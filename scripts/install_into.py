@@ -118,10 +118,19 @@ MAX_SYNC_RECORD_BYTES = 65536
 # never deletes them itself.
 LEGACY_STACK_DIR = ".grok-stack"
 LEGACY_STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+# Directories an install made before the rename owns entirely.
+LEGACY_MANAGED_DIRS = (
+    ".grok-stack",
+    "factory/src/adaptive_factory",
+    ".agents/skills/adaptive-delivery",
+    ".grok/skills/adaptive-delivery",
+)
 LEGACY_PATH_RULES = (
     (re.compile(r"^\.grok-stack/adaptive_grok/"), ".getzilla/getzilla/"),
     (re.compile(r"^\.grok-stack/"), ".getzilla/"),
     (re.compile(r"^scripts/grok_([a-z_]+)\.py$"), r"scripts/getzilla_\1.py"),
+    (re.compile(r"^factory/src/adaptive_factory/"), "factory/src/getzilla_factory/"),
+    (re.compile(r"^(\.agents|\.grok)/skills/adaptive-delivery/"), r"\1/skills/getzilla-delivery/"),
 )
 LEGACY_SCRIPT_PATTERN = re.compile(r"^grok_[a-z_]+\.py$")
 MAX_LEGACY_REPORT_ENTRIES = 4096
@@ -838,8 +847,13 @@ def _legacy_migration(target: Path) -> list[dict[str, str]]:
     """Report pre-rename stack files in target; the planner never removes them itself."""
     absolute = Path(os.path.abspath(target))
     found: list[str] = []
-    stack = absolute / LEGACY_STACK_DIR
-    if stack.is_dir() and not stack.is_symlink():
+    for managed in LEGACY_MANAGED_DIRS:
+        stack = absolute / managed
+        if not stack.is_dir() or stack.is_symlink() or any(
+            (absolute / Path(*Path(managed).parts[:depth])).is_symlink()
+            for depth in range(1, len(Path(managed).parts))
+        ):
+            continue
         for directory, subdirectories, files in os.walk(stack, followlinks=False):
             subdirectories[:] = sorted(
                 name for name in subdirectories

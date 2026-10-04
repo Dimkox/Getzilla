@@ -333,6 +333,10 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(retire[".grok-stack/config/routing.json"], ".getzilla/config/routing.json")
             self.assertEqual(retire["scripts/grok_verify.py"], "scripts/getzilla_verify.py")
             self.assertNotIn("scripts/custom_tool.py", retire)
+            self.assertEqual(MODULE.legacy_to_current_path("factory/src/adaptive_factory/cli.py"),
+                             "factory/src/getzilla_factory/cli.py")
+            self.assertEqual(MODULE.legacy_to_current_path(".agents/skills/adaptive-delivery/SKILL.md"),
+                             ".agents/skills/getzilla-delivery/SKILL.md")
             self.assertTrue(all(item["action"] == "RETIRE" for item in plan["legacy_migration"]))
 
     def test_current_sync_record_wins_over_legacy_record(self) -> None:
@@ -348,6 +352,29 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual([item["path"] for item in plan["kept"]], [".coveragerc"])
             self.assertEqual(MODULE.legacy_to_current_path("scripts/grok_status.py"), "scripts/getzilla_status.py")
             self.assertEqual(MODULE.legacy_to_current_path("README.md"), "README.md")
+
+    def test_previous_release_install_upgrades_with_a_replacement_for_every_retired_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "consumer"
+            for relative in (
+                ".grok-stack/adaptive_grok/state.py",
+                ".grok-stack/config/routing.json",
+                "scripts/grok_status.py",
+                "factory/src/adaptive_factory/cli.py",
+                ".agents/skills/adaptive-delivery/SKILL.md",
+                ".grok/skills/adaptive-delivery/SKILL.md",
+            ):
+                path = target / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# previous release\n", encoding="utf-8")
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertEqual(_snapshot(target), before)
+            delivered = {entry["path"] for entry in plan["entries"]}
+            retired = plan["legacy_migration"]
+            self.assertEqual(len(retired), 6)
+            for item in retired:
+                self.assertIn(item["replacement"], delivered, item)
 
     def test_fresh_target_plan_has_empty_legacy_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
