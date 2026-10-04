@@ -14,8 +14,8 @@ import sys
 import unittest
 from unittest import mock
 
-from adaptive_factory import landing_media
-from adaptive_factory.landing_media import LandingMediaError, extract_pdf_text
+from getzilla_factory import landing_media
+from getzilla_factory.landing_media import LandingMediaError, extract_pdf_text
 
 CURRENT_EPOCH_SHA = "fde60e040167c10975b00d11f578c4da6763069a"
 

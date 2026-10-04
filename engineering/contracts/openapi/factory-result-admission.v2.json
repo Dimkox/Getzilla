@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Adaptive Factory Result Admission API",
+    "title": "Getzilla Factory Result Admission API",
     "version": "2.0.0",
     "description": "Authenticated bounded durable result admission. The future outbox remains dormant; dispatch and model transport are unavailable in this slice."
   },

@@ -3,7 +3,7 @@
   "$id": "urn:adaptive-factory:bb-lifecycle-observation:v1",
   "x-admission": {
     "level": "structural",
-    "semantic_validator": "adaptive_factory.bb_contracts.BBLifecycleObservationV1.from_dict",
+    "semantic_validator": "getzilla_factory.bb_contracts.BBLifecycleObservationV1.from_dict",
     "semantic_validation_required": true,
     "semantic_checks": ["execution_binding", "effect_evidence", "idempotency", "replay_body"]
   },

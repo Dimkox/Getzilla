@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.result_dispatch_cli import (
+from getzilla_factory.result_dispatch_cli import (
     ResultDispatchCliError,
     compose_result_dispatcher,
     main,
 )
-from adaptive_factory.settings import FactorySettings, SettingsError
+from getzilla_factory.settings import FactorySettings, SettingsError
 
 
 class ResultDispatchServerTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class ResultDispatchServerTests(unittest.TestCase):
                 result_dispatch_timeout_seconds=0.5,
             )
             with patch(
-                "adaptive_factory.result_dispatch_cli.UdsResultHandoffClient", return_value=object()
+                "getzilla_factory.result_dispatch_cli.UdsResultHandoffClient", return_value=object()
             ):
                 dispatcher = compose_result_dispatcher(settings, object())
             self.assertEqual(
@@ -124,9 +124,9 @@ class ResultDispatchServerTests(unittest.TestCase):
     def test_once_process_has_a_bounded_lifecycle(self):
         dispatcher = unittest.mock.Mock()
         with (
-            patch("adaptive_factory.result_dispatch_cli.FactorySettings.from_environment"),
-            patch("adaptive_factory.result_dispatch_cli.PostgresResultDispatcherStore"),
-            patch("adaptive_factory.result_dispatch_cli.compose_result_dispatcher", return_value=dispatcher),
+            patch("getzilla_factory.result_dispatch_cli.FactorySettings.from_environment"),
+            patch("getzilla_factory.result_dispatch_cli.PostgresResultDispatcherStore"),
+            patch("getzilla_factory.result_dispatch_cli.compose_result_dispatcher", return_value=dispatcher),
         ):
             self.assertEqual(main(["--once"]), 0)
         dispatcher.run_once.assert_called_once_with()

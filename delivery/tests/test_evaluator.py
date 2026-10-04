@@ -10,8 +10,8 @@ from delivery.tests.synthetic_fixtures import (
     synthetic_promotion,
 )
 
-from adaptive_delivery.contracts import ContractError
-from adaptive_delivery.evaluator import evaluate_delivery
+from getzilla_delivery.contracts import ContractError
+from getzilla_delivery.evaluator import evaluate_delivery
 
 
 class EvaluatorTests(unittest.TestCase):

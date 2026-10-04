@@ -1,12 +1,12 @@
 import os
 import unittest
 
-from adaptive_factory.admin import (
+from getzilla_factory.admin import (
     provision_artifact_attestor_login,
     provision_runtime_login,
 )
-from adaptive_factory.migrations import PostgresMigrator
-from adaptive_factory.store import (
+from getzilla_factory.migrations import PostgresMigrator
+from getzilla_factory.store import (
     PostgresArtifactAttestationStore,
     PostgresFactoryStore,
     StoreError,

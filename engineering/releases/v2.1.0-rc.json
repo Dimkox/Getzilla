@@ -15,8 +15,8 @@
     "u7_release_identity": "candidate"
   },
   "preserved_migrations": [
-    "factory/src/adaptive_factory/resources/024_factory_v15_result_outbox.sql",
-    "factory/src/adaptive_factory/resources/025_factory_v15_result_dispatch.sql"
+    "factory/src/getzilla_factory/resources/024_factory_v15_result_outbox.sql",
+    "factory/src/getzilla_factory/resources/025_factory_v15_result_dispatch.sql"
   ],
   "excluded": [
     "U4",

@@ -1,4 +1,4 @@
-# Adaptive Grok Build Pro Engineering Contract
+# Getzilla Engineering Contract
 
 ## Mandatory startup algorithm: measure, then dispatch
 
@@ -16,7 +16,7 @@ An explicitly delegated push of an exact isolated branch/HEAD before verificatio
 
 ## Second mandatory startup step: select verification scope before heavy work
 
-After capacity discovery and route/dependency scheduling, record the trusted exact comparison base/HEAD and staged, unstaged and untracked inventory/statuses. Run bounded committed-HEAD controls as observations before independent reviews; they create no verification receipt or scope admission. After all selected reviews are persisted and the report-containing candidate is committed/frozen, invoke `python3 scripts/grok_verify.py --mode pr` once as the final qualifying local gate with the verified CPU allocation. Its merged fail-closed selector (`.grok-stack/adaptive_grok/verification_scope.py`, issue #205 / PR #207) selects scope inside that run before its heavy checks; a route label or an agent's assertion that factory is unaffected is not scope evidence. Refresh an outdated comparison base only to the actual agreed PR base, never to hide candidate changes.
+After capacity discovery and route/dependency scheduling, record the trusted exact comparison base/HEAD and staged, unstaged and untracked inventory/statuses. Run bounded committed-HEAD controls as observations before independent reviews; they create no verification receipt or scope admission. After all selected reviews are persisted and the report-containing candidate is committed/frozen, invoke `python3 scripts/getzilla_verify.py --mode pr` once as the final qualifying local gate with the verified CPU allocation. Its merged fail-closed selector (`.getzilla/getzilla/verification_scope.py`, issue #205 / PR #207) selects scope inside that run before its heavy checks; a route label or an agent's assertion that factory is unaffected is not scope evidence. Refresh an outdated comparison base only to the actual agreed PR base, never to hide candidate changes.
 
 The selector's closed focused inventory admits its named documentation/state paths, tracked `packages/**` release bytes, and exactly five binding test modules: `tests/test_structure.py`, `tests/test_project_state.py`, `tests/test_manifest_package.py`, `tests/test_workflow_sources.py` and `tests/test_repo_router.py`. For that admitted inventory, `docs-state-focused` skips the replaced full-discovery runner, `coverage` and `factory-postgres-exit` while retaining the other selected checks, including factory-unit checks. All other executable changes (including factory runtime/tests, database/migrations/schema/contracts and the selector itself), non-admitted paths or ambiguous inventories retain the full PR suite. The measured historical comparison is **629 s for serial Core coverage versus about 14 s for the five focused modules**, not a promise about total verifier duration or this host.
 
@@ -30,13 +30,13 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 ## Fresh-clone bootstrap
 
 - `START_HERE.md` is the zero-context entrypoint. `PROJECT_STATE.json` is the machine-readable current handoff. A new agent must not require chat history to understand the current milestone and next action.
-- `.grok-stack/runtime/active-route.json` is machine-local runtime state and may legitimately be absent in a fresh clone. Never fabricate it. If it is absent, read `START_HERE.md` and `PROJECT_STATE.json`, fetch remote refs, then either continue the active pull-request branch named there or route a new task before implementation.
+- `.getzilla/runtime/active-route.json` is machine-local runtime state and may legitimately be absent in a fresh clone. Never fabricate it. If it is absent, read `START_HERE.md` and `PROJECT_STATE.json`, fetch remote refs, then either continue the active pull-request branch named there or route a new task before implementation.
 - Milestone designs and implementation plans must live in the repository or the active pull request before a session ends. Chat is the lowest-priority source of truth.
 - Secrets, PEM/private keys, credentials, PostgreSQL runtime state, runtime approvals/receipts and host-local deployment scratch are intentionally not Git content. Their absence does not make a fresh clone incomplete for source development.
 
 ## Independent merge trust
 
-- Prompt files, hooks, `.grok-stack/runtime`, local delegated grants, local receipts, change packages, local tests and agent reviews are workflow evidence only. They are not merge authority.
+- Prompt files, hooks, `.getzilla/runtime`, local delegated grants, local receipts, change packages, local tests and agent reviews are workflow evidence only. They are not merge authority.
 - The authoritative merge gate is the GitHub App-owned policy-epoch Check Run `adaptive-trust-ci/verified@<policy-sha12>` for the exact pull-request head SHA. Branch protection binds that exact check name to the configured GitHub App ID.
 - Never use GitHub Actions for this repository. Trust CI is operated from `trust-ci/` with PostgreSQL durable state, isolated exact-SHA runners, external holdout validation, source-mutation detection, signed attestations and human-signed scoped approvals.
 - An agent must never generate, read, request, submit or simulate a human approval private key. Human security approvals are signed outside the agent environment and verified by the Trust CI API against its server-mounted public-key store.
@@ -55,20 +55,20 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 
 ## Skip no-op checks
 
-- If the product tree did not change (status, already-published identity, leftover uncommitted paperwork), do not dispatch analysis or review agents and do not block on `grok_verify`.
-- If product files changed, run `python3 scripts/grok_verify.py --mode pr`. Skip the analysis/review wave for a no-op.
+- If the product tree did not change (status, already-published identity, leftover uncommitted paperwork), do not dispatch analysis or review agents and do not block on `getzilla_verify`.
+- If product files changed, run `python3 scripts/getzilla_verify.py --mode pr`. Skip the analysis/review wave for a no-op.
 
 ## PR-only delivery and delegated release actions
 
 - All product changes are delivered through an isolated branch and pull request. Direct push to `main` or another protected/shared branch is prohibited.
-- Local `python3 scripts/grok_verify.py --mode pr` and route-selected reviews are preflight evidence. They never replace the App-owned policy-epoch check on the exact PR SHA.
+- Local `python3 scripts/getzilla_verify.py --mode pr` and route-selected reviews are preflight evidence. They never replace the App-owned policy-epoch check on the exact PR SHA.
 - Merge only after the external Trust CI check succeeds and all required signed approval scopes are present. A new commit, new base SHA, deployed holdout change or server-policy change requires a fresh check and fresh external approvals.
-- A user may explicitly delegate named operational actions, including branch push, tag push and GitHub Release publication. `scripts/grok_approve.py` may materialize that consent only as an exact delegated local grant bound to repository, route, change, Git HEAD, tree fingerprint, action/resource list and TTL.
+- A user may explicitly delegate named operational actions, including branch push, tag push and GitHub Release publication. `scripts/getzilla_approve.py` may materialize that consent only as an exact delegated local grant bound to repository, route, change, Git HEAD, tree fingerprint, action/resource list and TTL.
 - An exact delegated isolated-branch push may precede verification only as clearly labelled **UNVERIFIED transport**; verification/completion and PR merge eligibility remain separate requirements.
 - A delegated local grant never creates or substitutes the external Trust CI check, a human-signed security approval, or branch protection. It authorizes only the named local operation.
 - Tagging and GitHub Release publication must use the exact merged commit. No delegated grant permits changing the tested tree after approval and then reusing the grant.
 
-This repository uses an adaptive, task-routed Grok Build workflow. The `UserPromptSubmit` hook classifies development tasks and writes `.grok-stack/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
+This repository uses an adaptive, task-routed Grok Build workflow. The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
 
 ## Mandatory entrypoint
 
@@ -77,8 +77,8 @@ For every software-development task:
 0. Complete and record the startup CPU/capacity discovery above before inspecting handoff/backlog/routes or doing any other startup work.
 1. Read `START_HERE.md`, `PROJECT_STATE.json`, and this contract.
 2. Run `git fetch --all --prune` when remote Git is available so open milestone branches/PRs are not missed.
-3. Read `.grok-stack/runtime/active-route.json` if it exists. On a fresh clone where it does not exist, continue the explicitly named active PR/branch from `PROJECT_STATE.json` or route a new task; never invent runtime state.
-4. Invoke `/adaptive-delivery` once a local route exists for the task.
+3. Read `.getzilla/runtime/active-route.json` if it exists. On a fresh clone where it does not exist, continue the explicitly named active PR/branch from `PROJECT_STATE.json` or route a new task; never invent runtime state.
+4. Invoke `/getzilla-delivery` once a local route exists for the task.
 5. Use only agents listed in `allowed_agents`.
 6. Use the recorded startup capacity and dependency plan to dispatch all independent route-permitted work in parallel within measured limits and prerequisite order.
 7. Use exactly one `write_agent` per isolated task/route/branch/worktree; independent isolated writers may run concurrently.
@@ -108,7 +108,7 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 - Do not let an implementer approve its own work.
 - Do not spawn an agent that the active route did not select; the hook may block it.
 - Give each agent a narrow brief with route, exact repository/HEAD/base, one question, dependencies, CPU allocation and write/read-only boundary. Prefer a clean brief over repeated full-history reads.
-- Collect related failures and review findings into one repair batch for the same write owner; rerun affected bounded committed-HEAD controls and affected reviews before final freeze. Named smoke uses `grok_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
+- Collect related failures and review findings into one repair batch for the same write owner; rerun affected bounded committed-HEAD controls and affected reviews before final freeze. Named smoke uses `getzilla_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
 - Persist all complete review reports, commit, then freeze the candidate. After exact delegated UNVERIFIED branch transport, run one final qualifying local PR gate in parallel with external App-owned exact-head Trust CI; keep their outcomes separate. No preliminary full local gate is required before review. A ten-minute delivery cycle is an unconfirmed target; Core/PostgreSQL overlap is not implemented. A fetched identical merged tree with no new product changes is a no-op and requires no repeated full gate.
 
 ## Tool-denial circuit breaker
@@ -170,18 +170,18 @@ These rules apply whenever the route contains the `bitrix` domain:
 
 For static side-project changes, classify the final product changed-file inventory before selecting a verifier. A positive focused classification may contain only `side-projects/seo-landings/**` plus one explicitly named focused landing test; the active `engineering/changes/<id>/` package is workflow evidence and is ignored by that product classification. Require exactly one landing directory and fail closed for multiple directories, mixed, unknown, malformed, or incomplete inventory. The focused contract is the safe default for a positive landing-only classification. `--mode pr` always remains full PR verification and must never silently downgrade. Any product diff touching runtime, contracts, Trust CI, packages, architecture, workflow/configuration, the SEO skill, or the checked-in showcase uses full PR verification. This scope rule does not replace the App-owned exact-SHA Trust CI merge check.
 
-For successors within the closed admitted inventory, `--mode pr` and `--mode release` classify the changed-path inventory and may select the disclosed `docs-state-focused` profile instead of the full-suite coverage run. Admission is by explicit content role, not by directory name alone: named prose/dated state, tracked release bytes and exactly the five binding test modules below; admitted content is re-derived by those modules or has no machine binding to lose. The admitted inventory is the named prose file set (root documentation files, `docs/INVESTOR_DEMO.md`, `docs/package-status.md`, `engineering/decisions.md`, `engineering/mistakes.md`, `docs/superpowers/plans|specs/**` and the `engineering/` prose directories), `PROJECT_STATE.json`, `VERSION`, tracked `packages/**` release bytes, and five admitted modules — the lockstep trio `tests/test_structure.py`, `tests/test_project_state.py`, `tests/test_manifest_package.py` plus the binding tests `tests/test_workflow_sources.py` and `tests/test_repo_router.py`, which always run because they re-derive admitted content. Rejected despite living under a documentation path: `docs/bitrix-local-AGENTS.md` (installed verbatim as `local/AGENTS.md` into every consumer Bitrix install, so it is executed product) and any `**/evidence/historical-*` bundle (bytes `tests/test_history.py` pins literally). Every other path, plus an empty or invalid or unnormalized inventory, a deleted/renamed/copied/unmerged Git status, a status channel not positively reported as trusted, an unresolvable comparison base, an absent route or an absent admitted module, keeps the full PR suite. The profile name, reason code, admitted paths and each omitted check — the replaced full-discovery runner (`python-unittest`, or `pytest` where that is the install's runner), `coverage`, `factory-postgres-exit` — are reported by the `docs-state-scope` check and stored in the fingerprint-bound receipt as `docs_state_scope.evidence_kind`, so the reduction is disclosed rather than silent; `--full-scope` or `GROK_VERIFY_FORCE_FULL=1` forces the full suite. The "never silently downgrade" duty above is preserved: the landing focused contract remains a separate explicit mode, and neither profile relaxes independent review or the App-owned exact-SHA Trust CI check.
+For successors within the closed admitted inventory, `--mode pr` and `--mode release` classify the changed-path inventory and may select the disclosed `docs-state-focused` profile instead of the full-suite coverage run. Admission is by explicit content role, not by directory name alone: named prose/dated state, tracked release bytes and exactly the five binding test modules below; admitted content is re-derived by those modules or has no machine binding to lose. The admitted inventory is the named prose file set (root documentation files, `docs/INVESTOR_DEMO.md`, `docs/package-status.md`, `engineering/decisions.md`, `engineering/mistakes.md`, `docs/superpowers/plans|specs/**` and the `engineering/` prose directories), `PROJECT_STATE.json`, `VERSION`, tracked `packages/**` release bytes, and five admitted modules — the lockstep trio `tests/test_structure.py`, `tests/test_project_state.py`, `tests/test_manifest_package.py` plus the binding tests `tests/test_workflow_sources.py` and `tests/test_repo_router.py`, which always run because they re-derive admitted content. Rejected despite living under a documentation path: `docs/bitrix-local-AGENTS.md` (installed verbatim as `local/AGENTS.md` into every consumer Bitrix install, so it is executed product) and any `**/evidence/historical-*` bundle (bytes `tests/test_history.py` pins literally). Every other path, plus an empty or invalid or unnormalized inventory, a deleted/renamed/copied/unmerged Git status, a status channel not positively reported as trusted, an unresolvable comparison base, an absent route or an absent admitted module, keeps the full PR suite. The profile name, reason code, admitted paths and each omitted check — the replaced full-discovery runner (`python-unittest`, or `pytest` where that is the install's runner), `coverage`, `factory-postgres-exit` — are reported by the `docs-state-scope` check and stored in the fingerprint-bound receipt as `docs_state_scope.evidence_kind`, so the reduction is disclosed rather than silent; `--full-scope` or `GETZILLA_VERIFY_FORCE_FULL=1` forces the full suite. The "never silently downgrade" duty above is preserved: the landing focused contract remains a separate explicit mode, and neither profile relaxes independent review or the App-owned exact-SHA Trust CI check.
 
 Before reviews, run bounded committed-HEAD controls as observations:
 
 ```bash
-python3 scripts/grok_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
+python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
 ```
 
-Then dispatch every independent review agent listed by the active route. Store every complete report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/grok_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
+Then dispatch every independent review agent listed by the active route. Store every complete report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
 
 ```bash
-python3 scripts/grok_review.py code_review --status pass --report <path>
+python3 scripts/getzilla_review.py code_review --status pass --report <path>
 ```
 
 Use the exact local evidence kind requested by the route. A local receipt is stale after any repository change. The Stop hook warns when local evidence is missing or stale.
@@ -198,9 +198,9 @@ For each report, list the claims probed, exact commands and concise observed out
 
 ## Local delegated grants
 
-- `scripts/grok_approve.py` does not originate authority. It materializes explicit or standing user consent already present in the working context.
+- `scripts/getzilla_approve.py` does not originate authority. It materializes explicit or standing user consent already present in the working context.
 - Every grant must name explicit actions and, for protected/external writes, explicit resources. It is bound to the current repository, route, change, Git HEAD, tree digest and TTL; any tree or commit change invalidates it. Current grants serialize that binding as `grant_binding_digest`; readers retain compatibility with legacy `tree_fingerprint` records.
-- An agent may invoke `grok_approve.py` only when the user has explicitly delegated the named operation. The wildcard scope is forbidden.
+- An agent may invoke `getzilla_approve.py` only when the user has explicitly delegated the named operation. The wildcard scope is forbidden.
 - Trust CI security approvals use Ed25519 envelopes generated by `adaptive-trust-ci approval-create` on a human-controlled machine and submitted to the external API. Local grants are never accepted by Trust CI.
 
 ## Prohibited routine actions

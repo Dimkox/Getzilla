@@ -1,14 +1,14 @@
 # Five-minute investor demo
 
-This is a truthful local product tour of Adaptive Grok Build Pro. It demonstrates how reviewed software intent becomes bounded execution policy and inspectable evidence without running an agent, verifier, Git operation, provider, or external service. Demo routing uses a fixed non-authoritative seed rather than querying Git; `--open` may ask the operating system to open the configured local browser.
+This is a truthful local product tour of Getzilla. It demonstrates how reviewed software intent becomes bounded execution policy and inspectable evidence without running an agent, verifier, Git operation, provider, or external service. Demo routing uses a fixed non-authoritative seed rather than querying Git; `--open` may ask the operating system to open the configured local browser.
 
 ## Start
 
 Requirements: Python 3.10 or newer and this complete source or packaged checkout. No package install, frontend build, database, account, credential, or network connection is needed.
 
 ```bash
-cd /path/to/adaptive-grok-build-pro
-python3 scripts/grok_demo.py --open
+cd /path/to/getzilla
+python3 scripts/getzilla_demo.py --open
 ```
 
 The launcher prints `http://127.0.0.1:8765/` and opens it when the local browser permits. Without `--open`, copy the printed URL into a browser. Press `Ctrl-C` in the terminal to stop.
@@ -16,7 +16,7 @@ The launcher prints `http://127.0.0.1:8765/` and opens it when the local browser
 If port 8765 is occupied:
 
 ```bash
-python3 scripts/grok_demo.py --port 8766 --open
+python3 scripts/getzilla_demo.py --port 8766 --open
 ```
 
 ## What the evidence labels mean

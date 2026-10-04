@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unittest
 
-from adaptive_factory.contracts import ContractError
+from getzilla_factory.contracts import ContractError
 
 
 SCHEMAS = Path(__file__).parents[1] / "contracts" / "jsonschema"
@@ -73,7 +73,7 @@ def explanation_facts(prediction, **changes):
 
 class PredictionContractTests(unittest.TestCase):
     def module(self):
-        from adaptive_factory import prediction_contracts
+        from getzilla_factory import prediction_contracts
 
         return prediction_contracts
 

@@ -4,12 +4,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from adaptive_factory.landing_http import HttpLandingProfile
-from adaptive_factory.landing_renderer import TARGET_BASE_SHA, TARGET_BASE_TREE, TARGET_REPOSITORY_ID
-from adaptive_factory.landing_contracts import LandingProviderEvidenceV2, SiteArtifactV1
-from adaptive_factory.landing_observation import LandingProviderObservation
-from adaptive_factory.landing_service import LandingJobRecord
-from adaptive_factory.landing_failover_contracts import attempt_receipt, backend_capability
+from getzilla_factory.landing_http import HttpLandingProfile
+from getzilla_factory.landing_renderer import TARGET_BASE_SHA, TARGET_BASE_TREE, TARGET_REPOSITORY_ID
+from getzilla_factory.landing_contracts import LandingProviderEvidenceV2, SiteArtifactV1
+from getzilla_factory.landing_observation import LandingProviderObservation
+from getzilla_factory.landing_service import LandingJobRecord
+from getzilla_factory.landing_failover_contracts import attempt_receipt, backend_capability
 from factory.tests.test_landing_contracts import provider_facts, artifact_facts
 from factory.tests.test_landing_sqlite_store import source
 
@@ -42,7 +42,7 @@ class ScriptedBackends:
                 return backend_capability(HttpLandingProfile.for_provider(backend.profile_id, available=True),
                                           config.actor_id, config.repository_id, config.exact_base_sha, config.exact_base_tree)
             def submit(self, child_id, payload, media_type):
-                from adaptive_factory.landing_failover_transport import BackendAmbiguous, BackendRejected
+                from getzilla_factory.landing_failover_transport import BackendAmbiguous, BackendRejected
                 owner.calls.append(backend.profile_id)
                 outcome = owner.outcomes[backend.profile_id]
                 if outcome == "local_auth":
@@ -79,9 +79,9 @@ class ScriptedBackends:
 
 class CallerRoutingTests(unittest.TestCase):
     def run_script(self, outcomes):
-        from adaptive_factory.landing_failover import FailoverCoordinator
-        from adaptive_factory.landing_failover_config import FailoverConfig
-        from adaptive_factory.landing_failover_journal import CallerJournal
+        from getzilla_factory.landing_failover import FailoverCoordinator
+        from getzilla_factory.landing_failover_config import FailoverConfig
+        from getzilla_factory.landing_failover_journal import CallerJournal
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         config = FailoverConfig.from_dict(configuration(Path(temporary.name)))
@@ -132,17 +132,17 @@ class CallerRoutingTests(unittest.TestCase):
                 self.assertEqual(["qwen-intl"], script.calls)
 
     def test_reused_parent_with_changed_content_conflicts_before_any_new_call(self):
-        from adaptive_factory.settings import SettingsError
+        from getzilla_factory.settings import SettingsError
         _, caller, script = self.run_script({"qwen-intl": "success"})
         with self.assertRaisesRegex(SettingsError, "idempotency conflict"):
             caller.submit("parent-1", b"changed brief", "text/plain")
         self.assertEqual(["qwen-intl"], script.calls)
 
     def test_absent_backends_consume_each_slot_once_and_replay_has_no_io(self):
-        from adaptive_factory.landing_failover import FailoverCoordinator
-        from adaptive_factory.landing_failover_config import FailoverConfig
-        from adaptive_factory.landing_failover_journal import CallerJournal
-        from adaptive_factory.landing_failover_transport import BackendUnavailable
+        from getzilla_factory.landing_failover import FailoverCoordinator
+        from getzilla_factory.landing_failover_config import FailoverConfig
+        from getzilla_factory.landing_failover_journal import CallerJournal
+        from getzilla_factory.landing_failover_transport import BackendUnavailable
 
         calls = []
         class Absent:
@@ -165,11 +165,11 @@ class CallerRoutingTests(unittest.TestCase):
                 self.assertEqual(5, len(calls))
 
     def test_restart_after_durable_intent_observes_without_resubmitting(self):
-        from adaptive_factory.landing_failover import FailoverCoordinator
-        from adaptive_factory.landing_failover_config import FailoverConfig
-        from adaptive_factory.landing_failover_journal import CallerJournal
-        from adaptive_factory.landing_failover_transport import BackendAmbiguous
-        from adaptive_factory.landing_failover_contracts import backend_capability
+        from getzilla_factory.landing_failover import FailoverCoordinator
+        from getzilla_factory.landing_failover_config import FailoverConfig
+        from getzilla_factory.landing_failover_journal import CallerJournal
+        from getzilla_factory.landing_failover_transport import BackendAmbiguous
+        from getzilla_factory.landing_failover_contracts import backend_capability
 
         calls = []
         class Lost:

@@ -13,12 +13,12 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 
 
 def _runtime_snapshot() -> tuple[tuple[str, bytes, int], ...]:
-    runtime = ROOT / ".grok-stack/runtime"
+    runtime = ROOT / ".getzilla/runtime"
     return tuple(
         (path.relative_to(runtime).as_posix(), path.read_bytes(), path.stat().st_mtime_ns)
         for path in sorted(runtime.rglob("*"))
@@ -29,9 +29,9 @@ def _runtime_snapshot() -> tuple[tuple[str, bytes, int], ...]:
 class RunningDemo:
     def __enter__(self):
         try:
-            module = importlib.import_module("adaptive_grok.demo_http")
+            module = importlib.import_module("getzilla.demo_http")
         except ModuleNotFoundError:
-            raise AssertionError("adaptive_grok.demo_http must provide the loopback API") from None
+            raise AssertionError("getzilla.demo_http must provide the loopback API") from None
         self.server = module.create_server(ROOT, port=0, now_provider=lambda: NOW)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -166,8 +166,8 @@ class DemoHttpTests(unittest.TestCase):
                 self.assertEqual(json.loads(raw)["error"]["code"], "method_not_allowed")
 
     def test_application_and_server_initialization_do_not_run_subprocesses(self) -> None:
-        demo = importlib.import_module("adaptive_grok.demo")
-        demo_http = importlib.import_module("adaptive_grok.demo_http")
+        demo = importlib.import_module("getzilla.demo")
+        demo_http = importlib.import_module("getzilla.demo_http")
         server = None
         with patch.object(subprocess, "run", side_effect=AssertionError("demo initialization invoked subprocess")):
             try:
@@ -195,7 +195,7 @@ class DemoHttpTests(unittest.TestCase):
         self.assertEqual(_runtime_snapshot(), before)
 
     def test_launcher_help_and_openapi_contract_exist(self) -> None:
-        launcher = ROOT / "scripts/grok_demo.py"
+        launcher = ROOT / "scripts/getzilla_demo.py"
         self.assertTrue(launcher.is_file(), "one-command launcher is required")
         result = subprocess.run(
             [sys.executable, str(launcher), "--help"], cwd=ROOT, text=True, capture_output=True, check=False

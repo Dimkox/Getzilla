@@ -11,28 +11,28 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.change import public_change_slug, start_change, transition
-from adaptive_grok import architecture_diff as ARCHITECTURE_DIFF
-from adaptive_grok.architecture import architecture_fingerprint, contract_inventory, load_architecture
-from adaptive_grok.architecture_diagrams import render_diagrams
-from adaptive_grok.architecture_diff import (
+from getzilla.change import public_change_slug, start_change, transition
+from getzilla import architecture_diff as ARCHITECTURE_DIFF
+from getzilla.architecture import architecture_fingerprint, contract_inventory, load_architecture
+from getzilla.architecture_diagrams import render_diagrams
+from getzilla.architecture_diff import (
     ArchitectureError,
     diff_architecture,
     select_architecture_comparison_base,
 )
-from adaptive_grok.receipts import (
+from getzilla.receipts import (
     active_architecture_binding,
     active_governance_binding,
     invalidate_receipts,
     validate_evidence,
     write_receipt,
 )
-from adaptive_grok.router import build_route
-from adaptive_grok.state import get_active_change, get_active_route, set_active_route
-from adaptive_grok.verification import _architecture_check, verify
-from adaptive_grok.spec import dump_canonical_spec
+from getzilla.router import build_route
+from getzilla.state import get_active_change, get_active_route, set_active_route
+from getzilla.verification import _architecture_check, verify
+from getzilla.spec import dump_canonical_spec
 from tests._support import project_copy
 from tests.test_architecture_model import _rules, _system
 
@@ -354,7 +354,7 @@ class ReceiptTests(unittest.TestCase):
                 write_receipt(root, 'verification', 'pass')
             receipt_path = (
                 root
-                / '.grok-stack/runtime/receipts'
+                / '.getzilla/runtime/receipts'
                 / route['route_id']
                 / 'verification.json'
             )
@@ -421,7 +421,7 @@ class ReceiptTests(unittest.TestCase):
             )
 
     def test_pre_adoption_route_base_uses_one_architecture_comparison_base(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-frozen-receipt-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-frozen-receipt-') as tmp:
             root = Path(tmp)
             route_base, _alternate, frozen_base = self._frozen_adoption_history(root)
             route = {'base_commit': route_base}
@@ -462,7 +462,7 @@ class ReceiptTests(unittest.TestCase):
             self.assertRegex(evidence['architecture_evidence_digest'], r'^[0-9a-f]{64}$')
 
     def test_unrelated_consumer_bootstrap_is_explicit_and_end_to_end(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-consumer-bootstrap-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-consumer-bootstrap-') as tmp:
             root = Path(tmp)
             base = self._unrelated_adopted_repo(root)
             route = {
@@ -507,7 +507,7 @@ class ReceiptTests(unittest.TestCase):
             self.assertTrue(evidence['baseline_introduced'])
 
     def test_route_base_marker_with_partial_model_fails_selection(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-marker-partial-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-marker-partial-') as tmp:
             root = Path(tmp)
             base = self._unrelated_adopted_repo(
                 root, base_marker=True, base_models=(True, False)
@@ -516,21 +516,21 @@ class ReceiptTests(unittest.TestCase):
                 select_architecture_comparison_base(root, {'base_commit': base})
 
     def test_route_base_marker_with_both_models_missing_fails_selection(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-marker-missing-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-marker-missing-') as tmp:
             root = Path(tmp)
             base = self._unrelated_adopted_repo(root, base_marker=True)
             with self.assertRaisesRegex(ArchitectureError, 'adopted architecture model is missing'):
                 select_architecture_comparison_base(root, {'base_commit': base})
 
     def test_route_base_partial_model_without_marker_fails_selection(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-unmarked-partial-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-unmarked-partial-') as tmp:
             root = Path(tmp)
             base = self._unrelated_adopted_repo(root, base_models=(False, True))
             with self.assertRaisesRegex(ArchitectureError, 'partially missing'):
                 select_architecture_comparison_base(root, {'base_commit': base})
 
     def test_route_base_remains_a_separate_architecture_staleness_binding(self) -> None:
-        with tempfile.TemporaryDirectory(prefix='adaptive-grok-receipt-base-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='getzilla-receipt-base-') as tmp:
             root = Path(tmp)
             route_base, alternate_route_base, frozen_base = self._frozen_adoption_history(root)
             route = {

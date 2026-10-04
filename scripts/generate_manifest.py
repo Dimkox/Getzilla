@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.manifest import generate_manifest
-from adaptive_grok.util import find_root
+from getzilla.manifest import generate_manifest
+from getzilla.util import find_root
 
 
 if __name__ == '__main__':

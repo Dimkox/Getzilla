@@ -19,7 +19,7 @@ from setup_manager import InstallerError, _atomic_json, _json, _read
 
 PROFILE = "factory-python"
 CONFIG_SCHEMA = "factory-linux-process/v1"
-ARGV = ("/usr/bin/python3.12", "-m", "adaptive_factory.server")
+ARGV = ("/usr/bin/python3.12", "-m", "getzilla_factory.server")
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 ENV_NAME = re.compile(r"FACTORY_[A-Z0-9_]{1,96}\Z")
 MAX_LOG_BYTES = 65_536

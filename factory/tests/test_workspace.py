@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import psycopg
 
-from adaptive_factory.store import PostgresArtifactAttestationStore
-from adaptive_factory.workspace import (
+from getzilla_factory.store import PostgresArtifactAttestationStore
+from getzilla_factory.workspace import (
     ArtifactAttestationRequest,
     ArtifactAttestationUnavailable,
     ArtifactAttestationV1,

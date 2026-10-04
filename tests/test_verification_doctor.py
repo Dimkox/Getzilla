@@ -15,18 +15,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.doctor import run_doctor
-from adaptive_grok import architecture as architecture_module
-from adaptive_grok import receipts as receipts_module
-from adaptive_grok import util as util_module
-from adaptive_grok import verification as verification_module
-from adaptive_grok.change import start_change
-from adaptive_grok.router import build_route
-from adaptive_grok.spec import dump_canonical_spec
-from adaptive_grok.state import get_active_change, set_active_route
-from adaptive_grok.verification import (
+from getzilla.doctor import run_doctor
+from getzilla import architecture as architecture_module
+from getzilla import receipts as receipts_module
+from getzilla import util as util_module
+from getzilla import verification as verification_module
+from getzilla.change import start_change
+from getzilla.router import build_route
+from getzilla.spec import dump_canonical_spec
+from getzilla.state import get_active_change, set_active_route
+from getzilla.verification import (
     CheckResult,
     GitRangeSelection,
     _git_diff_check,
@@ -285,7 +285,7 @@ class _PathTools:
         self._old_path = None
 
     def __enter__(self) -> Path:
-        self._tmp = tempfile.TemporaryDirectory(prefix='adaptive-grok-tools-')
+        self._tmp = tempfile.TemporaryDirectory(prefix='getzilla-tools-')
         bindir = Path(self._tmp.name)
         for name, body in self.tools.items():
             _install_tool(bindir, name, body)
@@ -302,18 +302,18 @@ class _PathTools:
 
 class VerificationTests(unittest.TestCase):
     def test_scanner_fixture_keeps_real_checks_and_full_source_negative_control(self) -> None:
-        from adaptive_grok.verification import _bandit, _ruff
+        from getzilla.verification import _bandit, _ruff
         with project_copy() as root:
-            self.assertTrue((root / '.grok-stack/adaptive_grok/__init__.py').is_file())
-            self.assertFalse((root / '.grok-stack/adaptive_grok/verification.py').exists())
+            self.assertTrue((root / '.getzilla/getzilla/__init__.py').is_file())
+            self.assertFalse((root / '.getzilla/getzilla/verification.py').exists())
             for check in (_ruff(root), _bandit(root)):
                 self.assertEqual(check.status, 'pass' if shutil.which(check.name) else 'skip')
         with full_project_copy() as root:
-            source = root / '.grok-stack/adaptive_grok/verification.py'
-            self.assertEqual(source.read_bytes(), (ROOT / '.grok-stack/adaptive_grok/verification.py').read_bytes())
+            source = root / '.getzilla/getzilla/verification.py'
+            self.assertEqual(source.read_bytes(), (ROOT / '.getzilla/getzilla/verification.py').read_bytes())
             if shutil.which('bandit'):
                 self.assertEqual(_bandit(root).status, 'pass')
-                (root / '.grok-stack/adaptive_grok/_unsafe_probe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
+                (root / '.getzilla/getzilla/_unsafe_probe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
                 self.assertEqual(_bandit(root).status, 'fail')
 
     @staticmethod
@@ -364,12 +364,12 @@ class VerificationTests(unittest.TestCase):
         scope = self._landing_scope([
             'side-projects/seo-landings/winston-wolfe/index.html',
             'tests/test_winston_wolfe_seo_landing.py',
-            'factory/src/adaptive_factory/landing_renderer.py',
+            'factory/src/getzilla_factory/landing_renderer.py',
         ])
 
         self.assertFalse(scope['eligible'])
         self.assertEqual(scope['profile'], 'full-pr')
-        self.assertIn('factory/src/adaptive_factory/landing_renderer.py', scope['rejected_files'])
+        self.assertIn('factory/src/getzilla_factory/landing_renderer.py', scope['rejected_files'])
         self.assertIn('out-of-scope', scope['reason'])
 
     def test_static_landing_scope_keeps_showcase_skill_and_broad_test_on_full_path(self) -> None:
@@ -651,7 +651,7 @@ class VerificationTests(unittest.TestCase):
             focused_test = root / 'tests/test_winston_wolfe_seo_landing.py'
             focused_test.parent.mkdir(parents=True, exist_ok=True)
             focused_test.write_text('', encoding='utf-8')
-            with patch('adaptive_grok.verification._command_check') as command_check:
+            with patch('getzilla.verification._command_check') as command_check:
                 result = verification_module._focused_landing_contract(
                     root,
                     {'focused_tests': ['tests/test_winston_wolfe_seo_landing.py']},
@@ -672,7 +672,7 @@ class VerificationTests(unittest.TestCase):
                 '        pass\n',
                 encoding='utf-8',
             )
-            with patch('adaptive_grok.verification._command_check') as command_check:
+            with patch('getzilla.verification._command_check') as command_check:
                 result = verification_module._focused_landing_contract(
                     root,
                     {'focused_tests': ['tests/test_winston_wolfe_seo_landing.py']},
@@ -703,7 +703,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(route_range.returncode, 0)
 
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -789,7 +789,7 @@ class VerificationTests(unittest.TestCase):
             ).splitlines())
 
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -825,7 +825,7 @@ class VerificationTests(unittest.TestCase):
                 'delivery_expected': False,
             })
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -856,7 +856,7 @@ class VerificationTests(unittest.TestCase):
             (root / 'staged.txt').write_text('staged  \n', encoding='utf-8')
             subprocess.run(['git', 'add', 'staged.txt'], cwd=root, check=True)
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -905,7 +905,7 @@ class VerificationTests(unittest.TestCase):
                     'delivery_expected': False,
                 })
                 with patch(
-                    'adaptive_grok.verification.command_exists',
+                    'getzilla.verification.command_exists',
                     side_effect=_which_only('git'),
                 ):
                     report = verify(root, mode='pr', record=False, keep_going=True)
@@ -949,7 +949,7 @@ class VerificationTests(unittest.TestCase):
             })
 
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -978,7 +978,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(observed, {left, right})
 
             with patch(
-                'adaptive_grok.verification.command_exists',
+                'getzilla.verification.command_exists',
                 side_effect=_which_only('git'),
             ):
                 report = verify(root, mode='pr', record=False, keep_going=True)
@@ -1008,7 +1008,7 @@ class VerificationTests(unittest.TestCase):
                 })
 
                 with patch(
-                    'adaptive_grok.verification.command_exists',
+                    'getzilla.verification.command_exists',
                     side_effect=_which_only('git'),
                 ):
                     report = verify(root, mode='pr', record=False, keep_going=True)
@@ -1062,7 +1062,7 @@ class VerificationTests(unittest.TestCase):
             set_active_route(root, route)
             report = verify(root, mode='fast', record=True)
             self.assertEqual(report['status'], 'pass')
-            receipt = root / f".grok-stack/runtime/receipts/{route['route_id']}/verification.json"
+            receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
 
     def test_governance_runs_after_spec_and_architecture_and_failure_is_not_receipted(self) -> None:
@@ -1084,7 +1084,7 @@ class VerificationTests(unittest.TestCase):
             self.assertIsNotNone(governance)
             self.assertEqual(governance['status'], 'fail')
             self.assertEqual(report['governance']['status'], 'fail')
-            receipt = root / f".grok-stack/runtime/receipts/{route['route_id']}/verification.json"
+            receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertFalse(receipt.exists())
 
     def test_governance_rejects_a_different_architecture_snapshot(self) -> None:
@@ -1133,7 +1133,7 @@ class VerificationTests(unittest.TestCase):
                 return result
 
             with patch(
-                'adaptive_grok.verification._governance_check',
+                'getzilla.verification._governance_check',
                 side_effect=mutate_after_governance,
             ):
                 report = verify(root, mode='fast', record=True)
@@ -1144,7 +1144,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(stability['status'], 'fail')
             receipt = (
                 root
-                / '.grok-stack/runtime/receipts'
+                / '.getzilla/runtime/receipts'
                 / route['route_id']
                 / 'verification.json'
             )
@@ -1535,7 +1535,7 @@ class VerificationTests(unittest.TestCase):
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('print("postgres api restart exit")\n', encoding='utf-8')
             with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop('GROK_VERIFY_CAPABILITY', None)
+                os.environ.pop('GETZILLA_VERIFY_CAPABILITY', None)
                 checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
@@ -1565,7 +1565,7 @@ class VerificationTests(unittest.TestCase):
             (package / '__init__.py').write_text('', encoding='utf-8')
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
-            with patch.dict(os.environ, {'GROK_VERIFY_CAPABILITY': 'repository-sandbox'}):
+            with patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
                 checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
@@ -1582,7 +1582,7 @@ class VerificationTests(unittest.TestCase):
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
             with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop('GROK_VERIFY_CAPABILITY', None)
+                os.environ.pop('GETZILLA_VERIFY_CAPABILITY', None)
                 checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
@@ -1597,7 +1597,7 @@ class VerificationTests(unittest.TestCase):
             (package / '__init__.py').write_text('', encoding='utf-8')
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
-            with patch.dict(os.environ, {'GROK_VERIFY_CAPABILITY': 'repository-sandbox-extra'}):
+            with patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox-extra'}):
                 checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
@@ -1631,8 +1631,8 @@ class VerificationTests(unittest.TestCase):
             def fake_exists(name: str) -> bool:
                 return name == 'pytest'
 
-            with patch('adaptive_grok.verification.command_exists', side_effect=fake_exists), patch(
-                'adaptive_grok.verification._command_check',
+            with patch('getzilla.verification.command_exists', side_effect=fake_exists), patch(
+                'getzilla.verification._command_check',
                 return_value=CheckResult('pytest', 'pass', 'ok'),
             ):
                 results = _python(root)
@@ -1820,7 +1820,7 @@ class QualityContourTests(unittest.TestCase):
             route['quality_profiles'] = ['base']
             set_active_route(root, route)
             recorded: list[str] = []
-            real_check = __import__('adaptive_grok.verification', fromlist=['_command_check'])._command_check
+            real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
 
             def fake_exists(name: str) -> bool:
                 if name == 'ruff':
@@ -1835,8 +1835,8 @@ class QualityContourTests(unittest.TestCase):
                     return CheckResult('ruff', 'pass', 'ok', command=command)
                 return real_check(root_path, name, command, timeout)
 
-            with patch('adaptive_grok.verification.command_exists', side_effect=fake_exists), patch(
-                'adaptive_grok.verification._command_check',
+            with patch('getzilla.verification.command_exists', side_effect=fake_exists), patch(
+                'getzilla.verification._command_check',
                 side_effect=fake_check,
             ):
                 report = verify(root, mode='fast', record=False)
@@ -1848,7 +1848,7 @@ class QualityContourTests(unittest.TestCase):
 
     def test_missing_ruff_is_skip_not_fail(self) -> None:
         with project_copy() as root:
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_except('ruff')):
+            with patch('getzilla.verification.command_exists', side_effect=_which_except('ruff')):
                 results = _python(root)
             ruff = next((item for item in results if item.name == 'ruff'), None)
             self.assertIsNotNone(ruff)
@@ -1857,7 +1857,7 @@ class QualityContourTests(unittest.TestCase):
 
     def test_unused_import_in_quality_path_fails_ruff(self) -> None:
         with project_copy() as root:
-            planted = root / '.grok-stack/adaptive_grok/_planted_unused.py'
+            planted = root / '.getzilla/getzilla/_planted_unused.py'
             planted.write_text('import unused_module\n', encoding='utf-8')
             with _PathTools({'ruff': _FAKE_RUFF}):
                 results = _python(root, mode='fast')
@@ -1880,8 +1880,8 @@ class QualityContourTests(unittest.TestCase):
                 order.append(name)
                 return CheckResult(name, 'pass', 'ok', command=command)
 
-            with patch('adaptive_grok.verification.command_exists', side_effect=fake_exists), patch(
-                'adaptive_grok.verification._command_check',
+            with patch('getzilla.verification.command_exists', side_effect=fake_exists), patch(
+                'getzilla.verification._command_check',
                 side_effect=fake_check,
             ):
                 results = _python(root)
@@ -1900,7 +1900,7 @@ class QualityContourTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             set_active_route(root, route)
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_except('bandit')):
+            with patch('getzilla.verification.command_exists', side_effect=_which_except('bandit')):
                 report = verify(root, mode='fast', record=False)
             bandit = _check(report, 'bandit')
             self.assertIsNotNone(bandit)
@@ -1909,7 +1909,7 @@ class QualityContourTests(unittest.TestCase):
 
     def test_eval_in_product_path_fails_bandit(self) -> None:
         with project_copy() as root:
-            planted = root / '.grok-stack/adaptive_grok/_planted_eval.py'
+            planted = root / '.getzilla/getzilla/_planted_eval.py'
             planted.write_text('value = eval("1 + 1")\n', encoding='utf-8')
             with _PathTools({'bandit': _FAKE_BANDIT}):
                 results = _python(root, mode='fast')
@@ -1953,7 +1953,7 @@ class QualityContourTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             set_active_route(root, route)
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_except('coverage', 'ruff', 'bandit', 'pytest')):
+            with patch('getzilla.verification.command_exists', side_effect=_which_except('coverage', 'ruff', 'bandit', 'pytest')):
                 report = verify(root, mode='pr', record=False, keep_going=True)
             coverage = _check(report, 'coverage')
             self.assertIsNotNone(coverage)
@@ -2019,7 +2019,7 @@ class QualityContourTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             set_active_route(root, route)
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_except('semgrep')):
+            with patch('getzilla.verification.command_exists', side_effect=_which_except('semgrep')):
                 report = verify(root, mode='fast', record=False)
             semgrep = _check(report, 'semgrep')
             self.assertIsNotNone(semgrep)
@@ -2031,7 +2031,7 @@ class QualityContourTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             set_active_route(root, route)
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_except('trivy')):
+            with patch('getzilla.verification.command_exists', side_effect=_which_except('trivy')):
                 report = verify(root, mode='fast', record=False)
             trivy = _check(report, 'trivy-config')
             self.assertIsNotNone(trivy)
@@ -2043,8 +2043,8 @@ class QualityContourTests(unittest.TestCase):
                 json.dumps({'scripts': {'prettier': 'prettier --check .'}}),
                 encoding='utf-8',
             )
-            with patch('adaptive_grok.verification.command_exists', side_effect=_which_only('npm')), patch(
-                'adaptive_grok.verification._command_check',
+            with patch('getzilla.verification.command_exists', side_effect=_which_only('npm')), patch(
+                'getzilla.verification._command_check',
                 side_effect=lambda root_path, name, command, timeout=300: CheckResult(name, 'pass', 'ok', command=command),
             ):
                 results = _node(root, 'fast')
@@ -2084,7 +2084,7 @@ class FailFastVerificationTests(unittest.TestCase):
             self.assertEqual(report['evidence_status'], 'not_recorded')
             self.assertEqual(checks['source-stability']['status'], 'pass')
             self.assertEqual(checks['quality-gate']['status'], 'fail')
-            self.assertFalse((root / '.grok-stack/runtime/receipts' / route['route_id'] / 'verification.json').exists())
+            self.assertFalse((root / '.getzilla/runtime/receipts' / route['route_id'] / 'verification.json').exists())
 
     def test_fast_authority_refusal_keeps_repository_diagnostics_compatible(self):
         with self.routed_tree() as (root, route), \
@@ -2108,7 +2108,7 @@ class FailFastVerificationTests(unittest.TestCase):
             self.assertTrue(all(item.status == 'pass' or (item.name == 'bandit' and item.status == 'skip') for item in checks))
 
     def test_dispatch_fixture_isolates_and_restores_inherited_sandbox_capability(self):
-        with patch.dict(os.environ, {'GROK_VERIFY_CAPABILITY': 'repository-sandbox'}):
+        with patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
             with self.python_tree() as root:
                 def command(project, name, args, timeout=300, **kwargs):
                     return CheckResult(name, 'pass', 'actual success', command=args)
@@ -2116,7 +2116,7 @@ class FailFastVerificationTests(unittest.TestCase):
                     checks = {item.name: item for item in _python(root, 'pr')}
                 self.assertEqual(checks['factory-postgres-exit'].status, 'pass')
                 self.assertIsNotNone(checks['factory-postgres-exit'].command)
-            self.assertEqual(os.environ.get('GROK_VERIFY_CAPABILITY'), 'repository-sandbox')
+            self.assertEqual(os.environ.get('GETZILLA_VERIFY_CAPABILITY'), 'repository-sandbox')
 
     def test_early_refusal_still_detects_mutation_and_refuses_receipt(self):
         with self.routed_tree() as (root, route):
@@ -2127,7 +2127,7 @@ class FailFastVerificationTests(unittest.TestCase):
                 report = verify(root, 'pr')
             self.assertEqual(_check(report, 'source-stability')['status'], 'fail')
             self.assertEqual(report['evidence_status'], 'not_recorded')
-            self.assertFalse((root / '.grok-stack/runtime/receipts' / route['route_id'] / 'verification.json').exists())
+            self.assertFalse((root / '.getzilla/runtime/receipts' / route['route_id'] / 'verification.json').exists())
 
     def test_optional_configuration_disappearing_still_reaches_source_finalization(self):
         with self.routed_tree() as (root, route):
@@ -2186,7 +2186,7 @@ class FailFastVerificationTests(unittest.TestCase):
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \
                  patch.dict(os.environ, {}, clear=False):
                 # The fake dispatcher models a local runner, not the outer CI sandbox.
-                os.environ.pop('GROK_VERIFY_CAPABILITY', None)
+                os.environ.pop('GETZILLA_VERIFY_CAPABILITY', None)
                 yield root
 
     def test_python_refusal_prevents_later_subprocess_dispatch(self):
@@ -2250,7 +2250,7 @@ class FailFastVerificationTests(unittest.TestCase):
             self.assertEqual(checks['quality-gate']['status'], 'fail')
             self.assertEqual(checks['contract-structure']['details'][0]['blocked_by'], 'secret-scan')
             self.assertEqual(report['evidence_status'], 'recorded')
-            receipt = root / '.grok-stack/runtime/receipts' / route['route_id'] / 'verification.json'
+            receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'verification.json'
             self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
 
 

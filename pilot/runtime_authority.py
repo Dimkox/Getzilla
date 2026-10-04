@@ -18,7 +18,7 @@ from .authority import AuthorityError, ControlBinding, LiteralGrantAuthority
 from .contracts import HEX40, HEX64
 
 
-CONTROL_REPOSITORY = "Dimkox/adaptive-grok-build-pro"
+CONTROL_REPOSITORY = "Dimkox/Getzilla"
 ROUTE_ID = "0ce2d62a018e"
 CHANGE_ID = "20260905-feature-implement-a-single-operator-codex-github-0ce2d6"
 _GITHUB_REMOTE = re.compile(
@@ -84,11 +84,11 @@ class RuntimeGrantLoader:
         if HEX40.fullmatch(head) is None:
             raise RuntimeAuthorityError("control_head")
         route = _read_json_object(
-            self._root / ".grok-stack" / "runtime" / "active-route.json",
+            self._root / ".getzilla" / "runtime" / "active-route.json",
             "active_route",
         )
         change = _read_json_object(
-            self._root / ".grok-stack" / "runtime" / "active-change.json",
+            self._root / ".getzilla" / "runtime" / "active-change.json",
             "active_change",
         )
         if route.get("route_id") != ROUTE_ID or route.get("change_id") != CHANGE_ID:
@@ -109,7 +109,7 @@ class RuntimeGrantLoader:
     def load(self) -> LiteralGrantAuthority:
         binding = self.binding()
         grants = _read_grants(
-            self._root / ".grok-stack" / "runtime" / "approvals.json"
+            self._root / ".getzilla" / "runtime" / "approvals.json"
         )
         return LiteralGrantAuthority(binding, grants, now=self._now)
 
@@ -193,7 +193,7 @@ def _read_json(path: Path, code: str, *, maximum: int, private: bool) -> Any:
 
 
 def _adaptive_tree_fingerprint(root: Path) -> str:
-    package_root = root / ".grok-stack"
+    package_root = root / ".getzilla"
     try:
         metadata = package_root.lstat()
     except OSError as exc:
@@ -203,7 +203,7 @@ def _adaptive_tree_fingerprint(root: Path) -> str:
     inserted = str(package_root)
     sys.path.insert(0, inserted)
     try:
-        module = importlib.import_module("adaptive_grok.util")
+        module = importlib.import_module("getzilla.util")
         origin = Path(str(module.__file__)).resolve(strict=True)
         if package_root.resolve(strict=True) not in origin.parents:
             raise RuntimeAuthorityError("tree_fingerprint")

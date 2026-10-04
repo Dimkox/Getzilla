@@ -6,7 +6,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory import landing_media
+from getzilla_factory import landing_media
 
 
 class PdfChildLifetimeTests(unittest.TestCase):

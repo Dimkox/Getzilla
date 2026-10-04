@@ -9,12 +9,12 @@ Agents must not run `git push`, `git tag`, or `gh release`; humans own those com
 ## Checks
 
 ```bash
-python3 scripts/grok_status.py
-python3 scripts/grok_verify.py --mode pr
-python3 scripts/grok_deploy.py
+python3 scripts/getzilla_status.py
+python3 scripts/getzilla_verify.py --mode pr
+python3 scripts/getzilla_deploy.py
 ```
 
-Only when a human is ready to publish: `python3 scripts/grok_approve.py production --reason "publish v2.0.6"`
+Only when a human is ready to publish: `python3 scripts/getzilla_approve.py production --reason "publish v2.0.6"`
 
 ## Commands
 
@@ -24,7 +24,7 @@ cp dist/adaptive-grok-build-pro-v2.0.6.zip* packages/
 git tag -a v2.0.6 -m "v2.0.6"
 git push origin main
 git push origin v2.0.6
-gh release create v2.0.6 packages/adaptive-grok-build-pro-v2.0.6.zip packages/adaptive-grok-build-pro-v2.0.6.zip.sha256 --title "Adaptive Grok Build Pro v2.0.6" --notes-file dist/RELEASE-NOTES.md
+gh release create v2.0.6 packages/adaptive-grok-build-pro-v2.0.6.zip packages/adaptive-grok-build-pro-v2.0.6.zip.sha256 --title "Getzilla v2.0.6" --notes-file dist/RELEASE-NOTES.md
 ```
 
 ## Rollback

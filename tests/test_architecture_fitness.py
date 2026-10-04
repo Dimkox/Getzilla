@@ -20,22 +20,22 @@ from unittest.mock import patch
 from tests.test_architecture_model import _json_schema, _rules, _system
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
 
 def _fitness_module():
     try:
-        return importlib.import_module("adaptive_grok.architecture_fitness")
+        return importlib.import_module("getzilla.architecture_fitness")
     except ModuleNotFoundError as exc:
-        if exc.name != "adaptive_grok.architecture_fitness":
+        if exc.name != "getzilla.architecture_fitness":
             raise
         return None
 
 
 FIT = _fitness_module()
-DIFF = importlib.import_module("adaptive_grok.architecture_diff")
-ARCHITECTURE = importlib.import_module("adaptive_grok.architecture")
-QUEUE_PROVENANCE = importlib.import_module("adaptive_grok.queue_provenance")
+DIFF = importlib.import_module("getzilla.architecture_diff")
+ARCHITECTURE = importlib.import_module("getzilla.architecture")
+QUEUE_PROVENANCE = importlib.import_module("getzilla.queue_provenance")
 
 
 class GitArchitectureRepo:
@@ -93,7 +93,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
     def setUp(self) -> None:
         if FIT is None:
-            self.fail("adaptive_grok.architecture_fitness is not implemented")
+            self.fail("getzilla.architecture_fitness is not implemented")
 
     def _repo(self, *, system: dict | None = None, rules: dict | None = None):
         repo = GitArchitectureRepo(self)
@@ -153,7 +153,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             FIT.diff_architecture(repo.root, base_sha=absent, head_sha=adopted)
 
     def test_exact_and_worktree_diffs_fail_when_adoption_marker_is_removed(self) -> None:
-        script = ROOT / "scripts/grok_architecture.py"
+        script = ROOT / "scripts/getzilla_architecture.py"
 
         def invoke(repo: GitArchitectureRepo, *args: str):
             return subprocess.run(
@@ -660,18 +660,18 @@ class ArchitectureFitnessTests(unittest.TestCase):
         rules = _rules()
         rules["path_boundaries"] = [{
             "id": "FIT-MODULE", "source_prefixes": ["factory/src"],
-            "forbidden_dependency_prefixes": ["adaptive_factory.store", "adaptive_factory.service",
-                                               "adaptive_factory.landing_live_executors", "trust-ci"],
+            "forbidden_dependency_prefixes": ["getzilla_factory.store", "getzilla_factory.service",
+                                               "getzilla_factory.landing_live_executors", "trust-ci"],
             "severity": "error",
         }]
         repo, base = self._repo(rules=rules)
-        repo.write_text("factory/src/adaptive_factory/__init__.py", "from . import store\n")
+        repo.write_text("factory/src/getzilla_factory/__init__.py", "from . import store\n")
         # A package marker above the real src root must not change runtime
-        # identity or conceal adaptive_factory.store from the boundary rule.
+        # identity or conceal getzilla_factory.store from the boundary rule.
         repo.write_text("factory/__init__.py", "")
         sources = {
-            "absolute": "from adaptive_factory.store import X\n",
-            "selected": "from adaptive_factory import service as s\n",
+            "absolute": "from getzilla_factory.store import X\n",
+            "selected": "from getzilla_factory import service as s\n",
             "relative": "from .store import X\n",
             "module_none": "from . import service as s\n",
             "transport": "from . import landing_live_executors\n",
@@ -680,20 +680,20 @@ class ArchitectureFitnessTests(unittest.TestCase):
             "safe": "from .landing_contracts import X\n",
         }
         for name, source in sources.items():
-            repo.write_text(f"factory/src/adaptive_factory/{name}.py", source)
+            repo.write_text(f"factory/src/getzilla_factory/{name}.py", source)
         head = repo.commit("qualified boundaries")
         result = self._results(self._evaluate(repo, base, head))["module_boundary"]
         self.assertEqual(result.status, "fail")
         for name in (*sources, "__init__"):
             with self.subTest(source=name):
-                found = any(f"adaptive_factory/{name}.py imports" in item for item in result.findings)
+                found = any(f"getzilla_factory/{name}.py imports" in item for item in result.findings)
                 self.assertEqual(found, name != "safe")
 
     def test_boundary_src_namespace_packages_keep_runtime_module_identity(self) -> None:
         rules = _rules()
         rules["path_boundaries"] = [{
             "id": "FIT-MODULE", "source_prefixes": ["delivery/src"], "severity": "error",
-            "forbidden_dependency_prefixes": ["adaptive_delivery.landing_publication"],
+            "forbidden_dependency_prefixes": ["getzilla_delivery.landing_publication"],
         }]
         repo, base = self._repo(rules=rules)
         # The real delivery package is a namespace package: no __init__.py.
@@ -704,29 +704,29 @@ class ArchitectureFitnessTests(unittest.TestCase):
             "safe": "from .landing_publication_contracts import X\n",
         }
         for name, source in sources.items():
-            repo.write_text(f"delivery/src/adaptive_delivery/{name}.py", source)
+            repo.write_text(f"delivery/src/getzilla_delivery/{name}.py", source)
         result = self._results(self._evaluate(repo, base, repo.commit("namespace import boundaries")))["module_boundary"]
         self.assertEqual(result.status, "fail")
         for name in sources:
             with self.subTest(path=name):
-                self.assertEqual(any(f"adaptive_delivery/{name}.py imports" in item for item in result.findings),
+                self.assertEqual(any(f"getzilla_delivery/{name}.py imports" in item for item in result.findings),
                                  name != "safe")
 
     def test_boundary_relative_escape_or_missing_package_context_fails_closed(self) -> None:
         for source_path, source, package in (
-            ("factory/src/adaptive_factory/worker.py", "from .. import store\n", True),
-            ("factory/src/adaptive_factory/resources/worker.py", "from ... import store\n", True),
+            ("factory/src/getzilla_factory/worker.py", "from .. import store\n", True),
+            ("factory/src/getzilla_factory/resources/worker.py", "from ... import store\n", True),
             ("src/worker.py", "from . import store\n", False),
         ):
             with self.subTest(path=source_path):
                 rules = _rules()
                 rules["path_boundaries"] = [{
                     "id": "FIT-MODULE", "source_prefixes": ["factory/src", "src"],
-                    "forbidden_dependency_prefixes": ["adaptive_factory.store"], "severity": "error",
+                    "forbidden_dependency_prefixes": ["getzilla_factory.store"], "severity": "error",
                 }]
                 repo, base = self._repo(rules=rules)
                 if package:
-                    repo.write_text("factory/src/adaptive_factory/__init__.py", "")
+                    repo.write_text("factory/src/getzilla_factory/__init__.py", "")
                 repo.write_text(source_path, source)
                 report = self._evaluate(repo, base, repo.commit("relative escape"))
                 self.assertEqual(self._results(report)["module_boundary"].status, "unsupported")
@@ -753,11 +753,11 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo.write_text("pilot/__init__.py", "")
         repo.write_text(
             "pilot/tests/test_contracts.py",
-            "from adaptive_grok.spec import validate_schema\n",
+            "from getzilla.spec import validate_schema\n",
         )
         repo.write_text(
             "pilot/runtime.py",
-            "from adaptive_grok.spec import validate_schema\n",
+            "from getzilla.spec import validate_schema\n",
         )
         head = repo.commit("nested pilot tests")
 
@@ -766,7 +766,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(result.status, "fail")
         self.assertEqual(
             result.findings,
-            ("pilot/runtime.py imports governance/test module adaptive_grok.spec",),
+            ("pilot/runtime.py imports governance/test module getzilla.spec",),
         )
         self.assertNotIn("pilot/tests/test_contracts.py", result.applicability.scanned_scope)
 
@@ -3644,7 +3644,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         system = _system()
         system["nodes"][0]["type"] = "service"
         system["nodes"][0]["repository_paths"] = [
-            "factory/src/adaptive_factory/server.py",
+            "factory/src/getzilla_factory/server.py",
             "factory/tests/test_server.py",
         ]
         rules = _rules()
@@ -3656,10 +3656,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
             "severity": "error",
         }]
         repo, base = self._repo(system=system, rules=rules)
-        repo.write_text("factory/src/adaptive_factory/server.py", "def prepare_unix_socket(path):\n    return path\n")
+        repo.write_text("factory/src/getzilla_factory/server.py", "def prepare_unix_socket(path):\n    return path\n")
         repo.write_text(
             "factory/tests/test_server.py",
-            "from adaptive_factory.server import prepare_unix_socket\nprepare_unix_socket('/run/factory.sock')\n",
+            "from getzilla_factory.server import prepare_unix_socket\nprepare_unix_socket('/run/factory.sock')\n",
         )
         head = repo.commit("local src layout import")
         report = self._evaluate(repo, base, head)
@@ -3786,7 +3786,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 elif mutation == "local":
                     repo.write_text("factory/src/local.py", "VALUE = 3\n")
                 elif mutation == "checker":
-                    repo.write_text(".grok-stack/adaptive_grok/architecture.py", "VALUE = 3\n")
+                    repo.write_text(".getzilla/getzilla/architecture.py", "VALUE = 3\n")
                 elif mutation == "rules":
                     rules = copy.deepcopy(ARCHITECTURE.load_architecture(ROOT).rules)
                     rules["change_separation_policies"][0]["severity"] = "warning"
@@ -6322,7 +6322,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             (
                 "tautological marker migrate",
                 "migrations/001_migrate.sql",
-                "-- adaptive-grok: bounded\n-- adaptive-grok: resumable\n"
+                "-- getzilla: bounded\n-- getzilla: resumable\n"
                 "DELETE FROM item WHERE 1=1;\n",
                 "fail",
             ),
@@ -6790,7 +6790,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
     def test_architecture_cli_is_deterministic_and_labels_worktree_evidence(self) -> None:
         repo, base = self._repo()
-        script = ROOT / "scripts/grok_architecture.py"
+        script = ROOT / "scripts/getzilla_architecture.py"
 
         def invoke(*args: str):
             return subprocess.run(
@@ -6818,9 +6818,9 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo, base = self._repo()
         repo.write_text("src/app.py", "VALUE = 1\n")
         head = repo.commit("head")
-        script = ROOT / "scripts/grok_architecture.py"
+        script = ROOT / "scripts/getzilla_architecture.py"
         repo.write_text(
-            ".grok-stack/runtime/active-route.json",
+            ".getzilla/runtime/active-route.json",
             json.dumps({"base_commit": "0" * 40, "head_commit": "f" * 40}),
         )
         exact = subprocess.run(
@@ -6892,14 +6892,14 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo, base = self._repo()
         repo.write_text("architecture/system.yaml", "{}\n")
         invalid = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/grok_architecture.py"), "--root", str(repo.root), "validate", "--json"],
+            [sys.executable, str(ROOT / "scripts/getzilla_architecture.py"), "--root", str(repo.root), "validate", "--json"],
             cwd=ROOT, text=True, capture_output=True, check=False,
         )
         self.assertNotEqual(invalid.returncode, 0)
         self.assertFalse(json.loads(invalid.stdout)["ok"])
 
         unavailable = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/grok_architecture.py"), "--root", str(repo.root), "diff", "--base", "f" * 40, "--head", base, "--json"],
+            [sys.executable, str(ROOT / "scripts/getzilla_architecture.py"), "--root", str(repo.root), "diff", "--base", "f" * 40, "--head", base, "--json"],
             cwd=ROOT, text=True, capture_output=True, check=False,
         )
         self.assertNotEqual(unavailable.returncode, 0)
@@ -6920,7 +6920,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo, base = self._repo()
         repo.write_text("README.md", "exact head\n")
         head = repo.commit("exact head")
-        script = ROOT / "scripts/grok_architecture.py"
+        script = ROOT / "scripts/getzilla_architecture.py"
 
         repo.write_text("architecture/system.yaml", "{}\n")
         exact_diff = subprocess.run(

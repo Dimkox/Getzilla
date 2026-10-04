@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:adaptive-factory:m8:m7-autonomy-bridge:v1",
-  "title": "Adaptive Factory M8 bridge to canonical M7 contracts",
+  "title": "Getzilla Factory M8 bridge to canonical M7 contracts",
   "$defs": {
     "digest": {
       "type": "string",

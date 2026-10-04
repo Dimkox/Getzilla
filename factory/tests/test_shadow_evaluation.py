@@ -1,9 +1,9 @@
 from dataclasses import replace
 import unittest
 
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.shadow_evaluation import aggregate_shadow_cohort, evaluate_shadow_cohort
-from adaptive_factory.shadow_contracts import ShadowCohortKeyV1, ShadowCohortV1, ShadowOutcomeV1
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.shadow_evaluation import aggregate_shadow_cohort, evaluate_shadow_cohort
+from getzilla_factory.shadow_contracts import ShadowCohortKeyV1, ShadowCohortV1, ShadowOutcomeV1
 
 
 # Synthetic algorithm fixtures only. They are not real human outcomes and do not qualify for M8 evidence.

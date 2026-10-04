@@ -73,7 +73,7 @@ TRUST_CI_GITHUB_ADMIN_TOKEN=<temporary-admin-token> \
 TRUST_CI_GITHUB_APP_ID='<app-id>' \
 adaptive-trust-ci branch-protect \
   --policy "$PWD/runtime/policy.json" \
-  --repository Dimkox/adaptive-grok-build-pro \
+  --repository Dimkox/Getzilla \
   --branch main \
   --required-reviews 0
 ```
@@ -101,7 +101,7 @@ The harness must prove duplicate-webhook idempotency, `FOR UPDATE SKIP LOCKED` e
 
 ## Delegated release operations
 
-Explicit or standing user consent may be materialized locally through `scripts/grok_approve.py`. Every grant is bound to exact repository, route, change, Git HEAD, tree fingerprint, named action/resource and TTL. These grants may authorize branch push, tag push or GitHub Release publication, but never create or replace the external App-owned Check Run or a human-signed security approval.
+Explicit or standing user consent may be materialized locally through `scripts/getzilla_approve.py`. Every grant is bound to exact repository, route, change, Git HEAD, tree fingerprint, named action/resource and TTL. These grants may authorize branch push, tag push or GitHub Release publication, but never create or replace the external App-owned Check Run or a human-signed security approval.
 
 ## Emergency stop
 

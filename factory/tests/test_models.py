@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 import unittest
 
-from adaptive_factory.api import _json
-from adaptive_factory.models import (
+from getzilla_factory.api import _json
+from getzilla_factory.models import (
     FactoryAttemptV1,
     FactoryEventV1,
     FactoryRunV1,
@@ -13,7 +13,7 @@ from adaptive_factory.models import (
     TaskProjection,
     TaskStatus,
 )
-from adaptive_factory.store import PostgresFactoryStore
+from getzilla_factory.store import PostgresFactoryStore
 
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)

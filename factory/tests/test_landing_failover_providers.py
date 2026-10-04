@@ -11,19 +11,19 @@ import tempfile
 
 import httpx
 
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_contracts import LandingContractError
-from adaptive_factory.landing_http import HttpLandingNormalizer, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingExecutionResult, HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION
-from adaptive_factory.landing_live_executors import OpenAICompatibleLandingExecutor
-from adaptive_factory.landing_observation import LandingProviderObservation
-from adaptive_factory.landing_provider import LandingNormalizationRequest, LandingProviderError
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_contracts import LandingContractError
+from getzilla_factory.landing_http import HttpLandingNormalizer, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingExecutionResult, HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION
+from getzilla_factory.landing_live_executors import OpenAICompatibleLandingExecutor
+from getzilla_factory.landing_observation import LandingProviderObservation
+from getzilla_factory.landing_provider import LandingNormalizationRequest, LandingProviderError
 from factory.tests.test_landing_normalizer import draft, source
 
 
 class ProviderObservationTests(unittest.TestCase):
     def test_selected_file_reads_only_the_named_provider_and_rejects_shell_values(self):
-        from adaptive_factory.landing_live_executors import PROVIDER_KEY_NAMES, provider_api_key
-        from adaptive_factory.landing_provider import LandingProviderError
+        from getzilla_factory.landing_live_executors import PROVIDER_KEY_NAMES, provider_api_key
+        from getzilla_factory.landing_provider import LandingProviderError
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "providers.conf"
             path.write_text("\n".join(name + "=test-" + provider for provider, name in PROVIDER_KEY_NAMES.items()))
@@ -162,7 +162,7 @@ class ProviderObservationTests(unittest.TestCase):
         )
         for error in errors:
             with self.subTest(error_type=type(error).__name__, args=error.args), patch(
-                "adaptive_factory.landing_http.decode_landing_draft", side_effect=error,
+                "getzilla_factory.landing_http.decode_landing_draft", side_effect=error,
             ):
                 outcome = self.normalize()
                 self.assertEqual(("needs_human", "draft_validation_failed"),
@@ -190,7 +190,7 @@ class ProviderObservationTests(unittest.TestCase):
         for result, category in cases:
             with self.subTest(result=result), patch.object(
                 OpenAICompatibleLandingExecutor, "run", return_value=result,
-            ), patch("adaptive_factory.landing_http.decode_landing_draft",
+            ), patch("getzilla_factory.landing_http.decode_landing_draft",
                      side_effect=AssertionError("unvalidated result reached draft decoder")):
                 outcome = self.normalize()
                 self.assertEqual(("needs_human", "http_outcome_unusable"),
@@ -220,7 +220,7 @@ class ProviderObservationTests(unittest.TestCase):
 
 class AdditionalProviderTests(unittest.TestCase):
     def run_provider(self, profile_id, *, response=None):
-        from adaptive_factory.landing_extra_providers import landing_provider_executor
+        from getzilla_factory.landing_extra_providers import landing_provider_executor
 
         profile = HttpLandingProfile.for_provider(profile_id, available=True)
         self.sent = []

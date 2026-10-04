@@ -1,10 +1,10 @@
-# Quickstart — Adaptive Grok Build Pro
+# Quickstart — Getzilla
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
 0. Check tools (minimum or newer; doctor offers a fallback install if something is missing):
    ```bash
-   python3 scripts/grok_doctor.py --offer-install
+   python3 scripts/getzilla_doctor.py --offer-install
    ```
 
 1. Install Grok Build:
@@ -28,7 +28,7 @@ Use this page for the simple path. It gives you a local candidate and evidence. 
 
    This materialization mode is supported only on Linux with descriptor-relative `O_NOFOLLOW`/`O_DIRECTORY` operations and both libc and the target filesystem supporting `renameat2(RENAME_NOREPLACE)`. If any required capability is unavailable or the filesystem rejects it, materialization exits nonzero and fails closed without publishing the target; there is no fallback to replace, merge, or in-place copying. Use `--plan` plus a normal reviewed source-change for an existing consumer or for a platform/filesystem without those capabilities.
 
-   `MANAGED_DIRS`/`MANAGED_FILES` in `scripts/install_into.py` answer *what the stack owns*; a consumer answers the different question — *what this repo overrode* — in `.grok-stack/AGBP_SYNC.json` (`{"schema_version": 1, "kept_local": [".coveragerc", "bandit.yaml", ".grok-stack/config/routing.json"]}`). Declared paths appear in the plan as `KEEP <path> (declared by target)` and are never delivered. For an intentional managed-file divergence, add `kept_local_sha256` with the SHA-256 of each local file; the installer reports `divergent` and fails closed if those bytes later change. A kept path whose bytes differ from the stack’s without that binding remains a named conflict.
+   `MANAGED_DIRS`/`MANAGED_FILES` in `scripts/install_into.py` answer *what the stack owns*; a consumer answers the different question — *what this repo overrode* — in `.getzilla/AGBP_SYNC.json` (`{"schema_version": 1, "kept_local": [".coveragerc", "bandit.yaml", ".getzilla/config/routing.json"]}`). Declared paths appear in the plan as `KEEP <path> (declared by target)` and are never delivered. For an intentional managed-file divergence, add `kept_local_sha256` with the SHA-256 of each local file; the installer reports `divergent` and fails closed if those bytes later change. A kept path whose bytes differ from the stack’s without that binding remains a named conflict.
 
    New-target materialization uses an owned sibling stage and fail-closed no-replace publication. It refuses an existing, symlink, or special-file target. If the original identity of a newly created staging entry cannot be proven after a constructor failure, the installer preserves that unresolved entry, reports `manual cleanup required: installer ownership is unresolved`, and never deletes a same-named replacement.
 
@@ -41,18 +41,18 @@ An installed repository without `architecture/adoption.json` remains backward-co
 ```bash
 cd /path/to/repo
 mkdir -p architecture
-cp .grok-stack/templates/architecture/system.example.yaml architecture/system.yaml
-cp .grok-stack/templates/architecture/rules.example.yaml architecture/rules.yaml
+cp .getzilla/templates/architecture/system.example.yaml architecture/system.yaml
+cp .getzilla/templates/architecture/rules.example.yaml architecture/rules.yaml
 
 # Review and replace ARCH-REPLACE-ME, owners, paths, contracts, trust/data/secret
 # declarations, and every applicable policy before continuing.
-python3 scripts/grok_architecture.py validate --json
-python3 scripts/grok_architecture.py summary --json
-python3 scripts/grok_architecture.py drift --json
+python3 scripts/getzilla_architecture.py validate --json
+python3 scripts/getzilla_architecture.py summary --json
+python3 scripts/getzilla_architecture.py drift --json
 # This prints all five bounded artifacts and does not write repository files.
-python3 scripts/grok_architecture.py diagram --json
+python3 scripts/getzilla_architecture.py diagram --json
 # Apply approved projection text through normal reviewed source edits, then compare.
-python3 scripts/grok_architecture.py diagram --check --json
+python3 scripts/getzilla_architecture.py diagram --check --json
 ```
 
 After review succeeds, create `architecture/adoption.json` manually with exactly the same `architecture_id` as both model documents. For the unmodified examples, the strict canonical marker bytes are exactly:
@@ -70,8 +70,8 @@ The marker requires sorted keys, two-space JSON, and exactly one final newline. 
 Exact-state evidence uses literal 40-character commit SHAs. Use `--worktree` only for diagnostics; it never claims an exact head SHA:
 
 ```bash
-python3 scripts/grok_architecture.py diff --base <40-char-sha> --head <40-char-sha> --json
-python3 scripts/grok_architecture.py fitness --base <40-char-sha> --head <40-char-sha> --pre-risk red --json
+python3 scripts/getzilla_architecture.py diff --base <40-char-sha> --head <40-char-sha> --json
+python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40-char-sha> --pre-risk red --json
 ```
 
 4. Work:
@@ -84,9 +84,9 @@ python3 scripts/grok_architecture.py fitness --base <40-char-sha> --head <40-cha
    If hooks did not create a route, create one explicitly:
 
    ```bash
-   python3 scripts/grok_route.py "Добавить обработчик события OnAfterUserAdd в local-модуль" --session first-task --json
-   python3 scripts/grok_change.py start --title "Первая задача"
-   python3 scripts/grok_status.py
+   python3 scripts/getzilla_route.py "Добавить обработчик события OnAfterUserAdd в local-модуль" --session first-task --json
+   python3 scripts/getzilla_change.py start --title "Первая задача"
+   python3 scripts/getzilla_status.py
    ```
 
 5. Verify before delivery:
@@ -94,31 +94,31 @@ python3 scripts/grok_architecture.py fitness --base <40-char-sha> --head <40-cha
    ```bash
    git status --short
    git diff
-   python3 scripts/grok_verify.py --mode pr
-   python3 scripts/grok_status.py
+   python3 scripts/getzilla_verify.py --mode pr
+   python3 scripts/getzilla_status.py
    ```
 
    Treat local evidence as preflight only. Delivery still uses a branch and pull request. Trust CI and signed approvals are advanced merge controls, not the first-run path.
 
-5. Optional explicit skill: `/adaptive-delivery`
+5. Optional explicit skill: `/getzilla-delivery`
 
 6. Verify before finish:
    ```bash
-   python3 scripts/grok_verify.py --mode pr
+   python3 scripts/getzilla_verify.py --mode pr
    ```
-   Then `/release-readiness` and `python3 scripts/grok_deploy.py` to prepare human-owned publish commands (`--record` only with production approval).
+   Then `/release-readiness` and `python3 scripts/getzilla_deploy.py` to prepare human-owned publish commands (`--record` only with production approval).
 
 ### Optional workflow artifact convergence
 
 Create an explicit `engineering/changes/<active-id>/workflow/manifest.json` listing allowlisted GitHub Spec Kit, BMAD, or Superpowers files (accepted shapes and the known-unparsed list live in [docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md](docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md)). Inspect without writing first:
 
 ```bash
-python3 scripts/grok_artifacts.py import --change-id <active-id>
-python3 scripts/grok_artifacts.py compile --change-id <active-id>
-python3 scripts/grok_artifacts.py converge --change-id <active-id>
+python3 scripts/getzilla_artifacts.py import --change-id <active-id>
+python3 scripts/getzilla_artifacts.py compile --change-id <active-id>
+python3 scripts/getzilla_artifacts.py converge --change-id <active-id>
 ```
 
-Persist the exact derived `workflow/task-graph.json` / `workflow/convergence-report.json` files or marked framework projections/exports only with `--write --expected-digest <sha256>`; use 64 zeroes only to create a missing target. The graph stores source-status hints, while current canonical receipts derive ephemeral effective status without a tracked rewrite. Per-target runtime locks serialize cooperating writers. Missing targets use atomic no-clobber creation; existing targets require platform atomic exchange. Any post-exchange mismatch rolls back before displaced content is read, and a second racing entry is retained under a bounded recovery/temp name for manual forward recovery rather than deleted. Imported documents and their tightly allowlisted RED/GREEN argv are never executed and never become route, governance, approval, receipt, or merge authority. `grok_verify` checks stored graph/report read-only when the manifest exists and skips this check for historical packages. The `workflow_sources` currency observation is valid for 90 days after `observed_at`: before the freshness test fails, re-observe upstream latest releases, refresh `.grok-stack/config/toolchain.json` and the README table, and re-point any renamed shape test.
+Persist the exact derived `workflow/task-graph.json` / `workflow/convergence-report.json` files or marked framework projections/exports only with `--write --expected-digest <sha256>`; use 64 zeroes only to create a missing target. The graph stores source-status hints, while current canonical receipts derive ephemeral effective status without a tracked rewrite. Per-target runtime locks serialize cooperating writers. Missing targets use atomic no-clobber creation; existing targets require platform atomic exchange. Any post-exchange mismatch rolls back before displaced content is read, and a second racing entry is retained under a bounded recovery/temp name for manual forward recovery rather than deleted. Imported documents and their tightly allowlisted RED/GREEN argv are never executed and never become route, governance, approval, receipt, or merge authority. `getzilla_verify` checks stored graph/report read-only when the manifest exists and skips this check for historical packages. The `workflow_sources` currency observation is valid for 90 days after `observed_at`: before the freshness test fails, re-observe upstream latest releases, refresh `.getzilla/config/toolchain.json` and the README table, and re-point any renamed shape test.
 
 7. Trust project hooks in the TUI: `/hooks-trust`
 
@@ -127,7 +127,7 @@ Persist the exact derived `workflow/task-graph.json` / `workflow/convergence-rep
 From this checkout, start the Python-only dashboard with no install and no frontend build:
 
 ```bash
-python3 scripts/grok_demo.py --open
+python3 scripts/getzilla_demo.py --open
 ```
 
 It serves `http://127.0.0.1:8765/` on loopback only. The tour uses bundled sample evidence, a fixed non-authoritative route seed, in-memory computed previews and read-only summaries from this checkout; it invokes no Git command and makes no external request or write. `--open` may ask the operating system to open your local browser. Press `Ctrl-C` to stop. See [docs/INVESTOR_DEMO.md](docs/INVESTOR_DEMO.md) for the walkthrough and port troubleshooting.
@@ -136,11 +136,11 @@ It serves `http://127.0.0.1:8765/` on loopback only. The tour uses bundled sampl
 
 `install_into.py --plan` inspects an existing target read-only. On Linux with the descriptor and `renameat2(RENAME_NOREPLACE)` capabilities stated above, `install_into.py --materialize-new` publishes the local Grok stack (skills, agents, hooks, scripts, `AGENTS.md`) only at an absent target. It does **not** copy `trust-ci/`, `.github/workflows/`, target-owned architecture authority, this repository’s `README.md`, `QUICKSTART.md`, or `VERSION`. Consumer laptops do not stand up PostgreSQL.
 
-Local `python3 scripts/grok_verify.py --mode pr` is preflight evidence. It is **not merge authority**. Merge trust, when deployed, is the GitHub App-owned check `adaptive-trust-ci/verified@<policy-sha12>` on the exact pull-request SHA.
+Local `python3 scripts/getzilla_verify.py --mode pr` is preflight evidence. It is **not merge authority**. Merge trust, when deployed, is the GitHub App-owned check `adaptive-trust-ci/verified@<policy-sha12>` on the exact pull-request SHA.
 
 This repository is **PR-only**. Do not `git push origin main`. Ship product changes on an isolated branch and a pull request.
 
-Optional local quality tools used by `grok_verify --mode pr` (not required in `toolchain.json`): ruff, bandit, coverage (`fail_under` 74).
+Optional local quality tools used by `getzilla_verify --mode pr` (not required in `toolchain.json`): ruff, bandit, coverage (`fail_under` 74).
 
 ## Bitrix example
 
@@ -265,7 +265,7 @@ That script requires host tools **docker**, **trivy**, **syft**, and **cosign**.
 
 ### Scanner host install
 
-Official commands (also offered by `python3 scripts/grok_doctor.py --offer-install` for optional tools):
+Official commands (also offered by `python3 scripts/getzilla_doctor.py --offer-install` for optional tools):
 
 ```bash
 # Docker Engine + Compose v2 (Ubuntu 24.04)

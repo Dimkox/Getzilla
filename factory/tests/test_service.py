@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from adaptive_factory.models import (
+from getzilla_factory.models import (
     Actor,
     FactoryEventHistoryPageV1,
     FactoryRunHistoryPageV1,
@@ -11,9 +11,9 @@ from adaptive_factory.models import (
     TaskProjection,
     TaskStatus,
 )
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.service import AuthorizationError, FactoryService
-from adaptive_factory.store import FenceError, StoreError
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.service import AuthorizationError, FactoryService
+from getzilla_factory.store import FenceError, StoreError
 from factory.tests.test_contracts import valid_intake
 
 
@@ -299,7 +299,7 @@ class ServiceTests(unittest.TestCase):
         import ast
         from pathlib import Path
 
-        from adaptive_factory import store as store_module
+        from getzilla_factory import store as store_module
 
         tree = ast.parse(Path(store_module.__file__).read_text(encoding="utf-8"))
         owners = []

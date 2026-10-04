@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_module():
-    path = ROOT / ".grok-stack/adaptive_grok/workflow_artifacts.py"
-    spec = importlib.util.spec_from_file_location("adaptive_grok.workflow_artifacts", path)
+    path = ROOT / ".getzilla/getzilla/workflow_artifacts.py"
+    spec = importlib.util.spec_from_file_location("getzilla.workflow_artifacts", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -38,7 +38,7 @@ class WorkflowSourceTests(unittest.TestCase):
                  'review_agents': ['code_reviewer'], 'required_evidence': ['verification']}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / '.grok-stack/runtime/active-route.json'
+            path = root / '.getzilla/runtime/active-route.json'
             path.parent.mkdir(parents=True)
             for addition in ({}, {'matched_keywords': {}},
                              {'matched_keywords': {'data': ['sql', 'миграц']}}):
@@ -57,7 +57,7 @@ class WorkflowSourceTests(unittest.TestCase):
                    {f'domain{i}': ['sql'] for i in range(17)})
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / '.grok-stack/runtime/active-route.json'
+            path = root / '.getzilla/runtime/active-route.json'
             path.parent.mkdir(parents=True)
             for addition in [*({'matched_keywords': value} for value in invalid), {'unexpected': {}}]:
                 with self.subTest(addition=addition):
@@ -294,7 +294,7 @@ class WorkflowCompileTests(unittest.TestCase):
     def test_verification_command_accepts_focused_static_landing_mode(self) -> None:
         command = [
             "python3",
-            "scripts/grok_verify.py",
+            "scripts/getzilla_verify.py",
             "--mode",
             "focused-static-seo-landing",
         ]
@@ -838,13 +838,13 @@ deferred: []
     def test_receipt_kind_sets_match_and_domain_kinds_validate(self) -> None:
         import sys
 
-        for entry in (str(ROOT), str(ROOT / ".grok-stack")):
+        for entry in (str(ROOT), str(ROOT / ".getzilla")):
             if entry not in sys.path:
                 sys.path.insert(0, entry)
-        from adaptive_grok import receipts as canonical
+        from getzilla import receipts as canonical
 
         self.assertEqual(set(self.artifacts.RECEIPT_KINDS), set(canonical.RECEIPT_KINDS))
-        router_src = (ROOT / ".grok-stack/adaptive_grok/router.py").read_text(encoding="utf-8")
+        router_src = (ROOT / ".getzilla/getzilla/router.py").read_text(encoding="utf-8")
         emitted = set(re.findall(r"evidence\.append\('([a-z_]+)'\)", router_src))
         self.assertTrue(emitted, "router emits no receipt kinds")
         self.assertEqual(emitted - {"verification"}, set(canonical.RECEIPT_KINDS) - {"verification"})

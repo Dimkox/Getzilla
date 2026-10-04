@@ -12,16 +12,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory import landing_backup
-from adaptive_factory.landing_host_config import load_host_config
-from adaptive_factory.settings import SettingsError
+from getzilla_factory import landing_backup
+from getzilla_factory.landing_host_config import load_host_config
+from getzilla_factory.settings import SettingsError
 from factory.tests.landing_host_fixture import HostFixture
 
 # Single auditable list for both offline guards in this suite. The web/database stack is
 # matched by every importable name it can arrive under, not just the one we happen to use.
 BLOCKED_IMPORTS = (
-    "adaptive_factory.api", "adaptive_factory.server", "adaptive_factory.landing_host",
-    "adaptive_factory.landing_server", "adaptive_factory.landing_live_executors",
+    "getzilla_factory.api", "getzilla_factory.server", "getzilla_factory.landing_host",
+    "getzilla_factory.landing_server", "getzilla_factory.landing_live_executors",
     "fastapi", "httpx", "psycopg", "psycopg2", "starlette", "uvicorn",
 )
 
@@ -63,14 +63,14 @@ class LandingBackupTests(HostFixture):
 
     def test_offline_config_and_backup_import_without_host_or_live_composition(self):
         code = OFFLINE_GUARD + textwrap.dedent("""
-            from adaptive_factory import settings
+            from getzilla_factory import settings
             private_read = settings.read_private_file
             def bounded_read(path, maximum):
                 assert path == Path(sys.argv[1]), "unexpected private file acquisition"
                 return private_read(path, maximum)
             settings.read_private_file = bounded_read
-            from adaptive_factory import landing_backup
-            from adaptive_factory.landing_host_config import load_host_config
+            from getzilla_factory import landing_backup
+            from getzilla_factory.landing_host_config import load_host_config
             config = load_host_config(Path(sys.argv[1]))
             assert config.settings.landing_live_enabled is False
             assert landing_backup.load_host_config is load_host_config
@@ -192,9 +192,9 @@ class LandingBackupTests(HostFixture):
         self.assertEqual(b"opaque retained artifact bytes", self.artifact.read_bytes())
 
     def test_active_landing_and_publication_writers_reject_before_snapshot_and_release(self):
-        from adaptive_delivery.landing_publication import PublicationStore
-        from adaptive_delivery.landing_publication_contracts import PublicationError
-        from adaptive_factory.landing_service import LandingServiceError
+        from getzilla_delivery.landing_publication import PublicationStore
+        from getzilla_delivery.landing_publication_contracts import PublicationError
+        from getzilla_factory.landing_service import LandingServiceError
 
         for kind in ("landing", "publication"):
             owner = (self.reopen_store() if kind == "landing"
@@ -243,8 +243,8 @@ class LandingBackupTests(HostFixture):
         self.assertFalse(Path(str(destination) + "-shm").exists())
 
     def test_populated_publication_intent_round_trip_remains_observation_only(self):
-        from adaptive_delivery.landing_publication import PublicationStore
-        from adaptive_delivery.landing_publication_contracts import PublicationRequestV1
+        from getzilla_delivery.landing_publication import PublicationStore
+        from getzilla_delivery.landing_publication_contracts import PublicationRequestV1
 
         request = PublicationRequestV1(
             1, "snapshot-intent", "stage", "a" * 64,
@@ -261,8 +261,8 @@ class LandingBackupTests(HostFixture):
                       {(entry["category"], entry["name"]) for entry in manifest["entries"]})
         self.move_old_roots()
         with (
-            patch("adaptive_delivery.landing_filesystem.FilesystemLandingPublisher.stage", side_effect=AssertionError("publication effect")),
-            patch("adaptive_delivery.landing_filesystem.FilesystemLandingPublisher.activate", side_effect=AssertionError("publication effect")),
+            patch("getzilla_delivery.landing_filesystem.FilesystemLandingPublisher.stage", side_effect=AssertionError("publication effect")),
+            patch("getzilla_delivery.landing_filesystem.FilesystemLandingPublisher.activate", side_effect=AssertionError("publication effect")),
         ):
             result = landing_backup.restore_snapshot(self.config, self.snapshot, saved["manifest_sha256"])
         self.assertEqual("restored_inactive", result["status"])

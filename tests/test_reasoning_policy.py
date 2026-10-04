@@ -29,7 +29,7 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertRegex(config, r'(?m)^default_reasoning_effort\s*=\s*"low"\s*$')
 
     def test_every_project_agent_has_explicit_policy_effort(self) -> None:
-        routing = json.loads((ROOT / '.grok-stack/config/routing.json').read_text(encoding='utf-8'))
+        routing = json.loads((ROOT / '.getzilla/config/routing.json').read_text(encoding='utf-8'))
         reasoning = routing['reasoning']
         self.assertEqual(reasoning['default'], 'low')
         high_effort_agents = set(reasoning['high_effort_agents'])

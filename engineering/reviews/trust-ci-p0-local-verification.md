@@ -5,9 +5,9 @@ Verified on 2026-08-23 against the self-hosted Trust CI implementation reconstru
 ## Commands
 
 ```bash
-PYTHONPATH=.grok-stack:trust-ci/src python3 -m unittest discover -s tests -v
-PYTHONPATH=.grok-stack:trust-ci/src python3 -m unittest discover -s trust-ci/tests -v
-python3 -m compileall -q .grok-stack/adaptive_grok scripts trust-ci/src tests trust-ci/tests
+PYTHONPATH=.getzilla:trust-ci/src python3 -m unittest discover -s tests -v
+PYTHONPATH=.getzilla:trust-ci/src python3 -m unittest discover -s trust-ci/tests -v
+python3 -m compileall -q .getzilla/getzilla scripts trust-ci/src tests trust-ci/tests
 ```
 
 ## Results

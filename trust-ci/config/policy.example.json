@@ -23,14 +23,14 @@
       "scope": "governance",
       "globs": [
         ".grok/**",
-        ".grok-stack/**",
+        ".getzilla/**",
         "AGENTS.md",
         "decisions.md",
         "mistakes.md",
         "Makefile",
-        "scripts/grok_approve.py",
-        "scripts/grok_review.py",
-        "scripts/grok_verify.py",
+        "scripts/getzilla_approve.py",
+        "scripts/getzilla_review.py",
+        "scripts/getzilla_verify.py",
         "trust-ci/**"
       ]
     },
@@ -57,7 +57,7 @@
   ],
   "repository_profiles": [
     {
-      "repository": "Dimkox/adaptive-grok-build-pro",
+      "repository": "Dimkox/Getzilla",
       "commands": [
         {
           "name": "root-unittest",
@@ -92,7 +92,7 @@
             "-m",
             "compileall",
             "-q",
-            ".grok-stack/adaptive_grok",
+            ".getzilla/getzilla",
             "scripts",
             "trust-ci/src"
           ],
@@ -103,7 +103,7 @@
           "name": "repository-verification",
           "argv": [
             "python3",
-            "scripts/grok_verify.py",
+            "scripts/getzilla_verify.py",
             "--mode",
             "pr",
             "--no-record",
@@ -114,9 +114,9 @@
         }
       ],
       "holdout": {
-        "path": "/etc/adaptive-trust-ci/holdout/adaptive-grok-build-pro",
-        "host_path": "/etc/adaptive-trust-ci/holdout/adaptive-grok-build-pro",
-        "digest": "e2de03333ac37e6478433ad37486f6ee904ae8ba8054c86481c04eb7d56fcd64",
+        "path": "/etc/adaptive-trust-ci/holdout/getzilla",
+        "host_path": "/etc/adaptive-trust-ci/holdout/getzilla",
+        "digest": "95db2116b66e7f94dda5388d9d5b440c70dedf597a026543be0749b0205d2c04",
         "commands": [
           {
             "name": "adaptive-holdout",

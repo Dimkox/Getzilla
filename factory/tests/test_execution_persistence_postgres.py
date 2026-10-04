@@ -11,25 +11,25 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.contracts import canonical_digest
-from adaptive_factory.execution_contracts import WorkspaceResultV1, workspace_evidence_digest
-from adaptive_factory.brokers import BrokerError, ProposalBroker, proposal_idempotency_key
-from adaptive_factory.migrations import (
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.contracts import canonical_digest
+from getzilla_factory.execution_contracts import WorkspaceResultV1, workspace_evidence_digest
+from getzilla_factory.brokers import BrokerError, ProposalBroker, proposal_idempotency_key
+from getzilla_factory.migrations import (
     ADVISORY_LOCK_KEY,
     MigrationError,
     PostgresMigrator,
     RoleSafetyError,
     discover_migrations,
 )
-from adaptive_factory.models import Actor, ExecutionStage, FailureClass, RunRole
-from adaptive_factory.service import (
+from getzilla_factory.models import Actor, ExecutionStage, FailureClass, RunRole
+from getzilla_factory.service import (
     AuthorizationError,
     ClaimRequest,
     FactoryService,
     SnapshotBrokerUnavailable,
 )
-from adaptive_factory.store import (
+from getzilla_factory.store import (
     FenceError,
     IntegrityError,
     PostgresArtifactAttestationStore,
@@ -38,22 +38,22 @@ from adaptive_factory.store import (
     StoreError,
     StoreUnavailable,
 )
-from adaptive_factory.protocol import CanonicalEvent, PROTOCOL_VERSION_V2
-from adaptive_factory.pricing import (
+from getzilla_factory.protocol import CanonicalEvent, PROTOCOL_VERSION_V2
+from getzilla_factory.pricing import (
     PriceTableV1,
     PricingContractError,
     UsageTokens,
     calculate_cost_usd_micros,
     price_table_digest,
 )
-from adaptive_factory.protocol import EventStreamParser, ProtocolError, validate_event_payload
-from adaptive_factory.recovery import (
+from getzilla_factory.protocol import EventStreamParser, ProtocolError, validate_event_payload
+from getzilla_factory.recovery import (
     ExecutionRecovery,
     ExecutionRecoveryCandidate,
     ExecutionRecoveryClaim,
     ExecutionRecoveryNotDue,
 )
-from adaptive_factory.workspace import (
+from getzilla_factory.workspace import (
     ArtifactAttestationV1,
     FakeWorkspaceBroker,
     WorkspaceHandle,
@@ -311,7 +311,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         PostgresMigrator(DATABASE_URL).apply()
-        from adaptive_factory.admin import (
+        from getzilla_factory.admin import (
             provision_artifact_attestor_login,
             provision_runtime_login,
         )
@@ -431,7 +431,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             )
         if register_cleanup:
             self.addCleanup(self.drop_disposable_database, database_url, admin_url)
-        from adaptive_factory.migrations import discover_migrations
+        from getzilla_factory.migrations import discover_migrations
 
         migrations = tuple(PostgresMigrator(DATABASE_URL).status())
         self.assertEqual(len(migrations), len(discover_migrations()))
@@ -1485,7 +1485,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
                 connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(parent)))
 
     def test_separate_runtime_and_attestor_logins_survive_upgrade_and_attest(self):
-        from adaptive_factory.admin import bootstrap_local
+        from getzilla_factory.admin import bootstrap_local
 
         readiness = bootstrap_local(
             DATABASE_URL,
@@ -1496,7 +1496,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             artifact_attestor_password=self.attestor_password,
             artifact_attestor_url=self.attestor_url,
         )
-        from adaptive_factory.migrations import discover_migrations
+        from getzilla_factory.migrations import discover_migrations
 
         self.assertEqual(readiness["database_role"], "factory_runtime")
         self.assertEqual(
@@ -1531,7 +1531,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
 
     def test_bootstrap_rejects_partial_attestor_configuration_before_provisioning(self):
         import psycopg
-        from adaptive_factory.admin import BootstrapError, bootstrap_local
+        from getzilla_factory.admin import BootstrapError, bootstrap_local
         from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
         runtime_login = "factory_partial_runtime"
@@ -1882,7 +1882,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         import psycopg
         from psycopg import sql
         from psycopg.conninfo import make_conninfo
-        from adaptive_factory.admin import (
+        from getzilla_factory.admin import (
             provision_semantic_adjudicator_login,
             provision_semantic_coordinator_login,
             provision_semantic_validator_login,
@@ -2065,7 +2065,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         database_url, packaged, before = self.create_populated_current_prefix(packaged=historical)
         # The historical migrator receives the actual immutable packaged001–021
         # resources, so it applies and records real021 without accidentally022.
-        with mock.patch("adaptive_factory.migrations.discover_migrations", return_value=historical):
+        with mock.patch("getzilla_factory.migrations.discover_migrations", return_value=historical):
             self.assert_current_prefix_upgraded(
                 database_url, packaged, before, self.migrate(database_url)
             )

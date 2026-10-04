@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.grok-stack'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
-from adaptive_grok import util
+from getzilla import util
 
 
 class FingerprintTests(unittest.TestCase):
@@ -127,9 +127,9 @@ class FingerprintTests(unittest.TestCase):
     def test_verifier_json_output_roundtrips_filesystem_names_and_unicode(self) -> None:
         report = {'status': 'pass', 'changed_files': [os.fsdecode(b'source-\xff.py'), 'Обзор.py']}
         output = io.StringIO()
-        script = Path(__file__).resolve().parents[1] / 'scripts/grok_verify.py'
+        script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         with (patch.object(sys, 'argv', [str(script), '--json']),
-              patch('adaptive_grok.verification.verify', return_value=report),
+              patch('getzilla.verification.verify', return_value=report),
               patch.object(util, 'find_root', return_value=self.root),
               contextlib.redirect_stdout(output)):
             with self.assertRaises(SystemExit) as raised:
@@ -139,7 +139,7 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(report, json.loads(encoded.decode('utf-8')))
 
     def test_tracked_noise_paths_bind_edits_and_deletions(self) -> None:
-        for rel in ('.qwen/tmp/probe', '.grok-stack/runtime/probe', 'vendor/source.py',
+        for rel in ('.qwen/tmp/probe', '.getzilla/runtime/probe', 'vendor/source.py',
                     'node_modules/source.js', '__pycache__/source.py', 'coverage/source',
                     '.coverage', 'source.pyc', '.pytest_cache/source'):
             for operation in ('edit', 'staged_edit', 'delete', 'staged_delete'):
@@ -263,7 +263,7 @@ class FingerprintTests(unittest.TestCase):
 
     def test_existing_untracked_runtime_noise_remains_excluded(self) -> None:
         before = util.tree_fingerprint(self.root)
-        for rel in ('.grok-stack/runtime/receipt.json', '__pycache__/cache.pyc',
+        for rel in ('.getzilla/runtime/receipt.json', '__pycache__/cache.pyc',
                     '.pytest_cache/file', 'vendor/generated', 'node_modules/generated',
                     'coverage/report', '.coverage', 'module.pyo'):
             self.write(rel)
@@ -285,7 +285,7 @@ class FingerprintTests(unittest.TestCase):
 
                 with patch.object(subprocess, 'run', side_effect=failed_inventory):
                     before = util.tree_fingerprint(self.root)
-                    for rel in ('.qwen/tmp/probe', '.grok-stack/runtime/probe'):
+                    for rel in ('.qwen/tmp/probe', '.getzilla/runtime/probe'):
                         path = self.write(rel)
                         self.assert_bound(rel, before)
                         path.unlink()
@@ -301,7 +301,7 @@ class FingerprintTests(unittest.TestCase):
             before = util.tree_fingerprint(self.root)
             path.write_text('two', encoding='utf-8')
             self.assert_bound(rel, before)
-            tracked = '.grok-stack/runtime/tracked'
+            tracked = '.getzilla/runtime/tracked'
             self.write(tracked)
             self.git('add', tracked)
             before = util.tree_fingerprint(self.root)

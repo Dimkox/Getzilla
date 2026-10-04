@@ -14,11 +14,11 @@ import time
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.grok-stack'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
-from adaptive_grok.verification import CheckResult, _python
-from adaptive_grok import python_test_runner
-from adaptive_grok.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
+from getzilla.verification import CheckResult, _python
+from getzilla import python_test_runner
+from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 
 
 @contextlib.contextmanager
@@ -27,7 +27,7 @@ def fixture(*, workers: object = 2):
         root = Path(directory)
         (root / 'tests').mkdir()
         (root / 'tests/__init__.py').write_text('')
-        (root / '.grok-test-runner.json').write_text(
+        (root / '.getzilla-test-runner.json').write_text(
             json.dumps({'schema_version': 1, 'workers': workers})
         )
         (root / 'tests/test_sample.py').write_text(
@@ -41,13 +41,13 @@ def fixture(*, workers: object = 2):
             )
         )
         environment = os.environ.copy()
-        for key in ('GROK_TEST_WORKERS', '_GROK_TEST_CHILD'):
+        for key in ('GETZILLA_TEST_WORKERS', '_GETZILLA_TEST_CHILD'):
             environment.pop(key, None)
         with patch.dict(os.environ, environment, clear=True), patch(
-            'adaptive_grok.verification._ruff',
+            'getzilla.verification._ruff',
             return_value=CheckResult('ruff', 'skip', 'no python quality paths'),
         ), patch(
-            'adaptive_grok.verification._bandit',
+            'getzilla.verification._bandit',
             return_value=CheckResult('bandit', 'skip', 'bandit not available'),
         ):
             yield root
@@ -88,7 +88,7 @@ def v2_capacity(*, membership: str = '/team/job', mount_root: str = '/',
 
 class NamedSmokeTests(unittest.TestCase):
     def test_existing_cli_requires_explicit_observation_mode_and_no_record(self):
-        script = Path(__file__).resolve().parents[1] / 'scripts/grok_verify.py'
+        script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         for arguments in (
             ['--test', 'tests.test_named'], ['--mode', 'release', '--no-record', '--test', 'tests.test_named'],
             ['--mode', 'fast', '--test', 'tests.test_named'], ['--mode', 'fast', '--no-record', '--budget', '1'],
@@ -99,10 +99,10 @@ class NamedSmokeTests(unittest.TestCase):
                 proc = subprocess.run([sys.executable, str(script), *arguments], cwd=root,
                                       text=True, capture_output=True, timeout=10)
                 self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-                self.assertFalse((root / '.grok-stack/runtime/receipts').exists())
+                self.assertFalse((root / '.getzilla/runtime/receipts').exists())
         with self.committed_tree() as root:
-            (root / '.git/info/exclude').write_text('.grok-stack/runtime/\n')
-            receipt = root / '.grok-stack/runtime/receipts/verification.json'
+            (root / '.git/info/exclude').write_text('.getzilla/runtime/\n')
+            receipt = root / '.getzilla/runtime/receipts/verification.json'
             receipt.parent.mkdir(parents=True)
             receipt.write_text('prior evidence')
             proc = subprocess.run([sys.executable, str(script), '--mode', 'fast', '--no-record', '--json',
@@ -119,7 +119,7 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertEqual(receipt.read_text(), 'prior evidence')
 
     def test_named_smoke_cancellation_retains_signal_and_identity_without_receipt(self):
-        script = Path(__file__).resolve().parents[1] / 'scripts/grok_verify.py'
+        script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         body = '__import__("os").kill(__import__("os").getppid(), 15); time.sleep(5)'
         with self.committed_tree(body) as root:
             proc = subprocess.run([sys.executable, str(script), '--mode', 'fast', '--no-record', '--json',
@@ -131,16 +131,16 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertEqual(report['head_before'], report['head_after'])
             self.assertEqual(report['checks'][0]['status'], 'cancelled')
             self.assertEqual(report['checks'][1]['status'], 'pass')
-            self.assertFalse((root / '.grok-stack/runtime/receipts').exists())
+            self.assertFalse((root / '.getzilla/runtime/receipts').exists())
 
     @contextlib.contextmanager
     def committed_tree(self, body='self.assertEqual(core_marker.VALUE, 42)'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'tests').mkdir()
-            (root / '.grok-stack').mkdir()
+            (root / '.getzilla').mkdir()
             (root / 'tests/__init__.py').write_text('')
-            (root / '.grok-stack/core_marker.py').write_text('VALUE = 42\n')
+            (root / '.getzilla/core_marker.py').write_text('VALUE = 42\n')
             (root / 'tests/test_named.py').write_text(
                 'import unittest\nimport core_marker\nimport time\nfrom pathlib import Path\n'
                 'class Named(unittest.TestCase):\n    def test_named(self):\n        ' + body + '\n')
@@ -150,13 +150,13 @@ class NamedSmokeTests(unittest.TestCase):
             yield root
 
     def test_named_smoke_uses_core_imports_and_never_records_receipt(self):
-        from adaptive_grok.verification import verify_named_tests
+        from getzilla.verification import verify_named_tests
         with self.committed_tree() as root:
-            receipt = root / '.grok-stack/runtime/receipts/verification.json'
+            receipt = root / '.getzilla/runtime/receipts/verification.json'
             receipt.parent.mkdir(parents=True)
             receipt.write_text('prior evidence')
             # Runtime evidence is ignored as in a real repository.
-            (root / '.git/info/exclude').write_text('.grok-stack/runtime/\n')
+            (root / '.git/info/exclude').write_text('.getzilla/runtime/\n')
             report = verify_named_tests(root, ['tests.test_named.Named.test_named'], budget=10)
             self.assertEqual(report['status'], 'pass')
             self.assertEqual(report['evidence_status'], 'not_recorded')
@@ -166,7 +166,7 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertEqual(receipt.read_text(), 'prior evidence')
 
     def test_named_smoke_timeout_failure_and_source_mutation_are_refused(self):
-        from adaptive_grok.verification import verify_named_tests
+        from getzilla.verification import verify_named_tests
         for body, budget, diagnostic in (
             ('time.sleep(5)', 1, 'timeout'),
             ('self.fail("specific assertion")', 10, 'specific assertion'),
@@ -180,10 +180,10 @@ class NamedSmokeTests(unittest.TestCase):
                 self.assertEqual(report['status'], 'fail')
                 self.assertLess(time.monotonic() - started, budget + 4)
                 self.assertIn(diagnostic, json.dumps(report))
-                self.assertFalse((root / '.grok-stack/runtime/receipts').exists())
+                self.assertFalse((root / '.getzilla/runtime/receipts').exists())
 
     def test_named_smoke_rejects_dirty_tree_empty_invalid_targets_and_budget(self):
-        from adaptive_grok.verification import verify_named_tests
+        from getzilla.verification import verify_named_tests
         with self.committed_tree() as root:
             for targets, budget in (([], 10), ([''], 10), (['../test_named'], 10),
                                     (['tests.test_missing'], 10), (['tests.test_named'], 0),
@@ -366,9 +366,9 @@ class PythonTestCapacityTests(unittest.TestCase):
         ):
             with self.subTest(configured=configured, override=override, child=child), \
                  fixture(workers=configured) as root, capacity_files(root, {}) as reads:
-                env = {'_GROK_TEST_CHILD': '1'} if child else {}
+                env = {'_GETZILLA_TEST_CHILD': '1'} if child else {}
                 if override is not None:
-                    env['GROK_TEST_WORKERS'] = override
+                    env['GETZILLA_TEST_WORKERS'] = override
                 with patch.dict(os.environ, env):
                     self.assertEqual(selected_workers(root), expected)
                 self.assertEqual(reads, [])
@@ -390,7 +390,7 @@ class PythonTestCapacityTests(unittest.TestCase):
         files = v2_capacity(membership='/')
         files['/sys/fs/cgroup/cpu.max'] = '200000 100000'
         with fixture(workers=64) as root, capacity_files(root, files), \
-             patch.dict(os.environ, {'GROK_TEST_WORKERS': 'auto'}):
+             patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': 'auto'}):
             self.assertEqual(selected_workers(root), 2)
         for cpus, expected in ((4, 4), (None, 1)):
             with self.subTest(cpus=cpus), fixture(workers='auto') as root, \
@@ -436,8 +436,8 @@ class PythonTestRunnerTests(unittest.TestCase):
                             for i in range(3)
                         )
                     )
-                command = [sys.executable, '-m', 'adaptive_grok.python_test_runner', '--suite', 'trust-ci']
-                environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.grok-stack')}
+                command = [sys.executable, '-m', 'getzilla.python_test_runner', '--suite', 'trust-ci']
+                environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
                 result = execute(command, root, environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual({p.name for p in trust.glob('*.pid')},
@@ -460,8 +460,8 @@ class PythonTestRunnerTests(unittest.TestCase):
 
     def test_absent_opt_in_and_private_child_flag_preserve_consumer(self) -> None:
         with fixture() as root:
-            (root / '.grok-test-runner.json').unlink()
-            with patch.dict(os.environ, {'_GROK_TEST_CHILD': '1'}):
+            (root / '.getzilla-test-runner.json').unlink()
+            with patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1'}):
                 self.assertIsNone(selected_workers(root))
                 result = next(check for check in _python(root) if check.name == 'python-unittest')
             self.assertEqual(result.status, 'pass', result.stderr)
@@ -469,11 +469,11 @@ class PythonTestRunnerTests(unittest.TestCase):
 
     def test_serial_rollback_and_child_cap_do_not_start_a_pool(self) -> None:
         with fixture() as root:
-            with patch.dict(os.environ, {'GROK_TEST_WORKERS': '0'}):
+            with patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '0'}):
                 result = next(check for check in _python(root) if check.name == 'python-unittest')
             self.assertEqual(result.status, 'pass', result.stderr)
             self.assertEqual(len({p.read_text() for p in root.glob('result-*')}), 1)
-            with patch.dict(os.environ, {'_GROK_TEST_CHILD': '1', 'GROK_TEST_WORKERS': '22'}):
+            with patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1', 'GETZILLA_TEST_WORKERS': '22'}):
                 self.assertEqual(selected_workers(root), 0)
 
     def test_auto_uses_available_logical_cpus_with_a_bound(self) -> None:
@@ -666,9 +666,9 @@ class PythonTestRunnerTests(unittest.TestCase):
                 ('mismatched', lambda _name: '0.0.1'),
             ):
                 with self.subTest(pinning=label), \
-                     patch('adaptive_grok.python_test_runner.parallel_engine_ready', return_value=True), \
-                     patch('adaptive_grok.python_test_runner._parallel_process_cleanup_supported', return_value=True), \
-                     patch('adaptive_grok.python_test_runner.metadata.version', side_effect=version_effect):
+                     patch('getzilla.python_test_runner.parallel_engine_ready', return_value=True), \
+                     patch('getzilla.python_test_runner._parallel_process_cleanup_supported', return_value=True), \
+                     patch('getzilla.python_test_runner.metadata.version', side_effect=version_effect):
                     result = next(check for check in _python(root) if check.name == 'python-unittest')
                 self.assertEqual(result.status, 'fail', label)
                 self.assertIn('python-test-requirements.txt' if label == 'missing' else 'requires tested version',
@@ -679,7 +679,7 @@ class PythonTestRunnerTests(unittest.TestCase):
         # The Trust CI image lacks pytest/xdist, so measured PR verification must still
         # avoid the legacy serial coverage timeout without requiring a repo-local opt-in file.
         repo_root = Path(__file__).resolve().parents[1]
-        self.assertFalse((repo_root / '.grok-test-runner.json').exists())
+        self.assertFalse((repo_root / '.getzilla-test-runner.json').exists())
         self.assertIsNone(selected_workers(repo_root))
 
         class Core:
@@ -687,13 +687,13 @@ class PythonTestRunnerTests(unittest.TestCase):
             coverage = python_test_runner.ProcessResult(['coverage'], 0)
             workers = 2
             versions = {'coverage': python_test_runner.PINS['coverage'], 'engine': 'coverage-unittest-parallel'}
-            coverage_metadata = {'files': ['.grok-stack/adaptive_grok/python_test_runner.py']}
+            coverage_metadata = {'files': ['.getzilla/getzilla/python_test_runner.py']}
 
-        with patch('adaptive_grok.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
-             patch('adaptive_grok.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
-             patch('adaptive_grok.verification._factory_unit', return_value=[]), \
-             patch('adaptive_grok.verification.run_core_tests', return_value=Core()) as runner, \
-             patch.dict(os.environ, {'GROK_VERIFY_CAPABILITY': 'repository-sandbox'}):
+        with patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
+             patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
+             patch('getzilla.verification._factory_unit', return_value=[]), \
+             patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \
+             patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
             results = {check.name: check for check in _python(repo_root, mode='pr')}
         self.assertIn('python-unittest', results)
         self.assertEqual(runner.call_args.args[2], 2)
@@ -720,10 +720,10 @@ class PythonTestRunnerTests(unittest.TestCase):
             child_code = f'import os,time; from pathlib import Path; Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)'
             code = (
                 'import os,sys\nfrom pathlib import Path\n'
-                'from adaptive_grok.python_test_runner import execute\n'
+                'from getzilla.python_test_runner import execute\n'
                 f'execute([sys.executable,"-c",{child_code!r}],Path.cwd(),os.environ.copy())\n'
             )
-            environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.grok-stack')}
+            environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
             controller = subprocess.Popen([sys.executable, '-c', code], cwd=root, env=environment)
             try:
                 for _ in range(500):
@@ -764,7 +764,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 self.assertEqual(result.status, 'fail', result.stdout)
 
     def test_output_limit_applies_even_when_process_exits_quickly(self) -> None:
-        with fixture() as root, patch('adaptive_grok.python_test_runner.OUTPUT_LIMIT', 16):
+        with fixture() as root, patch('getzilla.python_test_runner.OUTPUT_LIMIT', 16):
             result = execute([sys.executable, '-c', 'print("x" * 10000)'], root, os.environ.copy())
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('output limit', result.stderr)
@@ -842,14 +842,14 @@ class PythonTestRunnerTests(unittest.TestCase):
                             data.write_bytes(b'broken coverage data')
                     return result
 
-                with patch('adaptive_grok.python_test_runner.execute', side_effect=damage_current_data):
+                with patch('getzilla.python_test_runner.execute', side_effect=damage_current_data):
                     results = {check.name: check for check in _python(root, mode='pr')}
                 self.assertEqual(results['python-unittest'].status, 'pass', results)
                 self.assertEqual(results['coverage'].status, 'fail', results)
 
     def test_nested_legacy_coverage_keeps_parent_data(self) -> None:
         with fixture() as root:
-            (root / '.grok-test-runner.json').unlink()
+            (root / '.getzilla-test-runner.json').unlink()
             (root / 'subject.py').write_text('value = 1\n')
             sample = root / 'tests/test_sample.py'
             sample.write_text('import subject\n' + sample.read_text())
@@ -858,7 +858,7 @@ class PythonTestRunnerTests(unittest.TestCase):
             )
             parent = root / 'parent.coverage'
             parent.write_bytes(b'parent-owned-evidence')
-            with patch.dict(os.environ, {'COVERAGE_FILE': str(parent), '_GROK_TEST_CHILD': '1'}):
+            with patch.dict(os.environ, {'COVERAGE_FILE': str(parent), '_GETZILLA_TEST_CHILD': '1'}):
                 results = {check.name: check for check in _python(root, mode='pr')}
             self.assertEqual(results['coverage'].status, 'pass', results)
             self.assertEqual(parent.read_bytes(), b'parent-owned-evidence')
@@ -884,23 +884,23 @@ class PythonTestRunnerTests(unittest.TestCase):
                 self.assertEqual(result.status, 'fail')
                 self.assertFalse(list(root.glob('result-*')))
         with fixture() as root:
-            config = root / '.grok-test-runner.json'
+            config = root / '.getzilla-test-runner.json'
             config.write_text(json.dumps({'schema_version': 2, 'workers': 2}))
             self.assertRaises(RunnerError, selected_workers, root)
             config.write_text(json.dumps({'schema_version': 1, 'workers': 2, 'extra': 1}))
             self.assertRaises(RunnerError, selected_workers, root)
-        with fixture(workers=0) as root, patch.dict(os.environ, {'GROK_TEST_WORKERS': '65'}):
+        with fixture(workers=0) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '65'}):
             self.assertRaises(RunnerError, selected_workers, root)
-        with fixture(workers=0) as root, patch.dict(os.environ, {'GROK_TEST_WORKERS': 'invalid'}):
+        with fixture(workers=0) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': 'invalid'}):
             self.assertRaises(RunnerError, selected_workers, root)
         with fixture() as root:
-            config = root / '.grok-test-runner.json'
+            config = root / '.getzilla-test-runner.json'
             config.unlink()
             os.mkfifo(config)
             result = execute(
                 [sys.executable, '-c',
-                 'from pathlib import Path; from adaptive_grok.python_test_runner import selected_workers; selected_workers(Path.cwd())'],
-                root, {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.grok-stack')}, timeout=1,
+                 'from pathlib import Path; from getzilla.python_test_runner import selected_workers; selected_workers(Path.cwd())'],
+                root, {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}, timeout=1,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertNotEqual(result.returncode, 124, 'nonregular configuration must fail without blocking')

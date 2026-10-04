@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.protected_write import ProtectedWriteError, apply_manifest, load_manifest
-from adaptive_grok.router import build_route
-from adaptive_grok.state import add_approval, set_active_route
-from adaptive_grok.util import file_sha256
+from getzilla.protected_write import ProtectedWriteError, apply_manifest, load_manifest
+from getzilla.router import build_route
+from getzilla.state import add_approval, set_active_route
+from getzilla.util import file_sha256
 from tests._support import project_copy
 
 
@@ -23,7 +23,7 @@ from tests._support import project_copy
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(
-            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/adaptive-grok-build-pro.git'],
+            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
             cwd=root,
             check=True,
         )

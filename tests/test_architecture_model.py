@@ -15,21 +15,21 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
 
 def _architecture_module():
     try:
-        return importlib.import_module("adaptive_grok.architecture")
+        return importlib.import_module("getzilla.architecture")
     except ModuleNotFoundError as exc:
-        if exc.name != "adaptive_grok.architecture":
+        if exc.name != "getzilla.architecture":
             raise
         return None
 
 
 ARCH = _architecture_module()
 try:
-    DIAGRAMS = importlib.import_module("adaptive_grok.architecture_diagrams")
+    DIAGRAMS = importlib.import_module("getzilla.architecture_diagrams")
 except ModuleNotFoundError:
     DIAGRAMS = None
 
@@ -152,7 +152,7 @@ def _openapi(operation: dict | None = None) -> dict:
 class ArchitectureModelTests(unittest.TestCase):
     def setUp(self) -> None:
         if ARCH is None:
-            self.fail("adaptive_grok.architecture is not implemented")
+            self.fail("getzilla.architecture is not implemented")
 
     def test_factory_control_plane_is_local_and_separate_from_trust_ci(self) -> None:
         snapshot = ARCH.load_architecture(ROOT)
@@ -184,7 +184,7 @@ class ArchitectureModelTests(unittest.TestCase):
                 {
                     "id": "FIT-BOUNDED-ARCHITECTURE-CHANGE",
                     "path_prefixes": [
-                        ".grok-stack/adaptive_grok",
+                        ".getzilla/getzilla",
                         "architecture",
                         "delivery",
                         "engineering/contracts",
@@ -200,7 +200,7 @@ class ArchitectureModelTests(unittest.TestCase):
                 {
                     "id": "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
                     "path_prefixes": [
-                        ".grok-stack/adaptive_grok",
+                        ".getzilla/getzilla",
                         "architecture",
                         "engineering/contracts",
                         "factory",
@@ -269,23 +269,23 @@ class ArchitectureModelTests(unittest.TestCase):
         expected_paths = {
             "NODE-FACTORY-EXECUTION-CORE": {
                 "factory/contracts/schemas",
-                "factory/src/adaptive_factory/execution_contracts.py",
-                "factory/src/adaptive_factory/pricing.py",
-                "factory/src/adaptive_factory/protocol.py",
-                "factory/src/adaptive_factory/semantic_bridge.py",
+                "factory/src/getzilla_factory/execution_contracts.py",
+                "factory/src/getzilla_factory/pricing.py",
+                "factory/src/getzilla_factory/protocol.py",
+                "factory/src/getzilla_factory/semantic_bridge.py",
             },
             "NODE-FACTORY-PROVIDER-ADAPTERS": {
-                "factory/src/adaptive_factory/adapters/__init__.py",
-                "factory/src/adaptive_factory/adapters/base.py",
-                "factory/src/adaptive_factory/adapters/codex.py",
-                "factory/src/adaptive_factory/adapters/grok.py",
+                "factory/src/getzilla_factory/adapters/__init__.py",
+                "factory/src/getzilla_factory/adapters/base.py",
+                "factory/src/getzilla_factory/adapters/codex.py",
+                "factory/src/getzilla_factory/adapters/grok.py",
             },
             "NODE-FACTORY-PROPOSAL-BROKER": {
-                "factory/src/adaptive_factory/brokers.py",
-                "factory/src/adaptive_factory/result_broker.py",
-                "factory/src/adaptive_factory/result_contracts.py",
+                "factory/src/getzilla_factory/brokers.py",
+                "factory/src/getzilla_factory/result_broker.py",
+                "factory/src/getzilla_factory/result_contracts.py",
             },
-            "NODE-FACTORY-WORKSPACE-BROKER": {"factory/src/adaptive_factory/workspace.py"},
+            "NODE-FACTORY-WORKSPACE-BROKER": {"factory/src/getzilla_factory/workspace.py"},
         }
         for node_id, paths in expected_paths.items():
             node = nodes[node_id]
@@ -294,7 +294,7 @@ class ArchitectureModelTests(unittest.TestCase):
             self.assertEqual(node["runtime"]["network"], "none")
             self.assertEqual(node["secrets"], [])
         self.assertIn(
-            "factory/src/adaptive_factory/recovery.py",
+            "factory/src/getzilla_factory/recovery.py",
             nodes["NODE-FACTORY-CONTROL"]["repository_paths"],
         )
 
@@ -339,8 +339,8 @@ class ArchitectureModelTests(unittest.TestCase):
         adapter_forbidden = set(policies["FIT-FACTORY-ADAPTER-BOUNDARY"]["forbidden_dependency_prefixes"])
         self.assertTrue(
             {
-                "adaptive_factory.store",
-                "adaptive_factory.workspace",
+                "getzilla_factory.store",
+                "getzilla_factory.workspace",
                 "psycopg",
                 "celery",
                 "rq",
@@ -377,9 +377,9 @@ class ArchitectureModelTests(unittest.TestCase):
         self.assertEqual(
             set(semantic["repository_paths"]),
             {
-                "factory/src/adaptive_factory/semantic_adjudication.py",
-                "factory/src/adaptive_factory/semantic_contracts.py",
-                "factory/src/adaptive_factory/semantic_repair.py",
+                "factory/src/getzilla_factory/semantic_adjudication.py",
+                "factory/src/getzilla_factory/semantic_contracts.py",
+                "factory/src/getzilla_factory/semantic_repair.py",
             },
         )
         self.assertEqual(semantic["runtime"]["network"], "none")
@@ -416,14 +416,14 @@ class ArchitectureModelTests(unittest.TestCase):
         )
         self.assertTrue(
             {
-                "adaptive_factory.adapters",
-                "adaptive_factory.api",
-                "adaptive_factory.brokers",
-                "adaptive_factory.execution_contracts",
-                "adaptive_factory.migrations",
-                "adaptive_factory.service",
-                "adaptive_factory.store",
-                "adaptive_factory.workspace",
+                "getzilla_factory.adapters",
+                "getzilla_factory.api",
+                "getzilla_factory.brokers",
+                "getzilla_factory.execution_contracts",
+                "getzilla_factory.migrations",
+                "getzilla_factory.service",
+                "getzilla_factory.store",
+                "getzilla_factory.workspace",
                 "psycopg",
                 "git",
                 "requests",
@@ -530,7 +530,7 @@ class ArchitectureModelTests(unittest.TestCase):
         }
         spec = importlib.util.spec_from_file_location(
             "grok_architecture_task6",
-            ROOT / "scripts/grok_architecture.py",
+            ROOT / "scripts/getzilla_architecture.py",
         )
         self.assertIsNotNone(spec)
         assert spec is not None and spec.loader is not None
@@ -561,7 +561,7 @@ class ArchitectureModelTests(unittest.TestCase):
 
         output = io.StringIO()
         with (
-            mock.patch.object(sys, "argv", ["grok_architecture.py", "--root", str(root), "diagram", "--json"]),
+            mock.patch.object(sys, "argv", ["getzilla_architecture.py", "--root", str(root), "diagram", "--json"]),
             mock.patch.object(DIAGRAMS, "os", GuardedOs()),
             contextlib.redirect_stdout(output),
         ):
@@ -1438,10 +1438,10 @@ class ArchitectureModelTests(unittest.TestCase):
         )
         self.assertTrue(
             {
-                "factory/src/adaptive_factory/landing_artifact_retention.py",
-                "factory/src/adaptive_factory/landing_normalizer.py",
-                "factory/src/adaptive_factory/landing_runtime.py",
-                "factory/src/adaptive_factory/resources/landing-normalization-draft.v1.schema.json",
+                "factory/src/getzilla_factory/landing_artifact_retention.py",
+                "factory/src/getzilla_factory/landing_normalizer.py",
+                "factory/src/getzilla_factory/landing_runtime.py",
+                "factory/src/getzilla_factory/resources/landing-normalization-draft.v1.schema.json",
             }
             <= set(landing_node["repository_paths"])
         )
@@ -1453,7 +1453,7 @@ class ArchitectureModelTests(unittest.TestCase):
         self.assertEqual("datastore", landing_sqlite["type"])
         self.assertEqual("none", landing_sqlite["runtime"]["kind"])
         self.assertEqual(
-            ["factory/src/adaptive_factory/landing_sqlite_store.py"],
+            ["factory/src/getzilla_factory/landing_sqlite_store.py"],
             landing_sqlite["repository_paths"],
         )
         landing_edge = next(

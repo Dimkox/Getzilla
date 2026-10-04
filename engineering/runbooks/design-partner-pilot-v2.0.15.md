@@ -69,7 +69,7 @@ Without `--live`, every effect-capable command returns `live_disabled`. `status`
 2. Stop. Freeze the control tree and obtain new explicit user consent for only the printed branch resource. Materialize one current grant without changing any tracked file:
 
    ```bash
-   python3 scripts/grok_approve.py production \
+   python3 scripts/getzilla_approve.py production \
      --source explicit-user-consent \
      --reason 'Publish the exact validated pilot candidate branch' \
      --ttl 15 \
@@ -78,12 +78,12 @@ Without `--live`, every effect-capable command returns `live_disabled`. `status`
    python3 -m pilot publish-branch --live --config /absolute/private/pilot-v2.0.15.json
    ```
 
-   The command independently re-derives control origin `Dimkox/adaptive-grok-build-pro`, route `0ce2d62a018e`, change ID, current Git HEAD and adaptive tree fingerprint before loading `.grok-stack/runtime/approvals.json`. It observes first and performs at most one non-force push of `<candidate-sha>:refs/heads/adaptive-pilot/issue-1-<candidate-sha12>`, then prints the distinct proposal request.
+   The command independently re-derives control origin `Dimkox/Getzilla`, route `0ce2d62a018e`, change ID, current Git HEAD and adaptive tree fingerprint before loading `.getzilla/runtime/approvals.json`. It observes first and performs at most one non-force push of `<candidate-sha>:refs/heads/adaptive-pilot/issue-1-<candidate-sha12>`, then prints the distinct proposal request.
 
 3. Stop again. The branch grant cannot authorize a proposal. Obtain new explicit consent and materialize exactly one current proposal grant for the newly printed resource:
 
    ```bash
-   python3 scripts/grok_approve.py external-write \
+   python3 scripts/getzilla_approve.py external-write \
      --source explicit-user-consent \
      --reason 'Create the exact validated pilot draft proposal' \
      --ttl 15 \

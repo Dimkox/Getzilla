@@ -15,9 +15,9 @@ import tempfile
 import unittest
 from uuid import uuid4
 
-from adaptive_factory.landing_renderer import TARGET_REPOSITORY_ID
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
-from adaptive_factory.models import Actor
+from getzilla_factory.landing_renderer import TARGET_REPOSITORY_ID
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory.models import Actor
 
 
 ROOT_FIELDS = (

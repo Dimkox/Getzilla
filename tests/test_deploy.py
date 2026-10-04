@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.deploy import _human_commands, prepare_deploy
+from getzilla.deploy import _human_commands, prepare_deploy
 
 
 class DeployTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class DeployTests(unittest.TestCase):
 
     def test_prepare_requires_active_route(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with patch('adaptive_grok.deploy.get_active_route', return_value=None):
+            with patch('getzilla.deploy.get_active_route', return_value=None):
                 result = prepare_deploy(Path(directory), record=False)
         self.assertFalse(result['ok'])
         self.assertEqual(result['error'], 'no active route')
@@ -44,8 +44,8 @@ class DeployTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch('adaptive_grok.deploy.get_active_route', return_value={'route_id': 'r1'}),
-                patch('adaptive_grok.deploy.validate_evidence', return_value=['verification: stale']),
+                patch('getzilla.deploy.get_active_route', return_value={'route_id': 'r1'}),
+                patch('getzilla.deploy.validate_evidence', return_value=['verification: stale']),
             ):
                 result = prepare_deploy(root, record=False)
         self.assertFalse(result['ok'])
@@ -55,11 +55,11 @@ class DeployTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch('adaptive_grok.deploy.get_active_route', return_value={'route_id': 'r1'}),
-                patch('adaptive_grok.deploy.validate_evidence', return_value=[]),
-                patch('adaptive_grok.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
-                patch('adaptive_grok.deploy._version', return_value='2.1.0'),
-                patch('adaptive_grok.deploy._human_commands', return_value=(['git tag -a v2.1.0 abc'], 'a' * 40)),
+                patch('getzilla.deploy.get_active_route', return_value={'route_id': 'r1'}),
+                patch('getzilla.deploy.validate_evidence', return_value=[]),
+                patch('getzilla.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
+                patch('getzilla.deploy._version', return_value='2.1.0'),
+                patch('getzilla.deploy._human_commands', return_value=(['git tag -a v2.1.0 abc'], 'a' * 40)),
             ):
                 result = prepare_deploy(root, record=False)
         self.assertTrue(result['ok'])
@@ -71,12 +71,12 @@ class DeployTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch('adaptive_grok.deploy.get_active_route', return_value={'route_id': 'r1'}),
-                patch('adaptive_grok.deploy.validate_evidence', return_value=[]),
-                patch('adaptive_grok.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
-                patch('adaptive_grok.deploy._version', return_value='2.1.0'),
-                patch('adaptive_grok.deploy._human_commands', return_value=(['tag'], 'a' * 40)),
-                patch('adaptive_grok.deploy.has_valid_approval', return_value=False) as approval,
+                patch('getzilla.deploy.get_active_route', return_value={'route_id': 'r1'}),
+                patch('getzilla.deploy.validate_evidence', return_value=[]),
+                patch('getzilla.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
+                patch('getzilla.deploy._version', return_value='2.1.0'),
+                patch('getzilla.deploy._human_commands', return_value=(['tag'], 'a' * 40)),
+                patch('getzilla.deploy.has_valid_approval', return_value=False) as approval,
             ):
                 result = prepare_deploy(root, record=True)
         self.assertFalse(result['ok'])
@@ -87,13 +87,13 @@ class DeployTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch('adaptive_grok.deploy.get_active_route', return_value={'route_id': 'r1'}),
-                patch('adaptive_grok.deploy.validate_evidence', return_value=[]),
-                patch('adaptive_grok.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
-                patch('adaptive_grok.deploy._version', return_value='2.1.0'),
-                patch('adaptive_grok.deploy._human_commands', return_value=(['tag'], 'a' * 40)),
-                patch('adaptive_grok.deploy.has_valid_approval', return_value=True) as approval,
-                patch('adaptive_grok.deploy.write_receipt') as write_receipt,
+                patch('getzilla.deploy.get_active_route', return_value={'route_id': 'r1'}),
+                patch('getzilla.deploy.validate_evidence', return_value=[]),
+                patch('getzilla.deploy._change_state', return_value=({'status': 'ready'}, 'c1')),
+                patch('getzilla.deploy._version', return_value='2.1.0'),
+                patch('getzilla.deploy._human_commands', return_value=(['tag'], 'a' * 40)),
+                patch('getzilla.deploy.has_valid_approval', return_value=True) as approval,
+                patch('getzilla.deploy.write_receipt') as write_receipt,
             ):
                 result = prepare_deploy(root, record=True)
         self.assertTrue(result['recorded'])

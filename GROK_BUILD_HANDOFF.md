@@ -134,10 +134,10 @@ This is local preflight evidence only.
 ### 1. Reproduce the local baseline
 
 ```bash
-PYTHONPATH=.grok-stack:trust-ci/src python3 -m unittest discover -s tests -v
-PYTHONPATH=.grok-stack:trust-ci/src python3 -m unittest discover -s trust-ci/tests -v
-python3 -m compileall -q .grok-stack/adaptive_grok scripts trust-ci/src tests trust-ci/tests
-python3 scripts/grok_verify.py --mode pr --no-record --json
+PYTHONPATH=.getzilla:trust-ci/src python3 -m unittest discover -s tests -v
+PYTHONPATH=.getzilla:trust-ci/src python3 -m unittest discover -s trust-ci/tests -v
+python3 -m compileall -q .getzilla/getzilla scripts trust-ci/src tests trust-ci/tests
+python3 scripts/getzilla_verify.py --mode pr --no-record --json
 ```
 
 Do not claim success from an earlier run. Record the exact command output and current SHA.

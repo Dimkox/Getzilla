@@ -3,7 +3,7 @@
   "$id": "urn:adaptive-factory:context-manifest:v1",
   "x-admission": {
     "level": "structural",
-    "semantic_validator": "adaptive_factory.context_contracts.ContextManifestV1.from_dict",
+    "semantic_validator": "getzilla_factory.context_contracts.ContextManifestV1.from_dict",
     "semantic_validation_required": true,
     "semantic_checks": ["utf8_byte_limits", "secret_detection", "content_digest", "source_binding", "safe_path"]
   },

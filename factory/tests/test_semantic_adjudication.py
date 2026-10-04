@@ -2,9 +2,9 @@ from copy import deepcopy
 import itertools
 import unittest
 
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.semantic_adjudication import adjudicate
-from adaptive_factory.semantic_contracts import SemanticCoverageV1, SemanticFindingV1, SemanticSubjectV1
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.semantic_adjudication import adjudicate
+from getzilla_factory.semantic_contracts import SemanticCoverageV1, SemanticFindingV1, SemanticSubjectV1
 from .test_semantic_contracts import coverage, finding, subject, validator
 
 

@@ -4,16 +4,16 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.models import Actor
-from adaptive_factory.semantic_adjudication import adjudicate
-from adaptive_factory.semantic_contracts import (
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.models import Actor
+from getzilla_factory.semantic_adjudication import adjudicate
+from getzilla_factory.semantic_contracts import (
     SemanticCoverageV1,
     SemanticFindingV1,
     SemanticSubjectV1,
     ValidatorIdentityV1,
 )
-from adaptive_factory.service import AuthorizationError, FactoryService
+from getzilla_factory.service import AuthorizationError, FactoryService
 from .test_semantic_contracts import coverage, finding, subject, validator
 
 

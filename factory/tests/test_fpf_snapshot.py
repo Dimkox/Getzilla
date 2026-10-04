@@ -7,8 +7,8 @@ import sys
 import textwrap
 import unittest
 
-from adaptive_factory.contracts import ContractError, canonical_digest
-from adaptive_factory.fpf_snapshot import (
+from getzilla_factory.contracts import ContractError, canonical_digest
+from getzilla_factory.fpf_snapshot import (
     FPF_LICENSE_ID,
     FPF_LICENSE_URL,
     FPF_SOURCE_AUTHOR,
@@ -25,7 +25,7 @@ from adaptive_factory.fpf_snapshot import (
     consume_selection,
     reconstruct_selection_artifact,
 )
-from adaptive_factory._fpf_snapshot_data import FPF_FRAGMENT_MANIFEST, FPF_FRAGMENT_BYTES
+from getzilla_factory._fpf_snapshot_data import FPF_FRAGMENT_MANIFEST, FPF_FRAGMENT_BYTES
 
 
 class FpfSnapshotTests(unittest.TestCase):
@@ -112,7 +112,7 @@ class FpfSnapshotTests(unittest.TestCase):
 
     def test_rebinding_importable_module_globals_cannot_change_loaded_bytes(self):
         code = textwrap.dedent("""
-            import adaptive_factory.fpf_snapshot as module
+            import getzilla_factory.fpf_snapshot as module
             module.FPF_SOURCE_REVISION = "0" * 40
             module.FPF_SOURCE_TREE = "0" * 40
             module.FPF_SOURCE_AUTHOR = "attacker"
@@ -336,7 +336,7 @@ class FpfSnapshotTests(unittest.TestCase):
         serialized = base64.b64encode(pickle.dumps(consume_selection(first))).decode("ascii")
         code = textwrap.dedent(f"""
             import base64, pickle
-            from adaptive_factory.fpf_snapshot import reconstruct_selection_artifact, consume_selection
+            from getzilla_factory.fpf_snapshot import reconstruct_selection_artifact, consume_selection
             values = pickle.loads(base64.b64decode({serialized!r}))
             replayed = reconstruct_selection_artifact(values)
             assert consume_selection(replayed)["selection_digest"] == values["selection_digest"]

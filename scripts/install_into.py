@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANAGED_DIRS = (
     ".grok",
     ".agents",
-    ".grok-stack",
+    ".getzilla",
     "factory/contracts",
     "factory/runtime",
     "factory/src",
@@ -42,20 +42,20 @@ MANAGED_FILES = (
     "factory/tests/test_server.py",
     "factory/tests/test_service.py",
     "factory/tests/test_state.py",
-    "scripts/grok_architecture.py",
-    "scripts/grok_governance.py",
-    "scripts/grok_history.py",
-    "scripts/grok_route.py",
-    "scripts/grok_change.py",
-    "scripts/grok_spec.py",
-    "scripts/grok_artifacts.py",
-    "scripts/grok_verify.py",
-    "scripts/grok_review.py",
-    "scripts/grok_approve.py",
-    "scripts/grok_doctor.py",
-    "scripts/grok_status.py",
-    "scripts/grok_agent.py",
-    "scripts/grok_deploy.py",
+    "scripts/getzilla_architecture.py",
+    "scripts/getzilla_governance.py",
+    "scripts/getzilla_history.py",
+    "scripts/getzilla_route.py",
+    "scripts/getzilla_change.py",
+    "scripts/getzilla_spec.py",
+    "scripts/getzilla_artifacts.py",
+    "scripts/getzilla_verify.py",
+    "scripts/getzilla_review.py",
+    "scripts/getzilla_approve.py",
+    "scripts/getzilla_doctor.py",
+    "scripts/getzilla_status.py",
+    "scripts/getzilla_agent.py",
+    "scripts/getzilla_deploy.py",
     "session_start.py",
     "user_prompt_submit.py",
     "pre_tool_use.py",
@@ -93,8 +93,8 @@ ROOT_HOOK_SHIMS = frozenset(
         "session_end.py",
     }
 )
-ROOT_HOOK_SHIM_TEMPLATE = ".grok-stack/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".grok-stack/runtime/",)
+ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
+SKIP_PREFIXES = (".getzilla/runtime/",)
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -111,7 +111,7 @@ TARGET_OWNED_GOVERNANCE = frozenset(
 )
 # A consumer repository declares its own-overridden managed paths in this record;
 # MANAGED_* answers what the stack owns, kept_local answers what this repo overrode.
-STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+STACK_SYNC_RECORD = ".getzilla/AGBP_SYNC.json"
 MAX_SYNC_RECORD_BYTES = 65536
 EMPTY_DIRECTORIES = (
     "engineering/changes",
@@ -124,8 +124,8 @@ EMPTY_DIRECTORIES = (
 )
 MANAGED_START = "<!-- ADAPTIVE-GROK-PRO:START -->"
 MANAGED_END = "<!-- ADAPTIVE-GROK-PRO:END -->"
-CONSUMER_AGENTS_TEMPLATE = ".grok-stack/templates/consumer-AGENTS.md.tmpl"
-CONSUMER_FACTORY_README_TEMPLATE = ".grok-stack/templates/consumer-factory-README.md.tmpl"
+CONSUMER_AGENTS_TEMPLATE = ".getzilla/templates/consumer-AGENTS.md.tmpl"
+CONSUMER_FACTORY_README_TEMPLATE = ".getzilla/templates/consumer-factory-README.md.tmpl"
 LEGACY_PLAN_NOTICE = (
     "NOTICE: legacy install mode now emits a read-only plan; "
     "use --materialize-new only for an absent target."
@@ -662,7 +662,7 @@ def _dependency_advice(
         return []
     with _SourceTree(source) as tree:
         content, _mode = tree.read(
-            ".grok-stack/config/toolchain.json",
+            ".getzilla/config/toolchain.json",
             MAX_TOOLCHAIN_BYTES,
         )
     try:
@@ -1402,7 +1402,7 @@ def install(
     if with_ci:
         raise SystemExit(
             "GitHub Actions is forbidden. Use local `make verify` / "
-            "`python3 scripts/grok_verify.py --mode pr`."
+            "`python3 scripts/getzilla_verify.py --mode pr`."
         )
     if force:
         raise SystemExit(
@@ -1423,7 +1423,7 @@ def install(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Plan a read-only Adaptive Grok installation or atomically materialize "
+            "Plan a read-only Getzilla installation or atomically materialize "
             "a new absent target."
         )
     )

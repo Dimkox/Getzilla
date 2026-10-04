@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.manifest import (
+from getzilla.manifest import (
     READ_CHUNK_BYTES,
     ManifestEntry,
     is_included_relative_path,
@@ -816,7 +816,7 @@ def _stage_archive(
             compresslevel=9,
         ) as archive:
             for rel, mode, source in sorted(members, key=lambda member: member[0]):
-                info = zipfile.ZipInfo(f'adaptive-grok-build-pro/{rel}', FIXED_ZIP_TIME)
+                info = zipfile.ZipInfo(f'getzilla/{rel}', FIXED_ZIP_TIME)
                 info.external_attr = (mode & 0xFFFF) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
                 if isinstance(source, bytes):
@@ -1088,7 +1088,7 @@ def write_release_archive(
 
 def _default_output(root: Path) -> str:
     version = (root / 'VERSION').read_text(encoding='utf-8').strip() or '0.0.0'
-    return f'dist/adaptive-grok-build-pro-v{version}.zip'
+    return f'dist/getzilla-v{version}.zip'
 
 
 def main() -> None:

@@ -11,9 +11,9 @@ from tests.test_architecture_model import _rules, _system
 from tests.test_governance import _valid_debt, _valid_example, _valid_rule
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok import architecture_fitness as FIT  # noqa: E402
+from getzilla import architecture_fitness as FIT  # noqa: E402
 
 
 GOVERNANCE_ID = "GOV-ADAPTIVE-GROK-M3"
@@ -60,8 +60,8 @@ class GovernanceFitnessTests(unittest.TestCase):
             "governance-handoff-v1.schema.json",
         ):
             repo.write_bytes(f"schemas/{name}", (ROOT / "schemas" / name).read_bytes())
-        repo.write_text(".grok-stack/adaptive_grok/governance.py", "VERSION = 1\n")
-        repo.write_text("scripts/grok_governance.py", "VERSION = 1\n")
+        repo.write_text(".getzilla/getzilla/governance.py", "VERSION = 1\n")
+        repo.write_text("scripts/getzilla_governance.py", "VERSION = 1\n")
 
     def _repo(
         self,
@@ -345,8 +345,8 @@ class GovernanceFitnessTests(unittest.TestCase):
             "schemas/governance-rule.schema.json",
             "schemas/debt-entry.schema.json",
             "schemas/canonical-example.schema.json",
-            ".grok-stack/adaptive_grok/governance.py",
-            "scripts/grok_governance.py",
+            ".getzilla/getzilla/governance.py",
+            "scripts/getzilla_governance.py",
         )
         for path in relevant_paths:
             with self.subTest(path=path):

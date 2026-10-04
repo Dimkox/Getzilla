@@ -7,17 +7,17 @@ from unittest.mock import MagicMock, patch
 import subprocess
 from urllib.parse import urlsplit
 
-from adaptive_factory import semantic_repair
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.migrations import AppliedMigration, MigrationError, discover_migrations, plan_migrations
-from adaptive_factory.semantic_repair import (
+from getzilla_factory import semantic_repair
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.migrations import AppliedMigration, MigrationError, discover_migrations, plan_migrations
+from getzilla_factory.semantic_repair import (
     REPAIR_CHILD_REJECTION_CHANNEL,
     REPAIR_CHILD_REJECTIONS,
     RepairChildTaskBindingV1,
     UNKNOWN_REPAIR_CHILD_REJECTION,
     repair_child_rejection_reason,
 )
-from adaptive_factory.store import PostgresSemanticCoordinatorStore, StoreError
+from getzilla_factory.store import PostgresSemanticCoordinatorStore, StoreError
 from factory.tests import postgres_restart_probe, run_disposable_exit
 
 
@@ -305,7 +305,7 @@ class MigrationTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_restart_releaser_wraps_real_broker_with_exact_at_least_once_outcomes(self):
-        from adaptive_factory.workspace import WorkspaceHandle, WorkspaceReleaseOutcome
+        from getzilla_factory.workspace import WorkspaceHandle, WorkspaceReleaseOutcome
 
         first_handle = WorkspaceHandle("task-a", "run-a", "workspace:" + "a" * 64)
         second_handle = WorkspaceHandle("task-b", "run-b", "workspace:" + "b" * 64)

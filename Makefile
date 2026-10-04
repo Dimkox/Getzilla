@@ -1,19 +1,19 @@
 .PHONY: doctor verify status package deploy trust-ci-test trust-ci-compile trust-ci-compose trust-ci-postgres-test trust-ci-holdout-digest
 
 doctor:
-	python3 scripts/grok_doctor.py
+	python3 scripts/getzilla_doctor.py
 
 verify:
-	python3 scripts/grok_verify.py --mode pr
+	python3 scripts/getzilla_verify.py --mode pr
 
 status:
-	python3 scripts/grok_status.py
+	python3 scripts/getzilla_status.py
 
 package:
 	python3 scripts/package_stack.py
 
 deploy:
-	python3 scripts/grok_deploy.py
+	python3 scripts/getzilla_deploy.py
 
 trust-ci-test:
 	PYTHONPATH=trust-ci/src python3 -m unittest discover -s trust-ci/tests

@@ -7,7 +7,7 @@ python3 scripts/package_stack.py
 cp dist/adaptive-grok-build-pro-v2.0.12.zip* packages/
 git tag -a v2.0.12 -m "v2.0.12"
 git push origin v2.0.12
-gh release create v2.0.12 packages/adaptive-grok-build-pro-v2.0.12.zip packages/adaptive-grok-build-pro-v2.0.12.zip.sha256 --title "Adaptive Grok Build Pro v2.0.12" --notes-file dist/RELEASE-NOTES.md
+gh release create v2.0.12 packages/adaptive-grok-build-pro-v2.0.12.zip packages/adaptive-grok-build-pro-v2.0.12.zip.sha256 --title "Getzilla v2.0.12" --notes-file dist/RELEASE-NOTES.md
 ```
 
 Rollback:

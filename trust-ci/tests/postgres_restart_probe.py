@@ -9,7 +9,7 @@ from adaptive_trust_ci.models import JobRequest
 from adaptive_trust_ci.store import PostgresStore
 
 
-REPOSITORY = 'Dimkox/adaptive-grok-build-pro'
+REPOSITORY = 'Dimkox/Getzilla'
 HEAD_SHA = '9' * 40
 BASE_SHA = '8' * 40
 POLICY_DIGEST = '7' * 64

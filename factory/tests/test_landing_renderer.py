@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.landing_artifact import DEPLOY_MEMBERS
-from adaptive_factory.landing_contracts import StaticLandingSpecV1
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_artifact import DEPLOY_MEMBERS
+from getzilla_factory.landing_contracts import StaticLandingSpecV1
+from getzilla_factory.landing_renderer import (
     DeterministicLandingRenderer,
     ExactGitLandingWorkspace,
     LANDING_WRITE_PATHS,
@@ -144,11 +144,11 @@ def sealed_target():
         sha = _git(repository, "rev-parse", "HEAD")
         tree = _git(repository, "rev-parse", "HEAD^{tree}")
         with patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=sha,
             TARGET_BASE_TREE=tree,
         ), patch(
-            "adaptive_factory.landing_artifact_retention.deploy_members_for_source",
+            "getzilla_factory.landing_artifact_retention.deploy_members_for_source",
             return_value=DEPLOY_MEMBERS,
         ):
             yield repository, sha, tree

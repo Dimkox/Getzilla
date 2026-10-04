@@ -60,12 +60,12 @@ The owner-only (`0600`) JSON has this closed shape; the separately existing runt
 directory must be owner-only `0700` and short enough for AF_UNIX:
 
 ```json
-{"schema_version":"factory-linux-process/v1","python":"/usr/bin/python3.12","runtime_directory":"/run/user/1000/adaptive-factory","environment":{}}
+{"schema_version":"factory-linux-process/v1","python":"/usr/bin/python3.12","runtime_directory":"/run/user/1000/getzilla-factory","environment":{}}
 ```
 
 Only bounded `FACTORY_*` environment entries are accepted; `FACTORY_SOCKET_PATH`
 is adapter-owned. The child receives a clean fixed environment and exact argv
-`/usr/bin/python3.12 -m adaptive_factory.server`, with `PYTHONPATH` bound to the
+`/usr/bin/python3.12 -m getzilla_factory.server`, with `PYTHONPATH` bound to the
 selected immutable release. It uses no shell, root, systemd, package manager,
 network, or migrations. Each release gets a distinct UDS, private log and durable
 PID record bound to release, boot ID, PID/PGID, `/proc` start time, cmdline and argv
@@ -89,7 +89,7 @@ on-disk log contains bounded lifecycle signals only and is tail-truncated at 64 
 exactly `runtime-wheels-linux-x86_64-cpython312.json`, and an output stem. The
 inventory is checked against `uv.lock`; every wheel filename/SHA-256 must match,
 with no extras, dependency resolver or network access. The builder safely expands
-wheels and tracked `factory/src/adaptive_factory` bytes, rejects unsafe entries and
+wheels and tracked `factory/src/getzilla_factory` bytes, rejects unsafe entries and
 collisions, emits canonical sorted ZIP metadata plus detached manifest/digests,
 then self-verifies through the setup manager before publishing outputs.
 

@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 import unittest
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.models import Actor
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.models import Actor
 
 
 CONTROL_CONTRACT = (

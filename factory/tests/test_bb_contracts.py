@@ -6,8 +6,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.adapters import CodexAdapter, select_adapter
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.adapters import CodexAdapter, select_adapter
 
 
 SCHEMAS = Path(__file__).parents[1] / "contracts" / "jsonschema"
@@ -58,10 +58,10 @@ def bb_observation(**changes):
 class BBContractTests(unittest.TestCase):
     def module(self):
         self.assertIsNotNone(
-            importlib.util.find_spec("adaptive_factory.bb_contracts"),
+            importlib.util.find_spec("getzilla_factory.bb_contracts"),
             "BB boundary missing",
         )
-        return importlib.import_module("adaptive_factory.bb_contracts")
+        return importlib.import_module("getzilla_factory.bb_contracts")
 
     def test_default_off_keeps_native_without_claiming_live_qualification(self):
         module = self.module()

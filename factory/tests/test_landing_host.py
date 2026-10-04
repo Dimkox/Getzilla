@@ -14,16 +14,16 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory import landing_host
-from adaptive_factory.landing_contracts import LandingContractError
-from adaptive_factory.landing_renderer import (
+from getzilla_factory import landing_host
+from getzilla_factory.landing_contracts import LandingContractError
+from getzilla_factory.landing_renderer import (
     TARGET_BASE_SHA,
     TARGET_BASE_TREE,
     TARGET_REPOSITORY_ID,
 )
-from adaptive_factory.landing_service import LandingServiceError
-from adaptive_factory.server import ServerError, prepare_unix_socket
-from adaptive_factory.settings import SettingsError
+from getzilla_factory.landing_service import LandingServiceError
+from getzilla_factory.server import ServerError, prepare_unix_socket
+from getzilla_factory.settings import SettingsError
 from factory.tests.landing_host_fixture import HostFixture as LandingHostFixture
 from factory.tests.landing_host_fixture import PATH_FIELDS, ROOT_FIELDS
 
@@ -163,13 +163,13 @@ class LandingHostCompositionTests(HostFixture):
     def test_offline_host_has_only_landing_routes_and_persists_unavailable_jobs(self):
         with ExitStack() as stack:
             for seam in (
-                "adaptive_factory.server.PostgresFactoryStore",
-                "adaptive_factory.server.PostgresArtifactAttestationStore",
-                "adaptive_factory.server.PostgresSemanticCoordinatorStore",
-                "adaptive_factory.server.PostgresSemanticValidatorStore",
-                "adaptive_factory.server.PostgresSemanticAdjudicatorStore",
-                "adaptive_factory.landing_live_executors.api_key_from_environ",
-                "adaptive_factory.landing_server._trusted_source",
+                "getzilla_factory.server.PostgresFactoryStore",
+                "getzilla_factory.server.PostgresArtifactAttestationStore",
+                "getzilla_factory.server.PostgresSemanticCoordinatorStore",
+                "getzilla_factory.server.PostgresSemanticValidatorStore",
+                "getzilla_factory.server.PostgresSemanticAdjudicatorStore",
+                "getzilla_factory.landing_live_executors.api_key_from_environ",
+                "getzilla_factory.landing_server._trusted_source",
             ):
                 stack.enter_context(patch(seam, side_effect=AssertionError("offline host crossed " + seam)))
             app = self.build_app()
@@ -207,7 +207,7 @@ class LandingHostCompositionTests(HostFixture):
     def test_offline_host_does_not_read_explicit_qwen_file(self):
         config = landing_host.load_host_config(self.config_path)
         with patch.object(landing_host, "load_actors", return_value=self.actors), patch(
-            "adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("offline credential read")
+            "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("offline credential read")
         ):
             app = landing_host.build_landing_app(config, qwen_env_file=self.root / "missing")
         app.state.owned_landing_runtime.close()
@@ -223,7 +223,7 @@ class LandingHostCompositionTests(HostFixture):
     def test_live_qwen_reads_file_only_after_source_validation_and_writer_lock(self):
         self.write_config({**self.data, "selected_profile": "qwen-intl", "live_enabled": True})
         config = landing_host.load_host_config(self.config_path)
-        from adaptive_factory.landing_server import compose_server_landing
+        from getzilla_factory.landing_server import compose_server_landing
         path = self.root / "synthetic-credentials"
         events = []
         def load(*, env_file):
@@ -233,26 +233,26 @@ class LandingHostCompositionTests(HostFixture):
             self.assertEqual("store_writer_active", error.exception.code)
             events.append("credential")
             raise RuntimeError("stop before HTTP")
-        with patch("adaptive_factory.landing_server._trusted_source"), patch(
-            "adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")
-        ), patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=load):
+        with patch("getzilla_factory.landing_server._trusted_source"), patch(
+            "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")
+        ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=load):
             with self.assertRaisesRegex(RuntimeError, "stop before HTTP"):
                 compose_server_landing(config.settings, repository_root=config.control_repository, qwen_env_file=path)
         self.assertEqual(["source", "credential"], events)
         self.assertTrue(self.reopen_store().database_path.is_file())
 
     def test_grok_does_not_read_qwen_file_and_qwen_validation_failure_precedes_read(self):
-        from adaptive_factory.landing_server import compose_server_landing
+        from getzilla_factory.landing_server import compose_server_landing
         for profile in ("grok-vision", "qwen-intl"):
             self.write_config({**self.data, "selected_profile": profile, "live_enabled": True})
             config = landing_host.load_host_config(self.config_path)
             with self.subTest(profile=profile), patch(
-                "adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("unexpected Qwen file read")
-            ), patch("adaptive_factory.landing_server._trusted_source"), patch(
-                "adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source",
+                "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("unexpected Qwen file read")
+            ), patch("getzilla_factory.landing_server._trusted_source"), patch(
+                "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source",
                 side_effect=RuntimeError("source invalid") if profile == "qwen-intl" else None
-            ), patch("adaptive_factory.landing_live_executors.api_key_from_environ", return_value=self.token), patch(
-                "adaptive_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("Grok selected")
+            ), patch("getzilla_factory.landing_live_executors.api_key_from_environ", return_value=self.token), patch(
+                "getzilla_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("Grok selected")
             ):
                 with self.assertRaisesRegex(RuntimeError, "source invalid" if profile == "qwen-intl" else "Grok selected"):
                     compose_server_landing(config.settings, repository_root=config.control_repository,
@@ -260,13 +260,13 @@ class LandingHostCompositionTests(HostFixture):
             self.reopen_store().close()
 
     def test_existing_writer_prevents_qwen_credential_read(self):
-        from adaptive_factory.landing_server import compose_server_landing
+        from getzilla_factory.landing_server import compose_server_landing
         self.write_config({**self.data, "selected_profile": "qwen-intl", "live_enabled": True})
         config = landing_host.load_host_config(self.config_path)
         writer = self.reopen_store()
-        with patch("adaptive_factory.landing_server._trusted_source"), patch(
-            "adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"
-        ), patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("read before lock")):
+        with patch("getzilla_factory.landing_server._trusted_source"), patch(
+            "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"
+        ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("read before lock")):
             with self.assertRaises(LandingServiceError) as error:
                 compose_server_landing(config.settings, repository_root=config.control_repository,
                                        qwen_env_file=self.root / "missing")
@@ -323,7 +323,7 @@ class LandingHostCompositionTests(HostFixture):
 class LandingHostMainTests(HostFixture):
     def run_main(self, app, *, run=None, prepare=None, server_error=None):
         with ExitStack() as stack:
-            stack.enter_context(patch("sys.argv", ["adaptive-landing-server", "--config", str(self.config_path)]))
+            stack.enter_context(patch("sys.argv", ["getzilla-landing-server", "--config", str(self.config_path)]))
             stack.enter_context(patch.object(landing_host, "build_landing_app", return_value=app))
             server = stack.enter_context(patch.object(landing_host.uvicorn, "Server"))
             if server_error is not None:

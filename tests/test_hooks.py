@@ -6,11 +6,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.receipts import write_receipt
-from adaptive_grok.router import build_route
-from adaptive_grok.state import add_approval, get_active_route, set_active_route
+from getzilla.receipts import write_receipt
+from getzilla.router import build_route
+from getzilla.state import add_approval, get_active_route, set_active_route
 import subprocess
 
 from tests._support import project_copy, run_hook
@@ -19,7 +19,7 @@ from tests._support import project_copy, run_hook
 class HookTests(unittest.TestCase):
     def _grant(self, root: Path, scope: str, *, actions: list[str], resources: list[str] | None = None) -> None:
         subprocess.run(
-            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/adaptive-grok-build-pro.git'],
+            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
             cwd=root,
             check=True,
         )
@@ -36,7 +36,7 @@ class HookTests(unittest.TestCase):
 
     def test_root_shim_dispatches_pre_tool_use(self) -> None:
         with project_copy() as root:
-            shim = (ROOT / '.grok-stack/templates/hook_root_shim.py').read_text(encoding='utf-8')
+            shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
             proc = subprocess.run(
                 ['python3', 'pre_tool_use.py'],
@@ -53,7 +53,7 @@ class HookTests(unittest.TestCase):
 
     def test_root_shim_fail_open_when_canonical_missing(self) -> None:
         with project_copy() as root:
-            shim = (ROOT / '.grok-stack/templates/hook_root_shim.py').read_text(encoding='utf-8')
+            shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
             (root / '.grok/hooks/pre_tool_use.py').unlink()
             proc = subprocess.run(
@@ -235,7 +235,7 @@ class HookTests(unittest.TestCase):
 
     def test_sensitive_external_and_protected_writes_cannot_borrow_session_grants(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:
-            target = '.grok-stack/adaptive_grok/policy.py'
+            target = '.getzilla/getzilla/policy.py'
             self._grant(
                 session_root,
                 'protected-path',
@@ -334,7 +334,7 @@ class HookTests(unittest.TestCase):
                 'tool_name': 'Bash',
                 'tool_input': {
                     'command': 'git push origin feature',
-                    'workdir': '~adaptive_grok_user_that_must_not_exist/root',
+                    'workdir': '~getzilla_user_that_must_not_exist/root',
                 },
             })
             self.assertEqual(data['decision'], 'deny')
@@ -392,7 +392,7 @@ class HookTests(unittest.TestCase):
                     self.assertIn('ambiguous-sensitive-shell', data['reason'])
 
             ledger = json.loads(
-                (session_root / '.grok-stack/runtime/tool-denials.json').read_text(encoding='utf-8')
+                (session_root / '.getzilla/runtime/tool-denials.json').read_text(encoding='utf-8')
             )
             serialized = json.dumps(ledger, sort_keys=True)
             self.assertIn('ambiguous-sensitive-shell', serialized)
@@ -529,7 +529,7 @@ class HookTests(unittest.TestCase):
                     self.assertEqual(data['decision'], 'allow', (command, error, data))
 
             ledger = json.loads(
-                (session_root / '.grok-stack/runtime/tool-denials.json').read_text(encoding='utf-8')
+                (session_root / '.getzilla/runtime/tool-denials.json').read_text(encoding='utf-8')
             )
             serialized = json.dumps(ledger, sort_keys=True)
             self.assertIn('ambiguous-command-root', serialized)
@@ -703,10 +703,10 @@ class HookTests(unittest.TestCase):
                 'cwd': str(root), 'agent_id': 'a1', 'agent_type': route['write_agent']
             })
             self.assertIn('implementation', data['hookSpecificOutput']['additionalContext'])
-            state = json.loads((root / '.grok-stack/runtime/agent-state.json').read_text())
+            state = json.loads((root / '.getzilla/runtime/agent-state.json').read_text())
             self.assertIn('a1', state['active'])
             run_hook(root, 'subagent_stop.py', {'cwd': str(root), 'agent_id': 'a1', 'agent_type': route['write_agent']})
-            state = json.loads((root / '.grok-stack/runtime/agent-state.json').read_text())
+            state = json.loads((root / '.getzilla/runtime/agent-state.json').read_text())
             self.assertNotIn('a1', state['active'])
 
     def test_subagent_stop_emits_empty_payload(self) -> None:
@@ -734,7 +734,7 @@ class HookTests(unittest.TestCase):
             code, data, err = run_hook(root, 'subagent_stop.py', payload)
             self.assertEqual(code, 0, err)
             self.assertEqual(data, {})
-            state = json.loads((root / '.grok-stack/runtime/agent-state.json').read_text())
+            state = json.loads((root / '.getzilla/runtime/agent-state.json').read_text())
             self.assertNotIn('a1', state['active'])
             stops = [item for item in state['history'] if item.get('event') == 'stop' and item.get('agent_id') == 'a1']
             self.assertEqual(len(stops), 1)
@@ -744,7 +744,7 @@ class HookTests(unittest.TestCase):
             set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             _, data, _ = run_hook(root, 'pre_compact.py', {'cwd': str(root), 'trigger': 'auto'})
             self.assertTrue(data['continue'])
-            self.assertTrue((root / '.grok-stack/runtime/handoff.json').is_file())
+            self.assertTrue((root / '.getzilla/runtime/handoff.json').is_file())
 
     def test_session_start_loads_active_route(self) -> None:
         with project_copy() as root:
@@ -785,7 +785,7 @@ class HookTests(unittest.TestCase):
             run_hook(root, 'post_tool_use.py', {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {}})
             (root / 'changed.txt').write_text('x')
             run_hook(root, 'post_tool_use.py', {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {}})
-            receipt = json.loads((root / f".grok-stack/runtime/receipts/{route['route_id']}/code_review.json").read_text())
+            receipt = json.loads((root / f".getzilla/runtime/receipts/{route['route_id']}/code_review.json").read_text())
             self.assertTrue(receipt['stale'])
 
 

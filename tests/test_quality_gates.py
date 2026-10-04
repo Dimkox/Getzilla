@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from adaptive_grok.quality_gates import evaluate_quality_gate
+from getzilla.quality_gates import evaluate_quality_gate
 
 
 def check(name: str, status: str = "pass", summary: str = "ok") -> SimpleNamespace:
@@ -31,7 +31,7 @@ BASE_PR_CHECKS = [
 
 class QualityGateTests(unittest.TestCase):
     def test_completed_refusal_does_not_require_future_checks(self) -> None:
-        from adaptive_grok.quality_gates import required_check_refused
+        from getzilla.quality_gates import required_check_refused
         for mode in ('pr', 'release'):
             for status, summary, refused in (
                 ('pass', 'ok', False), ('fail', 'actual refusal', True),

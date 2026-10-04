@@ -9,12 +9,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok import verification as verification_module
-from adaptive_grok import util as util_module
-from adaptive_grok.verification import CheckResult, _python, _docs_state_scope_check, verify
-from adaptive_grok.verification_scope import (
+from getzilla import verification as verification_module
+from getzilla import util as util_module
+from getzilla.verification import CheckResult, _python, _docs_state_scope_check, verify
+from getzilla.verification_scope import (
     DOCS_STATE_PROFILE,
     DOCUMENT_FILES,
     DOCUMENT_PREFIXES,
@@ -62,12 +62,12 @@ RELEASE_SYNC_INVENTORY = [
 # Every one of these can move an executed product statement, change a machine contract,
 # or silence a check, so none of them may ride the focused lane.
 FULL_PATH_ONLY_CHANGES = [
-    '.grok-stack/adaptive_grok/verification.py',
-    '.grok-stack/adaptive_grok/verification_scope.py',
-    'scripts/grok_verify.py',
+    '.getzilla/getzilla/verification.py',
+    '.getzilla/getzilla/verification_scope.py',
+    'scripts/getzilla_verify.py',
     'trust-ci/src/trust_ci/api.py',
     'trust-ci/config/policy.example.json',
-    'factory/src/adaptive_factory/service.py',
+    'factory/src/getzilla_factory/service.py',
     'factory/tests/test_service.py',
     'pilot/l5_runtime/host.py',
     'pre_tool_use.py',
@@ -140,7 +140,7 @@ def _init_repo(root: Path):
     # Runtime state and probe side effects must not be swept in by `git add .`, or the
     # synthetic inventory carries paths the real repository keeps untracked.
     (root / '.gitignore').write_text(
-        '.grok-stack/runtime/\n__pycache__/\n.coverage\nfull-suite-executed.marker\n',
+        '.getzilla/runtime/\n__pycache__/\n.coverage\nfull-suite-executed.marker\n',
         encoding='utf-8',
     )
     return git
@@ -191,7 +191,7 @@ class RealRepositoryInventoryTests(unittest.TestCase):
         return git
 
     def _scope_after(self, root: Path, base_sha: str) -> dict[str, object]:
-        from adaptive_grok.verification import GitRangeBase, _docs_state_status_inventory
+        from getzilla.verification import GitRangeBase, _docs_state_status_inventory
 
         head = _git_head(root)
         selection = verification_module.GitRangeSelection(bases=[GitRangeBase(
@@ -239,7 +239,7 @@ class RealRepositoryInventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grok-scope-repo-') as tmp:
             root = Path(tmp)
             git = self._repo(root)
-            source = root / '.grok-stack/adaptive_grok/service.py'
+            source = root / '.getzilla/getzilla/service.py'
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text('VALUE = 1\n', encoding='utf-8')
             git('add', '.')
@@ -299,9 +299,9 @@ class DocsStateScopeSelectionTests(unittest.TestCase):
     def test_the_shortcut_selectors_own_module_cannot_be_edited_in_focused_scope(self) -> None:
         # Changing the classifier must never be verifiable by the classifier it just changed.
         for path in (
-            '.grok-stack/adaptive_grok/verification_scope.py',
-            '.grok-stack/adaptive_grok/verification.py',
-            'scripts/grok_verify.py',
+            '.getzilla/getzilla/verification_scope.py',
+            '.getzilla/getzilla/verification.py',
+            'scripts/getzilla_verify.py',
         ):
             with self.subTest(path=path):
                 self.assertFalse(self._scope([path])['eligible'])
@@ -635,16 +635,16 @@ class DocsStateScopeCheckRenderingTests(unittest.TestCase):
     def test_ineligible_check_reports_the_blocking_path_and_is_not_a_failure(self) -> None:
         scope = select_docs_state_scope(
             'pr',
-            ['README.md', 'factory/src/adaptive_factory/service.py'],
+            ['README.md', 'factory/src/getzilla_factory/service.py'],
             range_base_count=1,
-            file_statuses=_statuses(['README.md', 'factory/src/adaptive_factory/service.py']),
+            file_statuses=_statuses(['README.md', 'factory/src/getzilla_factory/service.py']),
             status_inventory_trusted=True,
         )
         result = _docs_state_scope_check(scope)
 
         self.assertEqual(result.status, 'pass')
         self.assertIn(FULL_PROFILE, result.summary)
-        self.assertIn('factory/src/adaptive_factory/service.py', {item['path'] for item in result.details})
+        self.assertIn('factory/src/getzilla_factory/service.py', {item['path'] for item in result.details})
         self.assertIn('skipped=none', result.summary)
 
 
@@ -708,10 +708,10 @@ class FocusedPythonExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grok-scope-probe-') as tmp:
             root = Path(tmp)
             self._tree(root)
-            (root / '.grok-stack').mkdir(parents=True, exist_ok=True)
-            (root / '.grok-stack' / 'adaptive_grok').mkdir(parents=True, exist_ok=True)
-            (root / '.grok-stack' / 'adaptive_grok' / 'service.py').write_text('VALUE = 1\n', encoding='utf-8')
-            source_path = '.grok-stack/adaptive_grok/service.py'
+            (root / '.getzilla').mkdir(parents=True, exist_ok=True)
+            (root / '.getzilla' / 'getzilla').mkdir(parents=True, exist_ok=True)
+            (root / '.getzilla' / 'getzilla' / 'service.py').write_text('VALUE = 1\n', encoding='utf-8')
+            source_path = '.getzilla/getzilla/service.py'
 
             focused = self._scope(['README.md', *FOCUSED_TEST_TARGETS], root)
             mutated = self._scope(['README.md', source_path, *FOCUSED_TEST_TARGETS], root)
@@ -757,8 +757,8 @@ class FocusedPythonExecutionTests(unittest.TestCase):
 class VerifyReportScopeFieldTests(unittest.TestCase):
     def test_report_always_carries_the_scope_decision_and_its_evidence_kind(self) -> None:
         with project_copy(git=True) as root:
-            from adaptive_grok.router import build_route
-            from adaptive_grok.state import set_active_route
+            from getzilla.router import build_route
+            from getzilla.state import set_active_route
 
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
@@ -868,7 +868,7 @@ class DocsStateStatusInventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grok-scope-rename-') as tmp:
             root = Path(tmp)
             git = self._docs_repo(root)
-            source = root / '.grok-stack' / 'adaptive_grok' / 'service.py'
+            source = root / '.getzilla' / 'getzilla' / 'service.py'
             source.parent.mkdir(parents=True)
             source.write_text('PRODUCT STATEMENT = "executed"\n', encoding='utf-8')
             git('add', '.')
@@ -887,7 +887,7 @@ class DocsStateStatusInventoryTests(unittest.TestCase):
             production = util_module.changed_files(root, base)
             self.assertEqual(
                 production,
-                ['.grok-stack/adaptive_grok/service.py', 'docs/INVESTOR_DEMO.md'],
+                ['.getzilla/getzilla/service.py', 'docs/INVESTOR_DEMO.md'],
                 'the production inventory no longer reads diffs with --no-renames',
             )
 
@@ -1065,15 +1065,15 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         git('commit', '-qm', 'baseline')
         base = _git_head(root)
 
-        from adaptive_grok.router import build_route
-        from adaptive_grok.state import set_active_route
+        from getzilla.router import build_route
+        from getzilla.state import set_active_route
 
         route = build_route(root, 'Refresh release documentation and dated state', 'e2e-205').to_dict()
         route['base_commit'] = base
         route['quality_profiles'] = ['base']
         route['delivery_expected'] = False
         set_active_route(root, route)
-        from adaptive_grok.state import set_active_change
+        from getzilla.state import set_active_change
         set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})
         return git, base
 
@@ -1113,8 +1113,8 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:
             root = Path(tmp)
             git, _ = self._repo(root)
-            (root / '.grok-stack' / 'adaptive_grok').mkdir(parents=True)
-            (root / '.grok-stack' / 'adaptive_grok' / 'service.py').write_text(
+            (root / '.getzilla' / 'getzilla').mkdir(parents=True)
+            (root / '.getzilla' / 'getzilla' / 'service.py').write_text(
                 'PRODUCT_STATEMENT = 2\n', encoding='utf-8'
             )
             (root / 'README.md').write_text('# probe\n\nidentity 1.0.1\n', encoding='utf-8')

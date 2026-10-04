@@ -24,10 +24,10 @@ def _load(name: str, relative: str):
     return module
 
 
-SPEC = _load("adaptive_grok.spec", ".grok-stack/adaptive_grok/spec.py")
+SPEC = _load("getzilla.spec", ".getzilla/getzilla/spec.py")
 def _cli_rel() -> str:
     for path in (ROOT / "scripts").iterdir():
-        if path.name.startswith("grok") and path.name.endswith("pec.py"):
+        if path.name.startswith("getzilla") and path.name.endswith("pec.py"):
             return path.relative_to(ROOT).as_posix()
     raise RuntimeError("cli missing")
 
@@ -98,8 +98,8 @@ class ChangeSpecTests(unittest.TestCase):
         self.assertTrue(mapped["AC-001"][0].endswith("test_valid_spec_passes"))
 
     def test_receipt_evidence_enum_matches_both_runtime_registries(self) -> None:
-        sys.path.insert(0, str(ROOT / ".grok-stack"))
-        from adaptive_grok import receipts, workflow_artifacts
+        sys.path.insert(0, str(ROOT / ".getzilla"))
+        from getzilla import receipts, workflow_artifacts
 
         schema = SPEC.load_schema()
         schema_kinds = set(schema["$defs"]["evidence"]["properties"]["receipt"]["enum"])
@@ -107,8 +107,8 @@ class ChangeSpecTests(unittest.TestCase):
         self.assertEqual(schema_kinds, set(workflow_artifacts.RECEIPT_KINDS))
 
     def test_every_runtime_receipt_kind_validates_in_change_spec(self) -> None:
-        sys.path.insert(0, str(ROOT / ".grok-stack"))
-        from adaptive_grok import receipts
+        sys.path.insert(0, str(ROOT / ".getzilla"))
+        from getzilla import receipts
 
         for kind in sorted(receipts.RECEIPT_KINDS):
             with self.subTest(kind=kind):
@@ -426,7 +426,7 @@ class ChangeSpecTests(unittest.TestCase):
 
     def test_factory_is_nested_without_root_packaging_or_github_actions(self) -> None:
         self.assertTrue((ROOT / "factory" / "pyproject.toml").is_file())
-        self.assertTrue((ROOT / "factory" / "src" / "adaptive_factory").is_dir())
+        self.assertTrue((ROOT / "factory" / "src" / "getzilla_factory").is_dir())
         self.assertFalse((ROOT / "pyproject.toml").exists())
         self.assertFalse((ROOT / "requirements.txt").exists())
         self.assertFalse((ROOT / "setup.py").exists())
@@ -489,7 +489,7 @@ class ChangeSpecTests(unittest.TestCase):
                 "intent": "feature",
                 "repo": {"signals": []},
             }
-            runtime = fake_root / ".grok-stack" / "runtime"
+            runtime = fake_root / ".getzilla" / "runtime"
             runtime.mkdir(parents=True, exist_ok=True)
             (runtime / "active-route.json").write_text(json.dumps(route), encoding="utf-8")
             gen = fake_root / "engineering" / "changes" / route["change_id"]

@@ -5,10 +5,10 @@ import hashlib
 from functools import partial
 from uuid import uuid4
 
-from adaptive_factory.contracts import canonical_digest, canonical_json
-from adaptive_factory.decision_contracts import DecisionRecordV1
-from adaptive_factory.models import FailureClass, RunRole, TaskStatus
-from adaptive_factory.store import PostgresFactoryStore, StoreError
+from getzilla_factory.contracts import canonical_digest, canonical_json
+from getzilla_factory.decision_contracts import DecisionRecordV1
+from getzilla_factory.models import FailureClass, RunRole, TaskStatus
+from getzilla_factory.store import PostgresFactoryStore, StoreError
 from factory.tests.decision_fixtures import decision_facts
 
 

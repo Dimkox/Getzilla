@@ -4,7 +4,7 @@
   "title": "ResultEnvelopeV1 structural wire contract",
   "x-admission": {
     "level": "structural",
-    "semantic_validator": "adaptive_factory.result_contracts.ResultEnvelopeV1.from_dict",
+    "semantic_validator": "getzilla_factory.result_contracts.ResultEnvelopeV1.from_dict",
     "semantic_validation_required": true,
     "semantic_checks": ["utf8_byte_limits", "known_secret_detection", "strict_structured_payload", "payload_digest", "outcome_payload_parity", "unknown_channel_payload_parity"]
   },

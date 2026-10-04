@@ -20,7 +20,7 @@ from pilot.workspace import PreparedWorkspace
 
 
 BINDING = ControlBinding(
-    repository="Dimkox/adaptive-grok-build-pro",
+    repository="Dimkox/Getzilla",
     route_id="0ce2d62a018e",
     change_id="20260905-feature-implement-a-single-operator-codex-github-0ce2d6",
     git_head="a" * 40,

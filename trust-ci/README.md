@@ -1,6 +1,6 @@
 # Adaptive Trust CI
 
-Self-hosted, independent merge-trust boundary for Adaptive Grok Build Pro. It does **not** use GitHub Actions.
+Self-hosted, independent merge-trust boundary for Getzilla. It does **not** use GitHub Actions.
 
 The service consumes HMAC-verified GitHub pull-request webhooks, stores jobs and leases in PostgreSQL, checks out the exact webhook SHA on a trusted worker, verifies an external holdout bundle, executes mandatory checks in a separate no-network container, rejects source mutation, signs the result with Ed25519, and publishes a GitHub App-owned Check Run:
 
@@ -24,7 +24,7 @@ Repository profiles are a code/config capability in this repository, pending a s
 
 Roll out compatible API and worker binaries first while the legacy policy remains active. Configure and verify the paired trusted roots before atomically installing the reviewed catalog and external holdouts for API and workers. Separately review the server-mounted catalog and each external holdout, drain workers, then verify each repository’s App-owned exact-SHA Check Run and signed attestation before changing branch protection. On failure, drain workers and restore the previous reviewed binaries plus legacy policy as one unit; preserve PostgreSQL jobs and attestations, and re-enqueue unavailable-digest work only at the exact SHA under the restored epoch.
 
-Local Grok hooks, prompt files, change packages, delegated local grants and `.grok-stack/runtime` remain useful workflow inputs. They are not merge authority.
+Local Grok hooks, prompt files, change packages, delegated local grants and `.getzilla/runtime` remain useful workflow inputs. They are not merge authority.
 
 ## Trust boundary
 
@@ -198,7 +198,7 @@ TRUST_CI_GITHUB_ADMIN_TOKEN=<temporary-admin-token> \
 TRUST_CI_GITHUB_APP_ID='<app-id>' \
 adaptive-trust-ci branch-protect \
   --policy "$PWD/runtime/policy.json" \
-  --repository Dimkox/adaptive-grok-build-pro \
+  --repository Dimkox/Getzilla \
   --branch main \
   --required-reviews 0
 ```
@@ -238,7 +238,7 @@ service installation continues to use the full dependency set from `pyproject.to
 this minimal environment is only for human approval commands.
 
 ```bash
-TRUST_CI_CHECKOUT=/absolute/path/to/reviewed/adaptive-grok-build-pro
+TRUST_CI_CHECKOUT=/absolute/path/to/reviewed/getzilla
 TRUST_CI_OPERATOR_DIR=/absolute/human-controlled/path/outside-the-checkout
 TRUST_CI_OPERATOR_VENV="$TRUST_CI_OPERATOR_DIR/venv"
 install -d -m 700 "$TRUST_CI_OPERATOR_DIR"
@@ -299,7 +299,7 @@ files, approval IDs and nonces for `database` and `governance`; never edit or re
 signed envelope.
 
 ```bash
-TRUST_CI_REPOSITORY=Dimkox/adaptive-grok-build-pro
+TRUST_CI_REPOSITORY=Dimkox/Getzilla
 TRUST_CI_PR_NUMBER=123
 TRUST_CI_BASE_SHA='<40-hex-base-sha-reviewed-by-the-human>'
 TRUST_CI_HEAD_SHA='<40-hex-head-sha-reviewed-by-the-human>'
@@ -378,7 +378,7 @@ PYTHONPATH=trust-ci/src:trust-ci/tests \
 
 ## Delegated local operational consent
 
-`scripts/grok_approve.py` is separate from Trust CI security approvals. It may materialize explicit or standing user consent for a named local action such as branch push, tag push or GitHub Release publication. The grant is bound to repository, route, change, exact HEAD, tree fingerprint, action/resource list and TTL. It cannot create the external Check Run or satisfy a signed Trust CI approval.
+`scripts/getzilla_approve.py` is separate from Trust CI security approvals. It may materialize explicit or standing user consent for a named local action such as branch push, tag push or GitHub Release publication. The grant is bound to repository, route, change, exact HEAD, tree fingerprint, action/resource list and TTL. It cannot create the external Check Run or satisfy a signed Trust CI approval.
 
 ## Emergency stop
 

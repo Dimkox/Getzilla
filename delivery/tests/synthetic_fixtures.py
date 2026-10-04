@@ -11,14 +11,14 @@ import hashlib
 import json
 from dataclasses import asdict, is_dataclass
 
-from adaptive_delivery.contracts import (
+from getzilla_delivery.contracts import (
     DeliveryDecisionV1,
     DeliveryPromotionV1,
     EnvironmentObservationV1,
     ExposurePlanV1,
     SignedArtifactRefV1,
 )
-from adaptive_delivery.m8_boundary import (
+from getzilla_delivery.m8_boundary import (
     PROVISIONAL_M8_PRODUCER_SHA,
     M8AutonomyProfileV1,
     M8AutonomyTupleV1,

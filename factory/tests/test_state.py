@@ -1,8 +1,8 @@
 import unittest
 from unittest import mock
 
-from adaptive_factory.models import FailureClass, TaskStatus
-from adaptive_factory.state import (
+from getzilla_factory.models import FailureClass, TaskStatus
+from getzilla_factory.state import (
     TransitionCommand,
     TransitionOperation,
     TRANSITIONS,

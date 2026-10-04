@@ -11,8 +11,8 @@ from tests.json_schema_subset import SchemaDefinitionError, SubsetValidator
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "factory" / "src"))
 
-from adaptive_factory.context_contracts import ContextManifestV1  # noqa: E402
-from adaptive_factory.contracts import ContractError  # noqa: E402
+from getzilla_factory.context_contracts import ContextManifestV1  # noqa: E402
+from getzilla_factory.contracts import ContractError  # noqa: E402
 
 
 SCHEMA = ROOT / "factory/contracts/jsonschema/context-manifest.v1.schema.json"
@@ -75,7 +75,7 @@ class ContextManifestSchemaTests(unittest.TestCase):
             schema["x-admission"],
             {
                 "level": "structural",
-                "semantic_validator": "adaptive_factory.context_contracts.ContextManifestV1.from_dict",
+                "semantic_validator": "getzilla_factory.context_contracts.ContextManifestV1.from_dict",
                 "semantic_validation_required": True,
                 "semantic_checks": [
                     "utf8_byte_limits",

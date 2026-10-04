@@ -1,6 +1,6 @@
 {
   "openapi": "3.1.0",
-  "info": {"title": "Adaptive Factory Priced Usage API", "version": "3.0.0", "description": "HTTP v3 priced usage preserves the published HTTP v2 contract."},
+  "info": {"title": "Getzilla Factory Priced Usage API", "version": "3.0.0", "description": "HTTP v3 priced usage preserves the published HTTP v2 contract."},
   "paths": {
     "/v3/execution/usage": {"post": {
       "operationId": "reportPricedExecutionUsage", "description": "Atomically appends priced usage evidence.", "tags": ["execution"], "security": [{"bearerAuth": []}],

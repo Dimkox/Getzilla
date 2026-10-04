@@ -7,26 +7,26 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.landing_artifact import DEPLOY_MEMBERS
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_normalizer import (
+from getzilla_factory.landing_artifact import DEPLOY_MEMBERS
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_normalizer import (
     LANDING_NORMALIZATION_DRAFT_SCHEMA_SHA256,
     LANDING_NORMALIZER_PROMPT_SHA256,
     CodexLandingProfile,
 )
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_renderer import (
     TARGET_BASE_SHA,
     TARGET_BASE_TREE,
     TARGET_REPOSITORY_ID,
 )
-from adaptive_factory.landing_runtime import (
+from getzilla_factory.landing_runtime import (
     LandingLiveBindingV1,
     LandingRuntimeError,
     compose_landing_live,
     compose_unavailable_landing,
     implemented_live_binding,
 )
-from adaptive_factory.models import Actor
+from getzilla_factory.models import Actor
 from factory.tests.test_landing_normalizer import RecordingExecutor, draft
 from factory.tests.test_landing_renderer import sealed_target
 
@@ -139,11 +139,11 @@ class FactoryLiveAutoLandingTests(unittest.TestCase):
         payload = b"Build a bounded landing candidate"
         executor = RecordingExecutor(draft())
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):
@@ -181,11 +181,11 @@ class FactoryLiveAutoLandingTests(unittest.TestCase):
     def test_pdf_stops_before_executor_on_live_composition(self) -> None:
         executor = RecordingExecutor()
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):

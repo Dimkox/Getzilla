@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok import repo
+from getzilla import repo
 
 
 class RepoLanguageDisclosureTests(unittest.TestCase):
@@ -172,7 +172,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertTrue(self.scan(profile)['unknown'])
 
     def test_vendor_generated_and_hidden_sources_are_excluded(self) -> None:
-        for directory in ('vendor', 'NODE_MODULES', 'Pods', 'build', 'Generated', 'third_party', '.grok-stack', '.git'):
+        for directory in ('vendor', 'NODE_MODULES', 'Pods', 'build', 'Generated', 'third_party', '.getzilla', '.git'):
             self.write(f'{directory}/Main.swift', 'print("vendor")')
         profile = repo.detect_repo(self.root)
         self.assertEqual(profile.languages, [])

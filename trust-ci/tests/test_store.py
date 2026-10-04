@@ -13,7 +13,7 @@ class StoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.store = MemoryStore()
         self.request = JobRequest(
-            repository="Dimkox/adaptive-grok-build-pro",
+            repository="Dimkox/Getzilla",
             pr_number=7,
             base_sha=sha("a"),
             head_sha=sha("b"),

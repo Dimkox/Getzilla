@@ -9,21 +9,21 @@ import sqlite3
 import tempfile
 import unittest
 
-from adaptive_factory.landing_contracts import LandingInputV1
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_contracts import LandingInputV1
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_renderer import (
     TARGET_BASE_SHA,
     TARGET_BASE_TREE,
     TARGET_REPOSITORY_ID,
 )
-from adaptive_factory.landing_service import (
+from getzilla_factory.landing_service import (
     LandingApplicationService,
     LandingJobRecord,
     LandingServiceError,
 )
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
-from adaptive_factory.models import Actor
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory.models import Actor
 
 
 REPOSITORY_ID = "github.com/Dimkox/ai-dark-factory-landing"

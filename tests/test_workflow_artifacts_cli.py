@@ -24,15 +24,15 @@ def _load(name: str, path: Path):
     return module
 
 
-ARTIFACTS = _load("adaptive_grok.workflow_artifacts", ROOT / ".grok-stack/adaptive_grok/workflow_artifacts.py")
-CLI = _load("workflow_artifacts_cli", ROOT / "scripts/grok_artifacts.py")
+ARTIFACTS = _load("getzilla.workflow_artifacts", ROOT / ".getzilla/getzilla/workflow_artifacts.py")
+CLI = _load("workflow_artifacts_cli", ROOT / "scripts/getzilla_artifacts.py")
 
 
 def _run_cli_process(root: str, argv: list[str], queue: multiprocessing.Queue) -> None:
     output = io.StringIO()
     project = Path(root)
     with (
-        patch.object(sys, "argv", ["grok_artifacts.py", *argv]),
+        patch.object(sys, "argv", ["getzilla_artifacts.py", *argv]),
         patch.object(CLI, "ROOT", project),
         patch.object(CLI, "find_root", lambda *_: project),
         redirect_stdout(output),
@@ -90,8 +90,8 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (root / ".grok-stack/runtime").mkdir(parents=True)
-        (root / ".grok-stack/runtime/active-route.json").write_text(
+        (root / ".getzilla/runtime").mkdir(parents=True)
+        (root / ".getzilla/runtime/active-route.json").write_text(
             json.dumps(
                 {
                     "route_id": "route",
@@ -102,7 +102,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (root / ".grok-stack/runtime/active-change.json").write_text(
+        (root / ".getzilla/runtime/active-change.json").write_text(
             json.dumps({"change_id": change_id, "path": f"engineering/changes/{change_id}"}), encoding="utf-8"
         )
         return root, change_id
@@ -110,7 +110,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
     def _run(self, root: Path, argv: list[str]) -> tuple[int, dict]:
         output = io.StringIO()
         with (
-            patch.object(sys, "argv", ["grok_artifacts.py", *argv]),
+            patch.object(sys, "argv", ["getzilla_artifacts.py", *argv]),
             patch.object(CLI, "ROOT", root),
             patch.object(CLI, "find_root", lambda *_: root),
             redirect_stdout(output),
@@ -138,7 +138,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
         for filename in ("active-route.json", "active-change.json"):
             with self.subTest(filename=filename), tempfile.TemporaryDirectory() as tmp:
                 root, change_id = self._project(tmp)
-                runtime = root / ".grok-stack/runtime"
+                runtime = root / ".getzilla/runtime"
                 target = runtime / filename
                 outside = root / f"outside-{filename}"
                 outside.write_bytes(target.read_bytes())
@@ -150,7 +150,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)
-            route_path = root / ".grok-stack/runtime/active-route.json"
+            route_path = root / ".getzilla/runtime/active-route.json"
             route = json.loads(route_path.read_text(encoding="utf-8"))
             route["unexpected"] = True
             route_path.write_text(json.dumps(route), encoding="utf-8")
@@ -161,7 +161,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
     def test_runtime_authority_fifo_fails_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)
-            route = root / ".grok-stack/runtime/active-route.json"
+            route = root / ".getzilla/runtime/active-route.json"
             route.unlink()
             os.mkfifo(route)
             queue: multiprocessing.Queue = multiprocessing.Queue()

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://adaptive-grok.invalid/factory/workspace-result.v1.json",
-  "title": "Adaptive Factory WorkspaceResultV1",
+  "title": "Getzilla Factory WorkspaceResultV1",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -12,7 +12,7 @@ from unittest import mock
 import warnings
 import zipfile
 
-from adaptive_factory.vibevm_store import (
+from getzilla_factory.vibevm_store import (
     UPSTREAM_ADAPTER_COMMIT,
     UPSTREAM_ADAPTER_TREE,
     StaticPackageRegistry,
@@ -309,7 +309,7 @@ class VibeVMStoreTests(unittest.TestCase):
             return original_lstat(path)
 
         before_disappearance = descriptor_count()
-        with mock.patch("adaptive_factory.vibevm_store.Path.lstat", new=disappear_after_open):
+        with mock.patch("getzilla_factory.vibevm_store.Path.lstat", new=disappear_after_open):
             self.assert_code(
                 "store_path_missing",
                 lambda: VibeVMStore(
@@ -393,7 +393,7 @@ class VibeVMStoreTests(unittest.TestCase):
             except Exception as error:
                 outcomes.append(type(error).__name__)
 
-        with mock.patch("adaptive_factory.vibevm_store.os.replace", side_effect=synchronized):
+        with mock.patch("getzilla_factory.vibevm_store.os.replace", side_effect=synchronized):
             threads = [threading.Thread(target=publish_thread) for _ in range(2)]
             for thread in threads:
                 thread.start()

@@ -124,7 +124,7 @@ class FixtureResetTests(unittest.TestCase):
         helper = self.helper()
         result = subprocess.run([sys.executable, "-c",
             "import sys; from postgres_fixture_reset import reset_fixture_tables; "
-            "assert not any(n == 'adaptive_factory' or n.startswith('adaptive_factory.') for n in sys.modules)"],
+            "assert not any(n == 'getzilla_factory' or n.startswith('getzilla_factory.') for n in sys.modules)"],
             cwd=Path(helper.__file__).parent, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -135,8 +135,8 @@ class FixtureResetPostgresTests(unittest.TestCase):
         import psycopg
         from psycopg import sql
         from psycopg.conninfo import conninfo_to_dict, make_conninfo
-        from adaptive_factory.admin import provision_runtime_login
-        from adaptive_factory.migrations import PostgresMigrator
+        from getzilla_factory.admin import provision_runtime_login
+        from getzilla_factory.migrations import PostgresMigrator
         from factory.tests.postgres_fixture_reset import reset_fixture_tables
         from factory.tests.postgres_restart_probe import _assert_disposable_target
         url = os.environ["FACTORY_TEST_DATABASE_URL"]

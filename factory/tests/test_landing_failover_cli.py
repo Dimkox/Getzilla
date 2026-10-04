@@ -11,15 +11,15 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_failover import FailoverCoordinator
-from adaptive_factory.landing_failover_cli import main
-from adaptive_factory.landing_failover_config import FailoverConfig
-from adaptive_factory.landing_failover_journal import CallerJournal
-from adaptive_factory import landing_failover_transport as transport_module
-from adaptive_factory import landing_failover_cli as cli_module
-from adaptive_factory import landing_failover_config as config_module
-from adaptive_factory.settings import SettingsError
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_failover import FailoverCoordinator
+from getzilla_factory.landing_failover_cli import main
+from getzilla_factory.landing_failover_config import FailoverConfig
+from getzilla_factory.landing_failover_journal import CallerJournal
+from getzilla_factory import landing_failover_transport as transport_module
+from getzilla_factory import landing_failover_cli as cli_module
+from getzilla_factory import landing_failover_config as config_module
+from getzilla_factory.settings import SettingsError
 from factory.tests.test_landing_failover import configuration, ScriptedBackends
 
 

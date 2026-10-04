@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:adaptive-factory:m8:earned-autonomy:v1",
-  "title": "Adaptive Factory M8 Earned Autonomy V1",
+  "title": "Getzilla Factory M8 Earned Autonomy V1",
   "$defs": {
     "identifier": {
       "type": "string",

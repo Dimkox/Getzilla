@@ -1,6 +1,6 @@
 # Local package status and checkpoints
 
-`python3 scripts/grok_status.py` observes the current worktree. It preserves `route`, `change`, `agents`, and `evidence_gaps`, and adds:
+`python3 scripts/getzilla_status.py` observes the current worktree. It preserves `route`, `change`, `agents`, and `evidence_gaps`, and adds:
 
 | Field | Meaning |
 | --- | --- |
@@ -26,7 +26,7 @@ The immutable initial checkpoint HEAD is preferred for `diagnostic_base`, with `
 
 ## Durable lifecycle observations
 
-New `grok_change.py start` calls write one initial checkpoint in `state.json` and append its human-readable presentation to `evidence/README.md`. It includes change/route identity, time, actual branch/HEAD (or explicit unknown), product dirty state, and `draft; implementation not started`. The first successful transition to `implementing` appends one implementation checkpoint. Repeated starts and later reentry to implementation preserve those observations. An old package can acquire its first implementation observation through an explicit transition; its original start HEAD is never fabricated.
+New `getzilla_change.py start` calls write one initial checkpoint in `state.json` and append its human-readable presentation to `evidence/README.md`. It includes change/route identity, time, actual branch/HEAD (or explicit unknown), product dirty state, and `draft; implementation not started`. The first successful transition to `implementing` appends one implementation checkpoint. Repeated starts and later reentry to implementation preserve those observations. An old package can acquire its first implementation observation through an explicit transition; its original start HEAD is never fabricated.
 
 The state file is canonical and is written before the README mirror. A mirror failure raises an error and leaves `checkpoint_mirror_pending=true` in durable state. Retrying `start`, or retrying the same transition to the already-recorded stage, repairs the mirror without adding another checkpoint/history event. This is explicit recovery, not two-file crash atomicity. Finish all package/checkpoint writes before final verification and review: they retain their existing effect on full-tree receipt freshness. Cross-host continuation still requires separately authorized commit/publication.
 

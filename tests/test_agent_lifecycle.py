@@ -11,10 +11,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.state import get_agent_state, record_agent_start, record_agent_stop, set_active_route
-from adaptive_grok.util import dump_json
+from getzilla.state import get_agent_state, record_agent_start, record_agent_stop, set_active_route
+from getzilla.util import dump_json
 from tests._support import project_copy, run_hook
 
 T0 = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -22,26 +22,26 @@ T0 = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
 class AgentLifecycleTests(unittest.TestCase):
     def test_observer_failures_cannot_authorize_sensitive_tools(self) -> None:
-        from adaptive_grok.router import build_route
+        from getzilla.router import build_route
         with project_copy(git=True) as root:
             set_active_route(root, build_route(root, 'Fix security policy boundary', 'synthetic').to_dict())
             payload = {'cwd': str(root), 'agent_id': 'child', 'generation': 'generation'}
             for state in ({'active': [], 'history': []}, {'active': {'child': []}, 'history': []},
                           {'active': {'child': {'route_id': 'synthetic', 'task_id': 'synthetic'}}, 'history': {}}):
-                dump_json(root / '.grok-stack/runtime/agent-state.json', state)
+                dump_json(root / '.getzilla/runtime/agent-state.json', state)
                 for tool, values in [('Bash', {'command': 'git push origin feature'}),
-                                     ('Write', {'file_path': str(root / '.grok-stack/adaptive_grok/policy.py'), 'content': 'x'})]:
+                                     ('Write', {'file_path': str(root / '.getzilla/getzilla/policy.py'), 'content': 'x'})]:
                     with self.subTest(state=state, tool=tool):
                         self.assertEqual(run_hook(root, 'pre_tool_use.py', {**payload, 'tool_name': tool, 'tool_input': values})[1]['decision'], 'deny')
             # Inject arbitrary observer Exceptions at the actual hook boundary;
             # policy evaluation and hook output remain real.
             import runpy
-            from adaptive_grok import agent_lifecycle
+            from getzilla import agent_lifecycle
             with patch.object(sys, 'path', [str(root / '.grok/hooks'), *sys.path]):
                 hook = runpy.run_path(str(root / '.grok/hooks/pre_tool_use.py'))
             for failure in (RuntimeError('observer'), TypeError('observer'), AttributeError('observer')):
                 for tool, values in [('Bash', {'command': 'git push origin feature'}),
-                                     ('Write', {'file_path': str(root / '.grok-stack/adaptive_grok/policy.py'), 'content': 'x'}),
+                                     ('Write', {'file_path': str(root / '.getzilla/getzilla/policy.py'), 'content': 'x'}),
                                      ('Read', {'file_path': str(root / 'VERSION')})]:
                     results = []
                     warning = io.StringIO()
@@ -50,7 +50,7 @@ class AgentLifecycleTests(unittest.TestCase):
                          patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
                         hook['main']()
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
-                    self.assertEqual(warning.getvalue(), 'Adaptive Grok: lifecycle observation unavailable; authorization continues.\n')
+                    self.assertEqual(warning.getvalue(), 'Getzilla: lifecycle observation unavailable; authorization continues.\n')
                     with patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
                          patch.object(sys.stderr, 'write', side_effect=OSError('private-marker')), \
                          patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
@@ -58,7 +58,7 @@ class AgentLifecycleTests(unittest.TestCase):
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
 
     def test_changed_active_task_refuses_heartbeat_ack_and_resume_without_mutation(self) -> None:
-        from adaptive_grok.state import get_active_route
+        from getzilla.state import get_active_route
         for event in ('heartbeat', 'status-ack', 'interrupt-ack', 'resume'):
             with self.subTest(event=event), project_copy() as root:
                 record = self.start(root)
@@ -76,10 +76,10 @@ class AgentLifecycleTests(unittest.TestCase):
                 self.assertEqual(get_agent_state(root), before)
 
     def test_tool_receipt_invalidation_and_verifier_cancel_preserve_writer_progress(self) -> None:
-        from adaptive_grok import verification as verifier
-        from adaptive_grok.agent_lifecycle import update_agent
-        from adaptive_grok.python_test_runner import RunCancelled
-        from adaptive_grok.receipts import get_receipt, write_receipt
+        from getzilla import verification as verifier
+        from getzilla.agent_lifecycle import update_agent
+        from getzilla.python_test_runner import RunCancelled
+        from getzilla.receipts import get_receipt, write_receipt
         with project_copy(git=True) as root:
             self.start(root)
             record_agent_stop(root, 'writer-1', 'general_implementer', now=T0)
@@ -117,12 +117,12 @@ class AgentLifecycleTests(unittest.TestCase):
         return record_agent_start(root, 'writer-1', 'general_implementer', now=T0)
 
     def event(self, root: Path, record: dict, event: str, seconds: int = 0, **values) -> dict:
-        from adaptive_grok.agent_lifecycle import update_agent
+        from getzilla.agent_lifecycle import update_agent
         return update_agent(root, 'writer-1', record['generation'], 'route-229', 'task-229',
                             event, now=T0 + timedelta(seconds=seconds), **values)
 
     def sweep(self, root: Path, seconds: int) -> dict:
-        from adaptive_grok.agent_lifecycle import watchdog
+        from getzilla.agent_lifecycle import watchdog
         return watchdog(root, now=T0 + timedelta(seconds=seconds))
 
     def test_synthetic_stuck_running_warns_without_releasing_owner(self) -> None:
@@ -222,7 +222,7 @@ class AgentLifecycleTests(unittest.TestCase):
                                              generation=second['generation'], now=T0))
 
     def test_russian_change_identity_supports_heartbeat_ack_and_same_task_resume(self) -> None:
-        from adaptive_grok.agent_lifecycle import update_agent
+        from getzilla.agent_lifecycle import update_agent
         with project_copy() as root:
             source = '20261002-исправить-ошибку-обработки-агента-ru229a'
             set_active_route(root, {'route_id': 'route-ru', 'change_id': source,
@@ -245,7 +245,7 @@ class AgentLifecycleTests(unittest.TestCase):
             self.assertNotEqual(resumed['generation'], record['generation'])
 
     def test_ascii_task_identity_remains_unchanged_and_unicode_session_fallback_is_supported(self) -> None:
-        from adaptive_grok.agent_lifecycle import update_agent
+        from getzilla.agent_lifecycle import update_agent
         with project_copy() as root:
             self.assertEqual(self.start(root)['task_id'], 'task-229')
         with project_copy() as root:
@@ -276,7 +276,7 @@ class AgentLifecycleTests(unittest.TestCase):
         with project_copy() as root:
             set_active_route(root, {'route_id': 'route-229', 'change_id': 'task-229',
                                     'write_agent': 'general_implementer'})
-            command = [sys.executable, str(ROOT / 'scripts/grok_agent.py'), '--root', str(root)]
+            command = [sys.executable, str(ROOT / 'scripts/getzilla_agent.py'), '--root', str(root)]
 
             def call(action: str, *flags: str) -> dict:
                 proc = subprocess.run(command + [action, *flags], capture_output=True, text=True, check=False)
@@ -302,7 +302,7 @@ class AgentLifecycleTests(unittest.TestCase):
             self.assertEqual(report['terminal'][0]['classification'], 'terminal-completed')
 
     def test_route_task_generation_and_closed_diagnostics_reject_invalid_updates(self) -> None:
-        from adaptive_grok.agent_lifecycle import update_agent
+        from getzilla.agent_lifecycle import update_agent
         with project_copy() as root:
             record = self.start(root)
             before = get_agent_state(root)
@@ -325,12 +325,12 @@ class AgentLifecycleTests(unittest.TestCase):
             for value in (None, 'invalid', '2031-01-01T00:00:00+00:00'):
                 state = get_agent_state(root)
                 state['active']['writer-1']['last_heartbeat_at'] = value
-                dump_json(root / '.grok-stack/runtime/agent-state.json', state)
+                dump_json(root / '.getzilla/runtime/agent-state.json', state)
                 self.assertIn('heartbeat-unavailable', self.sweep(root, 1)['agents'][0]['warnings'])
 
     def test_legacy_records_are_uninstrumented_and_stop_remains_idempotent(self) -> None:
         with project_copy() as root:
-            dump_json(root / '.grok-stack/runtime/agent-state.json', {
+            dump_json(root / '.getzilla/runtime/agent-state.json', {
                 'active': {'old': {'agent_type': 'repo_explorer', 'started_at': T0.isoformat()}},
                 'history': []})
             report = self.sweep(root, 1)['agents'][0]
@@ -339,7 +339,7 @@ class AgentLifecycleTests(unittest.TestCase):
             self.assertFalse(record_agent_stop(root, 'old', 'repo_explorer'))
 
     def test_terminal_missing_report_is_distinct_and_late_report_can_be_acknowledged(self) -> None:
-        from adaptive_grok.agent_lifecycle import record_terminal_report
+        from getzilla.agent_lifecycle import record_terminal_report
         with project_copy() as root:
             record = self.start(root)
             self.assertTrue(record_agent_stop(root, 'writer-1', 'general_implementer',
@@ -356,8 +356,8 @@ class AgentLifecycleTests(unittest.TestCase):
         with project_copy() as root:
             set_active_route(root, {'route_id': 'route-229', 'write_agent': 'general_implementer'})
             code = ('import sys; from pathlib import Path; '
-                    'sys.path.insert(0,sys.argv[1]+"/.grok-stack"); '
-                    'from adaptive_grok.state import record_agent_start; '
+                    'sys.path.insert(0,sys.argv[1]+"/.getzilla"); '
+                    'from getzilla.state import record_agent_start; '
                     'record_agent_start(Path(sys.argv[1]),sys.argv[2],"general_implementer")')
             children = [subprocess.Popen([sys.executable, '-c', code, str(root), agent],
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -390,7 +390,7 @@ class AgentLifecycleTests(unittest.TestCase):
     def test_cli_one_shot_finite_watch_and_redacted_error(self) -> None:
         with project_copy() as root:
             self.start(root)
-            command = [sys.executable, str(ROOT / 'scripts/grok_agent.py'), '--root', str(root)]
+            command = [sys.executable, str(ROOT / 'scripts/getzilla_agent.py'), '--root', str(root)]
             for tail, lines in [(['watchdog'], 1), (['watch', '--iterations', '2', '--interval', '0'], 2)]:
                 proc = subprocess.run(command + tail, capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)

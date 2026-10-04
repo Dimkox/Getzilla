@@ -11,18 +11,18 @@ import unittest
 from unittest import mock
 import uuid
 
-from adaptive_factory.migrations import PostgresMigrator, discover_migrations
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.contracts import TaskIntakeV1, canonical_digest, canonical_json
-from adaptive_factory.models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
-from adaptive_factory.semantic_adjudication import adjudicate
-from adaptive_factory.semantic_bridge import SemanticBridgeResult
-from adaptive_factory.semantic_contracts import (
+from getzilla_factory.migrations import PostgresMigrator, discover_migrations
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.contracts import TaskIntakeV1, canonical_digest, canonical_json
+from getzilla_factory.models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
+from getzilla_factory.semantic_adjudication import adjudicate
+from getzilla_factory.semantic_bridge import SemanticBridgeResult
+from getzilla_factory.semantic_contracts import (
     SemanticCoverageV1,
     SemanticFindingV1,
     ValidatorIdentityV1,
 )
-from adaptive_factory.semantic_repair import (
+from getzilla_factory.semantic_repair import (
     REPAIR_CHILD_REJECTIONS,
     RepairChildProposalV1,
     RepairChildTaskBindingV1,
@@ -30,15 +30,15 @@ from adaptive_factory.semantic_repair import (
     SemanticRepairRequestV1,
     repair_child_rejection_reason,
 )
-from adaptive_factory.service import (
+from getzilla_factory.service import (
     REPAIR_CHILD_BROKER_ACTOR_ID,
     REPAIR_CHILD_BROKER_ACTOR_KIND,
     AuthorizationError,
     ClaimRequest,
     FactoryService,
 )
-from adaptive_factory.state import TransitionDecision
-from adaptive_factory.store import (
+from getzilla_factory.state import TransitionDecision
+from getzilla_factory.store import (
     BudgetError,
     FenceError,
     PostgresFactoryStore,
@@ -49,7 +49,7 @@ from adaptive_factory.store import (
     StoreError,
     StoreUnavailable,
 )
-from adaptive_factory.workspace import WorkspaceSnapshotV1
+from getzilla_factory.workspace import WorkspaceSnapshotV1
 from factory.tests.test_contracts import valid_intake
 from factory.tests.test_execution_contracts import valid_packet
 from factory.tests.test_execution_service import trusted_registry
@@ -117,7 +117,7 @@ class PostgresFactoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         PostgresMigrator(DATABASE_URL).apply()
-        from adaptive_factory.admin import (
+        from getzilla_factory.admin import (
             provision_result_dispatcher_login,
             provision_runtime_login,
             provision_semantic_adjudicator_login,
@@ -226,7 +226,7 @@ class PostgresFactoryTests(unittest.TestCase):
 
     @classmethod
     def result_dispatcher_store(cls):
-        from adaptive_factory.store import PostgresResultDispatcherStore
+        from getzilla_factory.store import PostgresResultDispatcherStore
 
         return PostgresResultDispatcherStore(cls.result_dispatcher_url)
 
@@ -962,7 +962,7 @@ class PostgresFactoryTests(unittest.TestCase):
     def test_v15_result_admission_is_authoritative_replay_safe_and_durable(self):
         import psycopg
         import uuid
-        from adaptive_factory.result_broker import ResultBroker
+        from getzilla_factory.result_broker import ResultBroker
 
         task = self.submit(source="v15-result-admission").task
         grant = self.service.claim(
@@ -1363,8 +1363,8 @@ class PostgresFactoryTests(unittest.TestCase):
 
     def test_result_dispatch_is_fenced_restart_safe_and_never_blindly_reposts_unknown(self):
         import psycopg
-        from adaptive_factory.result_broker import ResultBroker
-        from adaptive_factory.result_dispatch import DispatchOutcome
+        from getzilla_factory.result_broker import ResultBroker
+        from getzilla_factory.result_dispatch import DispatchOutcome
 
         task = self.submit(source="v15-result-dispatch").task
         grant = self.service.claim(
@@ -1500,8 +1500,8 @@ class PostgresFactoryTests(unittest.TestCase):
         from pathlib import Path
         import socketserver
         import tempfile
-        from adaptive_factory.result_broker import ResultBroker
-        from adaptive_factory.result_dispatch import ResultDispatcher, UdsResultHandoffClient
+        from getzilla_factory.result_broker import ResultBroker
+        from getzilla_factory.result_dispatch import ResultDispatcher, UdsResultHandoffClient
 
         task = self.submit(source="v15-result-dispatch-e2e").task
         grant = self.service.claim(
@@ -1611,7 +1611,7 @@ class PostgresFactoryTests(unittest.TestCase):
         import subprocess
         import sys
         import tempfile
-        from adaptive_factory.result_broker import ResultBroker
+        from getzilla_factory.result_broker import ResultBroker
 
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", POSTGRES_CONTAINER):
             self.fail("invalid disposable PostgreSQL container name")
@@ -1728,7 +1728,7 @@ class PostgresFactoryTests(unittest.TestCase):
                 "FACTORY_RESULT_DISPATCH_PROCESSING_MARGIN_SECONDS": "1",
             }
             first = subprocess.Popen(
-                [sys.executable, "-m", "adaptive_factory.result_dispatch_cli", "--once"],
+                [sys.executable, "-m", "getzilla_factory.result_dispatch_cli", "--once"],
                 env=child_env,
             )
             try:
@@ -1786,7 +1786,7 @@ class PostgresFactoryTests(unittest.TestCase):
                             raise
                         time.sleep(0.2)
                 second = subprocess.run(
-                    [sys.executable, "-m", "adaptive_factory.result_dispatch_cli", "--once"],
+                    [sys.executable, "-m", "getzilla_factory.result_dispatch_cli", "--once"],
                     env=child_env, timeout=15,
                 )
                 self.assertEqual(second.returncode, 0)
@@ -2300,7 +2300,7 @@ class PostgresFactoryTests(unittest.TestCase):
             repository="policy/denial/claim", source="policy-denial-claim"
         ).task
         claim_key = "1" * 64
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.claim(
                     owner=WORKER.actor_id,
@@ -2324,7 +2324,7 @@ class PostgresFactoryTests(unittest.TestCase):
             now=NOW,
         )
         release_key = "2" * 64
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.release(
                     release_grant,
@@ -2346,7 +2346,7 @@ class PostgresFactoryTests(unittest.TestCase):
             now=NOW,
         )
         cancel_key = "3" * 64
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.cancel(
                     cancel_task.task_id,
@@ -2365,7 +2365,7 @@ class PostgresFactoryTests(unittest.TestCase):
             source="policy-denial-supersede",
         )
         replacement["source_digest"] = "8" * 64
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.intake(replacement, actor=OPERATOR, now=NOW)
 
@@ -2396,7 +2396,7 @@ class PostgresFactoryTests(unittest.TestCase):
                 WHERE task_id=%s""",
                 (deadline_task.task_id,),
             )
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.reconcile(actor=OPERATOR, now=NOW)
 
@@ -2475,7 +2475,7 @@ class PostgresFactoryTests(unittest.TestCase):
 
         denied = TransitionDecision("forbidden", "injected retry-exhaustion denial")
         key = "9" * 64
-        with mock.patch("adaptive_factory.store.authorize_transition", return_value=denied):
+        with mock.patch("getzilla_factory.store.authorize_transition", return_value=denied):
             with self.assertRaises(StoreError):
                 self.service.claim(
                     owner=WORKER.actor_id,
@@ -5991,7 +5991,7 @@ class PostgresFactoryTests(unittest.TestCase):
 
     def test_shipped_local_bootstrap_provisions_effective_runtime_login(self):
         import psycopg
-        from adaptive_factory.admin import bootstrap_local
+        from getzilla_factory.admin import bootstrap_local
 
         result = bootstrap_local(
             DATABASE_URL,
@@ -6016,7 +6016,7 @@ class PostgresFactoryTests(unittest.TestCase):
 
     def test_bootstrap_rejects_unsafe_factory_role_attributes_and_memberships(self):
         import psycopg
-        from adaptive_factory.admin import BootstrapError, bootstrap_local
+        from getzilla_factory.admin import BootstrapError, bootstrap_local
         from psycopg import sql
 
         def assert_rejected() -> None:
@@ -6071,7 +6071,7 @@ class PostgresFactoryTests(unittest.TestCase):
 
     def test_bootstrap_rejects_service_login_with_unexpected_membership(self):
         import psycopg
-        from adaptive_factory.admin import BootstrapError, bootstrap_local
+        from getzilla_factory.admin import BootstrapError, bootstrap_local
         from psycopg import sql
 
         login = self.runtime_login

@@ -22,40 +22,40 @@ if __package__:
 else:
     from postgres_fixture_reset import reset_fixture_tables
 
-from adaptive_factory.adapters import (
+from getzilla_factory.adapters import (
     AdapterConformance,
     AdapterRegistry,
     TrustedExecutionProfile,
 )
-from adaptive_factory.admin import (
+from getzilla_factory.admin import (
     provision_artifact_attestor_login,
     provision_runtime_login,
 )
-from adaptive_factory.decision_contracts import DecisionRecordV1
-from adaptive_factory.contracts import canonical_digest
+from getzilla_factory.decision_contracts import DecisionRecordV1
+from getzilla_factory.contracts import canonical_digest
 from factory.tests.decision_fixtures import decision_facts
-from adaptive_factory.execution_contracts import ExecutionSelectionV1
-from adaptive_factory.migrations import PostgresMigrator, discover_migrations
-from adaptive_factory.models import (
+from getzilla_factory.execution_contracts import ExecutionSelectionV1
+from getzilla_factory.migrations import PostgresMigrator, discover_migrations
+from getzilla_factory.models import (
     Actor,
     ExecutionStage,
     FailureClass,
     RunRole,
     TaskStatus,
 )
-from adaptive_factory.recovery import (
+from getzilla_factory.recovery import (
     ExecutionRecovery,
     ExecutionRecoveryClaim,
 )
-from adaptive_factory.result_broker import ResultBroker
-from adaptive_factory.service import FactoryService
-from adaptive_factory.store import (
+from getzilla_factory.result_broker import ResultBroker
+from getzilla_factory.service import FactoryService
+from getzilla_factory.store import (
     FenceError,
     PostgresArtifactAttestationStore,
     PostgresFactoryStore,
     StoreError,
 )
-from adaptive_factory.workspace import (
+from getzilla_factory.workspace import (
     FakeWorkspaceBroker,
     WorkspaceHandle,
     WorkspacePolicy,

@@ -67,7 +67,7 @@ class ApiTests(unittest.TestCase):
     def read_headers(self) -> dict[str, str]:
         return {'Authorization': 'Bearer read-token'}
 
-    def webhook_body(self, action='opened', *, repository='Dimkox/adaptive-grok-build-pro') -> bytes:
+    def webhook_body(self, action='opened', *, repository='Dimkox/Getzilla') -> bytes:
         return json.dumps(
             {
                 'action': action,
@@ -92,9 +92,9 @@ class ApiTests(unittest.TestCase):
         common.pop('holdout')
         profiles = [
                 {
-                    'repository': 'Dimkox/adaptive-grok-build-pro',
+                    'repository': 'Dimkox/Getzilla',
                     'commands': policy_data()['commands'],
-                    'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/adaptive-grok-build-pro'},
+                    'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/getzilla'},
                 },
         ]
         if include_platform:
@@ -152,7 +152,7 @@ class ApiTests(unittest.TestCase):
         catalog = self.catalog()
         store = MemoryStore()
         client = TestClient(create_app(self.settings, store=store, policy=catalog, trust_store=self.trust_store))
-        for repository in ('Dimkox/adaptive-grok-build-pro', 'Dimkox/ii-tonya-platform'):
+        for repository in ('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform'):
             body = self.webhook_body(repository=repository)
             response = client.post('/webhooks/github', content=body, headers=self.headers(body))
             self.assertEqual(response.status_code, 200)
@@ -176,22 +176,22 @@ class ApiTests(unittest.TestCase):
     def test_unknown_and_case_variant_closed_events_cannot_cancel_configured_jobs(self) -> None:
         opened = self.webhook_body()
         self.client.post('/webhooks/github', content=opened, headers=self.headers(opened))
-        for repository in ('attacker/repo', 'dimkox/adaptive-grok-build-pro'):
+        for repository in ('attacker/repo', 'dimkox/getzilla'):
             closed = self.webhook_body('closed', repository=repository)
             response = self.client.post('/webhooks/github', content=closed, headers=self.headers(closed))
             self.assertEqual(response.status_code, 403)
-        self.assertEqual(self.store.get_job_for_sha('Dimkox/adaptive-grok-build-pro', sha('b')).status, 'queued')
+        self.assertEqual(self.store.get_job_for_sha('Dimkox/Getzilla', sha('b')).status, 'queued')
 
     def test_catalog_unknown_and_case_variant_closed_events_cannot_cancel_job(self) -> None:
         catalog = self.catalog()
         store = MemoryStore()
         client = TestClient(create_app(self.settings, store=store, policy=catalog, trust_store=self.trust_store))
-        opened = self.webhook_body(repository='Dimkox/adaptive-grok-build-pro')
+        opened = self.webhook_body(repository='Dimkox/Getzilla')
         client.post('/webhooks/github', content=opened, headers=self.headers(opened))
-        for repository in ('attacker/repo', 'dimkox/adaptive-grok-build-pro'):
+        for repository in ('attacker/repo', 'dimkox/getzilla'):
             closed = self.webhook_body('closed', repository=repository)
             self.assertEqual(client.post('/webhooks/github', content=closed, headers=self.headers(closed)).status_code, 403)
-        self.assertEqual(store.get_job_for_sha('Dimkox/adaptive-grok-build-pro', sha('b')).status, 'queued')
+        self.assertEqual(store.get_job_for_sha('Dimkox/Getzilla', sha('b')).status, 'queued')
 
     def test_catalog_approval_fails_closed_when_bound_profile_is_removed(self) -> None:
         catalog = self.catalog()
@@ -217,7 +217,7 @@ class ApiTests(unittest.TestCase):
         catalog = self.catalog()
         store = MemoryStore()
         client = TestClient(create_app(self.settings, store=store, policy=catalog, trust_store=self.trust_store))
-        request = JobRequest('Dimkox/adaptive-grok-build-pro', 15, sha('a'), sha('b'), 'feat/x', 'main')
+        request = JobRequest('Dimkox/Getzilla', 15, sha('a'), sha('b'), 'feat/x', 'main')
         profile = catalog.resolve_repository(request.repository)
         job, _ = store.enqueue(request, profile.digest, profile.max_attempts, now=now())
         claimed = store.claim('worker', profile.lease_seconds, now=now())
@@ -238,7 +238,7 @@ class ApiTests(unittest.TestCase):
         second = self.catalog(changed=True)
         first_client = TestClient(create_app(self.settings, store=store, policy=first, trust_store=self.trust_store))
         second_client = TestClient(create_app(self.settings, store=store, policy=second, trust_store=self.trust_store))
-        body = self.webhook_body(repository='Dimkox/adaptive-grok-build-pro')
+        body = self.webhook_body(repository='Dimkox/Getzilla')
         old_job = store.get_job(first_client.post('/webhooks/github', content=body, headers=self.headers(body)).json()['job_id'])
         new_job = store.get_job(second_client.post('/webhooks/github', content=body, headers=self.headers(body)).json()['job_id'])
         assert old_job is not None and new_job is not None
@@ -251,7 +251,7 @@ class ApiTests(unittest.TestCase):
         body = self.webhook_body()
         response = self.client.post('/webhooks/github', content=body, headers=self.headers(body))
         self.assertEqual(response.status_code, 503)
-        self.assertIsNone(self.store.get_job_for_sha('Dimkox/adaptive-grok-build-pro', sha('b')))
+        self.assertIsNone(self.store.get_job_for_sha('Dimkox/Getzilla', sha('b')))
 
     def test_closed_pull_request_cancels_active_job(self) -> None:
         opened = self.webhook_body()
@@ -263,7 +263,7 @@ class ApiTests(unittest.TestCase):
 
     def test_signed_approval_requeues_matching_waiting_job(self) -> None:
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=15,
             base_sha=sha('a'),
             head_sha=sha('b'),
@@ -301,7 +301,7 @@ class ApiTests(unittest.TestCase):
 
     def test_tampered_approval_is_rejected(self) -> None:
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=15,
             base_sha=sha('a'),
             head_sha=sha('b'),
@@ -353,7 +353,7 @@ class ApiTests(unittest.TestCase):
             )
         )
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=15,
             base_sha=sha('a'),
             head_sha=sha('b'),
@@ -382,7 +382,7 @@ class ApiTests(unittest.TestCase):
 
     def test_job_and_attestation_reads_require_bearer_token(self) -> None:
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=15,
             base_sha=sha('a'),
             head_sha=sha('b'),
@@ -398,7 +398,7 @@ class ApiTests(unittest.TestCase):
 
     def test_authorized_job_endpoint_does_not_return_command_output(self) -> None:
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=15,
             base_sha=sha('a'),
             head_sha=sha('b'),

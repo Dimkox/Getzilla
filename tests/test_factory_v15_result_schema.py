@@ -10,8 +10,8 @@ from tests.json_schema_subset import SubsetValidator
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "factory" / "src"))
 
-from adaptive_factory.contracts import ContractError, canonical_digest  # noqa: E402
-from adaptive_factory.result_contracts import (  # noqa: E402
+from getzilla_factory.contracts import ContractError, canonical_digest  # noqa: E402
+from getzilla_factory.result_contracts import (  # noqa: E402
     ResultEnvelopeV1,
     ResultEnvelopeV2,
     result_channel_qualification_from_wire,

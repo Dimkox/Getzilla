@@ -19,7 +19,7 @@ form "we are current with the upstream document formats".
 
 Express currency as three separable assertions, pinned in one place:
 
-- **C1 declared versions** — the `workflow_sources` block of `.grok-stack/config/toolchain.json`
+- **C1 declared versions** — the `workflow_sources` block of `.getzilla/config/toolchain.json`
   records, per component: `id` equal to the closed `source_type` enum, `pinned`/`upstream_tag`,
   `release_published_at`, `observed_latest`, `observed_at`, the accepted `roles`, the repository
   `tracked_prefixes`, and `verification_tests` (closed `SAFE_UNITTEST_TARGET` shape).

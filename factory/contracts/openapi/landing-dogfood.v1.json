@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Adaptive Factory L5 Landing Dogfood API",
+    "title": "Getzilla Factory L5 Landing Dogfood API",
     "version": "1.0.0",
     "description": "Additive local landing intake API. Repository identity and exact base SHA/tree must match trusted server configuration; the default provider and publisher are unavailable."
   },

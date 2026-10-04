@@ -281,9 +281,9 @@ class ExactGitWorkspace:
         candidate_tree = self._git_repo(workspace.git_dir, workspace.worktree, ("write-tree",), env=environment).decode().strip()
         commit_environment = {
             **environment,
-            "GIT_AUTHOR_NAME": "Adaptive Pilot",
+            "GIT_AUTHOR_NAME": "Getzilla Pilot",
             "GIT_AUTHOR_EMAIL": "pilot@example.invalid",
-            "GIT_COMMITTER_NAME": "Adaptive Pilot",
+            "GIT_COMMITTER_NAME": "Getzilla Pilot",
             "GIT_COMMITTER_EMAIL": "pilot@example.invalid",
             "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z",
             "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",

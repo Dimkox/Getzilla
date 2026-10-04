@@ -7,18 +7,18 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.change import start_change
-from adaptive_grok.repo import detect_repo
-from adaptive_grok.router import (
+from getzilla.change import start_change
+from getzilla.repo import detect_repo
+from getzilla.router import (
     build_route,
     can_reuse_active_route,
     is_development_prompt,
     should_reuse_active_route,
 )
-from adaptive_grok.state import set_active_route
-from adaptive_grok.workflow_artifacts import load_runtime_authority
+from getzilla.state import set_active_route
+from getzilla.workflow_artifacts import load_runtime_authority
 from tests._support import project_copy
 
 
@@ -370,7 +370,7 @@ class RouterTests(unittest.TestCase):
             'risk': 'high',
             'complexity': 'high-risk',
             'write_agent': 'general_implementer',
-            'workflow_skills': ['adaptive-delivery', 'bugfix-workflow',
+            'workflow_skills': ['getzilla-delivery', 'bugfix-workflow',
                                 'security-sensitive-change'],
             'review_agents': ['code_reviewer', 'test_reviewer',
                               'security_reviewer', 'release_reviewer'],
@@ -426,7 +426,7 @@ class RouterTests(unittest.TestCase):
                     self.assertEqual(route.complexity, 'micro')
                     self.assertEqual(route.write_agent, 'general_implementer')
                     self.assertEqual(route.workflow_skills,
-                                     ['adaptive-delivery', 'bugfix-workflow'])
+                                     ['getzilla-delivery', 'bugfix-workflow'])
                     self.assertEqual(route.review_agents, ['code_reviewer', 'test_reviewer'])
                     self.assertEqual(route.required_evidence,
                                      ['verification', 'code_review', 'test_review'])
@@ -524,7 +524,7 @@ class RouterTests(unittest.TestCase):
             self.assertEqual(build_route(root, route.task, 'again').to_dict().get('matched_keywords'), expected)
             set_active_route(root, route.to_dict())
             self.assertEqual(load_runtime_authority(root, 'route')['matched_keywords'], expected)
-            archived = root / f'.grok-stack/runtime/routes/{route.route_id}.json'
+            archived = root / f'.getzilla/runtime/routes/{route.route_id}.json'
             self.assertEqual(json.loads(archived.read_text())['matched_keywords'], expected)
             change = start_change(root)
             copied = root / 'engineering/changes' / change['change_id'] / 'route.json'
@@ -693,7 +693,7 @@ class RouterTests(unittest.TestCase):
 
     def test_analysis_cap_truncates_and_does_not_pad(self) -> None:
         with project_copy() as root:
-            path = root / '.grok-stack/config/routing.json'
+            path = root / '.getzilla/config/routing.json'
             data = json.loads(path.read_text(encoding='utf-8'))
             data['max_parallel_analysis'] = 2
             path.write_text(json.dumps(data), encoding='utf-8')
@@ -710,14 +710,14 @@ class RouterTests(unittest.TestCase):
 
     def test_missing_or_invalid_routing_json_uses_defaults(self) -> None:
         with project_copy() as root:
-            (root / '.grok-stack/config/routing.json').unlink()
+            (root / '.getzilla/config/routing.json').unlink()
             route = build_route(root, 'Добавить функцию', 's-missing')
             self.assertEqual(
                 route.analysis_agents,
                 ['repo_explorer', 'task_analyst', 'architect', 'docs_researcher'],
             )
         with project_copy() as root:
-            (root / '.grok-stack/config/routing.json').write_text('{', encoding='utf-8')
+            (root / '.getzilla/config/routing.json').write_text('{', encoding='utf-8')
             route = build_route(root, 'Добавить функцию', 's-invalid')
             self.assertEqual(
                 route.analysis_agents,

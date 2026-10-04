@@ -7,9 +7,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok.spec import validate_schema  # noqa: E402
+from getzilla.spec import validate_schema  # noqa: E402
 from pilot.contracts import (  # noqa: E402
     CandidateChangeV1,
     CandidateValidationV1,

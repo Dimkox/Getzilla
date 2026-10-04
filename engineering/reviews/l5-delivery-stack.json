@@ -494,8 +494,8 @@
   "evidence_location_policy": {
     "source_checkout": "Immutable after the source/docs commit used by the full verifier.",
     "reports": "Matching engineering/changes/<change>/evidence in this separate same-repository checkout.",
-    "receipts": "Run grok_review from the unchanged source checkout with an absolute report path; retain original verifier receipt.",
-    "completion": "Confirm current source grok_status gaps; never stamp old tests onto a newer HEAD or mutate frozen source state.json solely to say ready."
+    "receipts": "Run getzilla_review from the unchanged source checkout with an absolute report path; retain original verifier receipt.",
+    "completion": "Confirm current source getzilla_status gaps; never stamp old tests onto a newer HEAD or mutate frozen source state.json solely to say ready."
   },
   "archival_attempts": [
     {

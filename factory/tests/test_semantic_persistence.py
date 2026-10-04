@@ -4,11 +4,11 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.contracts import canonical_digest
-from adaptive_factory.models import Actor
-from adaptive_factory.semantic_bridge import build_semantic_subject
-from adaptive_factory.store import PostgresSemanticCoordinatorStore, StoreError
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.contracts import canonical_digest
+from getzilla_factory.models import Actor
+from getzilla_factory.semantic_bridge import build_semantic_subject
+from getzilla_factory.store import PostgresSemanticCoordinatorStore, StoreError
 from .test_semantic_bridge import bridge_material
 
 

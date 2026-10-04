@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import unittest
 
-from adaptive_factory.autonomy import (
+from getzilla_factory.autonomy import (
     AutonomyProfileV1,
     AutonomyTupleV1,
     CohortEvidenceV1,
@@ -13,7 +13,7 @@ from adaptive_factory.autonomy import (
     DemotionDecisionV1,
     PromotionRecommendationV1,
 )
-from adaptive_factory.m7_autonomy_bridge import M7ProviderMappingV1
+from getzilla_factory.m7_autonomy_bridge import M7ProviderMappingV1
 from factory.tests.test_autonomy import valid_cohort_payload, valid_handoff_payload
 
 

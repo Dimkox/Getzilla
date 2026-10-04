@@ -22,7 +22,7 @@ class DenialCircuitBreakerTest(unittest.TestCase):
             reason = data['hookSpecificOutput']['permissionDecisionReason']
             self.assertIn('exact tool invocation was denied again', reason)
             self.assertIn('objective BLOCKED', reason)
-            ledger = json.loads((root / '.grok-stack/runtime/tool-denials.json').read_text(encoding='utf-8'))
+            ledger = json.loads((root / '.getzilla/runtime/tool-denials.json').read_text(encoding='utf-8'))
             self.assertEqual(ledger['schema_version'], 3)
             entry = next(iter(ledger['exact'].values()))
             self.assertEqual(entry['session_cwd'], str(root))

@@ -44,7 +44,7 @@ def approval(signer: Signer, *, issued=None):
     payload = ApprovalPayload.new(
         actor='dmitry',
         key_id=signer.key_id,
-        repository='Dimkox/adaptive-grok-build-pro',
+        repository='Dimkox/Getzilla',
         pr_number=9,
         base_sha=sha('a'),
         head_sha=sha('b'),
@@ -61,7 +61,7 @@ def verify(envelope, store, *, current=None):
     return verify_approval(
         envelope,
         store,
-        expected_repository='Dimkox/adaptive-grok-build-pro',
+        expected_repository='Dimkox/Getzilla',
         expected_pr_number=9,
         expected_base_sha=sha('a'),
         expected_head_sha=sha('b'),

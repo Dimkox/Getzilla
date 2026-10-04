@@ -11,16 +11,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok.architecture import (  # noqa: E402
+from getzilla.architecture import (  # noqa: E402
     architecture_digests,
     contract_inventory,
     load_architecture,
 )
-from adaptive_grok.governance import governance_summary, load_governance  # noqa: E402
-from adaptive_grok.router import build_route  # noqa: E402
-from adaptive_grok.spec import (  # noqa: E402
+from getzilla.governance import governance_summary, load_governance  # noqa: E402
+from getzilla.router import build_route  # noqa: E402
+from getzilla.spec import (  # noqa: E402
     canonical_spec_digest,
     criterion_coverage,
     generate_spec,
@@ -33,7 +33,7 @@ NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 
 def _demo_module():
     try:
-        return importlib.import_module("adaptive_grok.demo")
+        return importlib.import_module("getzilla.demo")
     except ModuleNotFoundError:
         return None
 
@@ -41,12 +41,12 @@ def _demo_module():
 class DemoServiceTests(unittest.TestCase):
     def test_sample_snapshot_uses_real_repository_engines_with_provenance(self) -> None:
         demo = _demo_module()
-        self.assertIsNotNone(demo, "adaptive_grok.demo must provide the demo service")
+        self.assertIsNotNone(demo, "getzilla.demo must provide the demo service")
 
         snapshot = demo.build_sample_snapshot(ROOT, now=NOW, request_id="req-sample")
         fixtures = demo.load_demo_fixtures(ROOT)
         direct_route = build_route(ROOT, fixtures["task"]["primary_prompt"], "demo-sample").to_dict()
-        direct_spec = load_spec(ROOT / ".grok-stack/demo/sample/change-spec.json", allow_legacy=False)
+        direct_spec = load_spec(ROOT / ".getzilla/demo/sample/change-spec.json", allow_legacy=False)
         architecture = load_architecture(ROOT)
         governance = governance_summary(load_governance(ROOT), now=NOW)
 
@@ -79,7 +79,7 @@ class DemoServiceTests(unittest.TestCase):
 
     def test_prompt_preview_is_real_draft_and_verification_is_not_run(self) -> None:
         demo = _demo_module()
-        self.assertIsNotNone(demo, "adaptive_grok.demo must provide prompt previews")
+        self.assertIsNotNone(demo, "getzilla.demo must provide prompt previews")
         prompt = "Add authentication security to a responsive API dashboard"
 
         preview = demo.build_prompt_preview(ROOT, prompt, now=NOW, request_id="req-preview")
@@ -104,7 +104,7 @@ class DemoServiceTests(unittest.TestCase):
 
     def test_alternate_scenario_claims_match_its_computed_route(self) -> None:
         demo = _demo_module()
-        self.assertIsNotNone(demo, "adaptive_grok.demo must provide alternate scenario evidence")
+        self.assertIsNotNone(demo, "getzilla.demo must provide alternate scenario evidence")
         snapshot = demo.build_sample_snapshot(ROOT, now=NOW, request_id="req-alternate")
         scenario = snapshot["scenario"]
         self.assertIn("alternate_route", scenario)
@@ -134,13 +134,13 @@ class DemoServiceTests(unittest.TestCase):
 
     def test_fixture_loader_rejects_duplicate_keys_and_invalid_verification_status(self) -> None:
         demo = _demo_module()
-        self.assertIsNotNone(demo, "adaptive_grok.demo must validate bundled fixtures")
+        self.assertIsNotNone(demo, "getzilla.demo must validate bundled fixtures")
         with tempfile.TemporaryDirectory() as tmp:
             copied = Path(tmp)
-            sample = copied / ".grok-stack/demo/sample"
+            sample = copied / ".getzilla/demo/sample"
             sample.mkdir(parents=True)
             for name in ("task.json", "change-spec.json", "verification-report.json"):
-                (sample / name).write_bytes((ROOT / ".grok-stack/demo/sample" / name).read_bytes())
+                (sample / name).write_bytes((ROOT / ".getzilla/demo/sample" / name).read_bytes())
 
             (sample / "task.json").write_text(
                 '{"schema_version":1,"schema_version":1,"primary_prompt":"x","alternate_prompt":"y"}\n',
@@ -149,7 +149,7 @@ class DemoServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 demo.load_demo_fixtures(copied)
 
-            (sample / "task.json").write_bytes((ROOT / ".grok-stack/demo/sample/task.json").read_bytes())
+            (sample / "task.json").write_bytes((ROOT / ".getzilla/demo/sample/task.json").read_bytes())
             report = json.loads((sample / "verification-report.json").read_text(encoding="utf-8"))
             report["checks"][0]["status"] = "verified"
             (sample / "verification-report.json").write_text(json.dumps(report), encoding="utf-8")
@@ -158,7 +158,7 @@ class DemoServiceTests(unittest.TestCase):
 
     def test_architecture_failure_degrades_only_that_panel(self) -> None:
         demo = _demo_module()
-        self.assertIsNotNone(demo, "adaptive_grok.demo must support partial degradation")
+        self.assertIsNotNone(demo, "getzilla.demo must support partial degradation")
         original = demo.load_architecture
 
         def unavailable(_root):
@@ -181,7 +181,7 @@ class DemoServiceTests(unittest.TestCase):
 
 class VerificationSummaryTests(unittest.TestCase):
     def test_report_summary_counts_real_checks_and_rejects_unknown_fields(self) -> None:
-        verification = importlib.import_module("adaptive_grok.verification")
+        verification = importlib.import_module("getzilla.verification")
         self.assertTrue(
             hasattr(verification, "summarize_verification_report"),
             "verification module must expose a pure report summarizer",
@@ -206,7 +206,7 @@ class VerificationSummaryTests(unittest.TestCase):
 class DashboardAssetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.demo_root = ROOT / ".grok-stack/demo"
+        cls.demo_root = ROOT / ".getzilla/demo"
         cls.html = (cls.demo_root / "index.html").read_text(encoding="utf-8") if (cls.demo_root / "index.html").is_file() else ""
         cls.css = (cls.demo_root / "assets/app.css").read_text(encoding="utf-8") if (cls.demo_root / "assets/app.css").is_file() else ""
         cls.javascript = "\n".join(

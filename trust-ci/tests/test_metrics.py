@@ -15,7 +15,7 @@ class MetricsTests(unittest.TestCase):
 
     def request(self, pr_number: int, head: str) -> JobRequest:
         return JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=pr_number,
             base_sha=sha('a'),
             head_sha=sha(head),

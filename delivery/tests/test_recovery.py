@@ -8,7 +8,7 @@ from delivery.tests.synthetic_fixtures import (
     synthetic_promotion,
 )
 
-from adaptive_delivery.recovery import RecoverySelectionError, choose_recovery
+from getzilla_delivery.recovery import RecoverySelectionError, choose_recovery
 
 
 class RecoveryTests(unittest.TestCase):

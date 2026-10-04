@@ -32,9 +32,9 @@ class WorkerTests(unittest.TestCase):
             **common,
             'repository_profiles': [
                 {
-                    'repository': 'Dimkox/adaptive-grok-build-pro',
+                    'repository': 'Dimkox/Getzilla',
                     'commands': policy_data()['commands'],
-                    'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/adaptive-grok-build-pro'},
+                    'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/getzilla'},
                 },
                 {
                     'repository': 'Dimkox/ii-tonya-platform',
@@ -62,19 +62,19 @@ class WorkerTests(unittest.TestCase):
         calls = []
         factory = lambda policy: RecordingRunner(policy, calls)
         store = MemoryStore()
-        for index, repository in enumerate(('Dimkox/adaptive-grok-build-pro', 'Dimkox/ii-tonya-platform')):
+        for index, repository in enumerate(('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform')):
             request = JobRequest(repository, 15, sha('a'), sha(str(index + 2)), 'feat/x', 'main')
             store.enqueue(request, self.catalog.resolve_repository(repository).digest, 3, now=now())
         worker = Worker(self.settings, store, self.catalog, factory, threading.Event())
         worker.run(once=True)
         worker.run(once=True)
         self.assertEqual([item[2] for item in calls], [
-            self.catalog.resolve_repository('Dimkox/adaptive-grok-build-pro'),
+            self.catalog.resolve_repository('Dimkox/Getzilla'),
             self.catalog.resolve_repository('Dimkox/ii-tonya-platform'),
         ])
 
     def test_stale_binding_finishes_without_runner_or_retry(self) -> None:
-        store, job = self._job('Dimkox/adaptive-grok-build-pro', self.catalog.resolve_repository('Dimkox/adaptive-grok-build-pro').digest)
+        store, job = self._job('Dimkox/Getzilla', self.catalog.resolve_repository('Dimkox/Getzilla').digest)
         changed = policy_data()
         changed['max_attempts'] = 4
         changed_catalog = PolicyCatalog.from_policy(__import__('adaptive_trust_ci.policy', fromlist=['Policy']).Policy.from_dict(changed))
@@ -101,17 +101,17 @@ class WorkerTests(unittest.TestCase):
             holdout_path=Path('/srv/local-holdouts'),
             holdout_host_path=Path('/srv/daemon-holdouts'),
         )
-        valid = self.catalog_data_with_paths('/srv/local-holdouts/adaptive-grok-build-pro', '/srv/daemon-holdouts/adaptive-grok-build-pro')
+        valid = self.catalog_data_with_paths('/srv/local-holdouts/getzilla', '/srv/daemon-holdouts/getzilla')
         Worker._validate_catalog_paths(settings, valid)
         for local, host in (
-            ('/srv/local-holdouts', '/srv/daemon-holdouts/adaptive-grok-build-pro'),
-            ('/srv/local-holdouts/adaptive-grok-build-pro', '/srv/other/adaptive-grok-build-pro'),
+            ('/srv/local-holdouts', '/srv/daemon-holdouts/getzilla'),
+            ('/srv/local-holdouts/getzilla', '/srv/other/getzilla'),
         ):
             with self.assertRaisesRegex(SettingsError, 'holdout'):
                 data = self.catalog_data_with_paths(local, host)
                 Worker._validate_catalog_paths(settings, data)
         with self.assertRaisesRegex(PolicyError, 'parent traversal'):
-            self.catalog_data_with_paths('/srv/local-holdouts/../other/adaptive-grok-build-pro', '/srv/daemon-holdouts/adaptive-grok-build-pro')
+            self.catalog_data_with_paths('/srv/local-holdouts/../other/getzilla', '/srv/daemon-holdouts/getzilla')
 
     def test_configured_holdout_roots_reject_filesystem_root(self) -> None:
         for name in ('TRUST_CI_HOLDOUT_PATH', 'TRUST_CI_HOLDOUT_HOST_PATH'):
@@ -125,7 +125,7 @@ class WorkerTests(unittest.TestCase):
             'max_approval_ttl_seconds': 1800, 'max_output_bytes': 20000, 'allowed_environment': [],
             'sandbox': {'runtime': 'docker', 'image': 'runner@sha256:' + 'a' * 64, 'user': '10001:10001', 'memory_mb': 1024, 'cpus': 1.0, 'pids_limit': 128, 'tmpfs_mb': 256},
             'approval_rules': [], 'repository_profiles': [
-                {'repository': 'Dimkox/adaptive-grok-build-pro', 'commands': policy_data()['commands'],
+                {'repository': 'Dimkox/Getzilla', 'commands': policy_data()['commands'],
                  'holdout': {**policy_data()['holdout'], 'path': local, 'host_path': host}},
             ],
         }

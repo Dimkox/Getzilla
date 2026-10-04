@@ -37,9 +37,9 @@ class RuntimeGrantLoaderTests(unittest.TestCase):
             "remote",
             "add",
             "origin",
-            "git@github.com:Dimkox/adaptive-grok-build-pro.git",
+            "git@github.com:Dimkox/Getzilla.git",
         )
-        runtime = control / ".grok-stack" / "runtime"
+        runtime = control / ".getzilla" / "runtime"
         runtime.mkdir(parents=True, mode=0o700)
         (runtime / "active-route.json").write_text(
             json.dumps({"route_id": ROUTE_ID, "change_id": CHANGE_ID}),
@@ -61,7 +61,7 @@ class RuntimeGrantLoaderTests(unittest.TestCase):
             "actions": ["git-push-branch"],
             "resources": [resource],
             "reason": "one exact design-partner branch",
-            "repository": "Dimkox/adaptive-grok-build-pro",
+            "repository": "Dimkox/Getzilla",
             "route_id": ROUTE_ID,
             "change_id": CHANGE_ID,
             "git_head": head,
@@ -71,7 +71,7 @@ class RuntimeGrantLoaderTests(unittest.TestCase):
         }
 
     def _write_grants(self, control: Path, grants: list[dict]) -> None:
-        target = control / ".grok-stack" / "runtime" / "approvals.json"
+        target = control / ".getzilla" / "runtime" / "approvals.json"
         target.write_text(json.dumps(grants), encoding="utf-8")
         target.chmod(0o600)
 
@@ -89,7 +89,7 @@ class RuntimeGrantLoaderTests(unittest.TestCase):
             ).load()
 
             use = authority.authorize("branch_push", request_digest)
-            self.assertEqual(use.repository, "Dimkox/adaptive-grok-build-pro")
+            self.assertEqual(use.repository, "Dimkox/Getzilla")
             self.assertEqual(use.git_head, head)
             self.assertEqual(use.tree_fingerprint, FINGERPRINT)
 

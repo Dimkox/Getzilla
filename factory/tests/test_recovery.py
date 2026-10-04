@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import threading
 import unittest
 
-from adaptive_factory.recovery import (
+from getzilla_factory.recovery import (
     ExecutionRecovery,
     ExecutionRecoveryCandidate,
     ExecutionRecoveryClaim,
@@ -12,9 +12,9 @@ from adaptive_factory.recovery import (
     ExecutionRecoveryNotDue,
     ExecutionRecoveryPage,
 )
-from adaptive_factory.models import Actor
-from adaptive_factory.store import AuthorityError, PostgresFactoryStore, StoreError
-from adaptive_factory.workspace import (
+from getzilla_factory.models import Actor
+from getzilla_factory.store import AuthorityError, PostgresFactoryStore, StoreError
+from getzilla_factory.workspace import (
     FakeWorkspaceBroker,
     WorkspaceHandle,
     WorkspacePolicy,

@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from adaptive_delivery.landing_publisher import (
+from getzilla_delivery.landing_publisher import (
     LandingPublicationUnavailable,
     LandingPublisher,
     UnavailableLandingPublisher,

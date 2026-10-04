@@ -5,15 +5,15 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from adaptive_factory.brokers import ArtifactProposal, TerminalProposal, proposal_idempotency_key
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.execution_contracts import RunManifestV1, TaskPacketV1, WorkspaceResultV1, workspace_evidence_digest
-from adaptive_factory.semantic_bridge import (
+from getzilla_factory.brokers import ArtifactProposal, TerminalProposal, proposal_idempotency_key
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.execution_contracts import RunManifestV1, TaskPacketV1, WorkspaceResultV1, workspace_evidence_digest
+from getzilla_factory.semantic_bridge import (
     SemanticExecutionBindingV1,
     SemanticValidationInputsV1,
     build_semantic_subject,
 )
-from adaptive_factory.workspace import ArtifactAttestationV1, WorkspaceSnapshotV1
+from getzilla_factory.workspace import ArtifactAttestationV1, WorkspaceSnapshotV1
 from .test_execution_contracts import valid_packet
 
 

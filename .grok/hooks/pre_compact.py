@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from _lib import emit, first, read_payload, root_from
-from adaptive_grok.state import get_active_change, get_active_route
-from adaptive_grok.util import dump_json, now_utc, runtime_dir
+from getzilla.state import get_active_change, get_active_route
+from getzilla.util import dump_json, now_utc, runtime_dir
 
 
 def main() -> None:

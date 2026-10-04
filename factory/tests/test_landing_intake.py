@@ -7,8 +7,8 @@ import tempfile
 import unittest
 import zipfile
 
-from adaptive_factory.landing_contracts import LandingContractError
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_contracts import LandingContractError
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
 
 
 NOW = datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc)
