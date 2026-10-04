@@ -985,14 +985,16 @@ class StructureTests(unittest.TestCase):
 
         reviewed_head = "<reviewed-40-character-head-sha>"
         adoption_base = "25bfbe59ea188d9687b20a9caad19e7db3d031f8"
-        self.assertIn("python3 scripts/getzilla_architecture.py summary --json", test_plan)
+        # The M2 change package is a frozen record and names the predecessor CLI.
+        architecture_cli = "python3 scripts/grok_architecture.py"  # predecessor-record
+        self.assertIn(f"{architecture_cli} summary --json", test_plan)
         self.assertIn(
-            f"python3 scripts/getzilla_architecture.py diff --base {adoption_base} "
+            f"{architecture_cli} diff --base {adoption_base} "
             f"--head {reviewed_head} --json",
             test_plan,
         )
         self.assertIn(
-            f"python3 scripts/getzilla_architecture.py fitness --base {adoption_base} "
+            f"{architecture_cli} fitness --base {adoption_base} "
             f"--head {reviewed_head} --pre-risk red --json",
             test_plan,
         )

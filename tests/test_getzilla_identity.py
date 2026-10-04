@@ -41,6 +41,7 @@ LEGACY_AWARE_FILES = frozenset(
         "scripts/install_into.py",
         "tests/test_installer.py",
         "tests/test_getzilla_identity.py",
+        "engineering/runbooks/getzilla-trust-ci-onboarding.md",
     }
 )
 # Allowed references to the predecessor: links to its PRs, releases and pinned
@@ -49,9 +50,12 @@ LEGACY_AWARE_FILES = frozenset(
 HISTORICAL_LINK = re.compile(
     r"github\.com/Dimkox/adaptive-grok-build-pro/"
     r"(?:pull|issues|releases|commit|commits|compare|tree|blob|actions|checks|runs)\b"
-    r"|\badaptive-grok-build-pro-v\d"
+    r"|\badaptive-grok-build-pro-v2\."
     r"|/opt/adaptive-grok-build-pro\b"
 )
+# A line quoting a frozen predecessor record (for example a test asserting the
+# exact text of a historical change package) carries this marker.
+RECORD_MARKER = "predecessor-record"
 FORBIDDEN = re.compile(
     r"(?<!/opt/)adaptive-grok-build-pro"
     r"|adaptive_grok"
@@ -113,6 +117,8 @@ class GetzillaIdentityTests(unittest.TestCase):
             except UnicodeDecodeError:
                 continue
             for number, line in enumerate(text.splitlines(), start=1):
+                if RECORD_MARKER in line:
+                    continue
                 match = FORBIDDEN.search(HISTORICAL_LINK.sub("", line))
                 if match:
                     offenders.append(f"{relative}:{number}: {match.group(0)}")

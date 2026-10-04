@@ -1186,7 +1186,7 @@ module.main()
                 finally:
                     os.umask(previous_umask)
 
-                self.assertEqual(output, root / 'dist/adaptive-grok-build-pro-v9.9.9.zip')
+                self.assertEqual(output, root / 'dist/getzilla-v9.9.9.zip')
                 self.assertEqual(stat.S_IMODE(output.parent.stat().st_mode), 0o700)
                 self.assertTrue(output.is_file())
 
@@ -1447,7 +1447,7 @@ module.main()
         artifact = published['artifact']
         self.assertEqual(artifact['binding'], 'immutable_release_tag')
         self.assertEqual(artifact['storage'], 'github_release_asset')
-        expected_relative = f'packages/getzilla-v{published_version}.zip'
+        expected_relative = 'packages/adaptive-grok-build-pro-v2.1.1.zip'  # predecessor's published artifact
         self.assertEqual(artifact['path'], expected_relative)
         expected_digest = 'f5116c5e1303232ae883ed7a3aa804b71f0b5654d2c385924653b5ffd2d631c1'
         self.assertEqual(artifact['sha256'], expected_digest)
