@@ -43,10 +43,14 @@ LEGACY_AWARE_FILES = frozenset(
         "tests/test_getzilla_identity.py",
     }
 )
-# Links to the predecessor's PRs, releases and pinned trees stay on the old repository.
+# Allowed references to the predecessor: links to its PRs, releases and pinned
+# trees, its already-published release artifacts, and the deployed Trust CI
+# checkout path on the server.
 HISTORICAL_LINK = re.compile(
     r"github\.com/Dimkox/adaptive-grok-build-pro/"
     r"(?:pull|issues|releases|commit|commits|compare|tree|blob|actions|checks|runs)\b"
+    r"|\badaptive-grok-build-pro-v\d"
+    r"|/opt/adaptive-grok-build-pro\b"
 )
 FORBIDDEN = re.compile(
     r"(?<!/opt/)adaptive-grok-build-pro"
