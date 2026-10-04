@@ -116,7 +116,7 @@
       "holdout": {
         "path": "/etc/adaptive-trust-ci/holdout/getzilla",
         "host_path": "/etc/adaptive-trust-ci/holdout/getzilla",
-        "digest": "95db2116b66e7f94dda5388d9d5b440c70dedf597a026543be0749b0205d2c04",
+        "digest": "3e4aff00e0d050254bd3bd833972ceb1d8f372dcad8221d98625b0bdbc39e485",
         "commands": [
           {
             "name": "adaptive-holdout",
