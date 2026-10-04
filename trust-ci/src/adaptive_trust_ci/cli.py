@@ -246,12 +246,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == 'branch-protect':
         from .github import GitHubClient
-        from .policy import Policy
+        from .policy import PolicyCatalog, PolicyError
 
         policy_path = args.policy or _required_path_env('TRUST_CI_POLICY_PATH')
         if not policy_path.is_file():
             raise SystemExit('--policy or TRUST_CI_POLICY_PATH must name the deployed policy')
-        policy = Policy.load(policy_path)
+        try:
+            policy = PolicyCatalog.load(policy_path).resolve_repository(args.repository)
+        except PolicyError as exc:
+            raise SystemExit(f'deployed policy does not cover {args.repository}: {exc}') from exc
         check_name = args.context or policy.check_name
         app_id = args.app_id or _required_int_env('TRUST_CI_GITHUB_APP_ID')
         admin_token = os.environ.get('TRUST_CI_GITHUB_ADMIN_TOKEN', '').strip()

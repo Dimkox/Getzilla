@@ -174,5 +174,42 @@
         ]
       }
     }
+  ],
+  "owner_profiles": [
+    {
+      "owner": "Dimkox",
+      "commands": [
+        {
+          "name": "getzilla-verify",
+          "argv": [
+            "python3",
+            "scripts/getzilla_verify.py",
+            "--mode",
+            "pr",
+            "--no-record",
+            "--json"
+          ],
+          "timeout_seconds": 1200,
+          "required": true
+        }
+      ],
+      "holdout": {
+        "path": "/etc/adaptive-trust-ci/holdout/owner-dimkox",
+        "host_path": "/etc/adaptive-trust-ci/holdout/owner-dimkox",
+        "digest": "7a0d1b89c2c3dcf2a379ff5cc4883ffdc68640b114cf17446c7e53a756e0bb8d",
+        "commands": [
+          {
+            "name": "getzilla-consumer-holdout",
+            "argv": [
+              "python3",
+              "/holdout/validate.py",
+              "/workspace"
+            ],
+            "timeout_seconds": 300,
+            "required": true
+          }
+        ]
+      }
+    }
   ]
 }

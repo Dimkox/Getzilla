@@ -309,7 +309,14 @@ class CommandBranchImportTests(unittest.TestCase):
                 'utc_now': lambda: datetime.now(timezone.utc),
             },
             'adaptive_trust_ci.policy': {
-                'Policy': types.SimpleNamespace(load=lambda path: event('policy.load', policy))
+                'Policy': types.SimpleNamespace(load=lambda path: event('policy.load', policy)),
+                'PolicyCatalog': types.SimpleNamespace(
+                    load=lambda path: event(
+                        'policy.load',
+                        types.SimpleNamespace(resolve_repository=lambda repository: policy),
+                    )
+                ),
+                'PolicyError': ValueError,
             },
             'adaptive_trust_ci.settings': {
                 'ApiSettings': types.SimpleNamespace(load=lambda: event('settings.api.load', object())),
