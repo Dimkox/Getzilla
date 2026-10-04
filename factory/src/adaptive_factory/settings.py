@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import stat
+
+
+class SettingsError(RuntimeError):
+    pass
+
+
+# Closed operator set for FACTORY_LANDING_PROVIDER. "unavailable" is the default and keeps the
+# landing path dark unless an explicit provider is named.
+LANDING_PROVIDERS = frozenset(
+    {"unavailable", "grok", "qwen", "grok-vision", "qwen-omni", "qwen-omni-intl", "qwen-intl",
+     "openai", "anthropic", "openrouter"}
+)
+
+
+def read_private_file(path: Path, maximum: int) -> bytes:
+    if not path.is_absolute() or ".." in path.parts:
+        raise SettingsError("private file path must be absolute and normalized")
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if not isinstance(nofollow, int) or not isinstance(directory, int):
+        raise SettingsError("required no-follow descriptor capabilities are unavailable")
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    effective_uid = os.geteuid()
+    descriptors: list[int] = []
+    try:
+        try:
+            parent_descriptor = os.open("/", os.O_RDONLY | directory | close_on_exec)
+            descriptors.append(parent_descriptor)
+            parent_parts = path.parent.parts[1:]
+            for index, component in enumerate(parent_parts):
+                child = os.open(component, os.O_RDONLY | directory | nofollow | close_on_exec, dir_fd=parent_descriptor)
+                descriptors.append(child)
+                parent_descriptor = child
+                metadata = os.fstat(child)
+                mode = stat.S_IMODE(metadata.st_mode)
+                trusted_owner = metadata.st_uid in {0, effective_uid}
+                root_sticky = metadata.st_uid == 0 and bool(metadata.st_mode & stat.S_ISVTX)
+                if not stat.S_ISDIR(metadata.st_mode) or not trusted_owner or (mode & 0o022 and not root_sticky):
+                    raise SettingsError("private file ancestry is not trusted")
+                if index == len(parent_parts) - 1 and (metadata.st_uid != effective_uid or mode & 0o022):
+                    raise SettingsError("private file parent must be owned and non-writable by others")
+            descriptor = os.open(path.name, os.O_RDONLY | nofollow | close_on_exec, dir_fd=parent_descriptor)
+            descriptors.append(descriptor)
+        except OSError as exc:
+            raise SettingsError("private file cannot be opened safely") from exc
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_uid != effective_uid
+        ):
+            raise SettingsError("private file must be an owned regular mode-0600 file")
+        raw = os.read(descriptor, maximum + 1)
+        if len(raw) > maximum:
+            raise SettingsError("private file is too large")
+        return raw
+    finally:
+        for opened in reversed(descriptors):
+            os.close(opened)
+
+
+def read_token_file(path: Path) -> str:
+    try:
+        raw = read_private_file(path, 4096)
+        token = raw.decode("utf-8").strip()
+        if len(token) < 16 or any(character.isspace() for character in token):
+            raise SettingsError("token value is invalid")
+        return token
+    except UnicodeDecodeError as exc:
+        raise SettingsError("token value is invalid") from exc
+
+
+@dataclass(frozen=True)
+class FactorySettings:
+    database_url: str
+    socket_path: Path
+    actors_file: Path
+    artifact_attestor_database_url: str | None = None
+    execution_enabled: bool = False
+    semantic_coordinator_database_url: str | None = None
+    semantic_validator_database_url: str | None = None
+    semantic_adjudicator_database_url: str | None = None
+    landing_quarantine_path: Path | None = None
+    landing_provider: str = "unavailable"
+    landing_source_path: Path | None = None
+    landing_scratch_path: Path | None = None
+    landing_output_path: Path | None = None
+    # New settings fields are appended only: the block above keeps the order published by the
+    # env-landing composition change, so positional construction stays compatible.
+    landing_state_path: Path | None = None
+    landing_live_enabled: bool = False
+    result_dispatch_enabled: bool = False
+    result_dispatch_database_url: str | None = None
+    result_dispatch_socket_path: Path | None = None
+    result_dispatch_token_file: Path | None = None
+    result_dispatcher_id: str = "factory-result-dispatcher"
+    result_dispatch_batch_size: int = 8
+    result_dispatch_lease_seconds: int = 30
+    result_dispatch_poll_seconds: float = 1.0
+    result_dispatch_timeout_seconds: float = 5.0
+    result_dispatch_processing_margin_seconds: float = 2.0
+
+    def validate_landing(self) -> None:
+        if type(self.landing_live_enabled) is not bool or self.landing_provider not in LANDING_PROVIDERS:
+            raise SettingsError("invalid landing enablement or provider")
+        paths = (
+            self.landing_quarantine_path, self.landing_state_path,
+            self.landing_source_path, self.landing_scratch_path, self.landing_output_path,
+        )
+        for path in paths:
+            if path is not None and (
+                not isinstance(path, Path) or not path.is_absolute()
+                or path.anchor == "//" or ".." in path.parts
+            ):
+                raise SettingsError("landing paths must be absolute and normalized")
+        supplied = [path for path in paths if path is not None]
+        if any(
+            left == right or left in right.parents or right in left.parents
+            for index, left in enumerate(supplied) for right in supplied[index + 1:]
+        ):
+            raise SettingsError("landing paths must be disjoint")
+        if self.landing_state_path is not None and self.landing_quarantine_path is None:
+            raise SettingsError("landing state requires quarantine")
+        if self.landing_live_enabled:
+            if self.landing_provider == "unavailable" or any(path is None for path in paths):
+                raise SettingsError("live landing requires provider and all durable paths")
+        elif self.landing_provider != "unavailable":
+            raise SettingsError("landing provider requires explicit live enablement")
+
+    def validate_result_dispatch(self) -> None:
+        if type(self.result_dispatch_enabled) is not bool:
+            raise SettingsError("invalid result dispatch enablement")
+        for path in (self.result_dispatch_socket_path, self.result_dispatch_token_file):
+            if path is not None and (
+                not isinstance(path, Path) or not path.is_absolute()
+                or path.anchor == "//" or ".." in path.parts
+            ):
+                raise SettingsError("result dispatch paths must be absolute and normalized")
+        if (
+            not isinstance(self.result_dispatcher_id, str)
+            or not self.result_dispatcher_id
+            or len(self.result_dispatcher_id) > 128
+            or not self.result_dispatcher_id[0].isalnum()
+            or any(not (character.isalnum() or character in "._:-") for character in self.result_dispatcher_id)
+        ):
+            raise SettingsError("invalid result dispatcher identifier")
+        if type(self.result_dispatch_batch_size) is not int or not 1 <= self.result_dispatch_batch_size <= 100:
+            raise SettingsError("invalid result dispatch batch size")
+        if type(self.result_dispatch_lease_seconds) is not int or not 5 <= self.result_dispatch_lease_seconds <= 300:
+            raise SettingsError("invalid result dispatch lease")
+        if (
+            type(self.result_dispatch_poll_seconds) not in {int, float}
+            or not 0.05 <= self.result_dispatch_poll_seconds <= 60
+        ):
+            raise SettingsError("invalid result dispatch poll interval")
+        if (
+            type(self.result_dispatch_timeout_seconds) not in {int, float}
+            or not 0.1 <= self.result_dispatch_timeout_seconds <= 30
+        ):
+            raise SettingsError("invalid result dispatch timeout")
+        if (
+            type(self.result_dispatch_processing_margin_seconds) not in {int, float}
+            or not 0.1 <= self.result_dispatch_processing_margin_seconds <= 30
+        ):
+            raise SettingsError("invalid result dispatch processing margin")
+        if self.result_dispatch_lease_seconds <= (
+            self.result_dispatch_timeout_seconds
+            + self.result_dispatch_processing_margin_seconds
+        ):
+            raise SettingsError("result dispatch lease must exceed timeout plus processing margin")
+        if self.result_dispatch_enabled and (
+            not self.result_dispatch_database_url
+            or self.result_dispatch_socket_path is None or self.result_dispatch_token_file is None
+        ):
+            raise SettingsError("enabled result dispatch requires database, socket and token")
+
+    @classmethod
+    def from_environment(cls) -> "FactorySettings":
+        database_url = os.environ.get("FACTORY_DATABASE_URL", "")
+        artifact_attestor_database_url = (
+            os.environ.get("FACTORY_ARTIFACT_ATTESTOR_DATABASE_URL") or None
+        )
+        execution_flag = os.environ.get("FACTORY_EXECUTION_ENABLED", "false")
+        if execution_flag not in {"true", "false"}:
+            raise SettingsError("FACTORY_EXECUTION_ENABLED must be true or false")
+        execution_enabled = execution_flag == "true"
+        semantic_coordinator_database_url = os.environ.get(
+            "FACTORY_SEMANTIC_COORDINATOR_DATABASE_URL"
+        ) or None
+        semantic_validator_database_url = os.environ.get(
+            "FACTORY_SEMANTIC_VALIDATOR_DATABASE_URL"
+        ) or None
+        semantic_adjudicator_database_url = os.environ.get(
+            "FACTORY_SEMANTIC_ADJUDICATOR_DATABASE_URL"
+        ) or None
+        landing_quarantine_raw = os.environ.get("FACTORY_LANDING_QUARANTINE_PATH")
+        landing_quarantine_path = (
+            Path(landing_quarantine_raw) if landing_quarantine_raw else None
+        )
+        landing_provider = os.environ.get("FACTORY_LANDING_PROVIDER", "").strip() or "unavailable"
+        if landing_provider not in LANDING_PROVIDERS:
+            raise SettingsError(
+                "FACTORY_LANDING_PROVIDER must be one of " + ", ".join(sorted(LANDING_PROVIDERS - {"unavailable"}))
+            )
+        landing_paths = {}
+        for name in ("state", "source", "scratch", "output"):
+            value = os.environ.get(f"FACTORY_LANDING_{name.upper()}_PATH")
+            landing_paths[f"landing_{name}_path"] = Path(value) if value else None
+        landing_flag = os.environ.get("FACTORY_LANDING_LIVE_ENABLED", "false")
+        if landing_flag not in {"true", "false"}:
+            raise SettingsError("FACTORY_LANDING_LIVE_ENABLED must be true or false")
+        dispatch_flag = os.environ.get("FACTORY_RESULT_DISPATCH_ENABLED", "false")
+        if dispatch_flag not in {"true", "false"}:
+            raise SettingsError("FACTORY_RESULT_DISPATCH_ENABLED must be true or false")
+        dispatch_socket = os.environ.get("FACTORY_RESULT_DISPATCH_SOCKET_PATH")
+        dispatch_token = os.environ.get("FACTORY_RESULT_DISPATCH_TOKEN_FILE")
+        try:
+            dispatch_batch = int(os.environ.get("FACTORY_RESULT_DISPATCH_BATCH_SIZE", "8"))
+            dispatch_lease = int(os.environ.get("FACTORY_RESULT_DISPATCH_LEASE_SECONDS", "30"))
+            dispatch_poll = float(os.environ.get("FACTORY_RESULT_DISPATCH_POLL_SECONDS", "1"))
+            dispatch_timeout = float(os.environ.get("FACTORY_RESULT_DISPATCH_TIMEOUT_SECONDS", "5"))
+            dispatch_margin = float(os.environ.get(
+                "FACTORY_RESULT_DISPATCH_PROCESSING_MARGIN_SECONDS", "2"
+            ))
+        except ValueError as exc:
+            raise SettingsError("invalid result dispatch numeric setting") from exc
+        actors_file = os.environ.get("FACTORY_ACTORS_FILE", "")
+        socket_path = Path(os.environ.get("FACTORY_SOCKET_PATH", "/run/adaptive-factory/control.sock"))
+        if (
+            not database_url
+            or not actors_file
+            or not socket_path.is_absolute()
+            or not Path(actors_file).is_absolute()
+        ):
+            raise SettingsError(
+                "explicit database URL, actor file and absolute socket path are required"
+            )
+        if execution_enabled and (
+            not artifact_attestor_database_url
+            or database_url == artifact_attestor_database_url
+        ):
+            raise SettingsError(
+                "enabled execution requires a separate artifact attestor database URL"
+            )
+        # Landing path shape, disjointness and the provider/enablement pairing are enforced by
+        # FactorySettings.validate_landing(), which covers quarantine, state, source, scratch and
+        # output together.
+        result = cls(
+            database_url=database_url,
+            socket_path=socket_path,
+            actors_file=Path(actors_file),
+            artifact_attestor_database_url=artifact_attestor_database_url,
+            execution_enabled=execution_enabled,
+            semantic_coordinator_database_url=semantic_coordinator_database_url,
+            semantic_validator_database_url=semantic_validator_database_url,
+            semantic_adjudicator_database_url=semantic_adjudicator_database_url,
+            landing_quarantine_path=landing_quarantine_path,
+            **landing_paths,
+            landing_live_enabled=landing_flag == "true",
+            landing_provider=landing_provider,
+            result_dispatch_enabled=dispatch_flag == "true",
+            result_dispatch_database_url=os.environ.get("FACTORY_RESULT_DISPATCH_DATABASE_URL"),
+            result_dispatch_socket_path=Path(dispatch_socket) if dispatch_socket else None,
+            result_dispatch_token_file=Path(dispatch_token) if dispatch_token else None,
+            result_dispatcher_id=os.environ.get(
+                "FACTORY_RESULT_DISPATCHER_ID", "factory-result-dispatcher"
+            ),
+            result_dispatch_batch_size=dispatch_batch,
+            result_dispatch_lease_seconds=dispatch_lease,
+            result_dispatch_poll_seconds=dispatch_poll,
+            result_dispatch_timeout_seconds=dispatch_timeout,
+            result_dispatch_processing_margin_seconds=dispatch_margin,
+        )
+        result.validate_landing()
+        result.validate_result_dispatch()
+        return result

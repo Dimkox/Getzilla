@@ -1,0 +1,28 @@
+{
+  "at": "2026-09-21T08:41:33.888024+00:00",
+  "dns_exit_code": 0,
+  "dns_stdout": "<redacted-ip>    STREAM <redacted-tailnet-host>\n<redacted-ip>    DGRAM  \n<redacted-ip>    RAW    \n<redacted-ip>   STREAM \n<redacted-ip>   DGRAM  \n<redacted-ip>   RAW    \n<redacted-ip>   STREAM \n<redacted-ip>   DGRAM  \n<redacted-ip>   RAW    \n",
+  "probes": [
+    {
+      "probe": "loopback_ready",
+      "exit_code": 0,
+      "http_status": "200",
+      "elapsed_s": 0.035873,
+      "stderr": ""
+    },
+    {
+      "probe": "peer_refused",
+      "exit_code": 7,
+      "http_status": "000",
+      "elapsed_s": 0.026614,
+      "stderr": "curl: (7) Failed to connect to <redacted-ip> port 18080 after 0 ms: Couldn't connect to server\n"
+    },
+    {
+      "probe": "public_webhook_stopped",
+      "exit_code": 0,
+      "http_status": "502",
+      "elapsed_s": 1.047475,
+      "stderr": ""
+    }
+  ]
+}

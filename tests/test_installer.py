@@ -1,0 +1,1285 @@
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+import importlib.util
+import io
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import unquote, urlsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location("install_into", ROOT / "scripts/install_into.py")
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+
+def _snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
+    if not os.path.lexists(root):
+        return ((".", "absent"),)
+    records: list[tuple[object, ...]] = []
+    paths = [root, *sorted(root.rglob("*"), key=lambda item: item.as_posix())]
+    for path in paths:
+        metadata = os.lstat(path)
+        relative = "." if path == root else path.relative_to(root).as_posix()
+        kind = (
+            "symlink"
+            if stat.S_ISLNK(metadata.st_mode)
+            else "file"
+            if stat.S_ISREG(metadata.st_mode)
+            else "directory"
+            if stat.S_ISDIR(metadata.st_mode)
+            else "special"
+        )
+        content: object = None
+        if kind == "file":
+            content = path.read_bytes()
+        elif kind == "symlink":
+            content = os.readlink(path)
+        records.append(
+            (
+                relative,
+                kind,
+                stat.S_IMODE(metadata.st_mode),
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                content,
+            )
+        )
+    return tuple(records)
+
+
+def _stage_names(parent: Path) -> list[str]:
+    return sorted(path.name for path in parent.glob(".adaptive-install-*"))
+
+
+def _broken_local_links(document: Path, root: Path) -> list[str]:
+    broken = []
+    for destination in re.findall(r"\[[^\]]*\]\(([^\s)]+)\)", document.read_text()):
+        link = urlsplit(destination)
+        if link.scheme or link.netloc or not link.path:
+            continue
+        target = (document.parent / unquote(link.path)).resolve()
+        if not target.is_relative_to(root.resolve()) or not target.exists():
+            broken.append(destination)
+    return broken
+
+
+class InstallerTests(unittest.TestCase):
+    def test_installed_root_hook_aliases_delegate_and_preserve_fallback(self) -> None:
+        names = {
+            'session_start.py', 'user_prompt_submit.py', 'pre_tool_use.py',
+            'post_tool_use.py', 'pre_compact.py', 'subagent_start.py',
+            'subagent_stop.py', 'stop_gate.py', 'session_end.py',
+        }
+        template = ROOT / MODULE.ROOT_HOOK_SHIM_TEMPLATE
+        expected_bytes = template.read_bytes()
+        expected_mode = stat.S_IMODE(template.stat().st_mode)
+        self.assertEqual(MODULE.ROOT_HOOK_SHIMS, names)
+        for profile in ('generic', 'bitrix'):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                payload = MODULE.build_payload(ROOT, profile_kind=profile)
+                entries = {entry.path: entry for entry in payload}
+                self.assertTrue(names <= entries.keys())
+                root = Path(tmp) / 'consumer'
+                with patch.object(MODULE, 'build_payload', return_value=payload):
+                    MODULE.materialize_new(ROOT, root)
+                for name in sorted(names):
+                    with self.subTest(name=name):
+                        self.assertEqual(entries[name].content, expected_bytes)
+                        self.assertEqual(entries[name].mode, expected_mode)
+                        alias = root / name
+                        self.assertFalse(alias.is_symlink())
+                        self.assertEqual(alias.read_bytes(), expected_bytes)
+                        self.assertEqual(stat.S_IMODE(alias.stat().st_mode), expected_mode)
+                        canonical = root / '.grok/hooks' / name
+                        canonical.write_text('import json, sys\nfrom pathlib import Path\nprint(json.dumps({"name": Path(sys.argv[0]).name, "payload": json.load(sys.stdin)}))\n')
+                        result = subprocess.run([sys.executable, name], cwd=root, input='{"sentinel": 1}', text=True, capture_output=True, timeout=10)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), {'name': name, 'payload': {'sentinel': 1}})
+                        canonical.unlink()
+                        fallback = subprocess.run([sys.executable, name], cwd=root, input='{}', text=True, capture_output=True, timeout=10)
+                        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'allow'} if name == 'pre_tool_use.py' else {})
+
+    def test_hook_aliases_use_the_inventoried_template_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source'
+            template = source / MODULE.ROOT_HOOK_SHIM_TEMPLATE
+            template.parent.mkdir(parents=True)
+            old = (ROOT / MODULE.ROOT_HOOK_SHIM_TEMPLATE).read_bytes()
+            template.write_bytes(old)
+            template.chmod(0o640)
+            (source / MODULE.CONSUMER_AGENTS_TEMPLATE).write_text('fixture consumer contract\n')
+            original_read = MODULE._SourceTree.read
+            reads = []
+            def mutate_after_bound_read(tree, relative, limit, expected_identity=None):
+                result = original_read(tree, relative, limit, expected_identity)
+                if relative == MODULE.ROOT_HOOK_SHIM_TEMPLATE:
+                    reads.append(expected_identity)
+                    template.write_bytes(old + b'\n# changed after validated inventory read\n')
+                    template.chmod(0o600)
+                return result
+            with patch.object(MODULE, 'MANAGED_DIRS', ('.grok-stack',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', tuple(sorted(MODULE.ROOT_HOOK_SHIMS))), \
+                 patch.object(MODULE._SourceTree, 'read', mutate_after_bound_read):
+                payload = {entry.path: entry for entry in MODULE.build_payload(source)}
+            self.assertEqual(len(reads), 1)
+            self.assertIsNotNone(reads[0])
+            for name in MODULE.ROOT_HOOK_SHIMS:
+                self.assertEqual(payload[name].content, payload[MODULE.ROOT_HOOK_SHIM_TEMPLATE].content)
+                self.assertEqual(payload[name].content, old)
+                self.assertEqual(payload[name].mode, 0o640)
+
+    def test_installed_fixture_reset_leaf_is_byte_identical_and_importable(self) -> None:
+        relative = "factory/tests/postgres_fixture_reset.py"
+        for profile in ("generic", "bitrix"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                payload = MODULE.build_payload(ROOT, profile_kind=profile)
+                self.assertIn(relative, {entry.path for entry in payload})
+                target = Path(tmp) / "consumer"
+                with patch.object(MODULE, "build_payload", return_value=payload):
+                    MODULE.materialize_new(ROOT, target)
+                self.assertEqual((target / relative).read_bytes(), (ROOT / relative).read_bytes())
+                for directory, module in ((target, "factory.tests.postgres_fixture_reset"),
+                                          (target / "factory/tests", "postgres_fixture_reset")):
+                    result = subprocess.run([sys.executable, "-c",
+                        f"import {module} as m; assert callable(m.reset_fixture_tables)"],
+                        cwd=directory, capture_output=True, text=True, timeout=10,
+                        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_disposable_exit_full_suite_timeout_is_bounded_and_has_growth_margin(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "disposable_exit_timeout_contract",
+            ROOT / "factory/tests/run_disposable_exit.py",
+        )
+        runner = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(runner)
+
+        self.assertEqual(300, runner._DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        self.assertEqual(720, runner._FULL_SUITE_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(
+            runner._FULL_SUITE_TIMEOUT_SECONDS,
+            2 * runner._DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        )
+        self.assertLessEqual(runner._FULL_SUITE_TIMEOUT_SECONDS, 15 * 60)
+
+    def test_installed_link_audit_detects_missing_and_escaping_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "consumer"
+            root.mkdir()
+            (root / "present.md").write_text("present\n")
+            (root.parent / "outside.md").write_text("outside\n")
+            document = root / "README.md"
+            document.write_text(
+                "[valid](present.md#section) [missing](missing.md) "
+                "[escape](../outside.md) [upstream](https://example.com/docs)\n"
+            )
+            self.assertEqual(_broken_local_links(document, root),
+                             ["missing.md", "../outside.md"])
+
+    def test_materialized_consumer_documentation_is_portable(self) -> None:
+        for profile in ("generic", "bitrix"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / "consumer"
+                # The public absent-target installer defaults to generic; exercise
+                # its real writer with each explicitly constructed profile payload.
+                payload = MODULE.build_payload(ROOT, profile_kind=profile)
+                with patch.object(MODULE, "build_payload", return_value=payload):
+                    MODULE.materialize_new(ROOT, target)
+                readme = target / "factory/README.md"
+                self.assertEqual(_broken_local_links(readme, target), [])
+                self.assertIn("Upstream-only", readme.read_text())
+                self.assertIn("https://github.com/Dimkox/adaptive-grok-build-pro/",
+                              readme.read_text())
+                agents = target / "AGENTS.md"
+                self.assertEqual(_broken_local_links(agents, target), [])
+                text = agents.read_text()
+                self.assertIn("## Required installed entrypoints", text)
+                self.assertIn("## Optional consumer-owned files", text)
+                optional = text.split("## Optional consumer-owned files", 1)[1].split("\n## ", 1)[0]
+                for path in ("START_HERE.md", "PROJECT_STATE.json", "VERSION",
+                             "decisions.md", "mistakes.md", "architecture/system.yaml"):
+                    self.assertIn(path, optional)
+                    self.assertFalse((target / path).exists(), path)
+                for safeguard in ("one write agent", "independent review", "pull request",
+                                  "exact head SHA", "not merge authority",
+                                  "explicit consent", "human approval private key"):
+                    self.assertIn(safeguard, text)
+                for factory_identity in ("<redacted-app-id>", "06ecf1c875bc", "<ci-host>", "trust-ci/"):
+                    self.assertNotIn(factory_identity, text)
+                self.assertIn("Never fabricate", text)
+                self.assertEqual(agents.read_bytes(), MODULE.managed_agents_text(ROOT).encode())
+
+    def test_consumer_documentation_is_deterministic_and_manifest_bound(self) -> None:
+        for profile in ("generic", "bitrix"):
+            with self.subTest(profile=profile):
+                payload = MODULE.build_payload(ROOT, profile_kind=profile)
+                self.assertEqual(payload, MODULE.build_payload(ROOT, profile_kind=profile))
+                by_path = {entry.path: entry for entry in payload}
+                for destination, template in (
+                    ("AGENTS.md", MODULE.CONSUMER_AGENTS_TEMPLATE),
+                    ("factory/README.md", MODULE.CONSUMER_FACTORY_README_TEMPLATE),
+                ):
+                    template_bytes = (ROOT / template).read_bytes()
+                    expected = template_bytes if destination != "AGENTS.md" else (
+                        MODULE.MANAGED_START + "\n" + template_bytes.decode().rstrip() +
+                        "\n" + MODULE.MANAGED_END + "\n"
+                    ).encode()
+                    entry = by_path[destination]
+                    self.assertEqual(entry.content, expected)
+                    self.assertEqual(entry.manifest()["sha256"], hashlib.sha256(expected).hexdigest())
+                    self.assertNotEqual(entry.content, (ROOT / destination).read_bytes())
+
+    def test_installed_template_artifacts_are_explicit_reusable_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "consumer"
+            payload = MODULE.build_payload(ROOT)
+            MODULE.materialize_new(ROOT, target)
+            templates = target / ".grok-stack/templates"
+            template_paths = {path.name for path in templates.glob("consumer-*")}
+            self.assertEqual(template_paths, {
+                "consumer-AGENTS.md.tmpl", "consumer-factory-README.md.tmpl",
+            })
+            for source, destination in (
+                ("consumer-AGENTS.md.tmpl", "AGENTS.md"),
+                ("consumer-factory-README.md.tmpl", "factory/README.md"),
+            ):
+                template = templates / source
+                self.assertTrue(template.read_text().startswith(
+                    f"<!-- Template source for {destination}; links are relative to its output directory. -->\n"
+                ))
+                self.assertEqual(_broken_local_links(target / destination, target), [])
+            # Required rendering inputs stay in the installed inventory: a
+            # consumer remains a complete source for the generic payload.
+            self.assertEqual(MODULE.build_payload(target), payload)
+            self.assertEqual(MODULE.managed_agents_text(target),
+                             (target / "AGENTS.md").read_text())
+
+    def test_existing_consumer_documentation_plans_preserve_user_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._consumer_with_record(Path(tmp) / "consumer", [])
+            agents = target / "AGENTS.md"
+            original = (b"User prefix\r\n\xff\r\n" + MODULE.MANAGED_START.encode() +
+                        b"\r\nOld managed instructions\r\n" + MODULE.MANAGED_END.encode() +
+                        b"\r\nUser suffix\t\r\n")
+            agents.write_bytes(original)
+            readme = target / "factory/README.md"
+            readme.parent.mkdir()
+            readme.write_bytes((ROOT / "factory/README.md").read_bytes())
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertIn("factory/README.md", {entry["path"] for entry in plan["entries"]})
+            self.assertEqual(_snapshot(target), before)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.materialize_new(ROOT, target)
+            self.assertEqual(_snapshot(target), before)
+            (target / ".grok-stack/AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]})
+            )
+            before_conflict = _snapshot(target)
+            with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "factory/README.md"):
+                MODULE.plan_install(ROOT, target)
+            self.assertEqual(_snapshot(target), before_conflict)
+            self.assertEqual(agents.read_bytes(), original)
+
+    def _consumer_with_record(self, root: Path, kept: list[str] | object) -> Path:
+        record = root / ".grok-stack"
+        record.mkdir(parents=True)
+        payload = {"schema_version": 1, "kept_local": kept} if isinstance(kept, list) else kept
+        (record / "AGBP_SYNC.json").write_text(json.dumps(payload), encoding="utf-8")
+        return root
+
+    def test_keep_list_absent_file_is_reported_and_never_created(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._consumer_with_record(Path(tmp) / "t", [".coveragerc"])
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertEqual(
+                plan["kept"],
+                [{"action": "KEEP", "path": ".coveragerc", "reason": "declared by target",
+                  "state": "absent"}],
+            )
+            self.assertNotIn(".coveragerc", {entry["path"] for entry in plan["entries"]})
+            self.assertEqual(plan["target_state"], "directory")
+
+    def test_keep_list_identical_file_is_kept_not_rewritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, [".coveragerc"])
+            (root / ".coveragerc").write_bytes((ROOT / ".coveragerc").read_bytes())
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual(plan["kept"][0]["state"], "identical")
+            self.assertEqual(plan["target_state"], "directory")
+            self.assertNotIn(".coveragerc", {entry["path"] for entry in plan["entries"]})
+
+    def test_keep_list_drift_fails_the_plan_naming_the_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, ["bandit.yaml"])
+            (root / "bandit.yaml").write_text("# consumer-specific skips\n", encoding="utf-8")
+            before = _snapshot(root)
+            with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
+                MODULE.plan_install(ROOT, root)
+            self.assertIn("bandit.yaml", str(raised.exception))
+            self.assertEqual(_snapshot(root), before)
+
+    def test_keep_list_covers_a_managed_dir_file_and_multiple_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, [".coveragerc", "bandit.yaml",
+                                              ".grok-stack/config/routing.json"])
+            for path in (".coveragerc", "bandit.yaml"):
+                (root / path).write_bytes((ROOT / path).read_bytes())
+            actions = {item["path"]: item["state"] for item in MODULE.plan_install(ROOT, root)["kept"]}
+            self.assertEqual(actions[".coveragerc"], "identical")
+            self.assertEqual(actions["bandit.yaml"], "identical")
+            self.assertEqual(actions[".grok-stack/config/routing.json"], "absent")
+
+    def test_declared_divergence_digest_is_bound_to_kept_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, {
+                "schema_version": 1,
+                "kept_local": [".coveragerc"],
+                "kept_local_sha256": {".coveragerc": hashlib.sha256(b"local\n").hexdigest()},
+            })
+            (root / ".coveragerc").write_bytes(b"local\n")
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual(plan["kept"][0]["state"], "divergent")
+            (root / ".coveragerc").write_bytes(b"tampered\n")
+            with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "digest"):
+                MODULE.plan_install(ROOT, root)
+
+    def test_keep_record_validation_fails_closed(self) -> None:
+        cases = (
+            ("unknown key", {"schema_version": 1, "kept_local": [], "extra": 1}),
+            ("bad schema", {"schema_version": 2, "kept_local": []}),
+            ("kept_local not list", {"kept_local": ".coveragerc"}),
+            ("non-string entry", {"kept_local": [1]}),
+            ("absolute path", {"kept_local": ["/etc/passwd"]}),
+            ("traversal", {"kept_local": ["../x"]}),
+            ("non-canonical", {"kept_local": ["./.coveragerc"]}),
+            ("duplicates", {"kept_local": ["bandit.yaml", "bandit.yaml"]}),
+        )
+        for label, payload in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                root = self._consumer_with_record(Path(tmp) / "t", payload)
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.plan_install(ROOT, root)
+
+    def test_symlinked_keep_record_or_path_is_not_silently_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            stack_dir = root / ".grok-stack"
+            stack_dir.mkdir(parents=True)
+            outside = Path(tmp) / "outside.json"
+            outside.write_text('{"schema_version": 1, "kept_local": [".coveragerc"]}', encoding="utf-8")
+            (stack_dir / "AGBP_SYNC.json").symlink_to(outside)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.plan_install(ROOT, root)
+
+    def test_keep_states_target_owned_and_unmanaged_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._consumer_with_record(Path(tmp) / "t",
+                                              ["architecture/adoption.json", "never-managed.yaml"])
+            plan = MODULE.plan_install(ROOT, root)
+            states = {item["path"]: (item["action"], item["state"]) for item in plan["kept"]}
+            self.assertEqual(states["architecture/adoption.json"], ("KEEP", "target-owned"))
+            self.assertEqual(states["never-managed.yaml"], ("KEEP", "unmanaged"))
+            self.assertEqual(plan["target_state"], "directory")
+
+    def test_nested_managed_dir_path_kept_across_states(self) -> None:
+        routing = ".grok-stack/config/routing.json"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._consumer_with_record(Path(tmp) / "t", [routing])
+            (root / "plan").mkdir()
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual({item["path"]: item["state"] for item in plan["kept"]}, {routing: "absent"})
+            source = (ROOT / routing).read_bytes()
+            nested_dir = root / ".grok-stack" / "config"
+            nested_dir.mkdir(parents=True)
+            (nested_dir / "routing.json").write_bytes(source)
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual(plan["kept"][0]["state"], "identical")
+            self.assertNotIn(routing, {entry["path"] for entry in plan["entries"]})
+            (nested_dir / "routing.json").write_text('{"max_parallel_analysis_units": 3}\n', encoding="utf-8")
+            with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
+                MODULE.plan_install(ROOT, root)
+            self.assertIn(routing, str(raised.exception))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "host lacks mkfifo")
+    def test_fifo_at_a_kept_path_fails_closed_instead_of_hanging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._consumer_with_record(Path(tmp) / "t", [".coveragerc"])
+            os.mkfifo(root / ".coveragerc")
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.plan_install(ROOT, root)
+
+    def test_oversized_sync_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            stack = root / ".grok-stack"
+            stack.mkdir(parents=True)
+            (stack / "AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": ["x" * 40000, "y" * 40000]}), encoding="utf-8")
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.plan_install(ROOT, root)
+
+    def test_target_without_record_delivers_every_source_managed_path_intact(self) -> None:
+        # No-record parity is an in-tree property, not a snapshot: the checkout feeding
+        # the plan differs by branch, so the test recomputes the source inventory and
+        # verifies every delivered entry against its source file or synthesized
+        # hook template - dropping any payload path breaks it anywhere.
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = MODULE.plan_install(ROOT, Path(tmp) / "t")
+            self.assertEqual(plan["kept"], [])
+            self.assertEqual(plan["target_state"], "absent")
+            expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)}
+            delivered = {entry["path"] for entry in plan["entries"]}
+            self.assertEqual(delivered - {"AGENTS.md"}, expected)
+            for entry in plan["entries"]:
+                if entry["path"] in {"AGENTS.md", "factory/README.md"}:
+                    continue
+                source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
+                source = (ROOT / source_path).read_bytes()
+                self.assertEqual(entry["sha256"], hashlib.sha256(source).hexdigest(), entry["path"])
+                self.assertEqual(entry["size"], len(source), entry["path"])
+
+    def test_existing_target_modes_are_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            nested = target / "existing/data.txt"
+            nested.parent.mkdir(parents=True)
+            nested.write_bytes(b"keep exactly\n")
+            nested.chmod(0o640)
+            before = _snapshot(target)
+            runner_calls: list[str] = []
+            real_open = os.open
+
+            def read_only_open(path, flags, *args, **kwargs):
+                write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC
+                if flags & write_flags:
+                    raise AssertionError(f"planning opened for mutation: {path}")
+                return real_open(path, flags, *args, **kwargs)
+
+            invocations = (
+                lambda: MODULE.install(
+                    ROOT,
+                    target,
+                    force=False,
+                    dry_run=False,
+                    runner=lambda command: runner_calls.append(command),
+                ),
+                lambda: MODULE.plan_install(ROOT, target),
+                lambda: MODULE.install(
+                    ROOT,
+                    target,
+                    force=False,
+                    dry_run=True,
+                    runner=lambda command: runner_calls.append(command),
+                ),
+            )
+            plans = []
+            output = io.StringIO()
+            with (
+                patch.object(MODULE.os, "open", side_effect=read_only_open),
+                patch.object(MODULE.os, "mkdir", side_effect=AssertionError("mkdir")),
+                patch.object(MODULE.os, "unlink", side_effect=AssertionError("unlink")),
+                patch.object(MODULE.os, "rename", side_effect=AssertionError("rename")),
+                patch.object(MODULE.os, "replace", side_effect=AssertionError("replace")),
+                patch.object(MODULE.os, "chmod", side_effect=AssertionError("chmod")),
+                contextlib.redirect_stdout(output),
+            ):
+                for invoke in invocations:
+                    plans.append(invoke())
+                    self.assertEqual(_snapshot(target), before)
+
+            self.assertEqual(plans[0], plans[1])
+            self.assertEqual(plans[1], plans[2])
+            self.assertEqual(plans[0]["version"], 1)
+            self.assertEqual(plans[0]["target_state"], "directory")
+            entries = plans[0]["entries"]
+            self.assertEqual(
+                [item["path"].encode("utf-8") for item in entries],
+                sorted(item["path"].encode("utf-8") for item in entries),
+            )
+            self.assertEqual(len({item["path"] for item in entries}), len(entries))
+            for item in entries:
+                self.assertEqual(len(item["sha256"]), 64)
+                self.assertGreaterEqual(item["size"], 0)
+            self.assertEqual(runner_calls, [])
+            self.assertIn("read-only plan", output.getvalue().lower())
+
+    def test_force_is_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            authority = target / "architecture/system.yaml"
+            authority.parent.mkdir(parents=True)
+            authority.write_bytes(b"target authority\n")
+            before = _snapshot(target)
+            with self.assertRaises(SystemExit) as raised:
+                MODULE.install(ROOT, target, force=True, dry_run=False)
+            self.assertIn("--force", str(raised.exception))
+            self.assertIn("no longer supported", str(raised.exception).lower())
+            self.assertEqual(_snapshot(target), before)
+
+    def test_payload_is_sorted_safe_duplicate_free_and_profile_explicit(self) -> None:
+        generic = MODULE.build_payload(ROOT)
+        bitrix = MODULE.build_payload(ROOT, profile_kind="bitrix")
+        generic_paths = [entry.path for entry in generic]
+        bitrix_paths = [entry.path for entry in bitrix]
+        self.assertEqual(
+            [path.encode("utf-8") for path in generic_paths],
+            sorted(path.encode("utf-8") for path in generic_paths),
+        )
+        self.assertEqual(len(generic_paths), len(set(generic_paths)))
+        self.assertIn("AGENTS.md", generic_paths)
+        for expected in (
+            ".grok-stack/adaptive_grok/governance.py",
+            ".grok-stack/templates/change/architecture.md",
+            ".grok-stack/templates/change/requirements.md",
+            "scripts/grok_governance.py",
+            "scripts/grok_artifacts.py",
+            "scripts/grok_history.py",
+            ".grok-stack/adaptive_grok/history.py",
+            "schemas/canonical-example.schema.json",
+            "schemas/debt-entry.schema.json",
+            "schemas/governance-handoff-v1.schema.json",
+            "schemas/governance-rule.schema.json",
+            "schemas/workflow-source-v1.schema.json",
+            "schemas/workflow-task-graph-v1.schema.json",
+            "schemas/workflow-convergence-report-v1.schema.json",
+            "factory/README.md",
+            "factory/compose.yaml",
+            "factory/contracts/openapi/factory-control.v1.json",
+            "factory/contracts/openapi/factory-execution.v1.json",
+            "factory/pyproject.toml",
+            "factory/uv.lock",
+            "factory/src/adaptive_factory/store.py",
+            "factory/src/adaptive_factory/admin.py",
+            "factory/src/adaptive_factory/resources/003_budgets_kills_reconciliation.sql",
+            "factory/src/adaptive_factory/resources/008_allocation_release_authority.sql",
+            "factory/src/adaptive_factory/resources/009_authority_audit_and_history_indexes.sql",
+            "factory/src/adaptive_factory/resources/010_authority_accounting_and_cleanup.sql",
+            "factory/src/adaptive_factory/resources/011_legacy_accounting_quarantine.sql",
+            "factory/tests/run_disposable_exit.py",
+            "factory/tests/postgres_restart_probe.py",
+            "factory/tests/test_postgres_integration.py",
+        ):
+            self.assertIn(expected, generic_paths)
+        self.assertEqual(
+            {path for path in generic_paths if path.startswith("factory/tests/")},
+            {
+                "factory/tests/__init__.py",
+                "factory/tests/postgres_fixture_reset.py",
+                "factory/tests/postgres_restart_probe.py",
+                "factory/tests/run_disposable_exit.py",
+                "factory/tests/test_api.py",
+                "factory/tests/test_contracts.py",
+                "factory/tests/test_migrations.py",
+                "factory/tests/test_postgres_integration.py",
+                "factory/tests/test_server.py",
+                "factory/tests/test_service.py",
+                "factory/tests/test_state.py",
+            },
+        )
+        self.assertFalse(any("__pycache__" in path for path in generic_paths))
+        self.assertFalse(set(MODULE.TARGET_OWNED_GOVERNANCE) & set(generic_paths))
+        self.assertNotIn("local/AGENTS.md", generic_paths)
+        self.assertIn("local/AGENTS.md", bitrix_paths)
+        local_guidance = next(entry for entry in bitrix if entry.path == "local/AGENTS.md")
+        self.assertEqual(local_guidance.content, (ROOT / "docs/bitrix-local-AGENTS.md").read_bytes())
+        self.assertFalse(set(MODULE.TARGET_OWNED_ARCHITECTURE) & set(generic_paths))
+        for entry in generic:
+            self.assertEqual(entry.size, len(entry.content))
+            self.assertEqual(entry.sha256, hashlib.sha256(entry.content).hexdigest())
+        with patch.object(
+            MODULE,
+            "MANAGED_FILES",
+            (*MODULE.MANAGED_FILES, "architecture/system.yaml"),
+        ):
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(ROOT)
+        with patch.object(
+            MODULE,
+            "MANAGED_FILES",
+            (*MODULE.MANAGED_FILES, "governance/rules/index.json"),
+        ):
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(ROOT)
+        with patch.object(
+            MODULE,
+            "MANAGED_FILES",
+            (*MODULE.MANAGED_FILES, MODULE.MANAGED_FILES[0]),
+        ):
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(ROOT)
+
+    def test_materialize_new_publishes_verified_payload_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            target = parent / "target"
+            plan = MODULE.plan_install(ROOT, target)
+            old_umask = os.umask(0o077)
+            try:
+                with patch("subprocess.Popen", side_effect=AssertionError("dependency runner")):
+                    result = MODULE.materialize_new(ROOT, target)
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(result, plan)
+            self.assertEqual(result["target_state"], "absent")
+            for item in result["entries"]:
+                installed = target / item["path"]
+                self.assertTrue(installed.is_file(), item["path"])
+                self.assertEqual(installed.stat().st_size, item["size"])
+                self.assertEqual(
+                    hashlib.sha256(installed.read_bytes()).hexdigest(), item["sha256"]
+                )
+                self.assertEqual(stat.S_IMODE(installed.stat().st_mode), item["mode"])
+            for relative in (
+                "engineering/changes",
+                "engineering/adr",
+                "engineering/runbooks",
+                "engineering/reviews",
+                "engineering/contracts/openapi",
+                "engineering/contracts/asyncapi",
+                "engineering/contracts/schemas",
+            ):
+                self.assertTrue((target / relative).is_dir(), relative)
+            for authority in (
+                "architecture/adoption.json",
+                "architecture/rules.yaml",
+                "architecture/system.yaml",
+                "governance/rules/index.json",
+                "governance/debt/index.json",
+                "governance/canonical-examples/index.json",
+            ):
+                self.assertFalse((target / authority).exists(), authority)
+            self.assertEqual(_stage_names(parent), [])
+            result = subprocess.run(
+                ["python3", "scripts/grok_architecture.py", "--help"],
+                cwd=target,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            history_help = subprocess.run(
+                [sys.executable, "scripts/grok_history.py", "--help"],
+                cwd=target,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(history_help.returncode, 0, history_help.stdout + history_help.stderr)
+            self.assertIn("Offline historical evidence", history_help.stdout)
+
+    def test_materialize_new_rejects_existing_symlink_and_special_targets(self) -> None:
+        for kind in ("directory", "symlink", "fifo"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                target = parent / "target"
+                outside = parent / "outside"
+                outside.mkdir()
+                sentinel = outside / "sentinel.txt"
+                sentinel.write_bytes(b"outside unchanged\n")
+                if kind == "directory":
+                    target.mkdir()
+                    (target / "owned.txt").write_bytes(b"existing\n")
+                elif kind == "symlink":
+                    target.symlink_to(outside, target_is_directory=True)
+                else:
+                    os.mkfifo(target)
+                before = _snapshot(target)
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.materialize_new(ROOT, target)
+                self.assertEqual(_snapshot(target), before)
+                self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
+                self.assertEqual(_stage_names(parent), [])
+
+    def test_materialize_new_loses_target_creation_race_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            target = parent / "target"
+            real_rename = MODULE._rename_noreplace
+
+            def create_target(parent_fd: int, stage_name: str, target_name: str) -> None:
+                os.mkdir(target_name, dir_fd=parent_fd)
+                target_fd = os.open(
+                    target_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    descriptor = os.open(
+                        "winner.txt",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=target_fd,
+                    )
+                    try:
+                        os.write(descriptor, b"winner\n")
+                    finally:
+                        os.close(descriptor)
+                finally:
+                    os.close(target_fd)
+                real_rename(parent_fd, stage_name, target_name)
+
+            with patch.object(MODULE, "_rename_noreplace", side_effect=create_target):
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.materialize_new(ROOT, target)
+            self.assertEqual((target / "winner.txt").read_bytes(), b"winner\n")
+            self.assertEqual(_stage_names(parent), [])
+
+    def test_materialize_new_failure_injections_clean_owned_stage(self) -> None:
+        injections = (
+            ("write", "_write_all", OSError("write failed")),
+            ("manifest", "_verify_stage", MODULE.UnsafeInstallTarget("bad manifest")),
+            ("publication", "_rename_noreplace", OSError("publish failed")),
+        )
+        for label, attribute, failure in injections:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                target = parent / "target"
+                sentinel = parent / "outside.txt"
+                sentinel.write_bytes(b"outside unchanged\n")
+                with patch.object(MODULE, attribute, side_effect=failure):
+                    with self.assertRaises((OSError, MODULE.UnsafeInstallTarget)):
+                        MODULE.materialize_new(ROOT, target)
+                self.assertFalse(os.path.lexists(target))
+                self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
+                self.assertEqual(_stage_names(parent), [])
+
+    def test_materialize_new_fsync_failure_cleans_owned_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            target = parent / "target"
+            with patch.object(MODULE.os, "fsync", side_effect=OSError("fsync failed")):
+                with self.assertRaises(OSError):
+                    MODULE.materialize_new(ROOT, target)
+            self.assertFalse(os.path.lexists(target))
+            self.assertEqual(_stage_names(parent), [])
+
+    def test_materialize_new_parent_relocation_does_not_touch_outside_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            parent = root / "parent"
+            parent.mkdir()
+            target = parent / "target"
+            sentinel = parent / "outside.txt"
+            sentinel.write_bytes(b"outside unchanged\n")
+            relocated = root / "relocated"
+
+            def relocate_parent(*_args) -> None:
+                parent.rename(relocated)
+                parent.mkdir()
+                raise MODULE.UnsafeInstallTarget("parent relocated")
+
+            with patch.object(MODULE, "_rename_noreplace", side_effect=relocate_parent):
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.materialize_new(ROOT, target)
+            self.assertEqual((relocated / "outside.txt").read_bytes(), b"outside unchanged\n")
+            self.assertEqual(_stage_names(relocated), [])
+            self.assertEqual(_stage_names(parent), [])
+            self.assertFalse(os.path.lexists(target))
+
+    def test_materialize_new_rejects_ancestor_swaps_during_parent_binding(self) -> None:
+        for boundary in ("intermediate ancestor", "final parent"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                anchor = root / "anchor"
+                container = anchor / "container"
+                parent = container / "parent"
+                parent.mkdir(parents=True)
+                outside_container = root / "outside-container"
+                outside_parent = outside_container / "parent"
+                outside_parent.mkdir(parents=True)
+                outside_sentinel = outside_parent / "sentinel.txt"
+                outside_sentinel.write_bytes(b"outside unchanged\n")
+                relocated = root / "relocated"
+                target = parent / "target"
+                real_open = os.open
+                swapped = False
+
+                def swap_before_open(path, flags, *args, **kwargs):
+                    nonlocal swapped
+                    component = os.fsdecode(path)
+                    old_full_parent_open = Path(component) == parent
+                    if not swapped and (
+                        old_full_parent_open
+                        or boundary == "intermediate ancestor"
+                        and component == "container"
+                        or boundary == "final parent"
+                        and component == "parent"
+                    ):
+                        swapped = True
+                        if boundary == "intermediate ancestor":
+                            container.rename(relocated)
+                            container.symlink_to(
+                                outside_container,
+                                target_is_directory=True,
+                            )
+                        else:
+                            parent.rename(relocated)
+                            parent.symlink_to(outside_parent, target_is_directory=True)
+                    return real_open(path, flags, *args, **kwargs)
+
+                with patch.object(MODULE.os, "open", side_effect=swap_before_open):
+                    with self.assertRaises(MODULE.UnsafeInstallTarget):
+                        MODULE.materialize_new(ROOT, target)
+                self.assertTrue(swapped)
+                self.assertEqual(outside_sentinel.read_bytes(), b"outside unchanged\n")
+                self.assertFalse((outside_parent / "target").exists())
+                self.assertEqual(_stage_names(outside_parent), [])
+                self.assertEqual(_stage_names(relocated), [])
+
+    def test_plan_rejects_symlinked_target_ancestry_without_mutation(self) -> None:
+        for boundary in ("intermediate ancestor", "final parent"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                anchor = root / "anchor"
+                anchor.mkdir()
+                outside = root / "outside"
+                outside.mkdir()
+                if boundary == "intermediate ancestor":
+                    (outside / "container").mkdir()
+                    (anchor / "link").symlink_to(outside, target_is_directory=True)
+                    target = anchor / "link/container/target"
+                else:
+                    (anchor / "parent").symlink_to(outside, target_is_directory=True)
+                    target = anchor / "parent/target"
+                before = _snapshot(outside)
+                plan = MODULE.plan_install(ROOT, target)
+                self.assertEqual(plan["target_state"], "unsafe")
+                self.assertEqual(_snapshot(outside), before)
+                self.assertEqual(_stage_names(anchor), [])
+
+    def test_source_inventory_rejects_bound_root_or_managed_dir_relocation(self) -> None:
+        for boundary in ("source root", "managed directory"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "source"
+                managed = source / ".grok"
+                managed.mkdir(parents=True)
+                template = source / MODULE.CONSUMER_AGENTS_TEMPLATE
+                template.parent.mkdir(parents=True)
+                template.write_text("managed agents\n", encoding="utf-8")
+                (managed / "required.md").write_text("required\n", encoding="utf-8")
+                target = root / "target"
+                relocated = root / "relocated"
+                outside = root / "outside.txt"
+                outside.write_bytes(b"outside unchanged\n")
+                real_init = MODULE._SourceTree.__init__
+                swapped = False
+
+                def bind_then_relocate(tree, source_path):
+                    nonlocal swapped
+                    real_init(tree, source_path)
+                    if swapped:
+                        return
+                    swapped = True
+                    if boundary == "source root":
+                        source.rename(relocated)
+                        source.mkdir()
+                        (source / ".grok").mkdir()
+                    else:
+                        managed.rename(relocated)
+                        managed.mkdir()
+
+                with (
+                    patch.object(MODULE, "MANAGED_DIRS", (".grok",)),
+                    patch.object(MODULE, "MANAGED_FILES", (MODULE.CONSUMER_AGENTS_TEMPLATE,)),
+                ):
+                    positive = root / "unrelocated"
+                    MODULE._materialize_new(
+                        source, positive, include_dependencies=False,
+                        include_optional=False,
+                    )
+                    self.assertEqual((positive / ".grok/required.md").read_text(), "required\n")
+                    self.assertEqual((positive / "AGENTS.md").read_text(),
+                                     MODULE.managed_agents_text(source))
+                    with patch.object(MODULE._SourceTree, "__init__", bind_then_relocate):
+                        component = "source" if boundary == "source root" else ".grok"
+                        with self.assertRaisesRegex(
+                            MODULE.UnsafeInstallTarget,
+                            rf"^directory component is unsafe: {re.escape(component)}$",
+                        ):
+                            MODULE._materialize_new(
+                                source,
+                                target,
+                                include_dependencies=False,
+                                include_optional=False,
+                            )
+                self.assertTrue(swapped)
+                self.assertFalse(os.path.lexists(target))
+                self.assertEqual(_stage_names(root), [])
+                self.assertEqual(outside.read_bytes(), b"outside unchanged\n")
+
+    def test_source_reads_are_nofollow_and_bounded_at_the_descriptor(self) -> None:
+        cases = ("managed", "agents", "agents helper", "factory readme", "bitrix", "toolchain")
+        for family in cases:
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "source"
+                source.mkdir()
+                agents = source / MODULE.CONSUMER_AGENTS_TEMPLATE
+                agents.parent.mkdir(parents=True)
+                agents.write_text("managed agents\n", encoding="utf-8")
+                readme = source / MODULE.CONSUMER_FACTORY_README_TEMPLATE
+                readme.write_text("consumer factory docs\n", encoding="utf-8")
+                factory_readme = source / "factory/README.md"
+                factory_readme.parent.mkdir()
+                factory_readme.write_text("upstream factory docs\n", encoding="utf-8")
+                guidance = source / "docs/bitrix-local-AGENTS.md"
+                guidance.parent.mkdir(parents=True)
+                guidance.write_text("bitrix guidance\n", encoding="utf-8")
+                payload = source / "payload.bin"
+                payload.write_bytes(b"managed payload\n")
+                toolchain = source / ".grok-stack/config/toolchain.json"
+                toolchain.parent.mkdir(parents=True)
+                toolchain.write_text('{"tools": []}\n', encoding="utf-8")
+                victim = {
+                    "managed": payload,
+                    "agents": agents,
+                    "agents helper": agents,
+                    "factory readme": readme,
+                    "bitrix": guidance,
+                    "toolchain": toolchain,
+                }[family]
+                outside = root / "outside.bin"
+                outside.write_bytes(
+                    b'{"tools": [], "padding": "xxxxxxxxxxxxxxxxxxxxxxxx"}\n'
+                    if family == "toolchain"
+                    else b"x" * 34
+                )
+                saved = root / "saved-source"
+                swapped = False
+                path_bytes_read = 0
+                real_open = os.open
+                real_read_bytes = Path.read_bytes
+                real_read_text = Path.read_text
+
+                def swap() -> None:
+                    nonlocal swapped
+                    if swapped:
+                        return
+                    swapped = True
+                    victim.rename(saved)
+                    victim.symlink_to(outside)
+
+                def race_descriptor_open(path, flags, *args, **kwargs):
+                    parent_fd = kwargs.get("dir_fd")
+                    if parent_fd is not None:
+                        parent = Path(os.readlink(f"/proc/self/fd/{parent_fd}"))
+                        if parent / os.fsdecode(path) == victim:
+                            swap()
+                    return real_open(path, flags, *args, **kwargs)
+
+                def race_path_bytes(path: Path) -> bytes:
+                    nonlocal path_bytes_read
+                    if path == victim:
+                        swap()
+                        data = real_read_bytes(path)
+                        path_bytes_read += len(data)
+                        return data
+                    return real_read_bytes(path)
+
+                def race_path_text(path: Path, *args, **kwargs) -> str:
+                    nonlocal path_bytes_read
+                    if path == victim:
+                        swap()
+                        text = real_read_text(path, *args, **kwargs)
+                        path_bytes_read += len(text.encode("utf-8"))
+                        return text
+                    return real_read_text(path, *args, **kwargs)
+
+                managed_files = (MODULE.CONSUMER_AGENTS_TEMPLATE,)
+                if family == "managed":
+                    managed_files += ("payload.bin",)
+                if family == "factory readme":
+                    managed_files += ("factory/README.md", MODULE.CONSUMER_FACTORY_README_TEMPLATE)
+                if family == "toolchain":
+
+                    def invocation() -> object:
+                        return MODULE.plan_install(source, root / "target")
+
+                elif family == "agents helper":
+
+                    def invocation() -> object:
+                        return MODULE.managed_agents_text(source)
+
+                else:
+
+                    def invocation() -> object:
+                        return MODULE.build_payload(
+                            source,
+                            profile_kind=(
+                                "bitrix" if family == "bitrix" else "generic"
+                            ),
+                        )
+                with (
+                    patch.object(MODULE, "MANAGED_DIRS", ()),
+                    patch.object(MODULE, "MANAGED_FILES", managed_files),
+                    patch.object(MODULE, "MAX_SOURCE_FILE_BYTES", 32),
+                    patch.object(MODULE, "MAX_TOOLCHAIN_BYTES", 32),
+                    patch.object(MODULE.os, "open", side_effect=race_descriptor_open),
+                    patch.object(Path, "read_bytes", race_path_bytes),
+                    patch.object(Path, "read_text", race_path_text),
+                ):
+                    with self.assertRaises(MODULE.UnsafeInstallTarget):
+                        invocation()
+                self.assertTrue(swapped)
+                self.assertLessEqual(path_bytes_read, 33)
+
+    def test_known_owned_constructor_failures_remove_every_created_entry(self) -> None:
+        for boundary in ("stage fstat", "directory fstat", "file fstat"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                target = parent / "target"
+                sentinel = parent / "outside.txt"
+                sentinel.write_bytes(b"outside unchanged\n")
+                real_fstat = os.fstat
+                injected = False
+
+                def fail_fstat(descriptor):
+                    nonlocal injected
+                    metadata = real_fstat(descriptor)
+                    resolved = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+                    stage_gap = (
+                        boundary == "stage fstat"
+                        and resolved.parent == parent
+                        and resolved.name.startswith(".adaptive-install-")
+                        and stat.S_ISDIR(metadata.st_mode)
+                    )
+                    directory_gap = (
+                        boundary == "directory fstat"
+                        and resolved.name == "engineering"
+                        and resolved.parent.name.startswith(".adaptive-install-")
+                        and stat.S_ISDIR(metadata.st_mode)
+                    )
+                    file_gap = (
+                        boundary == "file fstat"
+                        and ".adaptive-install-" in resolved.as_posix()
+                        and stat.S_ISREG(metadata.st_mode)
+                    )
+                    if (
+                        not injected
+                        and (stage_gap or directory_gap or file_gap)
+                    ):
+                        injected = True
+                        raise OSError(f"injected {boundary}")
+                    return metadata
+
+                with patch.object(MODULE.os, "fstat", side_effect=fail_fstat):
+                    with self.assertRaises((OSError, MODULE.UnsafeInstallTarget)):
+                        MODULE.materialize_new(ROOT, target)
+                self.assertTrue(injected)
+                self.assertFalse(os.path.lexists(target))
+                self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
+                self.assertEqual(_stage_names(parent), [])
+
+    def test_constructor_gap_swaps_preserve_unproven_replacements(self) -> None:
+        for boundary in ("stage", "nested directory", "file"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                target = parent / "target"
+                outside = parent / "outside.txt"
+                outside.write_bytes(b"outside unchanged\n")
+                real_open = os.open
+                real_stat = os.stat
+                real_fstat = os.fstat
+                replacement: Path | None = None
+                replacement_identity: tuple[int, int, int] | None = None
+                original_file_identity: tuple[int, int] | None = None
+
+                def swap_directory(path: Path) -> None:
+                    nonlocal replacement, replacement_identity
+                    original = path.with_name(f"{path.name}.original-owned")
+                    path.rename(original)
+                    path.mkdir(mode=0o711)
+                    metadata = os.lstat(path)
+                    replacement = path
+                    replacement_identity = (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        stat.S_IMODE(metadata.st_mode),
+                    )
+
+                def race_stat(path, *args, **kwargs):
+                    name = os.fsdecode(path)
+                    parent_fd = kwargs.get("dir_fd")
+                    if parent_fd is not None and replacement is None:
+                        directory_path = Path(os.readlink(f"/proc/self/fd/{parent_fd}"))
+                        if (
+                            boundary == "stage"
+                            and name.startswith(".adaptive-install-")
+                            and directory_path == parent
+                        ) or (
+                            boundary == "nested directory"
+                            and name == "engineering"
+                            and directory_path.name.startswith(".adaptive-install-")
+                        ):
+                            swap_directory(directory_path / name)
+                            raise OSError(f"injected {boundary} identity failure")
+                    return real_stat(path, *args, **kwargs)
+
+                def race_open(path, flags, *args, **kwargs):
+                    name = os.fsdecode(path)
+                    parent_fd = kwargs.get("dir_fd")
+                    if parent_fd is not None and replacement is None:
+                        directory_path = Path(os.readlink(f"/proc/self/fd/{parent_fd}"))
+                        if (
+                            boundary == "stage"
+                            and name.startswith(".adaptive-install-")
+                            and directory_path == parent
+                        ) or (
+                            boundary == "nested directory"
+                            and name == "engineering"
+                            and directory_path.name.startswith(".adaptive-install-")
+                        ):
+                            swap_directory(directory_path / name)
+                            raise OSError(f"injected {boundary} open failure")
+                    return real_open(path, flags, *args, **kwargs)
+
+                def race_fstat(descriptor):
+                    nonlocal replacement, replacement_identity, original_file_identity
+                    metadata = real_fstat(descriptor)
+                    resolved = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+                    if (
+                        boundary == "file"
+                        and stat.S_ISREG(metadata.st_mode)
+                        and ".adaptive-install-" in resolved.as_posix()
+                    ):
+                        identity = (metadata.st_dev, metadata.st_ino)
+                        if original_file_identity is None:
+                            original_file_identity = identity
+                            original = resolved.with_name(
+                                f"{resolved.name}.original-owned"
+                            )
+                            resolved.rename(original)
+                            resolved.write_bytes(b"concurrent replacement\n")
+                            resolved.chmod(0o640)
+                            current = os.lstat(resolved)
+                            replacement = resolved
+                            replacement_identity = (
+                                current.st_dev,
+                                current.st_ino,
+                                stat.S_IMODE(current.st_mode),
+                            )
+                        if identity == original_file_identity:
+                            raise OSError("injected file identity failure")
+                    return metadata
+
+                with (
+                    patch.object(MODULE.os, "stat", side_effect=race_stat),
+                    patch.object(MODULE.os, "open", side_effect=race_open),
+                    patch.object(MODULE.os, "fstat", side_effect=race_fstat),
+                ):
+                    with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
+                        MODULE.materialize_new(ROOT, target)
+                self.assertIsNotNone(replacement)
+                self.assertIsNotNone(replacement_identity)
+                assert replacement is not None
+                self.assertTrue(os.path.lexists(replacement))
+                current = os.lstat(replacement)
+                self.assertEqual(
+                    (
+                        current.st_dev,
+                        current.st_ino,
+                        stat.S_IMODE(current.st_mode),
+                    ),
+                    replacement_identity,
+                )
+                if boundary == "file":
+                    self.assertEqual(
+                        replacement.read_bytes(),
+                        b"concurrent replacement\n",
+                    )
+                self.assertIn("manual cleanup required", str(raised.exception))
+                self.assertEqual(outside.read_bytes(), b"outside unchanged\n")
+                self.assertFalse(os.path.lexists(target))
+
+    def test_cli_modes_plan_by_default_and_materialize_only_when_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            existing = root / "existing"
+            existing.mkdir()
+            sentinel = existing / "sentinel.txt"
+            sentinel.write_bytes(b"unchanged\n")
+            before = _snapshot(existing)
+            default = subprocess.run(
+                ["python3", "scripts/install_into.py", str(existing)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            explicit = subprocess.run(
+                ["python3", "scripts/install_into.py", "--plan", str(existing)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            target = root / "new"
+            materialized = subprocess.run(
+                ["python3", "scripts/install_into.py", "--materialize-new", str(target)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(default.returncode, 0, default.stdout + default.stderr)
+            self.assertEqual(explicit.returncode, 0, explicit.stdout + explicit.stderr)
+            self.assertEqual(materialized.returncode, 0, materialized.stdout + materialized.stderr)
+            self.assertIn("read-only plan", default.stdout.lower())
+            self.assertEqual(default.stdout.count(MODULE.LEGACY_PLAN_NOTICE), 1)
+            self.assertEqual(_snapshot(existing), before)
+            self.assertTrue((target / "scripts/grok_verify.py").is_file())
+            self.assertTrue((target / "factory/runtime/setup_manager.py").is_file())
+            self.assertFalse((target / ".github/workflows").exists())
+            self.assertTrue((target / "scripts/grok_agent.py").is_file())
+            self.assertFalse((target / ".grok-stack/runtime/agent-state.json").exists())
+            self.assertFalse((target / ".grok-stack/runtime/.agents.guard").exists())
+            command = subprocess.run(
+                ["python3", "scripts/grok_agent.py", "watchdog"], cwd=target,
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(command.returncode, 0, command.stderr)
+            self.assertEqual(json.loads(command.stdout)["agents"], [])
+
+    def test_with_ci_remains_forbidden_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            before = _snapshot(target)
+            with self.assertRaises(SystemExit) as raised:
+                MODULE.install(
+                    ROOT,
+                    target,
+                    force=False,
+                    dry_run=False,
+                    with_ci=True,
+                )
+            self.assertIn("forbidden", str(raised.exception).lower())
+            self.assertEqual(_snapshot(target), before)
+
+
+if __name__ == "__main__":
+    unittest.main()

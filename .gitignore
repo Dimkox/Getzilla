@@ -1,0 +1,71 @@
+# Adaptive Grok runtime state
+.grok-stack/runtime/*
+!.grok-stack/runtime/.gitkeep
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Independent Trust CI deployment state
+trust-ci/env/*.env
+!trust-ci/env/*.example
+trust-ci/runtime/*
+!trust-ci/runtime/.gitkeep
+trust-ci/*.approval.json
+trust-ci/*.attestation.json
+
+# Local crash / hook dumps
+err.log
+
+# Packager writes this then embeds it in the zip; do not leave it at root.
+MANIFEST.sha256
+
+# Release archives belong in GitHub Releases, not in git history.
+packages/*.zip
+packages/*.zip.sha256
+
+# Runtime evidence logs belong in local/private evidence storage.
+*.out
+*.log
+*.err
+
+# Scratch builds.
+# Dependencies and build output
+vendor/
+node_modules/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.phpunit.cache/
+coverage/
+dist/
+build/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Bitrix runtime/generated files
+upload/
+bitrix/cache/
+bitrix/managed_cache/
+bitrix/stack_cache/
+bitrix/html_pages/
+bitrix/backup/
+bitrix/tmp/
+
+# Docker local data
+.docker-data/
+.grok-test-runner.json

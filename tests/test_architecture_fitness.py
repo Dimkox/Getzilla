@@ -1,0 +1,6950 @@
+from __future__ import annotations
+
+import ast
+import copy
+import hashlib
+import importlib
+import json
+import os
+import posixpath
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+
+from tests.test_architecture_model import _json_schema, _rules, _system
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".grok-stack"))
+
+
+def _fitness_module():
+    try:
+        return importlib.import_module("adaptive_grok.architecture_fitness")
+    except ModuleNotFoundError as exc:
+        if exc.name != "adaptive_grok.architecture_fitness":
+            raise
+        return None
+
+
+FIT = _fitness_module()
+DIFF = importlib.import_module("adaptive_grok.architecture_diff")
+ARCHITECTURE = importlib.import_module("adaptive_grok.architecture")
+QUEUE_PROVENANCE = importlib.import_module("adaptive_grok.queue_provenance")
+
+
+class GitArchitectureRepo:
+    def __init__(self, testcase: unittest.TestCase) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        testcase.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "architecture@example.test")
+        self.git("config", "user.name", "Architecture Test")
+        (self.root / "schemas").mkdir()
+        for name in ("architecture-system.schema.json", "architecture-rules.schema.json"):
+            (self.root / "schemas" / name).write_bytes((ROOT / "schemas" / name).read_bytes())
+
+    def git(self, *args: str) -> str:
+        return subprocess.check_output(
+            ["git", *args], cwd=self.root, text=True, encoding="utf-8"
+        ).strip()
+
+    def write_json(self, relative: str, value: dict) -> None:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def write_text(self, relative: str, value: str) -> None:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="utf-8")
+
+    def write_bytes(self, relative: str, value: bytes) -> None:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value)
+
+    def model(self, system: dict, rules: dict) -> None:
+        self.write_json("architecture/system.yaml", system)
+        self.write_json("architecture/rules.yaml", rules)
+        self.write_json("architecture/adoption.json", {
+            "architecture_id": system["architecture_id"],
+            "schema_version": 1,
+            "state": "adopted",
+        })
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+        return self.git("rev-parse", "HEAD")
+
+
+class ArchitectureFitnessTests(unittest.TestCase):
+    maxDiff = None
+
+    def setUp(self) -> None:
+        if FIT is None:
+            self.fail("adaptive_grok.architecture_fitness is not implemented")
+
+    def _repo(self, *, system: dict | None = None, rules: dict | None = None):
+        repo = GitArchitectureRepo(self)
+        repo.model(system or _system(), rules or _rules())
+        base = repo.commit("base")
+        return repo, base
+
+    def _bootstrap_repo(self) -> tuple[GitArchitectureRepo, str, str]:
+        repo = GitArchitectureRepo(self)
+        repo.write_text("README.md", "before architecture adoption\n")
+        frozen_base = repo.commit("frozen pre-adoption base")
+        repo.model(_system(), _rules())
+        head = repo.commit("adopt architecture")
+        return repo, frozen_base, head
+
+    def _evaluate(self, repo: GitArchitectureRepo, base: str, head: str, pre_risk="green"):
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        snapshot = FIT.load_architecture(repo.root)
+        return FIT.evaluate_fitness(
+            repo.root,
+            snapshot,
+            diff,
+            diff.changed_paths,
+            pre_risk=pre_risk,
+        )
+
+    @staticmethod
+    def _results(report):
+        return {result.category: result for result in report.results}
+
+    def _repository_code_budgets(self, *identities: str) -> list[dict]:
+        configured = {
+            rule["id"]: rule
+            for rule in ARCHITECTURE.load_architecture(ROOT).rules["code_budgets"]
+        }
+        missing = sorted(set(identities) - set(configured))
+        self.assertEqual(missing, [], "approved repository code budgets are not configured")
+        return [copy.deepcopy(configured[identity]) for identity in identities]
+
+    def test_adoption_bootstrap_uses_only_the_frozen_base(self) -> None:
+        repo, frozen_base, head = self._bootstrap_repo()
+        with patch.object(DIFF, "ADOPTION_BASE_SHA", frozen_base):
+            diff = FIT.diff_architecture(repo.root, base_sha=frozen_base, head_sha=head)
+            self.assertTrue(diff.baseline_introduced)
+            self.assertEqual(diff.base_sha, frozen_base)
+            self.assertEqual(diff.head_sha, head)
+            self.assertIn(("node", "NODE-A", "added"), {
+                (change.kind, change.id, change.change) for change in diff.changes
+            })
+
+        repo = GitArchitectureRepo(self)
+        repo.write_text("README.md", "before architecture\n")
+        absent = repo.commit("absent")
+        repo.model(_system(), _rules())
+        adopted = repo.commit("adopt")
+        with self.assertRaisesRegex(FIT.ArchitectureError, "adoption|missing"):
+            FIT.diff_architecture(repo.root, base_sha=absent, head_sha=adopted)
+
+    def test_exact_and_worktree_diffs_fail_when_adoption_marker_is_removed(self) -> None:
+        script = ROOT / "scripts/grok_architecture.py"
+
+        def invoke(repo: GitArchitectureRepo, *args: str):
+            return subprocess.run(
+                [sys.executable, str(script), "--root", str(repo.root), *args],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        repo, base = self._repo()
+        (repo.root / "architecture/adoption.json").unlink()
+        removed = repo.commit("remove adoption marker")
+        with self.assertRaisesRegex(FIT.ArchitectureError, "adoption marker"):
+            FIT.diff_architecture(repo.root, base_sha=base, head_sha=removed)
+        for command in ("diff", "fitness"):
+            result = invoke(repo, command, "--base", base, "--head", removed, "--json")
+            self.assertNotEqual(result.returncode, 0, (command, result.stdout, result.stderr))
+            self.assertIn("adoption marker", result.stdout + result.stderr)
+
+        repo.git("reset", "--hard", base)
+        (repo.root / "architecture/adoption.json").unlink()
+        with self.assertRaisesRegex(FIT.ArchitectureError, "adoption marker"):
+            FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        for command in ("diff", "fitness"):
+            result = invoke(repo, command, "--base", base, "--worktree", "--json")
+            self.assertNotEqual(result.returncode, 0, (command, result.stdout, result.stderr))
+            self.assertIn("adoption marker", result.stdout + result.stderr)
+
+    def test_adoption_marker_state_is_bound_into_exact_diff_evidence(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        head = repo.commit("head")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        self.assertEqual(diff.base_adoption_state, "adopted")
+        self.assertEqual(diff.head_adoption_state, "adopted")
+        self.assertRegex(diff.base_adoption_digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(diff.base_adoption_digest, diff.head_adoption_digest)
+        evidence = FIT.architecture_evidence(
+            repo.root, base_sha=base, head_sha=head, pre_risk="green"
+        )
+        self.assertEqual(evidence["base_adoption_state"], "adopted")
+        self.assertEqual(evidence["head_adoption_state"], "adopted")
+        self.assertEqual(evidence["base_adoption_digest"], diff.base_adoption_digest)
+        self.assertEqual(evidence["head_adoption_digest"], diff.head_adoption_digest)
+
+    def test_invalid_adoption_marker_fails_exact_and_worktree_state(self) -> None:
+        repo, base = self._repo()
+        repo.write_text(
+            "architecture/adoption.json",
+            '{"architecture_id":"ARCH-TEST","schema_version":1,"state":"adopted"}\n',
+        )
+        invalid = repo.commit("noncanonical marker")
+        with self.assertRaisesRegex(FIT.ArchitectureError, "canonical"):
+            FIT.diff_architecture(repo.root, base_sha=base, head_sha=invalid)
+        repo.git("reset", "--hard", base)
+        repo.write_text("architecture/adoption.json", "{}\n")
+        with self.assertRaisesRegex(FIT.ArchitectureError, "marker fields"):
+            FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+
+    def test_merge_and_shallow_exact_marker_deletions_fail_closed(self) -> None:
+        repo, adopted = self._repo()
+        repo.git("checkout", "-qb", "side")
+        repo.write_text("side.txt", "side\n")
+        repo.commit("side")
+        repo.git("checkout", "-q", "main")
+        (repo.root / "architecture/adoption.json").unlink()
+        repo.commit("remove marker")
+        repo.git("merge", "--no-edit", "side")
+        merge_head = repo.git("rev-parse", "HEAD")
+        with self.assertRaisesRegex(FIT.ArchitectureError, "adoption marker"):
+            FIT.diff_architecture(repo.root, base_sha=adopted, head_sha=merge_head)
+
+        with tempfile.TemporaryDirectory() as directory:
+            clone = Path(directory) / "shallow"
+            subprocess.run(
+                ["git", "clone", "-q", "--depth=1", f"file://{repo.root}", str(clone)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "fetch", "-q", "--depth=1", "origin", f"{adopted}:refs/architecture/adopted"],
+                cwd=clone,
+                check=True,
+            )
+            with self.assertRaisesRegex(FIT.ArchitectureError, "adoption marker"):
+                FIT.diff_architecture(clone, base_sha=adopted, head_sha=merge_head)
+
+    def test_exact_commits_are_required_and_route_base_is_never_inferred(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        head = repo.commit("head")
+        for label, bad_base, bad_head in (
+            ("symbolic base", "HEAD~1", head),
+            ("abbreviated base", base[:12], head),
+            ("symbolic head", base, "HEAD"),
+            ("missing", "0" * 40, head),
+        ):
+            with self.subTest(label=label), self.assertRaises(FIT.ArchitectureError):
+                FIT.diff_architecture(repo.root, base_sha=bad_base, head_sha=bad_head)
+
+    def test_exact_git_objects_ignore_replacement_refs(self) -> None:
+        system = _system()
+        repo, base = self._repo(system=system)
+        original = copy.deepcopy(system)
+        original["nodes"][0]["owner"] = "original-owner"
+        repo.model(original, _rules())
+        head = repo.commit("original head")
+
+        replacement = copy.deepcopy(original)
+        replacement["nodes"][0]["owner"] = "replacement-owner"
+        repo.model(replacement, _rules())
+        repo.write_text("src/evil.py", "VALUE = 'replacement'\n")
+        repo.git("add", "-A")
+        tree = repo.git("write-tree")
+        replacement_commit = subprocess.check_output(
+            ["git", "commit-tree", tree, "-p", base],
+            cwd=repo.root,
+            input="replacement\n",
+            text=True,
+            encoding="utf-8",
+        ).strip()
+        repo.git("replace", head, replacement_commit)
+
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        analyzed = {node["id"]: node for node in diff._head_state.snapshot.system["nodes"]}
+        self.assertEqual(diff.head_sha, head)
+        self.assertEqual(analyzed["NODE-A"]["owner"], "original-owner")
+        self.assertNotIn("src/evil.py", diff.changed_paths)
+
+    def test_git_changed_paths_are_nul_safe_and_deterministic(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("odd\nname.py", "VALUE = 1\n")
+        repo.write_text("tab\tname.py", "VALUE = 2\n")
+        head = repo.commit("odd paths")
+        first = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        second = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        self.assertEqual(first.changed_paths, ("odd\nname.py", "tab\tname.py"))
+        self.assertEqual(first.digest, second.digest)
+
+    def test_worktree_diff_binds_untracked_content_and_line_counts(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("odd\nworktree.py", "VALUE = 1\n")
+        first = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        artifact = next(item for item in first.artifacts if item.path == "odd\nworktree.py")
+        self.assertEqual(first.head_kind, "worktree")
+        self.assertIsNone(first.head_sha)
+        self.assertEqual(artifact.status, "added")
+        self.assertEqual(artifact.added_lines, 1)
+        repo.write_text("odd\nworktree.py", "VALUE = 2\nOTHER = 3\n")
+        second = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        self.assertNotEqual(first.repository_inventory_digest, second.repository_inventory_digest)
+
+    def test_semantic_diff_records_are_sorted_typed_and_digest_bound(self) -> None:
+        system = _system()
+        repo, base = self._repo(system=system)
+        changed = copy.deepcopy(system)
+        changed["nodes"][0]["owner"] = "platform"
+        changed["nodes"][0]["runtime"]["lifecycle"] = "long_running"
+        changed["edges"].append(
+            {
+                **copy.deepcopy(changed["edges"][0]),
+                "id": "EDGE-B-A",
+                "from": "NODE-B",
+                "to": "NODE-A",
+            }
+        )
+        repo.model(changed, _rules())
+        head = repo.commit("semantic changes")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        self.assertEqual(
+            [(item.kind, item.id, item.change) for item in diff.changes],
+            [
+                ("edge", "EDGE-B-A", "added"),
+                ("node", "NODE-A", "changed"),
+                ("runtime", "NODE-A", "changed"),
+            ],
+        )
+        self.assertRegex(diff.digest, r"^[0-9a-f]{64}$")
+
+    def test_semantic_diff_covers_trust_signal_top_level_and_contract_metadata(self) -> None:
+        system = _system()
+        system["contracts"] = [{
+            "id": "CONTRACT-TEST",
+            "kind": "json_schema",
+            "path": "engineering/contracts/test.json",
+            "version": "1",
+            "role": "consumer",
+            "compatibility": "consumer_accepts_old",
+        }]
+        system["nodes"][0]["public_contracts"] = ["CONTRACT-TEST"]
+        rules = _rules()
+        rules["contract_policies"] = [{
+            "id": "FIT-CONTRACT",
+            "contract_kinds": ["json_schema"],
+            "compatibility": "consumer_accepts_old",
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/test.json", _json_schema({"id": {"type": "string"}}))
+        base = repo.commit("semantic base")
+
+        changed = copy.deepcopy(system)
+        changed["architecture_id"] = "ARCH-TEST-V2"
+        changed["trust_domains"][0]["owner"] = "security"
+        changed["signals"][0]["description"] = "changed observable meaning"
+        changed["contracts"][0].update(
+            version="2", role="bidirectional", compatibility="exact"
+        )
+        changed_rules = copy.deepcopy(rules)
+        changed_rules["architecture_id"] = "ARCH-TEST-V2"
+        repo.model(changed, changed_rules)
+        head = repo.commit("all authority metadata")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        changes = {(item.kind, item.id, item.change) for item in diff.changes}
+        self.assertTrue(
+            {
+                ("contract", "CONTRACT-TEST", "changed"),
+                ("signal", "SIG-EDGE-FAILURE", "changed"),
+                ("trust_domain", "TD-LOCAL", "changed"),
+                ("system", "ARCHITECTURE", "changed"),
+                ("rules", "ARCHITECTURE", "changed"),
+            }
+            <= changes
+        )
+        report = self._evaluate(repo, base, head)
+        contract_result = self._results(report)["contract_compatibility"]
+        self.assertNotEqual(contract_result.status, "not_applicable")
+        self.assertEqual(report.exemption_state, "revoked")
+        self.assertIn("architecture", report.required_scopes)
+
+    def test_all_mandatory_categories_emit_typed_applicability(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("README.md", "head\n")
+        head = repo.commit("head")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        report = FIT.evaluate_fitness(
+            repo.root,
+            diff._head_state.snapshot,
+            diff,
+            diff.changed_paths,
+            pre_risk="yellow",
+        )
+        expected = {
+            "background_job",
+            "change_separation",
+            "code_budget",
+            "contract_compatibility",
+            "forbidden_edge",
+            "governance_promotion",
+            "migration_safety",
+            "module_boundary",
+            "network_client",
+            "production_import",
+            "secret_flow",
+            "tenant_authorization",
+            "workspace_trust",
+        }
+        self.assertEqual({item.category for item in report.results}, expected)
+        for result in report.results:
+            self.assertIn(result.status, {"pass", "fail", "not_applicable", "unsupported"})
+            self.assertTrue(result.applicability.predicate)
+            self.assertRegex(result.applicability.inventory_digest, r"^[0-9a-f]{64}$")
+            if result.status == "not_applicable":
+                self.assertTrue(result.applicability.reason_code)
+                self.assertIsInstance(result.applicability.scanned_scope, tuple)
+        governance = self._results(report)["governance_promotion"]
+        self.assertEqual(governance.status, "not_applicable")
+        self.assertEqual(governance.applicability.reason_code, "governance_paths_unchanged")
+
+    def test_model_rule_categories_fail_on_real_semantic_violations(self) -> None:
+        cases = []
+
+        rules = _rules()
+        rules["forbidden_edges"] = [{
+            "id": "FIT-FORBID",
+            "from_trust_domains": ["TD-LOCAL"],
+            "to_trust_domains": ["TD-LOCAL"],
+            "edge_types": ["dependency"],
+            "severity": "error",
+        }]
+        cases.append((
+            "forbidden_edge",
+            _system(),
+            rules,
+            lambda system: system["nodes"][0].update(owner="platform"),
+        ))
+
+        tenant_rules = _rules()
+        tenant_rules["tenant_authorization_policies"] = [{
+            "id": "FIT-AUTH",
+            "data_classifications": ["DATA-INTERNAL"],
+            "require_tenant_filter": False,
+            "require_authorization": True,
+            "severity": "error",
+        }]
+        tenant_system = _system()
+        tenant_system["data_classifications"][0]["tenant_scoped"] = True
+        cases.append((
+            "tenant_authorization",
+            tenant_system,
+            tenant_rules,
+            lambda system: system["edges"][0].update(authentication="none"),
+        ))
+
+        background_system = _system()
+        background_system["nodes"][0]["type"] = "worker"
+        background_system["edges"][0]["sync_or_async"] = "asynchronous"
+        background_rules = _rules()
+        background_rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases.append((
+            "background_job",
+            background_system,
+            background_rules,
+            lambda system: system["edges"][0]["failure_behavior"].update(
+                max_retries=4,
+                idempotency="not_required",
+                correlation_id="not_required",
+                terminal_action="reject",
+            ),
+        ))
+
+        secret_system = _system()
+        secret_system["secret_classes"] = [
+            {"id": "SECRET-TEST", "classification": "trust_material"}
+        ]
+        secret_rules = _rules()
+        secret_rules["secret_flow_policies"] = [{
+            "id": "FIT-SECRETS",
+            "secret_classes": ["SECRET-TEST"],
+            "allowed_trust_domains": ["TD-OTHER"],
+            "severity": "error",
+        }]
+        secret_system["trust_domains"].append(
+            {"id": "TD-OTHER", "kind": "trust_ci_control", "owner": "security"}
+        )
+        cases.append((
+            "secret_flow",
+            secret_system,
+            secret_rules,
+            lambda system: system["nodes"][0]["secrets"].append("SECRET-TEST"),
+        ))
+
+        workspace_system = copy.deepcopy(secret_system)
+        workspace_system["nodes"][1]["type"] = "runner"
+        workspace_rules = _rules()
+        workspace_rules["workspace_trust_policies"] = [{
+            "id": "FIT-WORKSPACE",
+            "node_types": ["runner"],
+            "forbidden_secret_classes": ["SECRET-TEST"],
+            "severity": "error",
+        }]
+        cases.append((
+            "workspace_trust",
+            workspace_system,
+            workspace_rules,
+            lambda system: system["nodes"][1]["secrets"].append("SECRET-TEST"),
+        ))
+
+        for category, system, rules, mutate in cases:
+            with self.subTest(category=category):
+                repo, base = self._repo(system=system, rules=rules)
+                changed = copy.deepcopy(system)
+                mutate(changed)
+                repo.model(changed, rules)
+                head = repo.commit(category)
+                result = self._results(self._evaluate(repo, base, head))[category]
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(result.findings)
+
+    def test_tenant_data_governs_every_edge_and_cannot_be_hidden_by_rules(self) -> None:
+        cases = (
+            ("deployment without auth", "deployment", "none", False, "fail"),
+            ("auth and filter uncertainty", "deployment", "none", True, "unsupported"),
+            ("missing policy", "deployment", "local_os", None, "unsupported"),
+            ("secret flow without filter evidence", "secret_flow", "local_os", True, "unsupported"),
+            ("authenticated governed flow", "deployment", "local_os", False, "pass"),
+        )
+        for label, edge_type, authentication, tenant_filter, expected in cases:
+            with self.subTest(label=label):
+                system = _system()
+                rules = _rules()
+                repo, base = self._repo(system=system, rules=rules)
+                system["data_classifications"][0].update(
+                    classification="restricted",
+                    tenant_scoped=True,
+                )
+                system["edges"][0].update(
+                    type=edge_type,
+                    authentication=authentication,
+                )
+                if tenant_filter is not None:
+                    rules["tenant_authorization_policies"] = [{
+                        "id": "FIT-TENANT",
+                        "data_classifications": ["DATA-INTERNAL"],
+                        "require_tenant_filter": tenant_filter,
+                        "require_authorization": True,
+                        "severity": "error",
+                    }]
+                repo.model(system, rules)
+                head = repo.commit(label)
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["tenant_authorization"]
+                self.assertEqual(result.status, expected)
+                self.assertIn("EDGE-A-B", result.applicability.scanned_scope)
+                self.assertEqual(report.status, "pass" if expected == "pass" else "fail")
+                if label == "auth and filter uncertainty":
+                    self.assertIn("unauthenticated tenant edge", " ".join(result.findings))
+                    self.assertIn("tenant-filter edge field", " ".join(result.findings))
+
+        system = _system()
+        rules = _rules()
+        repo, base = self._repo(system=system, rules=rules)
+        system["nodes"][0]["owner"] = "platform"
+        repo.model(system, rules)
+        head = repo.commit("ordinary architecture edit")
+        result = self._results(self._evaluate(repo, base, head))["tenant_authorization"]
+        self.assertEqual(result.status, "not_applicable")
+        self.assertEqual(result.applicability.reason_code, "no_tenant_scoped_data")
+
+    def test_source_analyzers_reject_boundaries_network_and_production_imports(self) -> None:
+        cases = (
+            (
+                "module_boundary",
+                {
+                    "path_boundaries": [{
+                        "id": "FIT-MODULE",
+                        "source_prefixes": ["src"],
+                        "forbidden_dependency_prefixes": ["trust-ci"],
+                        "severity": "error",
+                    }]
+                },
+                "import adaptive_trust_ci.policy\n",
+            ),
+            (
+                "network_client",
+                {
+                    "network_policies": [{
+                        "id": "FIT-NETWORK",
+                        "node_types": ["service"],
+                        "allowed_protocols": ["https"],
+                        "require_declared_edge": True,
+                        "severity": "error",
+                    }]
+                },
+                "import requests\nrequests.get('https://example.test')\n",
+            ),
+            ("production_import", {}, "from tests import helpers\n"),
+        )
+        for category, rule_update, source in cases:
+            with self.subTest(category=category):
+                system = _system()
+                system["nodes"][0]["type"] = "service"
+                system["nodes"][0]["repository_paths"] = ["src"]
+                rules = _rules()
+                rules.update(rule_update)
+                repo, base = self._repo(system=system, rules=rules)
+                repo.write_text("src/app.py", source)
+                head = repo.commit(category)
+                result = self._results(self._evaluate(repo, base, head))[category]
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(result.findings)
+
+    def test_boundary_exact_module_exception_never_permits_siblings_or_children(self) -> None:
+        for allowed in ([], ["urllib.parse"]):
+            with self.subTest(allowed=allowed):
+                rules = _rules()
+                rules["path_boundaries"] = [{
+                    "id": "FIT-MODULE", "source_prefixes": ["src"],
+                    "forbidden_dependency_prefixes": ["urllib"], "severity": "error",
+                    **({"allowed_dependency_modules": allowed} if allowed else {}),
+                }]
+                repo, base = self._repo(rules=rules)
+                sources = {
+                    "exact": "import urllib.parse as parser\n",
+                    "symbol": "from urllib.parse import urlsplit\n",
+                    "parent": "import urllib\n",
+                    "sibling": "import urllib.request as parse\n",
+                    "from_sibling": "from urllib import request as parse\n",
+                    "mixed": "from urllib import parse, request\n",
+                    "star": "from urllib import *\n",
+                    "child": "import urllib.parse.child\n",
+                    "nested": "def bad():\n    import urllib.request\n",
+                }
+                for name, source in sources.items():
+                    repo.write_text(f"src/{name}.py", source)
+                head = repo.commit("exact module boundaries")
+                result = self._results(self._evaluate(repo, base, head))["module_boundary"]
+                self.assertEqual(result.status, "fail")
+                for name in sources:
+                    with self.subTest(source=name):
+                        found = any(f"src/{name}.py imports" in item for item in result.findings)
+                        self.assertEqual(found, not (allowed and name in {"exact", "symbol"}))
+
+    def test_boundary_qualified_relative_and_module_none_imports_are_checked(self) -> None:
+        rules = _rules()
+        rules["path_boundaries"] = [{
+            "id": "FIT-MODULE", "source_prefixes": ["factory/src"],
+            "forbidden_dependency_prefixes": ["adaptive_factory.store", "adaptive_factory.service",
+                                               "adaptive_factory.landing_live_executors", "trust-ci"],
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/src/adaptive_factory/__init__.py", "from . import store\n")
+        # A package marker above the real src root must not change runtime
+        # identity or conceal adaptive_factory.store from the boundary rule.
+        repo.write_text("factory/__init__.py", "")
+        sources = {
+            "absolute": "from adaptive_factory.store import X\n",
+            "selected": "from adaptive_factory import service as s\n",
+            "relative": "from .store import X\n",
+            "module_none": "from . import service as s\n",
+            "transport": "from . import landing_live_executors\n",
+            "trust": "from adaptive_trust_ci import policy\n",
+            "resources/worker": "from ..store import X\n",
+            "safe": "from .landing_contracts import X\n",
+        }
+        for name, source in sources.items():
+            repo.write_text(f"factory/src/adaptive_factory/{name}.py", source)
+        head = repo.commit("qualified boundaries")
+        result = self._results(self._evaluate(repo, base, head))["module_boundary"]
+        self.assertEqual(result.status, "fail")
+        for name in (*sources, "__init__"):
+            with self.subTest(source=name):
+                found = any(f"adaptive_factory/{name}.py imports" in item for item in result.findings)
+                self.assertEqual(found, name != "safe")
+
+    def test_boundary_src_namespace_packages_keep_runtime_module_identity(self) -> None:
+        rules = _rules()
+        rules["path_boundaries"] = [{
+            "id": "FIT-MODULE", "source_prefixes": ["delivery/src"], "severity": "error",
+            "forbidden_dependency_prefixes": ["adaptive_delivery.landing_publication"],
+        }]
+        repo, base = self._repo(rules=rules)
+        # The real delivery package is a namespace package: no __init__.py.
+        repo.write_text("delivery/__init__.py", "")
+        sources = {
+            "worker": "from . import landing_publication\n",
+            "resources/worker": "from ..landing_publication import X\n",
+            "safe": "from .landing_publication_contracts import X\n",
+        }
+        for name, source in sources.items():
+            repo.write_text(f"delivery/src/adaptive_delivery/{name}.py", source)
+        result = self._results(self._evaluate(repo, base, repo.commit("namespace import boundaries")))["module_boundary"]
+        self.assertEqual(result.status, "fail")
+        for name in sources:
+            with self.subTest(path=name):
+                self.assertEqual(any(f"adaptive_delivery/{name}.py imports" in item for item in result.findings),
+                                 name != "safe")
+
+    def test_boundary_relative_escape_or_missing_package_context_fails_closed(self) -> None:
+        for source_path, source, package in (
+            ("factory/src/adaptive_factory/worker.py", "from .. import store\n", True),
+            ("factory/src/adaptive_factory/resources/worker.py", "from ... import store\n", True),
+            ("src/worker.py", "from . import store\n", False),
+        ):
+            with self.subTest(path=source_path):
+                rules = _rules()
+                rules["path_boundaries"] = [{
+                    "id": "FIT-MODULE", "source_prefixes": ["factory/src", "src"],
+                    "forbidden_dependency_prefixes": ["adaptive_factory.store"], "severity": "error",
+                }]
+                repo, base = self._repo(rules=rules)
+                if package:
+                    repo.write_text("factory/src/adaptive_factory/__init__.py", "")
+                repo.write_text(source_path, source)
+                report = self._evaluate(repo, base, repo.commit("relative escape"))
+                self.assertEqual(self._results(report)["module_boundary"].status, "unsupported")
+                self.assertEqual(report.status, "fail")
+
+    def test_boundary_exception_schema_accepts_only_exact_python_modules(self) -> None:
+        for value in (["urllib.*"], ["urllib/parse"], [".urllib.parse"], ["urllib..parse"],
+                      ["urllib.parse", "urllib.parse"], ["urllib.parse."]):
+            with self.subTest(value=value):
+                rules = _rules()
+                rules["path_boundaries"] = [{
+                    "id": "FIT-MODULE", "source_prefixes": ["src"], "severity": "error",
+                    "forbidden_dependency_prefixes": ["urllib"], "allowed_dependency_modules": value,
+                }]
+                repo, _base = self._repo(rules=rules)
+                with self.assertRaises(ARCHITECTURE.ArchitectureError):
+                    ARCHITECTURE.load_architecture(repo.root)
+
+    def test_nested_test_sources_are_not_classified_as_production_importers(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["pilot"]
+        system["nodes"][1]["repository_paths"] = ["pilot/tests"]
+        repo, base = self._repo(system=system)
+        repo.write_text("pilot/__init__.py", "")
+        repo.write_text(
+            "pilot/tests/test_contracts.py",
+            "from adaptive_grok.spec import validate_schema\n",
+        )
+        repo.write_text(
+            "pilot/runtime.py",
+            "from adaptive_grok.spec import validate_schema\n",
+        )
+        head = repo.commit("nested pilot tests")
+
+        result = self._results(self._evaluate(repo, base, head))["production_import"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            ("pilot/runtime.py imports governance/test module adaptive_grok.spec",),
+        )
+        self.assertNotIn("pilot/tests/test_contracts.py", result.applicability.scanned_scope)
+
+    def test_source_only_queue_signals_fail_background_fitness(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            ("celery alias", "", "import celery as c\napp = c.Celery('jobs')\n"),
+            ("rq from import", "", "from rq import Queue as WorkQueue\njobs = WorkQueue()\n"),
+            ("stdlib queue", "", "from queue import Queue\njobs = Queue()\n"),
+            ("existing import new call", "import celery as c\n", "import celery as c\napp = c.Celery('jobs')\n"),
+            (
+                "rq instance enqueue",
+                "from rq import Queue\njobs = Queue()\n",
+                "from rq import Queue\njobs = Queue()\njobs.enqueue(task)\n",
+            ),
+            (
+                "rq multi-hop enqueue",
+                "from rq import Queue\njobs = Queue()\nq1 = jobs\nq2 = q1\n",
+                "from rq import Queue\njobs = Queue()\nq1 = jobs\nq2 = q1\nq2.enqueue(task)\n",
+            ),
+            (
+                "rq getattr multi-hop enqueue",
+                "from rq import Queue\njobs = Queue()\nop = getattr(jobs, 'enqueue')\nalias = op\n",
+                "from rq import Queue\njobs = Queue()\nop = getattr(jobs, 'enqueue')\nalias = op\nalias(task)\n",
+            ),
+            (
+                "celery app decorator",
+                "import celery\napp = celery.Celery('jobs')\n",
+                "import celery\napp = celery.Celery('jobs')\n@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "aliased factory assignment",
+                "import celery as c\nfactory = c.Celery\napp = factory('jobs')\n",
+                "import celery as c\nfactory = c.Celery\napp = factory('jobs')\n@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "getattr factory",
+                "import celery\napp = getattr(celery, 'Celery')('jobs')\n",
+                "import celery\napp = getattr(celery, 'Celery')('jobs')\n@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "getattr project adapter",
+                "from project.jobs import app\ntask = getattr(app, 'task')\n",
+                "from project.jobs import app\ntask = getattr(app, 'task')\n@task\ndef job():\n    return None\n",
+            ),
+            (
+                "project adapter decorator",
+                "from project.jobs import app\n",
+                "from project.jobs import app\n@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "multi-hop project adapter decorator",
+                "from project.jobs import app\nd1 = app.task\nd2 = d1\n",
+                "from project.jobs import app\nd1 = app.task\nd2 = d1\n@d2\ndef job():\n    return None\n",
+            ),
+        )
+        for label, before, after in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                if "project adapter" in label:
+                    repo.write_text(
+                        "project/jobs.py",
+                        "import celery\napp = celery.Celery('jobs')\n",
+                    )
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", after)
+                head = repo.commit("queue source")
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", "VALUE = 1\n")
+        head = repo.commit("ordinary source")
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "not_applicable",
+        )
+        self.assertNotIn("new_queue", report.triggers)
+
+        no_policy = _rules()
+        repo = GitArchitectureRepo(self)
+        repo.model(system, no_policy)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", "from rq import Queue\njobs = Queue()\n")
+        head = repo.commit("unconfigured queue")
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "unsupported",
+        )
+        self.assertEqual(report.status, "fail")
+
+    def test_owner_resolution_rejects_equal_specificity_ties(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "service"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        system["nodes"][1]["repository_paths"] = ["other"]
+        repo, _ = self._repo(system=system)
+        snapshot = FIT.load_architecture(repo.root)
+        snapshot.system["nodes"][1]["repository_paths"] = ["src"]
+        with self.assertRaisesRegex(FIT.ArchitectureError, "ambiguous repository owner"):
+            FIT._owner_for_path(snapshot, "src/client.py")
+
+    def test_network_fitness_uses_the_unique_most_specific_owner(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["src"]
+        system["nodes"][1]["type"] = "service"
+        system["nodes"][1]["repository_paths"] = ["src/network"]
+        rules = _rules()
+        rules["network_policies"] = [{
+            "id": "FIT-NETWORK",
+            "node_types": ["service"],
+            "allowed_protocols": ["https"],
+            "require_declared_edge": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        repo.write_text("src/network/client.py", "import requests\nrequests.get('https://example.test')\n")
+        head = repo.commit("network client")
+        result = self._results(self._evaluate(repo, base, head))["network_client"]
+        self.assertEqual(result.status, "fail")
+        self.assertTrue(any("NODE-B" in finding for finding in result.findings))
+
+    def test_queue_provenance_covers_wildcards_and_structured_assignments(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "celery wildcard",
+                "from celery import *\n",
+                "@shared_task\ndef job():\n    return None\n",
+            ),
+            (
+                "tuple unpack",
+                "import celery\napps = (celery.Celery('a'), celery.Celery('b'))\n"
+                "app, backup = apps\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "list unpack rq",
+                "from rq import Queue\nqueues = [Queue(), Queue()]\n"
+                "jobs, backup = queues\n",
+                "jobs.enqueue(task)\n",
+            ),
+            (
+                "subscript derived",
+                "import celery\napps = [celery.Celery('a')]\napp = apps[0]\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "annotated derived",
+                "import celery\napp: object = celery.Celery('a')\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "chained derived",
+                "import celery\napp = backup = celery.Celery('a')\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "starred unpack",
+                "import celery\napps = [celery.Celery('a')]\napp, *rest = apps\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+        )
+        for label, before, addition in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="green")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        before = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n"
+            "pipelines = [Pipeline()]\n"
+            "pipeline = pipelines[0]\n"
+        )
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("ordinary base")
+        repo.write_text("src/jobs.py", before + "@pipeline.task\ndef stage():\n    return None\n")
+        head = repo.commit("ordinary decorator")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "not_applicable",
+        )
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_queue_provenance_is_operation_and_element_specific(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        positives = (
+            (
+                "wildcard celery decorator alias",
+                "from celery import *\ndecorator = shared_task\n",
+                "@decorator\ndef job():\n    return None\n",
+            ),
+            (
+                "wildcard celery factory alias",
+                "from celery import *\nfactory = Celery\napp = factory('jobs')\n",
+                "@app.task\ndef job():\n    return None\n",
+            ),
+            (
+                "wildcard rq factory alias",
+                "from rq import *\nfactory = Queue\njobs = factory()\n",
+                "jobs.enqueue(task)\n",
+            ),
+            (
+                "ambiguous mixed subscript",
+                "import celery\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\n"
+                "values = [celery.Celery('jobs'), Pipeline()]\n"
+                "receiver = values[index]\n",
+                "@receiver.task\ndef stage():\n    return None\n",
+            ),
+        )
+        for label, before, addition in positives:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        negatives = (
+            (
+                "wildcard unrelated receiver",
+                "from celery import *\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\n"
+                "pipeline = Pipeline()\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "tuple sibling",
+                "import celery\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\n"
+                "app, pipeline = (celery.Celery('jobs'), Pipeline())\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "list subscript sibling",
+                "import celery\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\n"
+                "values = [celery.Celery('jobs'), Pipeline()]\n"
+                "pipeline = values[1]\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "dict key sibling",
+                "import celery\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\n"
+                "values = {'queue': celery.Celery('jobs'), 'pipeline': Pipeline()}\n"
+                "pipeline = values['pipeline']\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+        )
+        for label, before, addition in negatives:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("ordinary operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_control_flow_and_python_equal_keys_fail_closed(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n\n"
+        )
+        cases = (
+            (
+                "queue branch first",
+                pipeline
+                + "import celery\n"
+                + "if enabled:\n"
+                + "    receiver = celery.Celery('jobs')\n"
+                + "else:\n"
+                + "    receiver = Pipeline()\n",
+            ),
+            (
+                "queue branch second",
+                pipeline
+                + "import celery\n"
+                + "if enabled:\n"
+                + "    receiver = Pipeline()\n"
+                + "else:\n"
+                + "    receiver = celery.Celery('jobs')\n",
+            ),
+            (
+                "bool key then integer key",
+                pipeline
+                + "import celery\n"
+                + "values = {True: Pipeline(), 1: celery.Celery('jobs')}\n"
+                + "receiver = values[True]\n",
+            ),
+            (
+                "integer key then bool key",
+                pipeline
+                + "import celery\n"
+                + "values = {1: Pipeline(), True: celery.Celery('jobs')}\n"
+                + "receiver = values[1]\n",
+            ),
+        )
+        addition = "@receiver.task\ndef stage():\n    return None\n"
+        for label, before in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_container_mutations_and_signed_selections(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n"
+            "    def enqueue(self, function):\n"
+            "        return function\n\n"
+        )
+        operations = (
+            ("append", "values = []\nvalues.append({queue})\nreceiver = values[0]\n"),
+            (
+                "extend",
+                "values = []\nvalues.extend([Pipeline(), {queue}])\n"
+                "receiver = values[1]\n",
+            ),
+            (
+                "subscript assignment",
+                "values = [Pipeline()]\nvalues[0] = {queue}\nreceiver = values[0]\n",
+            ),
+            (
+                "list concatenation",
+                "values = [Pipeline()] + [{queue}]\nreceiver = values[1]\n",
+            ),
+            (
+                "tuple concatenation",
+                "values = (Pipeline(),) + ({queue},)\nreceiver = values[1]\n",
+            ),
+        )
+        frameworks = (
+            (
+                "celery",
+                "import celery\n",
+                "celery.Celery('jobs')",
+                "@receiver.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "rq",
+                "from rq import Queue\n",
+                "Queue()",
+                "receiver.enqueue(task)\n",
+            ),
+        )
+        for framework, imported, queue_value, addition in frameworks:
+            for operation, source in operations:
+                with self.subTest(framework=framework, operation=operation):
+                    before = pipeline + imported + source.format(queue=queue_value)
+                    repo = GitArchitectureRepo(self)
+                    repo.model(system, rules)
+                    repo.write_text("src/jobs.py", before)
+                    base = repo.commit("base")
+                    repo.write_text("src/jobs.py", before + addition)
+                    head = repo.commit("queue operation")
+                    report = self._evaluate(repo, base, head, pre_risk="yellow")
+                    result = self._results(report)["background_job"]
+                    self.assertEqual(result.status, "unsupported")
+                    self.assertEqual(report.status, "fail")
+                    self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                    self.assertIn("new_queue", report.triggers)
+                    self.assertGreaterEqual(
+                        FIT.RISK_ORDER[report.post_risk],
+                        FIT.RISK_ORDER[report.pre_risk],
+                    )
+
+        controls = (
+            (
+                "negative list index",
+                "from rq import Queue\nvalues = [Queue(), Pipeline()]\n"
+                "receiver = values[-1]\n",
+            ),
+            (
+                "negative tuple index",
+                "import celery\nvalues = (celery.Celery('jobs'), Pipeline())\n"
+                "receiver = values[-1]\n",
+            ),
+            (
+                "negative integer mapping key",
+                "from rq import Queue\nvalues = {-1: Pipeline(), 0: Queue()}\n"
+                "receiver = values[-1]\n",
+            ),
+        )
+        addition = "@receiver.task\ndef stage():\n    return None\n"
+        for label, source in controls:
+            with self.subTest(label=label):
+                before = pipeline + source
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("ordinary operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_operations_keep_operation_site_and_lexical_provenance(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n\n"
+        )
+        cases = (
+            (
+                "operation before overwrite",
+                pipeline
+                + "import celery\n"
+                + "receiver = celery.Celery('jobs')\n"
+                + "receiver = Pipeline()\n",
+                pipeline
+                + "import celery\n"
+                + "receiver = celery.Celery('jobs')\n"
+                + "receiver.delay(task)\n"
+                + "receiver = Pipeline()\n",
+            ),
+            (
+                "function local decorator",
+                pipeline
+                + "import celery\n"
+                + "def configure():\n"
+                + "    receiver = celery.Celery('jobs')\n"
+                + "    def stage():\n"
+                + "        return None\n",
+                pipeline
+                + "import celery\n"
+                + "def configure():\n"
+                + "    receiver = celery.Celery('jobs')\n"
+                + "    @receiver.task\n"
+                + "    def stage():\n"
+                + "        return None\n",
+            ),
+            (
+                "method local decorator",
+                pipeline
+                + "import celery\n"
+                + "class Configurer:\n"
+                + "    def configure(self):\n"
+                + "        receiver = celery.Celery('jobs')\n"
+                + "        def stage():\n"
+                + "            return None\n",
+                pipeline
+                + "import celery\n"
+                + "class Configurer:\n"
+                + "    def configure(self):\n"
+                + "        receiver = celery.Celery('jobs')\n"
+                + "        @receiver.task\n"
+                + "        def stage():\n"
+                + "            return None\n",
+            ),
+        )
+        for label, before, after in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", after)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_alias_mutations_propagate_without_tainting_unrelated_aliases(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n"
+            "    def enqueue(self, function):\n"
+            "        return function\n\n"
+        )
+        frameworks = (
+            (
+                "celery",
+                "import celery\n",
+                "celery.Celery('jobs')",
+                "@receiver.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "rq",
+                "from rq import Queue\n",
+                "Queue()",
+                "receiver.enqueue(task)\n",
+            ),
+        )
+        mutations = (
+            (
+                "alias append",
+                "values = []\nalias = values\nalias.append({queue})\n"
+                "receiver = values[0]\n",
+            ),
+            (
+                "alias subscript store",
+                "values = [Pipeline()]\nalias = values\nalias[0] = {queue}\n"
+                "receiver = values[0]\n",
+            ),
+            (
+                "unsupported alias mutator",
+                "values = []\nalias = values\nalias.insert(0, {queue})\n"
+                "receiver = values[0]\n",
+            ),
+        )
+        for framework, imported, queue_value, addition in frameworks:
+            for mutation, source in mutations:
+                with self.subTest(framework=framework, mutation=mutation):
+                    before = pipeline + imported + source.format(queue=queue_value)
+                    repo = GitArchitectureRepo(self)
+                    repo.model(system, rules)
+                    repo.write_text("src/jobs.py", before)
+                    base = repo.commit("base")
+                    repo.write_text("src/jobs.py", before + addition)
+                    head = repo.commit("queue operation")
+                    report = self._evaluate(repo, base, head, pre_risk="yellow")
+                    result = self._results(report)["background_job"]
+                    self.assertEqual(result.status, "unsupported")
+                    self.assertEqual(report.status, "fail")
+                    self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                    self.assertIn("new_queue", report.triggers)
+                    self.assertGreaterEqual(
+                        FIT.RISK_ORDER[report.post_risk],
+                        FIT.RISK_ORDER[report.pre_risk],
+                    )
+
+        before = (
+            pipeline
+            + "from rq import Queue\n"
+            + "queue_values = [Queue()]\n"
+            + "ordinary_values = [Pipeline()]\n"
+            + "alias = ordinary_values\n"
+            + "queue_values.insert(0, Queue())\n"
+            + "receiver = alias[0]\n"
+        )
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text(
+            "src/jobs.py",
+            before + "@receiver.task\ndef stage():\n    return None\n",
+        )
+        head = repo.commit("ordinary aliased operation")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        result = self._results(report)["background_job"]
+        self.assertEqual(result.status, "not_applicable")
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+        self.assertGreaterEqual(
+            FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+        )
+
+    def test_queue_free_names_join_bounded_module_flow(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def delay(self, task):\n"
+            "        return task\n\n"
+            "import celery\n"
+        )
+        cases = (
+            (
+                "function queue rebound after definition before call",
+                "receiver = Pipeline()\n"
+                "def configure():\n"
+                "    return None\n"
+                "receiver = celery.Celery('jobs')\n"
+                "configure()\n",
+                "receiver = Pipeline()\n"
+                "def configure():\n"
+                "    receiver.delay(task)\n"
+                "receiver = celery.Celery('jobs')\n"
+                "configure()\n",
+            ),
+            (
+                "function queue rebound before definition and ordinary after call",
+                "receiver = celery.Celery('jobs')\n"
+                "def configure():\n"
+                "    return None\n"
+                "configure()\n"
+                "receiver = Pipeline()\n",
+                "receiver = celery.Celery('jobs')\n"
+                "def configure():\n"
+                "    receiver.delay(task)\n"
+                "configure()\n"
+                "receiver = Pipeline()\n",
+            ),
+            (
+                "method queue rebound after definition before call",
+                "receiver = Pipeline()\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        return None\n"
+                "receiver = celery.Celery('jobs')\n"
+                "Configurer().configure()\n",
+                "receiver = Pipeline()\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        receiver.delay(task)\n"
+                "receiver = celery.Celery('jobs')\n"
+                "Configurer().configure()\n",
+            ),
+            (
+                "method queue rebound before definition and ordinary after call",
+                "receiver = celery.Celery('jobs')\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        return None\n"
+                "Configurer().configure()\n"
+                "receiver = Pipeline()\n",
+                "receiver = celery.Celery('jobs')\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        receiver.delay(task)\n"
+                "Configurer().configure()\n"
+                "receiver = Pipeline()\n",
+            ),
+        )
+        for label, before_body, after_body in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", pipeline + before_body)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", pipeline + after_body)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_nonlocal_names_resolve_nearest_enclosing_scope(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def delay(self, task):\n"
+            "        return task\n"
+            "    def enqueue(self, task):\n"
+            "        return task\n\n"
+        )
+        positives = (
+            (
+                "nested function enclosing binding before definition",
+                "import celery\n"
+                "receiver = Pipeline()\n"
+                "def outer():\n"
+                "    receiver = celery.Celery('jobs')\n"
+                "    def inner():\n"
+                "        nonlocal receiver\n"
+                "        {operation}"
+                "    inner()\n"
+                "outer()\n",
+                "receiver.delay(task)\n",
+            ),
+            (
+                "nested function enclosing binding after definition",
+                "import celery\n"
+                "receiver = Pipeline()\n"
+                "def outer():\n"
+                "    def inner():\n"
+                "        nonlocal receiver\n"
+                "        {operation}"
+                "    receiver = celery.Celery('jobs')\n"
+                "    inner()\n"
+                "outer()\n",
+                "receiver.delay(task)\n",
+            ),
+            (
+                "method closure enclosing binding before definition",
+                "from rq import Queue\n"
+                "receiver = Pipeline()\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        receiver = Queue()\n"
+                "        def inner():\n"
+                "            nonlocal receiver\n"
+                "            {operation}"
+                "        inner()\n"
+                "Configurer().configure()\n",
+                "receiver.enqueue(task)\n",
+            ),
+            (
+                "method closure enclosing binding after definition",
+                "from rq import Queue\n"
+                "receiver = Pipeline()\n"
+                "class Configurer:\n"
+                "    def configure(self):\n"
+                "        def inner():\n"
+                "            nonlocal receiver\n"
+                "            {operation}"
+                "        receiver = Queue()\n"
+                "        inner()\n"
+                "Configurer().configure()\n",
+                "receiver.enqueue(task)\n",
+            ),
+        )
+        for label, template, operation in positives:
+            with self.subTest(label=label):
+                before = pipeline + template.format(operation="return None\n")
+                after = pipeline + template.format(operation=operation)
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", after)
+                head = repo.commit("nested queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        controls = (
+            (
+                "nonlocal ordinary enclosing binding beats queue module",
+                "import celery\n"
+                "receiver = celery.Celery('jobs')\n"
+                "def outer():\n"
+                "    receiver = Pipeline()\n"
+                "    def inner():\n"
+                "        nonlocal receiver\n"
+                "        {operation}"
+                "    inner()\n"
+                "outer()\n",
+            ),
+            (
+                "explicit global ordinary module beats queue enclosing binding",
+                "import celery\n"
+                "receiver = Pipeline()\n"
+                "def outer():\n"
+                "    receiver = celery.Celery('jobs')\n"
+                "    def inner():\n"
+                "        global receiver\n"
+                "        {operation}"
+                "    inner()\n"
+                "outer()\n",
+            ),
+        )
+        for label, template in controls:
+            with self.subTest(label=label):
+                before = pipeline + template.format(operation="return None\n")
+                after = pipeline + template.format(operation="receiver.delay(task)\n")
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", after)
+                head = repo.commit("ordinary nested operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_inplace_add_mutates_only_mutable_alias_groups(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        pipeline = (
+            "class Pipeline:\n"
+            "    def task(self, function):\n"
+            "        return function\n"
+            "    def enqueue(self, function):\n"
+            "        return function\n\n"
+        )
+        frameworks = (
+            (
+                "celery",
+                "import celery\n",
+                "celery.Celery('jobs')",
+                "@receiver.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "rq",
+                "from rq import Queue\n",
+                "Queue()",
+                "receiver.enqueue(task)\n",
+            ),
+        )
+        for framework, imported, queue_value, addition in frameworks:
+            with self.subTest(framework=framework, mutable="list"):
+                before = (
+                    pipeline
+                    + imported
+                    + "values = []\n"
+                    + "alias = values\n"
+                    + f"alias += [{queue_value}]\n"
+                    + "receiver = values[0]\n"
+                )
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+            with self.subTest(framework=framework, mutable="tuple rebind"):
+                before = (
+                    pipeline
+                    + imported
+                    + "values = (Pipeline(),)\n"
+                    + "alias = values\n"
+                    + f"alias += ({queue_value},)\n"
+                    + "receiver = values[0]\n"
+                )
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("ordinary tuple operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        before = (
+            pipeline
+            + "from rq import Queue\n"
+            + "queue_values = [Queue()]\n"
+            + "ordinary_values = []\n"
+            + "alias = ordinary_values\n"
+            + "alias += [Pipeline()]\n"
+            + "receiver = ordinary_values[0]\n"
+        )
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text(
+            "src/jobs.py",
+            before + "@receiver.task\ndef stage():\n    return None\n",
+        )
+        head = repo.commit("unrelated alias operation")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "not_applicable",
+        )
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_queue_alias_work_is_bounded_before_branch_closure(self) -> None:
+        alias_chain = "\n".join(f"alias{index} = values" for index in range(40))
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "alias"):
+            FIT.analyze_queue_tree(
+                ast.parse("import celery\nvalues = []\n" + alias_chain + "\n"),
+                value_limit=32,
+            )
+
+        left_aliases = "\n".join(f"left{index} = left" for index in range(10))
+        right_aliases = "\n".join(f"right{index} = right" for index in range(10))
+        branch_aliases = "\n".join(
+            f"    bridge{index} = {'left' if index % 2 == 0 else 'right'}"
+            for index in range(10)
+        )
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "alias"):
+            FIT.analyze_queue_tree(
+                ast.parse(
+                    "import celery\nleft = []\nright = []\n"
+                    + left_aliases
+                    + "\n"
+                    + right_aliases
+                    + "\nif enabled:\n"
+                    + branch_aliases
+                    + "\nelse:\n"
+                    + branch_aliases.replace("left", "right")
+                    + "\n"
+                ),
+                value_limit=150,
+            )
+
+        ordinary = FIT.analyze_queue_tree(
+            ast.parse("values = []\n" + alias_chain + "\nform.submit()\n"),
+            value_limit=1,
+        )
+        self.assertEqual(ordinary.signals, ())
+        self.assertFalse(ordinary.uncertain)
+
+        deep_imports = "\n".join(
+            f"import project.services.module{index}" for index in range(8)
+        )
+        deep_adapters = {
+            f"project.services.module{index}.app" for index in range(8)
+        }
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "alias|value"):
+            FIT.analyze_queue_tree(
+                ast.parse(deep_imports + "\nproject.services.module0.app.delay(task)\n"),
+                deep_adapters,
+                value_limit=16,
+            )
+
+    def test_dotted_import_object_construction_charges_low_value_limit(self) -> None:
+        low_limit_module = ".".join(
+            ("project", *(f"layer{index}" for index in range(200)), "runtime")
+        )
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "value"):
+            FIT.analyze_queue_tree(
+                ast.parse(
+                    f"import {low_limit_module}\n"
+                    f"{low_limit_module}.app.delay(task)\n"
+                ),
+                {f"{low_limit_module}.app"},
+                value_limit=1,
+            )
+
+    def test_dotted_import_object_depth_is_bounded_before_merge(self) -> None:
+        accepted_module = ".".join(
+            (
+                "project",
+                *(f"layer{index}" for index in range(QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH - 1)),
+                "runtime",
+            )
+        )
+        accepted = FIT.analyze_queue_tree(
+            ast.parse(
+                f"import {accepted_module}\n"
+                f"{accepted_module}.app.delay(task)\n"
+            ),
+            {f"{accepted_module}.app"},
+        )
+        self.assertTrue(accepted.signals)
+
+        rejected_module = ".".join(
+            (
+                "project",
+                *(f"layer{index}" for index in range(QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH)),
+                "runtime",
+            )
+        )
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "depth"):
+            FIT.analyze_queue_tree(
+                ast.parse(f"import {rejected_module}\n"),
+                {f"{rejected_module}.app"},
+            )
+
+        hostile_prefix = ".".join(
+            ("project", *(f"layer{index}" for index in range(1100)))
+        )
+        with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "depth"):
+            FIT.analyze_queue_tree(
+                ast.parse(
+                    f"import {hostile_prefix}.runtime\n"
+                    f"import {hostile_prefix}.forms\n"
+                    f"{hostile_prefix}.runtime.app.delay(task)\n"
+                ),
+                {f"{hostile_prefix}.runtime.app"},
+            )
+
+    def test_normal_deep_dotted_imports_preserve_disjoint_siblings(self) -> None:
+        normal_prefix = ".".join(
+            ("project", *(f"layer{index}" for index in range(16)))
+        )
+        for imports in (
+            f"import {normal_prefix}.runtime\nimport {normal_prefix}.forms\n",
+            f"import {normal_prefix}.forms\nimport {normal_prefix}.runtime\n",
+        ):
+            with self.subTest(imports=imports):
+                queue = FIT.analyze_queue_tree(
+                    ast.parse(imports + f"{normal_prefix}.runtime.app.delay(task)\n"),
+                    {f"{normal_prefix}.runtime.app"},
+                )
+                ordinary = FIT.analyze_queue_tree(
+                    ast.parse(imports + f"{normal_prefix}.forms.form.delay(task)\n"),
+                    {f"{normal_prefix}.runtime.app"},
+                )
+                self.assertTrue(queue.signals)
+                self.assertEqual(ordinary.signals, ())
+
+    def test_unrelated_semantic_method_names_remain_background_not_applicable(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "form submit",
+                "class Form:\n    def submit(self):\n        return None\nform = Form()\n",
+                "form.submit()\n",
+            ),
+            (
+                "timer delay",
+                "class Timer:\n    def delay(self):\n        return None\ntimer = Timer()\n",
+                "timer.delay()\n",
+            ),
+            (
+                "pipeline task decorator",
+                "class Pipeline:\n    def task(self, function):\n        return function\npipeline = Pipeline()\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "unresolved project adapter",
+                "from project.jobs import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+        )
+        for label, before, addition in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/local.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/local.py", before + addition)
+                head = repo.commit("ordinary local semantics")
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertEqual(
+                    ARCHITECTURE.validate_repository_drift(
+                        repo.root, FIT.load_architecture(repo.root)
+                    ),
+                    (),
+                )
+
+    def test_mixed_queue_files_ignore_operations_without_queue_provenance(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "rq and form",
+                "from rq import Queue\njobs = Queue()\n"
+                "class Form:\n    def submit(self):\n        return None\nform = Form()\n",
+                "form.submit()\n",
+            ),
+            (
+                "celery and timer",
+                "import celery\napp = celery.Celery('jobs')\n"
+                "class Timer:\n    def delay(self):\n        return None\ntimer = Timer()\n",
+                "timer.delay()\n",
+            ),
+            (
+                "adapter and pipeline",
+                "from project.jobs import app\n"
+                "class Pipeline:\n    def task(self, fn):\n        return fn\npipeline = Pipeline()\n",
+                "@pipeline.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "rq and generic call",
+                "from rq import Queue\njobs = Queue()\n"
+                "def format_value():\n    return 'value'\n",
+                "format_value()\n",
+            ),
+        )
+        for label, before, addition in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("project/__init__.py", "")
+                if label.startswith("adapter"):
+                    repo.write_text(
+                        "project/jobs.py",
+                        "import celery\napp = celery.Celery('jobs')\n",
+                    )
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("ordinary operation")
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertEqual(
+                    ARCHITECTURE.validate_repository_drift(
+                        repo.root, FIT.load_architecture(repo.root)
+                    ),
+                    (),
+                )
+
+    def test_queue_adapter_cycle_at_depth_limit_does_not_enter_a_new_module(self) -> None:
+        self.assertEqual(FIT.MAX_QUEUE_ADAPTER_DEPTH, 8)
+        resolving = {f'adapters.m{index}' for index in range(FIT.MAX_QUEUE_ADAPTER_DEPTH)}
+        ninth = f'adapters.m{FIT.MAX_QUEUE_ADAPTER_DEPTH}'
+        cache = FIT._QueueResolutionCache(tuple(sorted(resolving | {ninth})), (), {})
+        cycle = FIT._local_queue_resolution(ROOT, None, 'adapters.m0', 'head', cache, set(resolving), set(resolving), ())
+        self.assertEqual(cycle.state, 'unsupported')
+        self.assertEqual(cycle.reason, 'cyclic_local_queue_adapter')
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'queue adapter depth limit') as raised:
+            FIT._local_queue_resolution(ROOT, None, ninth, 'head', cache, set(resolving), set(resolving), ())
+        self.assertEqual(raised.exception.code, 'limit')
+
+    def test_queue_adapter_resolution_bounds_fail_closed_only_for_possible_operations(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+
+        for label, modules in (("depth nine", 9),):
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                for index in range(modules):
+                    if index == modules - 1:
+                        value = "import celery\napp = celery.Celery('jobs')\n"
+                    else:
+                        value = f"from adapters.m{index + 1} import app\n"
+                    repo.write_text(f"adapters/m{index}.py", value)
+                before = "from adapters.m0 import app\n"
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text(
+                    "src/jobs.py",
+                    before + "@app.task\ndef stage():\n    return None\n",
+                )
+                head = repo.commit("bounded adapter operation")
+                report = self._evaluate(repo, base, head)
+                self.assertEqual(
+                    self._results(report)["background_job"].status,
+                    "unsupported",
+                )
+                self.assertEqual(report.status, "fail")
+                self.assertIn("new_queue", report.triggers)
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        imports = []
+        for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES):
+            imports.append(f"from absent.m{index} import app{index}")
+        imports.append("from adapters.valid import app")
+        repo.write_text("adapters/aggregate.py", "\n".join(imports) + "\n")
+        repo.write_text(
+            "adapters/valid.py",
+            "import celery\napp = celery.Celery('jobs')\n",
+        )
+        imported = "from adapters.aggregate import " + ", ".join(
+            [f"app{index}" for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES)] + ["app"]
+        ) + "\n"
+        repo.write_text("src/jobs.py", imported)
+        base = repo.commit("base")
+        calls = "".join(
+            f"app{index}()\n" for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES)
+        )
+        repo.write_text(
+            "src/jobs.py",
+            imported + calls + "@app.task\ndef stage():\n    return None\n",
+        )
+        head = repo.commit("adapter import ceiling")
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(self._results(report)["background_job"].status, "unsupported")
+        self.assertEqual(report.status, "fail")
+        self.assertIn("new_queue", report.triggers)
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text(
+            "project/celery_app.py",
+            "import celery\napp = celery.Celery('jobs')\n",
+        )
+        repo.write_text("project/jobs.py", "from .celery_app import app\n")
+        before = "from project.jobs import app\n"
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text(
+            "src/jobs.py",
+            before + "@app.task\ndef stage():\n    return None\n",
+        )
+        head = repo.commit("relative adapter operation")
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(self._results(report)["background_job"].status, "unsupported")
+        self.assertIn("new_queue", report.triggers)
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        for index in range(10):
+            value = f"from ordinary.m{index + 1} import value\n" if index < 9 else "value = 1\n"
+            repo.write_text(f"ordinary/m{index}.py", value)
+        before = "from ordinary.m0 import value\n"
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", before + "RESULT = value\n")
+        head = repo.commit("ordinary deep import")
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(self._results(report)["background_job"].status, "not_applicable")
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_local_queue_adapter_dependency_chains_do_not_silently_truncate(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+
+        dependency_boundary = FIT.MAX_QUEUE_DEPENDENCY_WORK
+        boundary_cases = (
+            ("below", dependency_boundary - 2, False),
+            ("at", dependency_boundary - 1, False),
+            ("above", dependency_boundary, True),
+        )
+        for label, links, expected_exhausted in boundary_cases:
+            with self.subTest(boundary=label, links=links):
+                chain = ["from project.jobs import app"]
+                previous = "app"
+                for index in range(links):
+                    current = f"alias{index}"
+                    chain.append(f"{current} = {previous}")
+                    previous = current
+                before = "\n".join(chain) + "\n"
+                operation = f"{previous}.delay(task)\n"
+                dependency_result = FIT._operation_dependencies(
+                    ast.parse(before + operation)
+                )
+                self.assertEqual(dependency_result.exhausted, expected_exhausted)
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text(
+                    "project/jobs.py",
+                    "import celery\napp = celery.Celery('jobs')\n",
+                )
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + operation)
+                head = repo.commit("long local queue dependency")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        unrelated_chain = [
+            "class Form:\n    def submit(self):\n        return None",
+            "value0 = Form()",
+        ]
+        for index in range(1, dependency_boundary + 1):
+            unrelated_chain.append(f"value{index} = value{index - 1}")
+        before = "\n".join(unrelated_chain) + "\n"
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text(
+            "src/jobs.py",
+            before + f"value{dependency_boundary}.submit()\n",
+        )
+        head = repo.commit("long unrelated dependency")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "not_applicable",
+        )
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_queue_dependency_frontier_resolves_reachable_local_exports(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        wide = ", ".join(
+            f"wide{index}" for index in range(FIT.MAX_QUEUE_DEPENDENCY_WORK)
+        )
+        cases = (
+            (
+                "neutral module queue export",
+                "project/runtime.py",
+                "import celery\napp = celery.Celery('jobs')\n",
+                "from project.runtime import app\nzzzz = app\n",
+                "app",
+                "unsupported",
+                "fail",
+                True,
+            ),
+            (
+                "queue-adjacent module nonqueue export",
+                "project/jobs.py",
+                "class Form:\n    def submit(self):\n        return None\nform = Form()\n",
+                "from project.jobs import form\nzzzz = form\n",
+                "form",
+                "not_applicable",
+                "pass",
+                False,
+            ),
+        )
+        for (
+            label,
+            module_path,
+            module_source,
+            prefix,
+            imported_name,
+            expected_background,
+            expected_status,
+            expected_trigger,
+        ) in cases:
+            with self.subTest(case=label):
+                before = prefix + f"receiver = ({wide}, zzzz)\n"
+                operation = "receiver.delay(task)\n"
+                dependency_result = FIT._operation_dependencies(
+                    ast.parse(before + operation)
+                )
+                self.assertTrue(dependency_result.exhausted)
+                self.assertNotIn(imported_name, dependency_result.names)
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text(module_path, module_source)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + operation)
+                worktree_diff = FIT.diff_architecture(
+                    repo.root, base_sha=base, worktree=True
+                )
+                worktree_report = FIT.evaluate_fitness(
+                    repo.root,
+                    FIT.load_architecture(repo.root),
+                    worktree_diff,
+                    worktree_diff.changed_paths,
+                    pre_risk="yellow",
+                )
+                head = repo.commit("frontier operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, expected_background)
+                self.assertEqual(report.status, expected_status)
+                self.assertEqual("new_queue" in report.triggers, expected_trigger)
+                if expected_trigger:
+                    self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+                self.assertEqual(
+                    (
+                        worktree_report.status,
+                        self._results(worktree_report)["background_job"].status,
+                        worktree_report.triggers,
+                    ),
+                    (report.status, result.status, report.triggers),
+                )
+
+    def test_unrelated_exhausted_dependency_frontier_remains_not_applicable(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        wide = ", ".join(
+            f"wide{index}" for index in range(FIT.MAX_QUEUE_DEPENDENCY_WORK)
+        )
+        before = "from project.jobs import form\nform.submit()\n"
+        head_source = before + f"receiver = ({wide})\nreceiver.delay(task)\n"
+        dependency_result = FIT._operation_dependencies(ast.parse(head_source))
+        self.assertTrue(dependency_result.exhausted)
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text(
+            "project/jobs.py",
+            "class Form:\n    def submit(self):\n        return None\nform = Form()\n",
+        )
+        repo.write_text("src/jobs.py", before)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", head_source)
+        head = repo.commit("unrelated exhausted graph")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(
+            self._results(report)["background_job"].status,
+            "not_applicable",
+        )
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+        self.assertGreaterEqual(
+            FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+        )
+
+    def test_queue_local_resolution_is_reused_across_changed_importers(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_text(
+            "project/runtime.py",
+            "import celery\napp = celery.Celery('jobs')\n",
+        )
+        before = "from project.runtime import app\n"
+        for path in ("src/first.py", "src/second.py"):
+            repo.write_text(path, before)
+        base = repo.commit("base")
+        for path in ("src/first.py", "src/second.py"):
+            repo.write_text(path, before + "app.delay(task)\n")
+        head = repo.commit("two queue importers")
+        real_batch = FIT.read_diff_files
+        with patch.object(FIT, "read_diff_files", wraps=real_batch) as batches:
+            report = self._evaluate(repo, base, head, pre_risk="yellow")
+        runtime_reads = sorted(
+            (path, call.args[3])
+            for call in batches.call_args_list
+            for path in call.args[2]
+            if path == "project/runtime.py"
+        )
+        self.assertEqual(
+            runtime_reads,
+            [("project/runtime.py", "head")],
+        )
+        result = self._results(report)["background_job"]
+        self.assertEqual(result.status, "unsupported")
+        self.assertEqual(report.status, "fail")
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {"FIT-JOBS", "src/first.py", "src/second.py"},
+        )
+        self.assertIn("new_queue", report.triggers)
+        self.assertGreaterEqual(
+            FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+        )
+
+    def test_shared_queue_cache_does_not_share_importer_work_budget(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["adapters", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        per_importer = FIT.MAX_QUEUE_ADAPTER_MODULES // 2 + 1
+        wide = ", ".join(
+            f"wide{index}" for index in range(FIT.MAX_QUEUE_DEPENDENCY_WORK)
+        )
+        for group in ("a", "b"):
+            imports = []
+            aliases = []
+            for index in range(per_importer):
+                alias = f"zz{group}{index:02d}"
+                imports.append(
+                    f"from adapters.{group}{index:02d} import value as {alias}"
+                )
+                aliases.append(alias)
+                repo.write_text(f"adapters/{group}{index:02d}.py", "value = 1\n")
+            before = "\n".join(imports) + f"\nreceiver = ({wide}, {', '.join(aliases)})\n"
+            repo.write_text(f"src/{group}.py", before)
+        base = repo.commit("base")
+        for group in ("a", "b"):
+            path = repo.root / f"src/{group}.py"
+            repo.write_text(
+                f"src/{group}.py",
+                path.read_text(encoding="utf-8") + "receiver.delay(task)\n",
+            )
+        head = repo.commit("two bounded exhausted importers")
+        real_batch = FIT.read_diff_files
+        with patch.object(FIT, "read_diff_files", wraps=real_batch) as batches:
+            report = self._evaluate(repo, base, head, pre_risk="yellow")
+        modules = {
+            path
+            for call in batches.call_args_list
+            if call.args[3] == "head"
+            for path in call.args[2]
+            if path.startswith("adapters/")
+        }
+        self.assertGreater(len(modules), FIT.MAX_QUEUE_ADAPTER_MODULES)
+        self.assertEqual(
+            self._results(report)["background_job"].status, "not_applicable"
+        )
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_external_imports_use_batched_local_module_inventory(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        before = "import external_alpha as alpha\nimport external_beta as beta\n"
+        for path in ("src/first.py", "src/second.py"):
+            repo.write_text(path, before)
+        base = repo.commit("base")
+        for path in ("src/first.py", "src/second.py"):
+            repo.write_text(path, before + "alpha.render()\nbeta.validate()\n")
+        head = repo.commit("ordinary external imports")
+        real_batch = FIT.read_diff_files
+        with patch.object(FIT, "read_diff_files", wraps=real_batch) as batches:
+            report = self._evaluate(repo, base, head, pre_risk="yellow")
+        external_reads = [
+            path
+            for call in batches.call_args_list
+            for path in call.args[2]
+            if path.startswith("external_")
+        ]
+        self.assertEqual(external_reads, [])
+        self.assertEqual(
+            self._results(report)["background_job"].status, "not_applicable"
+        )
+        self.assertNotIn("new_queue", report.triggers)
+
+    def test_exact_batch_blob_reader_is_bounded_and_validates_entries(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        paths = tuple(f"src/module{index:02d}.py" for index in range(32))
+        for path in paths:
+            repo.write_text(path, "VALUE = 1\n")
+        base = repo.commit("base")
+        repo.write_text("src/changed.py", "VALUE = 2\n")
+        head = repo.commit("head")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        real_git = DIFF._git
+        with patch.object(DIFF, "_git", wraps=real_git) as single_git:
+            DIFF.read_diff_files(repo.root, diff, (paths[0],))
+        self.assertEqual(single_git.call_count, 2)
+        with patch.object(DIFF, "_git", wraps=real_git) as git:
+            values = DIFF.read_diff_files(repo.root, diff, (*paths, "src/missing.py"))
+        self.assertEqual(values[paths[0]], b"VALUE = 1\n")
+        self.assertIsNone(values["src/missing.py"])
+        batch_calls = [
+            call
+            for call in git.call_args_list
+            if any("--batch" in argument for argument in call.args[1])
+        ]
+        self.assertEqual(len(batch_calls), 1)
+        self.assertEqual(git.call_count, 2)
+        self.assertNotIn("-Z", batch_calls[0].args[1])
+
+        os.symlink("module00.py", repo.root / "src/link.py")
+        repo.write_bytes(
+            "src/oversized.py", b"x" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1)
+        )
+        bad_base = repo.commit("unsafe entries")
+        repo.write_text("src/changed.py", "VALUE = 3\n")
+        bad_head = repo.commit("query unsafe entries")
+        bad_diff = FIT.diff_architecture(repo.root, base_sha=bad_base, head_sha=bad_head)
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "not a regular file"):
+            DIFF.read_diff_files(repo.root, bad_diff, ("src/link.py",))
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "exceeds analysis limit"):
+            DIFF.read_diff_files(repo.root, bad_diff, ("src/oversized.py",))
+
+        repo.git("update-index", "--add", "--cacheinfo", f"160000,{head},src/gitlink")
+        repo.git("commit", "-qm", "gitlink entry")
+        gitlink_base = repo.git("rev-parse", "HEAD")
+        repo.write_text("src/changed.py", "VALUE = 4\n")
+        repo.git("add", "src/changed.py")
+        repo.git("commit", "-qm", "query gitlink entry")
+        gitlink_head = repo.git("rev-parse", "HEAD")
+        gitlink_diff = FIT.diff_architecture(repo.root, base_sha=gitlink_base, head_sha=gitlink_head)
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "not a regular file"):
+            DIFF.read_diff_files(repo.root, gitlink_diff, ("src/gitlink",))
+
+        object_id = repo.git("rev-parse", f"{head}:{paths[0]}").encode("ascii")
+        negative = b"100644 blob " + object_id + b" -1\t" + paths[0].encode() + b"\0"
+        with patch.object(DIFF, "_git", return_value=negative):
+            with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "invalid Git blob size"):
+                DIFF.read_diff_files(repo.root, diff, (paths[0],))
+        metadata = b"100644 blob " + object_id + b" 10\t" + paths[0].encode() + b"\0"
+        malformed = object_id + b" blob 9\0VALUE = 1\n\0"
+        with patch.object(DIFF, "_git", side_effect=(metadata, malformed)):
+            with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "unexpected Git blob batch header"):
+                DIFF.read_diff_files(repo.root, diff, (paths[0],))
+
+        worktree = replace(diff, head_sha=None, head_kind="worktree")
+        with patch.object(DIFF, "_worktree_blob") as worktree_blob:
+            count_paths = tuple(
+                f"src/{index}.py" for index in range(DIFF.MAX_CHANGED_PATHS + 1)
+            )
+            count_bytes = sum(len(os.fsencode(path)) for path in count_paths)
+            with patch.object(DIFF, "MAX_BATCH_INPUT_BYTES", count_bytes + 1):
+                with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "batch path limit"):
+                    DIFF.read_diff_files(repo.root, worktree, count_paths)
+            with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "batch path limit"):
+                DIFF.read_diff_files(
+                    repo.root,
+                    worktree,
+                    tuple(f"src/{index:04d}-{'x' * 64}.py" for index in range(1024)),
+                )
+            worktree_blob.assert_not_called()
+        large = b"x" * (DIFF.MAX_GIT_OUTPUT_BYTES // 2 + 1)
+        with patch.object(DIFF, "_worktree_blob", return_value=large) as worktree_blob:
+            with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "batch exceeds analysis limit"):
+                DIFF.read_diff_files(repo.root, worktree, (paths[0], paths[1]))
+            self.assertEqual(worktree_blob.call_count, 2)
+
+    def test_analysis_memory_constants_are_pinned(self) -> None:
+        # Analysis memory caps remain unchanged; the finite streamed aggregate
+        # identity budget covers the measured 123 MB release-archive cleanup.
+        self.assertEqual(DIFF.MAX_ANALYZED_FILE_BYTES, 10_000_000)
+        self.assertEqual(DIFF.MAX_GIT_OUTPUT_BYTES, 20_000_000)
+        self.assertEqual(DIFF.MAX_DIFF_ARTIFACT_BYTES, 128_000_000)
+        self.assertLess(DIFF.BLOB_STREAM_CHUNK_BYTES, DIFF.MAX_ANALYZED_FILE_BYTES)
+
+    def test_aggregate_artifact_budget_counts_deleted_binary_bytes(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        repo.write_bytes('packages/archived.bin', b'\0' + b'x' * 31)
+        base = repo.commit('archived binary')
+        (repo.root / 'packages/archived.bin').unlink()
+        head = repo.commit('retire archived binary')
+        with patch.object(DIFF, 'MAX_DIFF_ARTIFACT_BYTES', 31):
+            with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'aggregate changed artifact byte limit'):
+                FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        with patch.object(DIFF, 'MAX_DIFF_ARTIFACT_BYTES', 32):
+            diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+            self.assertEqual(diff.artifacts[0].status, 'deleted')
+
+    def test_stream_git_blob_setup_failure_is_typed_and_stops_child(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        blob = b"\0" + b"z" * 4096
+        repo.write_bytes("packages/stoppable.bin", blob)
+        head = repo.commit("stream-stop target")
+        oid = subprocess.run(
+            ["git", "-C", str(repo.root), "rev-parse", f"{head}:packages/stoppable.bin"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        real_popen = subprocess.Popen
+        spawned: list = []
+
+        def fake_popen(args, **kwargs):
+            proc = real_popen(["sleep", "120"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              start_new_session=True)
+            spawned.append(proc)
+            return proc
+
+        class BoomSelector:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("simulated selector setup failure")
+
+        with patch.object(DIFF.subprocess, "Popen", fake_popen), \
+             patch.object(DIFF.selectors, "DefaultSelector", BoomSelector):
+            with self.assertRaises(ARCHITECTURE.ArchitectureError) as raised:
+                DIFF._stream_git_blob(repo.root, oid, len(blob), "packages/stoppable.bin")
+        self.assertEqual(raised.exception.code, "io")
+        self.assertIn("streamed blob setup failed", str(raised.exception))
+        self.assertEqual(len(spawned), 1)
+        self.assertIsNotNone(spawned[0].poll(), "git cat-file child survived a setup failure")
+        for stream in (spawned[0].stdout, spawned[0].stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+    def test_stream_git_blob_stops_child_on_unnamed_exception(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        blob = b"\0" + b"w" * 2048
+        repo.write_bytes("packages/midstream.bin", blob)
+        head = repo.commit("mid-stream target")
+        oid = subprocess.run(
+            ["git", "-C", str(repo.root), "rev-parse", f"{head}:packages/midstream.bin"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        real_popen = subprocess.Popen
+        spawned: list = []
+
+        def fake_popen(args, **kwargs):
+            proc = real_popen(["sleep", "120"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              start_new_session=True)
+            spawned.append(proc)
+            return proc
+
+        class SelectBoom:
+            def register(self, *args, **kwargs):
+                return None
+            def select(self, timeout):
+                raise RuntimeError("simulated unnamed mid-loop failure")
+            def get_map(self):
+                return {"open": None}
+            def unregister(self, fileobj):
+                return None
+            def close(self):
+                return None
+
+        with patch.object(DIFF.subprocess, "Popen", fake_popen), \
+             patch.object(DIFF.selectors, "DefaultSelector", SelectBoom):
+            with self.assertRaises(RuntimeError):
+                DIFF._stream_git_blob(repo.root, oid, len(blob), "packages/midstream.bin")
+        self.assertEqual(len(spawned), 1)
+        self.assertIsNotNone(spawned[0].poll(), "child survived an exception the handlers do not name")
+        for stream in (spawned[0].stdout, spawned[0].stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+    def test_profile_worktree_blob_closes_directory_when_descriptor_close_fails(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        repo.write_bytes("packages/small.bin", b"abc\n")
+        repo.commit("small file")
+        real_open = DIFF._open_worktree_file
+        real_close = DIFF.os.close
+        captured: dict = {}
+
+        def spy(root_, parts, **kwargs):
+            directory, descriptor = real_open(root_, parts, **kwargs)
+            captured["directory"], captured["descriptor"] = directory, descriptor
+            return directory, descriptor
+
+        closed: list[int] = []
+
+        def flaky_close(fd: int) -> None:
+            if captured.get("descriptor") is not None and fd == captured["descriptor"]:
+                closed.append(fd)
+                raise OSError("simulated descriptor-close failure")
+            closed.append(fd)
+            real_close(fd)
+
+        with patch.object(DIFF, "_open_worktree_file", side_effect=spy), \
+             patch.object(DIFF.os, "close", side_effect=flaky_close):
+            with self.assertRaises(OSError):
+                DIFF._profile_worktree_blob(repo.root, "packages/small.bin")
+        self.assertIn(captured["directory"], closed, "directory fd leaked behind a failing descriptor close")
+        real_close(captured["descriptor"])
+
+    def test_oversized_binary_marker_is_found_anywhere_in_the_stream(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        blob = b"t" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1) + b"\0"
+        base = repo.commit("base")
+        repo.write_bytes("packages/late_nul.bin", blob)
+        head = repo.commit("large object whose NUL is in the last chunk")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        artifact = next(item for item in diff.artifacts if item.path == "packages/late_nul.bin")
+        self.assertIsNone(artifact.added_lines)
+        self.assertEqual(artifact.head_digest, hashlib.sha256(blob).hexdigest())
+
+    def test_oversized_binary_reports_modified_and_refuses_truncated_stream(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        original = b"\0" + b"a" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1)
+        repo.write_bytes("packages/mutable.bin", original)
+        base = repo.commit("first oversized binary")
+        replacement = b"\0" + b"b" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1)
+        repo.write_bytes("packages/mutable.bin", replacement)
+        head = repo.commit("second oversized binary")
+
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        artifact = next(item for item in diff.artifacts if item.path == "packages/mutable.bin")
+        self.assertEqual(artifact.status, "modified")
+        self.assertEqual(artifact.base_size, len(original))
+        self.assertEqual(artifact.head_size, len(replacement))
+        self.assertEqual(artifact.base_digest, hashlib.sha256(original).hexdigest())
+        self.assertEqual(artifact.head_digest, hashlib.sha256(replacement).hexdigest())
+        self.assertIsNone(artifact.added_lines)
+        self.assertIsNone(artifact.deleted_lines)
+
+        real_read = DIFF.os.read
+
+        def short_read(fd: int, size: int) -> bytes:
+            chunk = real_read(fd, size)
+            return chunk[:-1] if len(chunk) > 1 else chunk
+
+        with patch.object(DIFF.os, "read", side_effect=short_read):
+            with self.assertRaisesRegex(
+                ARCHITECTURE.ArchitectureError, "was truncated during analysis"
+            ):
+                DIFF._profile_worktree_blob(repo.root, "packages/mutable.bin")
+
+    def test_oversized_tracked_binary_is_streamed_and_still_verified(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        blob = b"\0" + b"z" * (DIFF.MAX_ANALYZED_FILE_BYTES + 8)
+        expected = hashlib.sha256(blob).hexdigest()
+        base = repo.commit("base")
+        repo.write_bytes("packages/huge.bin", blob)
+        head = repo.commit("huge tracked binary")
+
+        commit_diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        artifact = next(item for item in commit_diff.artifacts if item.path == "packages/huge.bin")
+        self.assertEqual(artifact.status, "added")
+        self.assertEqual(artifact.base_size, 0)
+        self.assertEqual(artifact.head_size, len(blob))
+        self.assertEqual(artifact.head_digest, expected)
+        self.assertIsNone(artifact.added_lines)
+        self.assertIsNone(artifact.deleted_lines)
+
+        worktree_diff = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        worktree_artifact = next(
+            item for item in worktree_diff.artifacts if item.path == "packages/huge.bin"
+        )
+        self.assertEqual(worktree_artifact.head_size, len(blob))
+        self.assertEqual(worktree_artifact.head_digest, expected)
+
+        repo.write_bytes("packages/huge.bin", b"\0" + b"y" * (DIFF.MAX_ANALYZED_FILE_BYTES + 8))
+        tampered = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        tampered_artifact = next(
+            item for item in tampered.artifacts if item.path == "packages/huge.bin"
+        )
+        self.assertNotEqual(tampered_artifact.head_digest, expected)
+
+    def test_oversized_text_file_still_refuses_analysis(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        base = repo.commit("base")
+        repo.write_bytes("src/oversized_text.py", b"x" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1))
+        head = repo.commit("oversized text")
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "exceeds analysis limit"):
+            FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "exceeds analysis limit"):
+            FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+
+    def test_package_child_import_uses_exact_local_module_provenance(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        queue_source = "import celery\napp = celery.Celery('jobs')\n"
+        nonqueue_source = "class Form: pass\napp = Form()\n"
+        cases = (
+            ("namespace queue", None, queue_source, True),
+            ("regular queue alias", "", queue_source, True),
+            ("namespace nonqueue", None, nonqueue_source, False),
+            ("regular nonqueue alias", "", nonqueue_source, False),
+        )
+        for label, package_source, child_source, expected_queue in cases:
+            with self.subTest(case=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                if package_source is not None:
+                    repo.write_text("project/__init__.py", package_source)
+                repo.write_text("project/runtime.py", child_source)
+                imported = "from project import runtime as job_runtime\n"
+                repo.write_text("src/jobs.py", imported)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", imported + "job_runtime.app.delay(task)\n")
+                head = repo.commit("package child operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported" if expected_queue else "not_applicable")
+                self.assertEqual(report.status, "fail" if expected_queue else "pass")
+                self.assertEqual("new_queue" in report.triggers, expected_queue)
+                self.assertGreaterEqual(FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk])
+
+        missing_cases = (
+            ("regular local package", "project/__init__.py"),
+            ("namespace local package", "project/other.py"),
+        )
+        for label, local_path in missing_cases:
+            with self.subTest(case=f"{label} missing child"):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text(local_path, "VALUE = 1\n")
+                imported = "from project import runtime as job_runtime\n"
+                repo.write_text("src/jobs.py", imported)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", imported + "job_runtime.app.delay(task)\n")
+                head = repo.commit("missing local child operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                self.assertEqual(self._results(report)["background_job"].status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("new_queue", report.triggers)
+
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        imported = "from external_package import runtime as job_runtime\n"
+        repo.write_text("src/jobs.py", imported)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", imported + "job_runtime.app.delay(task)\n")
+        head = repo.commit("external absent child operation")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(self._results(report)["background_job"].status, "not_applicable")
+        self.assertNotIn("new_queue", report.triggers)
+
+        ambiguous = copy.deepcopy(system)
+        ambiguous["nodes"][0]["repository_paths"] = ["one", "two", "src"]
+        repo = GitArchitectureRepo(self)
+        repo.model(ambiguous, rules)
+        for root in ("one", "two"):
+            repo.write_text(f"{root}/project/runtime.py", nonqueue_source)
+        imported = "from project import runtime as job_runtime\n"
+        repo.write_text("src/jobs.py", imported)
+        base = repo.commit("base")
+        repo.write_text("src/jobs.py", imported + "job_runtime.app.delay(task)\n")
+        head = repo.commit("ambiguous child operation")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        self.assertEqual(self._results(report)["background_job"].status, "unsupported")
+        self.assertIn("new_queue", report.triggers)
+
+    def test_mixed_local_module_exports_are_member_specific(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS", "node_types": ["worker"], "max_retries": 3,
+            "require_idempotency": True, "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"], "severity": "error",
+        }]
+        module_source = (
+            "import celery\n"
+            "app = celery.Celery('jobs')\n"
+            "class Form: pass\n"
+            "form = Form()\n"
+        )
+        forms_source = "class Form: pass\nform = Form()\n"
+        cases = (
+            ("module queue", "import project.runtime as runtime\n", "runtime.app.delay(task)\n", True),
+            ("module ordinary", "import project.runtime as runtime\n", "runtime.form.delay(task)\n", False),
+            ("dotted queue", "import project.runtime\n", "project.runtime.app.delay(task)\n", True),
+            ("dotted ordinary", "import project.runtime\n", "project.runtime.form.delay(task)\n", False),
+            ("dotted sibling queue first", "import project.runtime\nimport project.forms\n", "project.runtime.app.delay(task)\n", True),
+            ("dotted sibling queue last", "import project.forms\nimport project.runtime\n", "project.runtime.app.delay(task)\n", True),
+            ("dotted sibling ordinary first", "import project.runtime\nimport project.forms\n", "project.forms.form.delay(task)\n", False),
+            ("dotted sibling ordinary last", "import project.forms\nimport project.runtime\n", "project.forms.form.delay(task)\n", False),
+            ("deep sibling queue first", "import project.services.runtime\nimport project.services.forms\n", "project.services.runtime.app.delay(task)\n", True),
+            ("deep sibling queue last", "import project.services.forms\nimport project.services.runtime\n", "project.services.runtime.app.delay(task)\n", True),
+            ("deep sibling ordinary first", "import project.services.runtime\nimport project.services.forms\n", "project.services.forms.form.delay(task)\n", False),
+            ("deep sibling ordinary last", "import project.services.forms\nimport project.services.runtime\n", "project.services.forms.form.delay(task)\n", False),
+            ("deep duplicate queue", "import project.services.runtime\nimport project.services.runtime\n", "project.services.runtime.app.delay(task)\n", True),
+            ("deep duplicate ordinary", "import project.services.forms\nimport project.services.forms\n", "project.services.forms.form.delay(task)\n", False),
+            ("wildcard queue", "from project.runtime import *\n", "app.delay(task)\n", True),
+            ("wildcard ordinary", "from project.runtime import *\n", "form.delay(task)\n", False),
+        )
+        for label, imported, operation, expected_queue in cases:
+            with self.subTest(case=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("project/runtime.py", module_source)
+                repo.write_text("project/forms.py", forms_source)
+                repo.write_text("project/services/runtime.py", module_source)
+                repo.write_text("project/services/forms.py", forms_source)
+                repo.write_text("src/jobs.py", imported)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", imported + operation)
+                head = repo.commit("mixed member operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                self.assertEqual(
+                    self._results(report)["background_job"].status,
+                    "unsupported" if expected_queue else "not_applicable",
+                )
+                self.assertEqual(report.status, "fail" if expected_queue else "pass")
+                self.assertEqual("new_queue" in report.triggers, expected_queue)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_completed_queue_cache_is_charged_per_importer_before_reuse(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["adapters", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS", "node_types": ["worker"], "max_retries": 3,
+            "require_idempotency": True, "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"], "severity": "error",
+        }]
+        for reversed_order in (False, True):
+            with self.subTest(reversed_paths=reversed_order):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                aliases = []
+                imports = []
+                for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES):
+                    alias = f"adapter{index:02d}"
+                    aliases.append(alias)
+                    imports.append(f"from adapters.module{index:02d} import value as {alias}")
+                    repo.write_text(f"adapters/module{index:02d}.py", "value = 1\n")
+                repo.write_text("adapters/extra.py", "value = 1\n")
+                shared = "\n".join(imports) + "\n"
+                bounded_path, excess_path = (("src/z.py", "src/a.py") if reversed_order else ("src/a.py", "src/z.py"))
+                repo.write_text(bounded_path, shared)
+                repo.write_text(excess_path, shared + "from adapters.extra import value as extra\n")
+                base = repo.commit("base")
+                operations = "".join(f"{alias}.delay(task)\n" for alias in aliases)
+                repo.write_text(bounded_path, shared + operations)
+                repo.write_text(excess_path, shared + "from adapters.extra import value as extra\n" + operations + "extra.delay(task)\n")
+                head = repo.commit("overlapping importer limits")
+                real_batch = FIT.read_diff_files
+                with patch.object(FIT, "read_diff_files", wraps=real_batch) as batches:
+                    report = self._evaluate(repo, base, head, pre_risk="yellow")
+                self.assertEqual(self._results(report)["background_job"].status, "unsupported")
+                self.assertIn("new_queue", report.triggers)
+                self.assertTrue(all(len(call.args[2]) <= FIT.MAX_QUEUE_ADAPTER_MODULES for call in batches.call_args_list))
+
+    def test_local_module_and_wildcard_imports_resolve_queue_exports(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        queue_source = "import celery\napp = celery.Celery('jobs')\n"
+        nonqueue_source = (
+            "class Form:\n"
+            "    def delay(self, value):\n"
+            "        return value\n"
+            "app = Form()\n"
+        )
+        cases = (
+            (
+                "module alias queue",
+                "import project.runtime as runtime\n",
+                "runtime.app.delay(task)\n",
+                queue_source,
+                True,
+            ),
+            (
+                "module alias nonqueue",
+                "import project.runtime as runtime\n",
+                "runtime.app.delay(task)\n",
+                nonqueue_source,
+                False,
+            ),
+            (
+                "wildcard queue",
+                "from project.runtime import *\n",
+                "app.delay(task)\n",
+                queue_source,
+                True,
+            ),
+            (
+                "wildcard nonqueue",
+                "from project.runtime import *\n",
+                "app.delay(task)\n",
+                nonqueue_source,
+                False,
+            ),
+        )
+        for label, imported, operation, module_source, expected_queue in cases:
+            with self.subTest(case=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("project/runtime.py", module_source)
+                repo.write_text("src/jobs.py", imported)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", imported + operation)
+                head = repo.commit("local import operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(
+                    result.status,
+                    "unsupported" if expected_queue else "not_applicable",
+                )
+                self.assertEqual(report.status, "fail" if expected_queue else "pass")
+                self.assertEqual("new_queue" in report.triggers, expected_queue)
+                if expected_queue:
+                    self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_relative_child_import_requires_a_resolved_local_source(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            ("missing below", FIT.MAX_QUEUE_DEPENDENCY_WORK - 3, None, True),
+            ("missing at", FIT.MAX_QUEUE_DEPENDENCY_WORK - 2, None, True),
+            ("missing above", FIT.MAX_QUEUE_DEPENDENCY_WORK - 1, None, True),
+            (
+                "queue child at frontier",
+                FIT.MAX_QUEUE_DEPENDENCY_WORK - 2,
+                "import celery\napp = celery.Celery('jobs')\n",
+                True,
+            ),
+            (
+                "nonqueue child at frontier",
+                FIT.MAX_QUEUE_DEPENDENCY_WORK - 2,
+                "class Runtime:\n    pass\nruntime = Runtime()\n",
+                False,
+            ),
+        )
+        for label, width, child_source, expected_queue in cases:
+            with self.subTest(case=label):
+                wide = ", ".join(f"wide{index}" for index in range(width))
+                before = (
+                    "from . import runtime\n"
+                    "zzzz = runtime\n"
+                    f"receiver = ({wide}, zzzz)\n"
+                )
+                dependency_result = FIT._operation_dependencies(
+                    ast.parse(before + "receiver.delay(task)\n")
+                )
+                self.assertEqual(
+                    dependency_result.exhausted,
+                    width >= FIT.MAX_QUEUE_DEPENDENCY_WORK - 2,
+                )
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("src/project/__init__.py", "")
+                if child_source is not None:
+                    repo.write_text("src/project/runtime.py", child_source)
+                repo.write_text("src/project/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text(
+                    "src/project/jobs.py", before + "receiver.delay(task)\n"
+                )
+                head = repo.commit("relative child operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(
+                    result.status,
+                    "unsupported" if expected_queue else "not_applicable",
+                )
+                self.assertEqual(report.status, "fail" if expected_queue else "pass")
+                self.assertEqual("new_queue" in report.triggers, expected_queue)
+                if expected_queue:
+                    self.assertIn(
+                        "src/project/jobs.py", result.applicability.scanned_scope
+                    )
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_package_aware_queue_provenance_is_shared_by_fitness_and_risk(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["project", "src"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "package initializer child export",
+                {
+                    "project/jobs/__init__.py": "from .celery_app import app\n",
+                    "project/jobs/celery_app.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "from project.jobs import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "regular module child export",
+                {
+                    "project/jobs/worker.py": "from .celery_app import app\n",
+                    "project/jobs/celery_app.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "from project.jobs.worker import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "package import child module",
+                {
+                    "project/jobs/__init__.py": "from . import celery_app\n",
+                    "project/jobs/celery_app.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "from project.jobs import celery_app\n",
+                "@celery_app.app.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "parent relative package export",
+                {
+                    "project/jobs/subpackage/__init__.py": "from ..celery_app import app\n",
+                    "project/jobs/celery_app.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "from project.jobs.subpackage import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "multi hop package re-export",
+                {
+                    "project/__init__.py": "from .jobs import app\n",
+                    "project/jobs/__init__.py": "from .celery_app import app\n",
+                    "project/jobs/celery_app.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "from project import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+            (
+                "relevant unresolved local adapter",
+                {"project/__init__.py": "VALUE = 1\n"},
+                "from project.jobs import app\n",
+                "@app.task\ndef stage():\n    return None\n",
+            ),
+        )
+        for label, modules, before, addition in cases:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                for path, value in modules.items():
+                    repo.write_text(path, value)
+                repo.write_text("src/jobs.py", before)
+                base = repo.commit("base")
+                repo.write_text("src/jobs.py", before + addition)
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/jobs.py", result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+
+    def test_queue_adapter_uncertainty_and_source_roots_fail_closed(self) -> None:
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "present adapter with unsupported factory export",
+                ["project", "src"],
+                {
+                    "project/jobs.py": (
+                        "import celery\n\n"
+                        "def build_app():\n"
+                        "    return celery.Celery('jobs')\n\n"
+                        "app = build_app()\n"
+                    ),
+                },
+                "src/consumer.py",
+                "unsupported",
+            ),
+            (
+                "src layout adapter",
+                ["src"],
+                {
+                    "src/project/jobs.py": (
+                        "import celery\napp = celery.Celery('jobs')\n"
+                    ),
+                },
+                "src/consumer.py",
+                "unsupported",
+            ),
+            (
+                "ambiguous source roots",
+                ["src", "lib"],
+                {
+                    "src/project/jobs.py": (
+                        "import celery\napp = celery.Celery('src-jobs')\n"
+                    ),
+                    "lib/project/jobs.py": (
+                        "import celery\napp = celery.Celery('lib-jobs')\n"
+                    ),
+                },
+                "src/consumer.py",
+                "unsupported",
+            ),
+            (
+                "grounded source root with missing adapter",
+                ["src"],
+                {"src/project/__init__.py": "VALUE = 1\n"},
+                "src/consumer.py",
+                "unsupported",
+            ),
+        )
+        for label, repository_paths, modules, consumer, expected in cases:
+            with self.subTest(label=label):
+                system = _system()
+                system["nodes"][0]["type"] = "worker"
+                system["nodes"][0]["repository_paths"] = repository_paths
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                for path, value in modules.items():
+                    repo.write_text(path, value)
+                before = "from project.jobs import app\n"
+                repo.write_text(consumer, before)
+                base = repo.commit("base")
+                repo.write_text(
+                    consumer,
+                    before + "@app.task\ndef stage():\n    return None\n",
+                )
+                head = repo.commit("queue operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, expected)
+                self.assertEqual(report.status, "fail")
+                self.assertIn(consumer, result.applicability.scanned_scope)
+                self.assertIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_queue_source_root_limit_is_lazy_and_returns_shared_evidence(self) -> None:
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        cases = (
+            ("unrelated below root limit", FIT.MAX_QUEUE_SOURCE_ROOTS - 1, False),
+            ("unrelated above root limit", FIT.MAX_QUEUE_SOURCE_ROOTS, False),
+            ("relevant at root limit", FIT.MAX_QUEUE_SOURCE_ROOTS - 1, True),
+            ("relevant above root limit", FIT.MAX_QUEUE_SOURCE_ROOTS, True),
+        )
+        for label, declared_root_count, relevant in cases:
+            with self.subTest(label=label):
+                repository_paths = [
+                    f"root{index}" for index in range(declared_root_count)
+                ]
+                system = _system()
+                system["nodes"][0]["type"] = "worker"
+                system["nodes"][0]["repository_paths"] = repository_paths
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                for source_root in repository_paths:
+                    repo.write_text(f"{source_root}/__init__.py", "")
+                consumer = "root0/consumer.py"
+                if relevant:
+                    adapter_root = repository_paths[-1]
+                    repo.write_text(
+                        f"{adapter_root}/project/jobs.py",
+                        "import celery\napp = celery.Celery('jobs')\n",
+                    )
+                    before = "from project.jobs import app\n"
+                    addition = "@app.task\ndef stage():\n    return None\n"
+                else:
+                    before = (
+                        "class Form:\n"
+                        "    def submit(self):\n"
+                        "        return None\n\n"
+                        "form = Form()\n"
+                    )
+                    addition = "form.submit()\n"
+                repo.write_text(consumer, before)
+                base = repo.commit("base")
+                repo.write_text(consumer, before + addition)
+                head = repo.commit("changed operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                if relevant:
+                    self.assertEqual(result.status, "unsupported")
+                    self.assertEqual(report.status, "fail")
+                    self.assertIn(consumer, result.applicability.scanned_scope)
+                    self.assertIn("new_queue", report.triggers)
+                else:
+                    self.assertEqual(result.status, "not_applicable")
+                    self.assertEqual(report.status, "pass")
+                    self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+        repository_paths = [
+            f"root{index}" for index in range(FIT.MAX_QUEUE_SOURCE_ROOTS)
+        ]
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = repository_paths
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        for source_root in repository_paths:
+            repo.write_text(f"{source_root}/__init__.py", "")
+        repo.write_text(
+            f"{repository_paths[-1]}/project/jobs.py",
+            "import celery\napp = celery.Celery('jobs')\n",
+        )
+        consumer = "root0/consumer.py"
+        before = (
+            "from project.jobs import app\n\n"
+            "@app.task\n"
+            "def existing():\n"
+            "    return None\n\n"
+            "class Form:\n"
+            "    def submit(self):\n"
+            "        return None\n\n"
+            "form = Form()\n"
+        )
+        repo.write_text(consumer, before)
+        base = repo.commit("base with existing queue operation")
+        repo.write_text(consumer, before + "form.submit()\n")
+        head = repo.commit("unrelated operation only")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        result = self._results(report)["background_job"]
+        self.assertEqual(result.status, "not_applicable")
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_queue", report.triggers)
+        self.assertGreaterEqual(
+            FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+        )
+
+    def test_queue_root_limit_does_not_inherit_sibling_export_provenance(self) -> None:
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS",
+            "node_types": ["worker"],
+            "max_retries": 3,
+            "require_idempotency": True,
+            "require_correlation_id": True,
+            "terminal_actions": ["dead_letter"],
+            "severity": "error",
+        }]
+        for declared_root_count in (
+            FIT.MAX_QUEUE_SOURCE_ROOTS - 1,
+            FIT.MAX_QUEUE_SOURCE_ROOTS,
+        ):
+            with self.subTest(declared_root_count=declared_root_count):
+                repository_paths = [
+                    f"root{index:03d}" for index in range(declared_root_count)
+                ]
+                system = _system()
+                system["nodes"][0]["type"] = "worker"
+                system["nodes"][0]["repository_paths"] = repository_paths
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                for source_root in repository_paths:
+                    repo.write_text(f"{source_root}/__init__.py", "")
+                repo.write_text(
+                    "root000/project/forms.py",
+                    "import celery\n"
+                    "app = celery.Celery('jobs')\n\n"
+                    "class Form:\n"
+                    "    def submit(self):\n"
+                    "        return None\n\n"
+                    "form = Form()\n",
+                )
+                consumer = "root000/consumer.py"
+                before = "from project.forms import form\n"
+                repo.write_text(consumer, before)
+                base = repo.commit("base with mixed exports")
+                repo.write_text(consumer, before + "form.submit()\n")
+                head = repo.commit("unrelated export operation")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["background_job"]
+                self.assertEqual(result.status, "not_applicable")
+                self.assertEqual(report.status, "pass")
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_network_analysis_handles_stdlib_unowned_and_unknown_clients(self) -> None:
+        cases = (
+            (
+                "owned http.client",
+                "src/client.py",
+                "import http.client\nhttp.client.HTTPSConnection('example.test')\n",
+                "fail",
+            ),
+            (
+                "unowned urllib",
+                "unowned/client.py",
+                "import urllib.request\nurllib.request.urlopen('https://example.test')\n",
+                "fail",
+            ),
+            (
+                "unknown external client",
+                "src/client.py",
+                "import mystery_http\nmystery_http.connect('example.test')\n",
+                "unsupported",
+            ),
+            (
+                "unknown external constructor",
+                "src/client.py",
+                "import paramiko as ssh\nclient = ssh.transport.SSHClient()\n",
+                "unsupported",
+            ),
+            (
+                "cloud sdk client factory",
+                "src/client.py",
+                "import boto3\ns3 = boto3.client('s3')\n"
+                "s3.get_object(Bucket='bucket', Key='key')\n",
+                "unsupported",
+            ),
+            (
+                "cloud sdk resource factory",
+                "src/client.py",
+                "import boto3\ns3 = boto3.resource('s3')\n",
+                "unsupported",
+            ),
+            (
+                "cloud sdk session constructor",
+                "src/client.py",
+                "from boto3.session import Session\nsession = Session()\n",
+                "unsupported",
+            ),
+            (
+                "cloud core session factory",
+                "src/client.py",
+                "import botocore.session as core\nsession = core.get_session()\n",
+                "unsupported",
+            ),
+        )
+        for label, path, source, expected in cases:
+            with self.subTest(label=label):
+                system = _system()
+                system["nodes"][0]["type"] = "service"
+                system["nodes"][0]["repository_paths"] = ["src"]
+                rules = _rules()
+                rules["network_policies"] = [{
+                    "id": "FIT-NETWORK",
+                    "node_types": ["service"],
+                    "allowed_protocols": ["https"],
+                    "require_declared_edge": True,
+                    "severity": "error",
+                }]
+                repo, base = self._repo(system=system, rules=rules)
+                repo.write_text(path, source)
+                head = repo.commit(label)
+                report = self._evaluate(repo, base, head)
+                result = self._results(report)["network_client"]
+                self.assertEqual(result.status, expected)
+                self.assertEqual(report.status, "fail")
+                self.assertIn("new_network_client", report.triggers)
+
+    def test_network_unknown_detection_excludes_non_network_calls(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "service"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["network_policies"] = [{
+            "id": "FIT-NETWORK",
+            "node_types": ["service"],
+            "allowed_protocols": ["https"],
+            "require_declared_edge": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        repo.write_text("src/local_client.py", "class SSHClient:\n    pass\n")
+        repo.write_text(
+            "src/use.py",
+            "import pathlib\nimport local_client\nimport pydantic\n"
+            "from fastapi import HTTPException\n"
+            "pathlib.Path('value')\nlocal_client.SSHClient()\npydantic.BaseModel()\n"
+            "HTTPException(400)\n",
+        )
+        head = repo.commit("local constructors")
+        report = self._evaluate(repo, base, head)
+        result = self._results(report)["network_client"]
+        self.assertEqual(result.status, "not_applicable")
+        self.assertNotIn("new_network_client", report.triggers)
+
+    def test_network_analysis_ignores_pure_urllib_parse(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "service"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        rules = _rules()
+        rules["network_policies"] = [{
+            "id": "FIT-NETWORK",
+            "node_types": ["service"],
+            "allowed_protocols": ["https"],
+            "require_declared_edge": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        repo.write_text(
+            "src/parser.py",
+            "from urllib.parse import urlsplit\n"
+            "urlsplit('https://example.test/path')\n",
+        )
+        head = repo.commit("pure URL parsing")
+        report = self._evaluate(repo, base, head)
+        result = self._results(report)["network_client"]
+        self.assertEqual(result.status, "not_applicable")
+        self.assertEqual(report.status, "pass")
+        self.assertNotIn("new_network_client", report.triggers)
+
+    def test_network_analysis_recognizes_local_src_layout_package_imports(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "service"
+        system["nodes"][0]["repository_paths"] = [
+            "factory/src/adaptive_factory/server.py",
+            "factory/tests/test_server.py",
+        ]
+        rules = _rules()
+        rules["network_policies"] = [{
+            "id": "FIT-NETWORK",
+            "node_types": ["service"],
+            "allowed_protocols": ["filesystem"],
+            "require_declared_edge": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        repo.write_text("factory/src/adaptive_factory/server.py", "def prepare_unix_socket(path):\n    return path\n")
+        repo.write_text(
+            "factory/tests/test_server.py",
+            "from adaptive_factory.server import prepare_unix_socket\nprepare_unix_socket('/run/factory.sock')\n",
+        )
+        head = repo.commit("local src layout import")
+        report = self._evaluate(repo, base, head)
+        result = self._results(report)["network_client"]
+        self.assertEqual(result.status, "not_applicable")
+
+    def test_network_fitness_recognizes_bounded_httpx_unix_socket_transport(self) -> None:
+        system = _system()
+        system["nodes"][0]["type"] = "service"
+        system["nodes"][0]["repository_paths"] = ["src"]
+        system["edges"][0]["protocol"] = "unix_http"
+        rules = _rules()
+        rules["network_policies"] = [{
+            "id": "FIT-NETWORK",
+            "node_types": ["service"],
+            "allowed_protocols": ["unix_http"],
+            "require_declared_edge": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        for transport, client in (("HTTPTransport", "Client"), ("AsyncHTTPTransport", "AsyncClient")):
+            for has_uds in (True, False):
+                with self.subTest(transport=transport, has_uds=has_uds):
+                    arguments = "uds=socket_path" if has_uds else ""
+                    repo.write_text(
+                        "src/client.py",
+                        f"import httpx\nsocket_path = '/run/factory.sock'\ntransport = httpx.{transport}({arguments})\n"
+                        f"client = httpx.{client}(transport=transport, base_url='http://factory.local')\n",
+                    )
+                    head = repo.commit(f"{transport} uds={has_uds}")
+                    result = self._results(self._evaluate(repo, base, head))["network_client"]
+                    self.assertEqual(result.status, "pass" if has_uds else "fail", result.findings)
+                    if not has_uds:
+                        self.assertIn("undeclared network client https", " ".join(result.findings))
+
+    def test_change_separation_rejects_product_and_trust_ci_mixing(self) -> None:
+        rules = _rules()
+        rules["change_separation_policies"] = [{
+            "id": "FIT-SEPARATION",
+            "implementation_prefixes": ["src"],
+            "trust_ci_prefixes": ["trust-ci"],
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        repo.write_text("trust-ci/policy.py", "VALUE = 2\n")
+        head = repo.commit("mixed")
+        result = self._results(self._evaluate(repo, base, head))["change_separation"]
+        self.assertEqual(result.status, "fail")
+        self.assertIn("FIT-SEPARATION", result.rule_ids)
+
+    def _trust_binding_repo(self):
+        snapshot = ARCHITECTURE.load_architecture(ROOT)
+        system = copy.deepcopy(snapshot.system)
+        nodes = {node["id"]: node for node in system["nodes"]}
+        # Freeze the pre-correction ownership even when this test runs in G's successor.
+        api_paths = nodes["NODE-TRUST-CI-API"]["repository_paths"]
+        api_paths[:] = [path for path in api_paths if path not in {
+            "trust-ci/src/adaptive_trust_ci/authority.py",
+            "trust-ci/src/adaptive_trust_ci/store.py",
+        }]
+        store = "trust-ci/src/adaptive_trust_ci/store.py"
+        if store not in nodes["NODE-TRUST-CI-POSTGRES"]["repository_paths"]:
+            nodes["NODE-TRUST-CI-POSTGRES"]["repository_paths"].append(store)
+        repo = GitArchitectureRepo(self)
+        repo.model(system, snapshot.rules)
+        for contract in system["contracts"]:
+            repo.write_bytes(contract["path"], (ROOT / contract["path"]).read_bytes())
+        base = repo.commit("registered Trust CI owners and contracts")
+        nodes = {node["id"]: node for node in system["nodes"]}
+        nodes["NODE-TRUST-CI-API"]["repository_paths"].extend([
+            "trust-ci/src/adaptive_trust_ci/authority.py",
+            "trust-ci/src/adaptive_trust_ci/store.py",
+        ])
+        nodes["NODE-TRUST-CI-POSTGRES"]["repository_paths"].remove(
+            "trust-ci/src/adaptive_trust_ci/store.py"
+        )
+        repo.write_json("architecture/system.yaml", system)
+        repo.write_text("trust-ci/src/adaptive_trust_ci/authority.py", "VALUE = 1\n")
+        repo.write_text("trust-ci/src/adaptive_trust_ci/store.py", "VALUE = 2\n")
+        contract_path = "engineering/contracts/openapi/trust-ci.v1.json"
+        document = json.loads((ROOT / contract_path).read_text())
+        document["info"]["description"] = document["info"].get("description", "") + " fixture metadata change"
+        repo.write_json(contract_path, document)
+        return repo, base, system
+
+    def test_change_separation_admits_bound_trust_ci_metadata(self) -> None:
+        repo, base, _ = self._trust_binding_repo()
+        head = repo.commit("Trust CI source and mandatory metadata")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._change_separation(FIT.load_architecture(repo.root), diff)
+        self.assertEqual(result.status, "pass", result.findings)
+        self.assertIn("qualified Trust CI metadata", result.applicability.predicate)
+        self.assertIn("architecture/system.yaml", result.applicability.predicate)
+        self.assertIn("engineering/contracts/openapi/trust-ci.v1.json", result.applicability.predicate)
+        missing_base = replace(diff, _base_state=None)
+        self.assertEqual(FIT._change_separation(FIT.load_architecture(repo.root), missing_base).status, "fail")
+
+    def test_change_separation_metadata_does_not_hide_implementation(self) -> None:
+        repo, base, common_system = self._trust_binding_repo()
+        common_head = repo.commit("Trust CI source and mandatory metadata")
+        for mutation in ("runtime", "contract_role", "local"):
+            with self.subTest(mutation=mutation):
+                repo.git("reset", "--hard", common_head)
+                system = copy.deepcopy(common_system)
+                nodes = {node["id"]: node for node in system["nodes"]}
+                api = nodes["NODE-TRUST-CI-API"]
+                if mutation == "runtime":
+                    api["runtime"]["network"] = "local_only"
+                elif mutation == "secret":
+                    api["secrets"].remove("SECRET-WEBHOOK")
+                elif mutation == "edge":
+                    system["edges"][0]["failure_behavior"]["timeout_ms"] += 1
+                elif mutation == "owner":
+                    api["owner"] = "another operator"
+                elif mutation == "other_source":
+                    source = "trust-ci/src/adaptive_trust_ci/lease.py"
+                    nodes["NODE-TRUST-CI-POSTGRES"]["repository_paths"].remove(source)
+                    api["repository_paths"].append(source)
+                    repo.write_text(source, "VALUE = 3\n")
+                elif mutation == "wildcard":
+                    api["repository_paths"].append("trust-ci/src/adaptive_trust_ci/new")
+                    repo.write_text("trust-ci/src/adaptive_trust_ci/new/module.py", "VALUE = 3\n")
+                elif mutation == "local":
+                    repo.write_text("factory/src/local.py", "VALUE = 3\n")
+                elif mutation == "checker":
+                    repo.write_text(".grok-stack/adaptive_grok/architecture.py", "VALUE = 3\n")
+                elif mutation == "rules":
+                    rules = copy.deepcopy(ARCHITECTURE.load_architecture(ROOT).rules)
+                    rules["change_separation_policies"][0]["severity"] = "warning"
+                    repo.write_json("architecture/rules.yaml", rules)
+                elif mutation == "schema":
+                    schema_path = "schemas/architecture-system.schema.json"
+                    schema = json.loads((ROOT / schema_path).read_text())
+                    schema["description"] = "Changed executable model schema"
+                    repo.write_json(schema_path, schema)
+                elif mutation == "contract":
+                    repo.write_json("engineering/contracts/openapi/unrelated.json", {"unknown": True})
+                elif mutation == "contract_role":
+                    next(item for item in system["contracts"] if item["id"] == "CONTRACT-TRUST-CI-OPENAPI")["compatibility"] = "exact"
+                repo.write_json("architecture/system.yaml", system)
+                head = repo.commit(mutation)
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                result = FIT._change_separation(FIT.load_architecture(repo.root), diff)
+                self.assertEqual(result.status, "fail", result.findings)
+
+    def test_changed_code_budget_counts_bytes_lines_and_ast_complexity(self) -> None:
+        metrics = (
+            ("max_changed_bytes", 8, "VALUE = 'too large'\n"),
+            ("max_changed_lines", 1, "VALUE = 1\nOTHER = 2\n"),
+            ("max_ast_complexity", 1, "if True:\n    VALUE = 1\nif False:\n    VALUE = 2\n"),
+        )
+        for field, limit, source in metrics:
+            with self.subTest(metric=field):
+                rules = _rules()
+                budget = {
+                    "id": "FIT-BUDGET",
+                    "path_prefixes": ["src"],
+                    "max_changed_bytes": 1000,
+                    "max_changed_lines": 100,
+                    "max_ast_complexity": 100,
+                    "severity": "error",
+                }
+                budget[field] = limit
+                rules["code_budgets"] = [budget]
+                repo, base = self._repo(rules=rules)
+                repo.write_text("src/app.py", source)
+                head = repo.commit(field)
+                result = self._results(self._evaluate(repo, base, head))["code_budget"]
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(any(field in finding for finding in result.findings))
+
+    def test_factory_test_budget_unions_discovery_shim_and_fails_over_800000(self) -> None:
+        identity = "FIT-BOUNDED-FACTORY-TEST-CHANGE"
+        budget = self._repository_code_budgets(identity)[0]
+        self.assertEqual(
+            budget["path_prefixes"],
+            ["factory/tests", "tests/test_factory_v15_decisions.py"],
+        )
+        self.assertEqual(budget["max_changed_bytes"], 800_000)
+        rules = _rules()
+        rules["code_budgets"] = [budget]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/tests/payload.txt", "f" * 400_001)
+        repo.write_text("tests/test_factory_v15_decisions.py", "#" + "s" * 399_999)
+        head = repo.commit("factory tests plus root discovery shim")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            (f"{identity}: max_changed_bytes 800001 exceeds 800000",),
+        )
+        self.assertTrue(
+            {"factory/tests/payload.txt", "tests/test_factory_v15_decisions.py"}
+            <= set(result.applicability.scanned_scope)
+        )
+
+    def test_changed_code_budget_rejects_unknown_non_python_line_metrics(self) -> None:
+        for label, content in (
+            ("nul", b"line one\0\nline two\n"),
+            ("invalid utf8", b"line one\n\xff\n"),
+        ):
+            with self.subTest(label=label):
+                rules = _rules()
+                rules["code_budgets"] = [{
+                    "id": "FIT-BUDGET",
+                    "path_prefixes": ["src"],
+                    "max_changed_bytes": 1000,
+                    "max_changed_lines": 1,
+                    "max_ast_complexity": 100,
+                    "severity": "error",
+                }]
+                repo, base = self._repo(rules=rules)
+                repo.write_text("src/readable.js", "const value = 1;\n")
+                repo.write_bytes("src/opaque.js", content)
+                head = repo.commit("unknown line metric")
+                report = self._evaluate(repo, base, head, pre_risk="yellow")
+                result = self._results(report)["code_budget"]
+                self.assertEqual(result.status, "unsupported")
+                self.assertEqual(report.status, "fail")
+                self.assertIn("src/opaque.js", result.applicability.scanned_scope)
+                self.assertIn("unknown line statistics", " ".join(result.findings))
+                self.assertGreaterEqual(
+                    FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+                )
+
+    def test_overlapping_code_budgets_report_each_applicable_failure(self) -> None:
+        identities = (
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+            "FIT-BOUNDED-FACTORY-SOURCE-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=1,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/src/app.txt", "two")
+        head = repo.commit("overlapping budget failures")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            tuple(
+                f"{identity}: max_changed_bytes 3 exceeds 1"
+                for identity in identities
+            ),
+        )
+
+    def test_narrow_budget_can_fail_while_parent_budgets_pass(self) -> None:
+        identities = (
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+            "FIT-BOUNDED-FACTORY-SOURCE-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=1_000,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        rules["code_budgets"][2]["max_changed_bytes"] = 10
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/src/app.txt", "01234567890")
+        head = repo.commit("source child alone exceeds budget")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            (
+                "FIT-BOUNDED-FACTORY-SOURCE-CHANGE: "
+                "max_changed_bytes 11 exceeds 10",
+            ),
+        )
+
+    def test_combined_children_and_scopes_can_fail_parent_and_union_budgets(self) -> None:
+        parent_identities = (
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+            "FIT-BOUNDED-FACTORY-SOURCE-CHANGE",
+            "FIT-BOUNDED-FACTORY-TEST-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*parent_identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=1_000,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        rules["code_budgets"][1]["max_changed_bytes"] = 15
+        rules["code_budgets"][2]["max_changed_bytes"] = 10
+        rules["code_budgets"][3]["max_changed_bytes"] = 10
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/src/app.txt", "12345678")
+        repo.write_text("factory/tests/test_app.txt", "abcdefgh")
+        head = repo.commit("children pass while parent fails")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            ("FIT-BOUNDED-FACTORY-CHANGE: max_changed_bytes 16 exceeds 15",),
+        )
+
+        union_identities = (
+            "FIT-BOUNDED-ARCHITECTURE-CHANGE",
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*union_identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=10,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        rules["code_budgets"][1]["max_changed_bytes"] = 15
+        repo, base = self._repo(rules=rules)
+        repo.write_text("architecture/note.txt", "12345678")
+        repo.write_text("factory/note.txt", "abcdefgh")
+        head = repo.commit("scope parents pass while union fails")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            ("FIT-BOUNDED-ALL-GOVERNED-CHANGE: max_changed_bytes 16 exceeds 15",),
+        )
+
+    def test_code_budget_prefixes_match_only_complete_path_segments(self) -> None:
+        identities = (
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+            "FIT-BOUNDED-FACTORY-SOURCE-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=1,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factoryish/src/app.txt", "outside")
+        head = repo.commit("sibling outside factory")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "not_applicable")
+
+        repo, base = self._repo(rules=rules)
+        repo.write_text("factory/srcish/app.txt", "inside parent only")
+        head = repo.commit("source sibling inside factory")
+
+        result = self._results(self._evaluate(repo, base, head))["code_budget"]
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(
+            result.findings,
+            (
+                "FIT-BOUNDED-ALL-GOVERNED-CHANGE: max_changed_bytes 18 exceeds 1",
+                "FIT-BOUNDED-FACTORY-CHANGE: max_changed_bytes 18 exceeds 1",
+            ),
+        )
+
+    def test_unknown_line_metrics_fail_closed_for_every_overlapping_budget(self) -> None:
+        identities = (
+            "FIT-BOUNDED-ALL-GOVERNED-CHANGE",
+            "FIT-BOUNDED-FACTORY-CHANGE",
+            "FIT-BOUNDED-FACTORY-SOURCE-CHANGE",
+        )
+        rules = _rules()
+        rules["code_budgets"] = self._repository_code_budgets(*identities)
+        for budget in rules["code_budgets"]:
+            budget.update(
+                max_changed_bytes=1_000,
+                max_changed_lines=100,
+                max_ast_complexity=100,
+            )
+        repo, base = self._repo(rules=rules)
+        repo.write_bytes("factory/src/opaque.bin", b"line one\0\nline two\n")
+        head = repo.commit("unknown nested line metrics")
+
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        result = self._results(report)["code_budget"]
+
+        self.assertEqual(result.status, "unsupported")
+        self.assertEqual(report.status, "fail")
+        self.assertEqual(
+            result.findings,
+            tuple(
+                f"{identity}: unknown line statistics for factory/src/opaque.bin"
+                for identity in identities
+            ),
+        )
+        self.assertGreaterEqual(
+            FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
+        )
+
+    def test_contract_compatibility_rejects_directional_break(self) -> None:
+        system = _system()
+        system["contracts"] = [{
+            "id": "CONTRACT-TEST",
+            "kind": "json_schema",
+            "path": "engineering/contracts/test.json",
+            "version": "1",
+            "role": "consumer",
+            "compatibility": "consumer_accepts_old",
+        }]
+        system["nodes"][0]["public_contracts"] = ["CONTRACT-TEST"]
+        rules = _rules()
+        rules["contract_policies"] = [{
+            "id": "FIT-CONTRACT",
+            "contract_kinds": ["json_schema"],
+            "compatibility": "consumer_accepts_old",
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json(
+            "engineering/contracts/test.json",
+            _json_schema({"id": {"type": "string"}}, ["id"]),
+        )
+        base = repo.commit("contract base")
+        repo.write_json("engineering/contracts/test.json", _json_schema({}))
+        head = repo.commit("contract break")
+        result = self._results(self._evaluate(repo, base, head))["contract_compatibility"]
+        self.assertEqual(result.status, "fail")
+        self.assertIn("CONTRACT-TEST", " ".join(result.findings))
+
+    def test_contract_compatibility_rechecks_unchanged_declared_ref_dependents(self) -> None:
+        for changed_contract, expected_status in (
+            ("CONTRACT-COMMON", "fail"),
+            ("CONTRACT-UNRELATED", "pass"),
+        ):
+            with self.subTest(changed_contract=changed_contract):
+                system = _system()
+                system["contracts"] = [
+                    {
+                        "id": "CONTRACT-EVENT",
+                        "kind": "event",
+                        "path": "engineering/contracts/event.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-COMMON",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/common.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-UNRELATED",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/unrelated.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                ]
+                system["nodes"][0]["public_contracts"] = [
+                    item["id"] for item in system["contracts"]
+                ]
+                rules = _rules()
+                rules["contract_policies"] = [
+                    {
+                        "id": "FIT-CONTRACT",
+                        "contract_kinds": ["event", "json_schema"],
+                        "compatibility": "consumer_accepts_old",
+                        "severity": "error",
+                    }
+                ]
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_json(
+                    "engineering/contracts/event.json", {"$ref": "common.json"}
+                )
+                repo.write_json(
+                    "engineering/contracts/common.json",
+                    {"type": "integer", "description": "money is cents"},
+                )
+                repo.write_json(
+                    "engineering/contracts/unrelated.json",
+                    {"type": "string", "description": "unrelated alpha"},
+                )
+                base = repo.commit("declared ref baseline")
+                path = (
+                    "engineering/contracts/common.json"
+                    if changed_contract == "CONTRACT-COMMON"
+                    else "engineering/contracts/unrelated.json"
+                )
+                changed = (
+                    {"type": "integer", "description": "money is dollars"}
+                    if changed_contract == "CONTRACT-COMMON"
+                    else {"type": "string", "description": "unrelated beta"}
+                )
+                repo.write_json(path, changed)
+                head = repo.commit("description-only dependency change")
+                result = self._results(self._evaluate(repo, base, head))[
+                    "contract_compatibility"
+                ]
+                self.assertEqual(result.status, expected_status)
+                if expected_status == "fail":
+                    self.assertIn("CONTRACT-EVENT", " ".join(result.findings))
+
+    def test_contract_compatibility_ignores_unrelated_unsupported_contracts(self) -> None:
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-EVENT",
+                "kind": "event",
+                "path": "engineering/contracts/event.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-COMMON",
+                "kind": "json_schema",
+                "path": "engineering/contracts/common.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-UNRELATED",
+                "kind": "json_schema",
+                "path": "engineering/contracts/unrelated.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [{
+            "id": "FIT-CONTRACT",
+            "contract_kinds": ["event", "json_schema"],
+            "compatibility": "consumer_accepts_old",
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/event.json", {"$ref": "common.json"})
+        repo.write_json(
+            "engineering/contracts/common.json",
+            {"type": "integer", "description": "money is cents"},
+        )
+        repo.write_json(
+            "engineering/contracts/unrelated.json",
+            {"type": "string", "not": {"const": "unsupported"}},
+        )
+        base = repo.commit("contract dependency baseline")
+        repo.write_json(
+            "engineering/contracts/common.json",
+            {"type": "integer", "description": "money is dollars"},
+        )
+        head = repo.commit("referenced contract changed")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(result.status, "fail")
+        self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+        self.assertNotIn("CONTRACT-UNRELATED", result.applicability.scanned_scope)
+
+    def _reference_grammar_repo(
+        self,
+        event_reference: str,
+        common_document: dict,
+        changed_common_document: dict,
+        changed_event_document: dict | None = None,
+    ) -> tuple[GitArchitectureRepo, str, str]:
+        """Inventory where only ``CONTRACT-EVENT`` points at ``CONTRACT-COMMON``.
+
+        Every reference-grammar case shares this inventory, the same policy and the same
+        description-only change to the referenced contract; only the spelling of the
+        ``$ref`` differs.  A dependent that drops out of the comparison therefore fails
+        because of the grammar and nothing else.
+        """
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-EVENT",
+                "kind": "event",
+                "path": "engineering/contracts/event.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-COMMON",
+                "kind": "json_schema",
+                "path": "engineering/contracts/common.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-UNRELATED",
+                "kind": "json_schema",
+                "path": "engineering/contracts/unrelated.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["event", "json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/event.json", {"$ref": event_reference})
+        repo.write_json("engineering/contracts/common.json", common_document)
+        repo.write_json(
+            "engineering/contracts/unrelated.json",
+            {"type": "string", "description": "unrelated alpha"},
+        )
+        base = repo.commit("reference grammar baseline")
+        if changed_event_document is not None:
+            repo.write_json("engineering/contracts/event.json", changed_event_document)
+        repo.write_json("engineering/contracts/common.json", changed_common_document)
+        head = repo.commit("referenced contract changed")
+        return repo, base, head
+
+    def test_contract_compatibility_rechecks_dependents_of_every_reference_grammar(self) -> None:
+        whole_document = {"type": "integer", "description": "money is cents"}
+        whole_document_changed = {"type": "integer", "description": "money is dollars"}
+        fragment_bearing = {"$defs": {"money": whole_document}}
+        fragment_bearing_changed = {"$defs": {"money": whole_document_changed}}
+        declared_id = {"$id": "urn:adaptive-grok.test:common", **fragment_bearing}
+        declared_id_changed = {"$id": "urn:adaptive-grok.test:common", **fragment_bearing_changed}
+        for case in (
+            {
+                "label": "plain relative path",
+                "reference": "common.json",
+                "common": whole_document,
+                "changed": whole_document_changed,
+            },
+            {
+                "label": "declared $id",
+                "reference": "urn:adaptive-grok.test:common",
+                "common": {"$id": "urn:adaptive-grok.test:common", **whole_document},
+                "changed": {"$id": "urn:adaptive-grok.test:common", **whole_document_changed},
+            },
+            {
+                "label": "path with JSON pointer",
+                "reference": "common.json#/$defs/money",
+                "common": fragment_bearing,
+                "changed": fragment_bearing_changed,
+            },
+            {
+                "label": "declared $id with JSON pointer",
+                "reference": "urn:adaptive-grok.test:common#/$defs/money",
+                "common": declared_id,
+                "changed": declared_id_changed,
+            },
+        ):
+            with self.subTest(grammar=case["label"]):
+                repo, base, head = self._reference_grammar_repo(
+                    case["reference"], case["common"], case["changed"]
+                )
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+                self.assertNotIn("CONTRACT-UNRELATED", result.applicability.scanned_scope)
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(
+                    any(
+                        finding.startswith("CONTRACT-EVENT:")
+                        for finding in result.findings
+                    ),
+                    result.findings,
+                )
+
+    def test_contract_compatibility_ignores_reference_without_declared_target(self) -> None:
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-COMMON",
+                "kind": "json_schema",
+                "path": "engineering/contracts/common.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-ORPHAN",
+                "kind": "json_schema",
+                "path": "engineering/contracts/orphan.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-ESCAPE",
+                "kind": "json_schema",
+                "path": "engineering/contracts/escape.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-EXTERNAL",
+                "kind": "json_schema",
+                "path": "engineering/contracts/external.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json(
+            "engineering/contracts/common.json",
+            {"type": "integer", "description": "money is cents"},
+        )
+        repo.write_json(
+            "engineering/contracts/orphan.json",
+            {"$ref": "urn:adaptive-grok.test:undeclared"},
+        )
+        repo.write_json(
+            "engineering/contracts/escape.json",
+            {"$ref": "../../../outside/money.json"},
+        )
+        repo.write_json(
+            "engineering/contracts/external.json",
+            {"$ref": "https://example.test/schema.json"},
+        )
+        base = repo.commit("undeclared reference baseline")
+        repo.write_json(
+            "engineering/contracts/common.json",
+            {"type": "integer", "description": "money is dollars"},
+        )
+        head = repo.commit("referenced contract changed")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(set(result.applicability.scanned_scope), {"CONTRACT-COMMON"})
+
+    def test_contract_compatibility_still_reports_referrer_with_undeclared_reference(self) -> None:
+        for reference in (
+            "urn:adaptive-grok.test:undeclared",
+            "../../../outside/money.json",
+            "https://example.test/schema.json",
+        ):
+            with self.subTest(reference=reference):
+                repo, base, head = self._reference_grammar_repo(
+                    reference,
+                    {"type": "integer", "description": "money is cents"},
+                    {"type": "integer", "description": "money is dollars"},
+                    changed_event_document={"$ref": reference, "description": "referrer changed"},
+                )
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+                self.assertIn("CONTRACT-EVENT", " ".join(result.findings))
+                self.assertNotEqual(result.status, "pass")
+
+    def test_contract_dependency_closure_uses_declared_path_precedence_issue_146(self) -> None:
+        """Issue #146: a reverse edge names every contract a ``$ref`` can point at.
+
+        ``CONTRACT-CLAIMANT`` declares an ``$id`` that is textually identical to the
+        referrer's ``$ref`` base, and that same base resolves to ``CONTRACT-TARGET``'s
+        declared path.  Reverse identity conservatively retains the union of both tables,
+        while the comparator follows the concrete path.  Claimant edits can cause extra
+        re-verification, but cannot redirect the referrer's verdict to the claimant.
+        """
+        shadowed_path = "engineering/contracts/dir/target.json"
+        reference_text = "dir/target.json"
+        for changed_contract in ("CONTRACT-TARGET", "CONTRACT-CLAIMANT"):
+            with self.subTest(changed_contract=changed_contract):
+                system = _system()
+                system["contracts"] = [
+                    {
+                        "id": "CONTRACT-REFERRER",
+                        "kind": "event",
+                        "path": "engineering/contracts/referrer.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-TARGET",
+                        "kind": "json_schema",
+                        "path": shadowed_path,
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-CLAIMANT",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/claimant.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                ]
+                system["nodes"][0]["public_contracts"] = [
+                    item["id"] for item in system["contracts"]
+                ]
+                rules = _rules()
+                rules["contract_policies"] = [
+                    {
+                        "id": "FIT-CONTRACT",
+                        "contract_kinds": ["event", "json_schema"],
+                        "compatibility": "consumer_accepts_old",
+                        "severity": "error",
+                    }
+                ]
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_json(
+                    "engineering/contracts/referrer.json", {"$ref": reference_text}
+                )
+                repo.write_json(shadowed_path, {"type": "string", "minLength": 1})
+                repo.write_json(
+                    "engineering/contracts/claimant.json",
+                    {"$id": reference_text, "type": "string", "minLength": 1},
+                )
+                base = repo.commit("path shadowed by claimant id baseline")
+                if changed_contract == "CONTRACT-TARGET":
+                    repo.write_json(shadowed_path, {"type": "string", "minLength": 9})
+                else:
+                    repo.write_json(
+                        "engineering/contracts/claimant.json",
+                        {"$id": reference_text, "type": "string", "minLength": 9},
+                    )
+                head = repo.commit("narrowed constraint")
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                # The dependent is re-verified whichever of the two candidates changed, and
+                # nothing else is dragged in: the union is exactly path candidate + $id
+                # candidate, so widening cannot degenerate into "compare everything".
+                self.assertEqual(
+                    set(result.applicability.scanned_scope),
+                    {changed_contract, "CONTRACT-REFERRER"},
+                )
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(
+                    any(
+                        finding.startswith(f"{changed_contract}:")
+                        for finding in result.findings
+                    ),
+                    result.findings,
+                )
+                if changed_contract == "CONTRACT-CLAIMANT":
+                    self.assertFalse(
+                        any(
+                            finding.startswith("CONTRACT-REFERRER:")
+                            for finding in result.findings
+                        ),
+                        result.findings,
+                    )
+                else:
+                    self.assertIn("CONTRACT-REFERRER: narrowed_constraint", result.findings)
+
+    def test_unsafe_declared_id_alias_keeps_both_dependency_candidates(self) -> None:
+        for reference, concrete_path in (
+            ("./alias.json", "contracts/alias.json"),
+            ("alias+v1.json", "contracts/alias+v1.json"),
+        ):
+            for fail_closed in (False, True):
+                with self.subTest(reference=reference, fail_closed=fail_closed):
+                    signals = []
+                    candidates = FIT._reference_identity_candidates(
+                        "contracts/root.json", reference,
+                        {reference: ["contracts/target.json"]},
+                        frozenset((concrete_path, "contracts/target.json")),
+                        fail_closed=fail_closed, signals=signals,
+                    )
+                    self.assertEqual(candidates, {concrete_path, "contracts/target.json"})
+                    self.assertEqual(signals, [])
+
+    def test_contract_dependency_closure_shares_the_comparator_reference_grammar(self) -> None:
+        """Issue #146 guard: the closure interprets ``$ref`` through the comparator's function.
+
+        The two symbols are asserted to be one implementation, then a spy proves an
+        ``$id`` reference actually travelled through it under both identity tables, with the
+        declared-path look-up among them.  A closure that grows its own grammar again, one
+        that is "simplified" into the comparator's ``resolve()`` ordering, or one that
+        consults only a single table fails here even while its edges still look plausible.
+        """
+        self.assertIs(
+            FIT.schema_reference_target_path, ARCHITECTURE.schema_reference_target_path
+        )
+        self.assertIs(FIT.schema_reference_parts, ARCHITECTURE.schema_reference_parts)
+        declared_id = "urn:adaptive-grok.test:common"
+        repo, base, head = self._reference_grammar_repo(
+            f"{declared_id}#/$defs/money",
+            {"$id": declared_id, "$defs": {"money": {"type": "integer"}}},
+            {"$id": declared_id, "$defs": {"money": {"type": "string"}}},
+        )
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        seen: list[tuple[str, str, str]] = []
+        real = ARCHITECTURE.schema_reference_target_path
+
+        def spy(referrer_path, reference_base, *arguments, **keywords):
+            seen.append((referrer_path, reference_base, keywords.get("precedence", "")))
+            return real(referrer_path, reference_base, *arguments, **keywords)
+
+        with patch.object(FIT, "schema_reference_target_path", side_effect=spy):
+            result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertIn(
+            (
+                "engineering/contracts/event.json",
+                declared_id,
+                ARCHITECTURE.SCHEMA_REFERENCE_PATH_FIRST,
+            ),
+            seen,
+        )
+        self.assertIn(
+            (
+                "engineering/contracts/event.json",
+                declared_id,
+                ARCHITECTURE.SCHEMA_REFERENCE_ID_FIRST,
+            ),
+            seen,
+        )
+        self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+
+    def test_contract_compatibility_fails_closed_on_duplicate_declared_schema_id(self) -> None:
+        for colliding in (False, True):
+            with self.subTest(colliding=colliding):
+                system = _system()
+                system["contracts"] = [
+                    {
+                        "id": "CONTRACT-COLLIDER-A",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/a.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-COLLIDER-B",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/b.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                    {
+                        "id": "CONTRACT-DEPENDENT",
+                        "kind": "json_schema",
+                        "path": "engineering/contracts/dependent.json",
+                        "version": "1",
+                        "role": "consumer",
+                        "compatibility": "consumer_accepts_old",
+                    },
+                ]
+                system["nodes"][0]["public_contracts"] = [
+                    item["id"] for item in system["contracts"]
+                ]
+                rules = _rules()
+                rules["contract_policies"] = [
+                    {
+                        "id": "FIT-CONTRACT",
+                        "contract_kinds": ["json_schema"],
+                        "compatibility": "consumer_accepts_old",
+                        "severity": "error",
+                    }
+                ]
+                referenced_id = "urn:adaptive-grok.test:money"
+                collider_id = "urn:adaptive-grok.test:other"
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_json(
+                    "engineering/contracts/a.json",
+                    {
+                        "$id": referenced_id if colliding else collider_id,
+                        "type": "integer",
+                        "description": "a base",
+                    },
+                )
+                repo.write_json(
+                    "engineering/contracts/b.json",
+                    {
+                        "$id": referenced_id,
+                        "type": "integer",
+                        "description": "b base",
+                    },
+                )
+                repo.write_json(
+                    "engineering/contracts/dependent.json",
+                    {"$ref": referenced_id, "description": "dependent base"},
+                )
+                base = repo.commit("schema id baseline")
+                repo.write_json(
+                    "engineering/contracts/b.json",
+                    {
+                        "$id": referenced_id,
+                        "type": "integer",
+                        "description": "b head",
+                    },
+                )
+                head = repo.commit("one referenced contract changed")
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                if colliding:
+                    with self.assertRaises(FIT.ArchitectureError) as captured:
+                        FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                    self.assertEqual(captured.exception.code, "contract")
+                    self.assertIn("ambiguous declared schema id", str(captured.exception))
+                else:
+                    result = FIT._contract_compatibility(
+                        diff._head_state.snapshot, diff
+                    )
+                    self.assertIn("CONTRACT-DEPENDENT", result.applicability.scanned_scope)
+
+    def _duplicate_declared_id_repo(
+        self, base_a_id: str, head_edits: dict[str, dict]
+    ) -> tuple[GitArchitectureRepo, str, str]:
+        """Repo where ``CONTRACT-COLLIDER-A`` carries ``base_a_id`` and head applies edits.
+
+        ``CONTRACT-DEPENDENT`` references ``urn:adaptive-grok.test:money``, which
+        ``CONTRACT-COLLIDER-B`` declares in both states, so the only thing that decides
+        whether the reference is attributable is which state ``CONTRACT-COLLIDER-A`` shares
+        that ``$id`` in.  Every arm below differs from another by one inventory only.
+        """
+        referenced_id = "urn:adaptive-grok.test:money"
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": identity,
+                "kind": "json_schema",
+                "path": path,
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            }
+            for identity, path in (
+                ("CONTRACT-COLLIDER-A", "engineering/contracts/a.json"),
+                ("CONTRACT-COLLIDER-B", "engineering/contracts/b.json"),
+                ("CONTRACT-DEPENDENT", "engineering/contracts/dependent.json"),
+                ("CONTRACT-UNRELATED", "engineering/contracts/unrelated.json"),
+            )
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json(
+            "engineering/contracts/a.json",
+            {"$id": base_a_id, "type": "integer", "description": "a base"},
+        )
+        repo.write_json(
+            "engineering/contracts/b.json",
+            {"$id": referenced_id, "type": "integer", "description": "b base"},
+        )
+        repo.write_json(
+            "engineering/contracts/dependent.json",
+            {"$ref": referenced_id, "description": "dependent base"},
+        )
+        repo.write_json(
+            "engineering/contracts/unrelated.json",
+            {"type": "string", "description": "unrelated base"},
+        )
+        base = repo.commit("duplicate declared id baseline")
+        for path, document in head_edits.items():
+            repo.write_json(path, document)
+        head = repo.commit("duplicate declared id change")
+        return repo, base, head
+
+    def test_contract_compatibility_bounds_duplicate_declared_id_to_certified_state(
+        self
+    ) -> None:
+        """Review finding A: an ``$id`` collision may only abort the state being certified.
+
+        The closure walks both inventories.  When only the base carries a shared ``$id``, the
+        collision is inherited authored state, and aborting on it made every contract pull
+        request against that base fail in the gate *and* the request that removes the
+        collision too -- its own base is the poisoned one -- so recovery needed a revert of
+        the gate change.  These arms pin the bounded rule: a collision in the certified state
+        still fails closed naming the offenders, a base-only collision is degraded to an
+        attributed row and the dependent is still re-verified, and the cleanup pull request
+        completes and reports.
+        """
+        referenced_id = "urn:adaptive-grok.test:money"
+        clean_id = "urn:adaptive-grok.test:other"
+        a_path = "engineering/contracts/a.json"
+        b_path = "engineering/contracts/b.json"
+        collider = {
+            "colliding": referenced_id,
+            "clean": clean_id,
+        }
+
+        def declared(schema_id: str, note: str) -> dict:
+            return {"$id": schema_id, "type": "integer", "description": note}
+
+        # Arms where the certified (head) state still carries the collision: fail closed and
+        # name the offending id and both declared paths, so no operator has to read the gate.
+        for arm, base_id, head_edits in (
+            (
+                "head-only collision",
+                collider["clean"],
+                {a_path: declared(collider["colliding"], "a head")},
+            ),
+            (
+                "collision in both states",
+                collider["colliding"],
+                {a_path: declared(collider["colliding"], "a head")},
+            ),
+        ):
+            with self.subTest(arm=arm):
+                repo, base, head = self._duplicate_declared_id_repo(base_id, head_edits)
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                with self.assertRaises(FIT.ArchitectureError) as captured:
+                    FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                message = str(captured.exception)
+                self.assertEqual(captured.exception.code, "contract")
+                self.assertIn("ambiguous declared schema id", message)
+                self.assertIn(referenced_id, message)
+                self.assertIn(a_path, message)
+                self.assertIn(b_path, message)
+
+        # Arm: the collision exists only in the base.  The dependent is still pulled in
+        # through the head inventory, its own comparison degrades the way the comparator
+        # already degrades an ambiguous reference, and the attributed row names the offenders.
+        for arm, base_id, head_edits in (
+            (
+                "base-only collision",
+                collider["colliding"],
+                {
+                    a_path: declared(collider["clean"], "a base"),
+                    b_path: declared(collider["colliding"], "b head"),
+                },
+            ),
+            (
+                "cleanup pull request with an unrelated contract edited",
+                collider["colliding"],
+                {
+                    a_path: declared(collider["clean"], "a head"),
+                    "engineering/contracts/unrelated.json": {
+                        "type": "string",
+                        "description": "unrelated head",
+                    },
+                },
+            ),
+        ):
+            with self.subTest(arm=arm):
+                repo, base, head = self._duplicate_declared_id_repo(base_id, head_edits)
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                result = FIT._contract_compatibility(
+                    diff._head_state.snapshot, diff
+                )
+                scope = set(result.applicability.scanned_scope)
+                self.assertIn("CONTRACT-COLLIDER-A", scope)
+                findings = "\n".join(result.findings)
+                if arm == "base-only collision":
+                    self.assertIn("CONTRACT-DEPENDENT", scope)
+                    self.assertIn(
+                        "CONTRACT-DEPENDENT: unsupported compatibility semantics",
+                        result.findings,
+                    )
+                    self.assertIn(
+                        "CONTRACT-DEPENDENT: unattributed reference: ambiguous declared"
+                        f" schema id '{referenced_id}' declared by {a_path}, {b_path}",
+                        findings,
+                    )
+                    self.assertEqual(result.status, "unsupported")
+                else:
+                    # Nothing the untouched referrer depends on moved, so its inherited
+                    # collision is not this change's verdict and must not be charged to it.
+                    self.assertNotIn("CONTRACT-DEPENDENT", scope)
+                    self.assertNotIn("CONTRACT-DEPENDENT", findings)
+                    self.assertIn("CONTRACT-UNRELATED", scope)
+
+    def _one_sided_declared_id_repo(
+        self, declare_id_in: str
+    ) -> tuple[GitArchitectureRepo, str, str]:
+        """Referrer byte-identical across the diff; only a declared ``$id`` moves state.
+
+        ``declare_id_in`` picks which of the two states carries the ``$id`` the referrer
+        names.  The reverse edge then exists in exactly one inventory, which is the only
+        way to falsify the closure's union over ``before`` and ``after``: a case where both
+        states carry the reference cannot tell a two-inventory walk from a one-inventory
+        walk, and that is how the base-side half of the union went unpinned once already.
+        """
+        declared_id = "urn:adaptive-grok.test:transient"
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-REFERRER",
+                "kind": "json_schema",
+                "path": "engineering/contracts/referrer.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-TARGET",
+                "kind": "json_schema",
+                "path": "engineering/contracts/target.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/referrer.json", {"$ref": declared_id})
+        base_document = {"type": "integer", "description": "base"}
+        head_document = {"type": "integer", "description": "head"}
+        if declare_id_in in {"base", "both"}:
+            base_document = {"$id": declared_id, **base_document}
+        if declare_id_in in {"head", "both"}:
+            head_document = {"$id": declared_id, **head_document}
+        repo.write_json("engineering/contracts/target.json", base_document)
+        base = repo.commit("one sided declared id baseline")
+        repo.write_json("engineering/contracts/target.json", head_document)
+        head = repo.commit("referenced contract changed")
+        return repo, base, head
+
+    def test_contract_dependency_closure_keeps_base_only_reference_dependents(self) -> None:
+        """The ``before`` inventory is load-bearing: a retracted ``$id`` must not drop the edge.
+
+        The referrer never changes and head no longer declares the ``$id`` its ``$ref``
+        names, so only the base table can produce this dependency.  A closure that walked
+        ``after`` alone silently loses the dependent's identity and its verdict, which is
+        the exact failure class issue #146 was opened for.
+        """
+        repo, base, head = self._one_sided_declared_id_repo("base")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {"CONTRACT-TARGET", "CONTRACT-REFERRER"},
+        )
+        self.assertTrue(
+            any(
+                finding.startswith("CONTRACT-REFERRER:") for finding in result.findings
+            ),
+            result.findings,
+        )
+        self.assertNotEqual(result.status, "pass")
+
+    def test_contract_dependency_closure_adds_head_only_reference_dependents(self) -> None:
+        """The symmetric lock: an edge that exists only in the ``after`` inventory.
+
+        The target *gains* the ``$id`` the byte-identical referrer already named, so a
+        closure restricted to the base state keeps every older edge and still misses this
+        one; pinning only the base side would leave half of the union unfalsified.
+        """
+        repo, base, head = self._one_sided_declared_id_repo("head")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {"CONTRACT-TARGET", "CONTRACT-REFERRER"},
+        )
+        self.assertTrue(
+            any(
+                finding.startswith("CONTRACT-REFERRER:") for finding in result.findings
+            ),
+            result.findings,
+        )
+        self.assertNotEqual(result.status, "pass")
+
+    def test_contract_dependency_closure_attaches_named_path_despite_ambiguous_ids(self) -> None:
+        """An unattributable ``$id`` candidate must not cost the edge the path table names.
+
+        Two claimants share the ``$id`` that also shadows a declared path.  Attaching one of
+        them would be guessing, so neither is attached and nothing raises: the path edge
+        stays, and the ambiguity still makes the referrer's fitness row unsupported through
+        its unattributed signal. Raising here instead would let a pre-existing ``$id``
+        collision break every gate run, including runs that touch neither claimant nor
+        referrer.
+        """
+        shadowed_path = "engineering/contracts/dir/target.json"
+        reference_text = "dir/target.json"
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": id_,
+                "kind": "json_schema",
+                "path": path,
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            }
+            for id_, path in (
+                ("CONTRACT-REFERRER", "engineering/contracts/referrer.json"),
+                ("CONTRACT-TARGET", shadowed_path),
+                ("CONTRACT-CLAIMANT-A", "engineering/contracts/claimant-a.json"),
+                ("CONTRACT-CLAIMANT-B", "engineering/contracts/claimant-b.json"),
+            )
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/referrer.json", {"$ref": reference_text})
+        repo.write_json(
+            shadowed_path, {"type": "string", "description": "target base"}
+        )
+        for name in ("claimant-a", "claimant-b"):
+            repo.write_json(
+                f"engineering/contracts/{name}.json",
+                {"$id": reference_text, "type": "string", "minLength": 1},
+            )
+        base = repo.commit("ambiguous claimant ids baseline")
+        repo.write_json(
+            shadowed_path, {"type": "string", "description": "target head"}
+        )
+        head = repo.commit("referenced contract changed")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {"CONTRACT-TARGET", "CONTRACT-REFERRER"},
+        )
+        self.assertNotIn("CONTRACT-CLAIMANT-A", result.applicability.scanned_scope)
+        self.assertNotIn("CONTRACT-CLAIMANT-B", result.applicability.scanned_scope)
+        self.assertTrue(
+            any(
+                finding.startswith("CONTRACT-REFERRER:") for finding in result.findings
+            ),
+            result.findings,
+        )
+        self.assertNotEqual(result.status, "pass")
+
+    def _unattributed_reference_fixture(self, unique_count: int):
+        """Real path targets with two ID claimants each; each signal repeats three times."""
+        documents = {}
+        references = {
+            f"signal-{index:02d}-{repeat}": {"$ref": f"target-{index:02d}.json"}
+            for index in range(unique_count) for repeat in range(3)
+        }
+        for identity in ("REFERRER-A", "REFERRER-B"):
+            documents[identity] = {"type": "object", "$defs": copy.deepcopy(references)}
+        for index in range(unique_count):
+            documents[f"TARGET-{index:02d}"] = {"type": "string", "minLength": 1}
+            for claimant in ("A", "B"):
+                documents[f"CLAIMANT-{index:02d}-{claimant}"] = {
+                    "$id": f"target-{index:02d}.json", "type": "string",
+                }
+        documents["OTHER"] = {"not": {"type": "string"}}
+        paths = {identity: f"engineering/contracts/{identity.lower()}.json" for identity in documents}
+        system = _system()
+        system["contracts"] = [
+            {"id": f"CONTRACT-{identity}", "kind": "json_schema", "path": paths[identity],
+             "version": "1", "role": "consumer", "compatibility": "consumer_accepts_old"}
+            for identity in documents
+        ]
+        system["nodes"][0]["public_contracts"] = [item["id"] for item in system["contracts"]]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {"id": "FIT-CONTRACT", "contract_kinds": ["json_schema"],
+             "compatibility": "consumer_accepts_old", "severity": "error"}
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        for identity, document in documents.items():
+            repo.write_json(paths[identity], document)
+        base = repo.commit("repeated ambiguous references")
+        return repo, base, documents, paths
+
+    def test_unattributed_reference_findings_are_unique_sorted_and_capped_per_referrer(self) -> None:
+        for unique_count in (0, 1, 5, 8):
+            with self.subTest(unique_count=unique_count):
+                repo, base, documents, paths = self._unattributed_reference_fixture(unique_count)
+                for identity in ("REFERRER-A", "REFERRER-B", "OTHER"):
+                    repo.write_json(paths[identity], {**documents[identity], "description": "changed"})
+                head = repo.commit("recheck referrers and separate unsupported contract")
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                with patch.object(FIT, "_result", wraps=FIT._result) as emitted:
+                    result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                self.assertEqual(result.status, "unsupported")
+                self.assertIn("CONTRACT-OTHER: unsupported compatibility semantics", result.findings)
+                for identity in ("REFERRER-A", "REFERRER-B"):
+                    prefix = f"CONTRACT-{identity}: unattributed reference: "
+                    group_prefix = f"CONTRACT-{identity}: unattributed reference"
+                    actual = [line for line in result.findings if line.startswith(group_prefix)]
+                    expected = [
+                        prefix + f"ambiguous declared schema id 'target-{index:02d}.json' declared by "
+                        + f"{paths[f'CLAIMANT-{index:02d}-A']}, {paths[f'CLAIMANT-{index:02d}-B']}"
+                        + f"; referenced by {paths[identity]}"
+                        for index in range(min(unique_count, 5))
+                    ]
+                    if unique_count > 5:
+                        expected.append(f"CONTRACT-{identity}: unattributed references: "
+                                        f"(+{unique_count - 5} more unattributed references)")
+                    self.assertEqual(actual, expected)
+                    # The final result helper also deduplicates; bound the expansion before it.
+                    raw = [line for line in emitted.call_args.kwargs["findings"]
+                           if line.startswith(group_prefix)]
+                    self.assertEqual(raw, expected)
+
+    def test_unattributed_reference_cap_keeps_out_of_scope_referrers_silent(self) -> None:
+        repo, base, documents, paths = self._unattributed_reference_fixture(8)
+        repo.write_json(paths["OTHER"], {**documents["OTHER"], "description": "changed"})
+        head = repo.commit("unrelated unsupported contract")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(result.applicability.scanned_scope, ("CONTRACT-OTHER",))
+        self.assertEqual(result.findings, ("CONTRACT-OTHER: unsupported compatibility semantics",))
+
+    def test_unattributed_reference_cap_retains_base_only_signals(self) -> None:
+        repo, base, documents, paths = self._unattributed_reference_fixture(8)
+        for identity, document in documents.items():
+            if identity.startswith("CLAIMANT-"):
+                repo.write_json(paths[identity], {"type": "string"})
+        repo.write_json(paths["REFERRER-A"], {**documents["REFERRER-A"], "description": "changed"})
+        head = repo.commit("repair inherited ambiguity")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        lines = [line for line in result.findings if "unattributed reference" in line]
+        self.assertEqual(result.status, "unsupported")
+        self.assertEqual(len(lines), 6)
+        self.assertEqual(lines[-1], "CONTRACT-REFERRER-A: unattributed references: (+3 more unattributed references)")
+        self.assertNotIn("CONTRACT-REFERRER-B", result.applicability.scanned_scope)
+
+    def test_unattributed_reference_cap_cannot_hide_late_head_only_ambiguity(self) -> None:
+        repo, base, documents, paths = self._unattributed_reference_fixture(8)
+        fatal_id = "urn:adaptive-test:late-head-ambiguity"
+        for identity in ("CLAIMANT-00-A", "CLAIMANT-00-B"):
+            repo.write_json(paths[identity], {"$id": fatal_id, "type": "string"})
+        # The walk uses a stack. Sorted JSON visits signal-* entries before a-late.
+        referrer = copy.deepcopy(documents["REFERRER-A"])
+        referrer["$defs"]["a-late"] = {"$ref": fatal_id}
+        repo.write_json(paths["REFERRER-A"], referrer)
+        head = repo.commit("late head-only id ambiguity")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        observed = []
+        real = FIT._reference_identity_candidates
+
+        def observe(*args, **kwargs):
+            observed.append((args[1], kwargs["fail_closed"]))
+            return real(*args, **kwargs)
+
+        with patch.object(FIT, "_reference_identity_candidates", side_effect=observe):
+            with self.assertRaises(FIT.ArchitectureError) as captured:
+                FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(captured.exception.code, "contract")
+        self.assertIn(fatal_id, str(captured.exception))
+        for identity in ("CLAIMANT-00-A", "CLAIMANT-00-B"):
+            self.assertIn(paths[identity], str(captured.exception))
+        self.assertEqual(observed[-1], (fatal_id, True))
+        preceding_head = {reference for reference, is_head in observed[:-1] if is_head}
+        self.assertGreater(len(preceding_head), 5)
+        self.assertTrue(any(not is_head for reference, is_head in observed))
+
+    def test_contract_dependency_closure_terminates_on_self_reference(self) -> None:
+        """Requirements edge case: a contract whose ``$ref`` names its own ``$id``.
+
+        The real inventory contains three of these.  A self reference must not become a
+        dependent (which would loop the BFS) and must not drag any other contract into the
+        re-verified set; the closure of a self-referencing contract is that contract alone.
+        """
+        declared_id = "urn:adaptive-grok.test:self"
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-SELF",
+                "kind": "json_schema",
+                "path": "engineering/contracts/self.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-UNRELATED",
+                "kind": "json_schema",
+                "path": "engineering/contracts/unrelated.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json(
+            "engineering/contracts/self.json",
+            {"$id": declared_id, "$ref": declared_id, "description": "base"},
+        )
+        repo.write_json("engineering/contracts/unrelated.json", {"type": "string"})
+        base = repo.commit("self reference baseline")
+        repo.write_json(
+            "engineering/contracts/self.json",
+            {"$id": declared_id, "$ref": declared_id, "description": "head"},
+        )
+        head = repo.commit("self referencing contract changed")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        before = {item.id: item for item in diff._base_state.contracts}
+        after = {item.id: item for item in diff._head_state.contracts}
+        self.assertEqual(
+            FIT._contract_dependency_closure({"CONTRACT-SELF"}, before, after),
+            {"CONTRACT-SELF"},
+        )
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(set(result.applicability.scanned_scope), {"CONTRACT-SELF"})
+        self.assertNotIn("CONTRACT-UNRELATED", result.applicability.scanned_scope)
+
+    def _declined_relative_repo(
+        self, event_reference: str, common_path: str
+    ) -> tuple[GitArchitectureRepo, str, str]:
+        """Inventory whose one dependency is a relative path the strict grammar declines.
+
+        The same shape as ``_reference_grammar_repo`` -- only the referenced contract
+        changes, only the spelling of the ``$ref`` differs -- except the referenced file
+        lives at ``common_path``, the legacy fold of the declined spelling.  A closure that
+        treats ``SCHEMA_REFERENCE_UNSAFE`` as an ordinary miss loses the only edge here.
+        """
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-EVENT",
+                "kind": "event",
+                "path": "engineering/contracts/event.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-COMMON",
+                "kind": "json_schema",
+                "path": common_path,
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-UNRELATED",
+                "kind": "json_schema",
+                "path": "engineering/contracts/unrelated.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["event", "json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/event.json", {"$ref": event_reference})
+        repo.write_json(common_path, {"type": "integer", "description": "money is cents"})
+        repo.write_json(
+            "engineering/contracts/unrelated.json",
+            {"type": "string", "description": "unrelated alpha"},
+        )
+        base = repo.commit("declined relative-path reference baseline")
+        repo.write_json(common_path, {"type": "integer", "description": "money is dollars"})
+        head = repo.commit("declined-path dependency changed")
+        return repo, base, head
+
+    def test_contract_dependency_closure_reverifies_declined_relative_path_referrers(
+        self
+    ) -> None:
+        """Finding C2, one arm per declined spelling: the referrer must be re-verified.
+
+        ``./common.json``, a segment holding a space and a segment holding a ``+`` are
+        relative paths the repository's own path rules accept, so the pre-issue-#146
+        closure had already attached the referrer to the contract folded onto.  Each arm
+        changes only the referenced contract and requires the byte-identical referrer in
+        the closure *and* in the re-verified scanned scope.  Re-collapsing the reasons --
+        putting ``SCHEMA_REFERENCE_UNSAFE`` back into ``SCHEMA_REFERENCE_UNRESOLVED`` or
+        deleting the ``schema_reference_identity_path`` recovery -- drops the referrer for
+        exactly these spellings and fails all three arms.
+        """
+        for spelling, reference, common_path in (
+            ("dot-slash", "./common.json", "engineering/contracts/common.json"),
+            ("space", "com mon.json", "engineering/contracts/com mon.json"),
+            ("plus", "com+mon.json", "engineering/contracts/com+mon.json"),
+        ):
+            with self.subTest(spelling=spelling):
+                repo, base, head = self._declined_relative_repo(reference, common_path)
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                before = {item.id: item for item in diff._base_state.contracts}
+                after = {item.id: item for item in diff._head_state.contracts}
+                closure = FIT._contract_dependency_closure({"CONTRACT-COMMON"}, before, after)
+                self.assertIn("CONTRACT-EVENT", closure)
+                result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+                self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+                self.assertIn("CONTRACT-EVENT", " ".join(result.findings))
+                self.assertNotEqual(result.status, "pass")
+
+    def test_reference_reasons_keep_declined_paths_apart_from_non_paths(self) -> None:
+        """The C2 root cause was two meanings sharing one reason; pin them apart.
+
+        ``SCHEMA_REFERENCE_UNSAFE`` means "a relative path the grammar declined" and is
+        recoverable, so it must never sit in ``SCHEMA_REFERENCE_UNRESOLVED``;
+        ``SCHEMA_REFERENCE_NOT_A_PATH`` means "no fold names a repository path" and stays
+        droppable, which is what leaves the comparator's IRI/``$id`` semantics untouched.
+        Asserted per refused spelling on both the raised reason and the recovered fold, so
+        collapsing either direction fails here first.
+        """
+        self.assertNotIn(
+            ARCHITECTURE.SCHEMA_REFERENCE_UNSAFE, ARCHITECTURE.SCHEMA_REFERENCE_UNRESOLVED
+        )
+        for droppable in (
+            ARCHITECTURE.SCHEMA_REFERENCE_NOT_A_PATH,
+            ARCHITECTURE.SCHEMA_REFERENCE_ESCAPE,
+            ARCHITECTURE.SCHEMA_REFERENCE_UNDECLARED,
+        ):
+            self.assertIn(droppable, ARCHITECTURE.SCHEMA_REFERENCE_UNRESOLVED)
+        for reference in ("./target.json", "ta rget.json", "ta+rget.json"):
+            with self.subTest(declined=reference):
+                with self.assertRaises(ARCHITECTURE.ArchitectureError) as refused:
+                    ARCHITECTURE.schema_reference_relative_path(
+                        "dir/referrer.json", reference
+                    )
+                self.assertEqual(
+                    str(refused.exception), ARCHITECTURE.SCHEMA_REFERENCE_UNSAFE
+                )
+                self.assertEqual(
+                    ARCHITECTURE.schema_reference_identity_path(
+                        "dir/referrer.json", reference
+                    ),
+                    (posixpath.normpath(posixpath.join("dir", reference)), ""),
+                )
+        with self.assertRaises(ARCHITECTURE.ArchitectureError) as refused:
+            ARCHITECTURE.schema_reference_relative_path("dir/referrer.json", "urn:x:target")
+        self.assertEqual(str(refused.exception), ARCHITECTURE.SCHEMA_REFERENCE_NOT_A_PATH)
+        self.assertEqual(
+            ARCHITECTURE.schema_reference_identity_path("dir/referrer.json", "/abs/x.json"),
+            (None, ARCHITECTURE.SCHEMA_REFERENCE_NOT_A_PATH),
+        )
+        self.assertEqual(
+            ARCHITECTURE.schema_reference_identity_path("referrer.json", "../x.json"),
+            (None, ARCHITECTURE.SCHEMA_REFERENCE_ESCAPE),
+        )
+
+    def test_real_contract_closure_supersets_legacy_fold_per_target(self) -> None:
+        """Structural lock for the release.md No-go line: zero lost closure edges.
+
+        Re-derives the d871ea6 dependency relation inside the test -- normalise
+        ``posixpath.join(dirname(referrer.path), $ref)`` over the *whole* reference text
+        (no fragment split), keep it only when it names a declared path -- and asserts,
+        for every contract declared in this repository, that the legacy transitive
+        dependents all sit inside what ``_contract_dependency_closure`` re-verifies on the
+        shipped inventory: measured in the review that is 22 -> 27 pairs with zero lost.
+        Self-pairs are excluded because the self edge is forbidden outright, locked by
+        ``test_contract_dependency_closure_terminates_on_self_reference``.  The gained
+        assertion keeps the superset meaningful: zero gained pairs would mean the fleet
+        no longer exercises the widened tables and this arm had gone vacuous.
+        """
+        snapshot = ARCHITECTURE.load_architecture(ROOT)
+        records = ARCHITECTURE.contract_inventory(ROOT, snapshot)
+        state = {record.id: record for record in records}
+        declared = {record.path: record.id for record in records}
+        self.assertTrue(
+            all("#" not in path for path in declared),
+            "a declared contract path holding '#' breaks the fold this arm models",
+        )
+        reverse: dict[str, set[str]] = {}
+        for record in records:
+            pending = [record.document]
+            while pending:
+                value = pending.pop()
+                if isinstance(value, dict):
+                    reference = value.get("$ref")
+                    if isinstance(reference, str) and not reference.startswith("#"):
+                        normalized = posixpath.normpath(
+                            posixpath.join(posixpath.dirname(record.path), reference)
+                        )
+                        if normalized != ".." and not normalized.startswith("../"):
+                            target_id = declared.get(normalized)
+                            if target_id is not None and target_id != record.id:
+                                reverse.setdefault(target_id, set()).add(record.id)
+                    pending.extend(value.values())
+                elif isinstance(value, list):
+                    pending.extend(value)
+
+        def legacy_closure(target_id: str) -> set[str]:
+            closure = {target_id}
+            frontier = [target_id]
+            while frontier:
+                node = frontier.pop()
+                for dependent in reverse.get(node, ()):
+                    if dependent not in closure:
+                        closure.add(dependent)
+                        frontier.append(dependent)
+            return closure - {target_id}
+
+        lost = []
+        gained = set()
+        for target_id in sorted(state):
+            legacy = legacy_closure(target_id)
+            shipped = FIT._contract_dependency_closure(
+                {target_id}, dict(state), dict(state)
+            ) - {target_id}
+            lost.extend((target_id, dependent) for dependent in sorted(legacy - shipped))
+            gained.update((target_id, dependent) for dependent in sorted(shipped - legacy))
+        self.assertEqual(
+            lost,
+            [],
+            "lost closure edges (No-go: any lost edge): "
+            + ", ".join(f"{target}<-{dependent}" for target, dependent in lost),
+        )
+        self.assertGreater(
+            len(gained),
+            0,
+            "shipped closure must still attach dependents the legacy fold could not "
+            "($id-table references); zero gained pairs mean this arm is vacuous",
+        )
+
+    def test_contract_dependency_closure_keeps_parent_segment_references_inside_repository(
+        self
+    ) -> None:
+        """Finding C2's fourth shape: ``../`` that stays inside the repository.
+
+        ``../shared/common.json`` is resolved identically by the strict grammar and by the
+        legacy fold, so this arm is the control that says the C2 recovery did not have to
+        widen anything for the spelling the shipped inventory already uses (the landing
+        openapi contracts reference ``../jsonschema/...``).  The escaped form is the
+        contradiction pair: still no edge and still nothing raised, because there is no
+        declared contract outside the inventory to attach.  Both readings go through
+        ``architecture.schema_reference_identity_path``, asserted to be the one fold the
+        closure shares -- a closure that grew its own normalisation would pass both arms
+        here and still drift from the comparator.
+        """
+        self.assertIs(
+            FIT.schema_reference_identity_path,
+            ARCHITECTURE.schema_reference_identity_path,
+        )
+        repo, base, head = self._declined_relative_repo(
+            "../shared/common.json", "engineering/shared/common.json"
+        )
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        before = {item.id: item for item in diff._base_state.contracts}
+        after = {item.id: item for item in diff._head_state.contracts}
+        self.assertEqual(
+            FIT._reverse_contract_dependencies(
+                after, fail_closed=True, unattributed={}
+            ),
+            {"CONTRACT-COMMON": {"CONTRACT-EVENT"}},
+        )
+        self.assertEqual(
+            FIT._contract_dependency_closure({"CONTRACT-COMMON"}, before, after),
+            {"CONTRACT-COMMON", "CONTRACT-EVENT"},
+        )
+        result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertIn("CONTRACT-EVENT", result.applicability.scanned_scope)
+        escaped, escaped_base, escaped_head = self._reference_grammar_repo(
+            "../../../outside/common.json",
+            {"type": "integer", "description": "money is cents"},
+            {"type": "integer", "description": "money is dollars"},
+        )
+        escaped_diff = FIT.diff_architecture(
+            escaped.root, base_sha=escaped_base, head_sha=escaped_head
+        )
+        escaped_result = FIT._contract_compatibility(
+            escaped_diff._head_state.snapshot, escaped_diff
+        )
+        self.assertEqual(
+            set(escaped_result.applicability.scanned_scope), {"CONTRACT-COMMON"}
+        )
+        self.assertEqual(escaped_result.status, "pass", escaped_result.findings)
+
+    def test_contract_dependency_closure_creates_no_self_edge(self) -> None:
+        """Finding C3: a ``$ref`` that resolves through the referrer's own identity is no edge.
+
+        ``test_contract_dependency_closure_terminates_on_self_reference`` cannot see a self edge:
+        the walk seeds the changed contract, so a dependent that *is* the target is already in the
+        returned set and the closure is identical with or without the edge.  The direct edge map is
+        the unit that carried three self edges after the ``$id`` widening -- the 17-versus-14 gap
+        in the published count -- so it is asserted here, for both self spellings (through the
+        referrer's own ``$id`` and through its own path), for the ordinary local pointer
+        (``#/$defs/...``, which was never an edge), and for every contract declared in this
+        repository.  A genuine dependency on a *different* contract that happens to be referenced
+        by the self-referencing file must survive: excluding self edges is not a narrowing.
+        """
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": "CONTRACT-SELF-ID",
+                "kind": "json_schema",
+                "path": "engineering/contracts/self-id.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-SELF-PATH",
+                "kind": "json_schema",
+                "path": "engineering/contracts/self-path.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-LOCAL-POINTER",
+                "kind": "json_schema",
+                "path": "engineering/contracts/local.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+            {
+                "id": "CONTRACT-OTHER",
+                "kind": "json_schema",
+                "path": "engineering/contracts/other.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            },
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json(
+            "engineering/contracts/self-id.json",
+            {
+                "$id": "urn:adaptive-grok.test:self",
+                "$ref": "urn:adaptive-grok.test:self",
+                "description": "references its own declared id",
+            },
+        )
+        repo.write_json(
+            "engineering/contracts/self-path.json",
+            {"$ref": "self-path.json", "description": "references its own file"},
+        )
+        repo.write_json(
+            "engineering/contracts/local.json",
+            {
+                "$ref": "#/$defs/money",
+                "$defs": {"money": {"type": "integer"}},
+                "description": "local pointer only",
+            },
+        )
+        repo.write_json(
+            "engineering/contracts/other.json",
+            {"$ref": "self-id.json", "description": "a real dependency"},
+        )
+        state = {
+            record.id: record
+            for record in ARCHITECTURE.contract_inventory(
+                repo.root, FIT.load_architecture(repo.root)
+            )
+        }
+        edges = FIT._reverse_contract_dependencies(
+            state, fail_closed=True, unattributed={}
+        )
+        self.assertEqual(edges, {"CONTRACT-SELF-ID": {"CONTRACT-OTHER"}})
+        for identity, expected_dependents in (
+            ("CONTRACT-SELF-ID", {"CONTRACT-OTHER"}),
+            ("CONTRACT-SELF-PATH", set()),
+            ("CONTRACT-LOCAL-POINTER", set()),
+        ):
+            with self.subTest(self_referencer=identity):
+                self.assertEqual(
+                    FIT._contract_dependency_closure({identity}, dict(state), dict(state))
+                    - {identity},
+                    expected_dependents,
+                )
+        fleet = {
+            record.id: record
+            for record in ARCHITECTURE.contract_inventory(
+                ROOT, ARCHITECTURE.load_architecture(ROOT)
+            )
+        }
+        shipped = FIT._reverse_contract_dependencies(
+            fleet, fail_closed=True, unattributed={}
+        )
+        self.assertEqual(
+            sorted(target for target, dependents in shipped.items() if target in dependents),
+            [],
+            "the shipped inventory must not produce a self edge for any contract",
+        )
+        self.assertGreater(
+            sum(len(dependents) for dependents in shipped.values()),
+            0,
+            "a vacuous fleet-wide edge map would make the self-edge assertion meaningless",
+        )
+
+    def test_contract_compatibility_has_one_aggregate_comparison_budget(self) -> None:
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": f"CONTRACT-{suffix}",
+                "kind": "json_schema",
+                "path": f"engineering/contracts/{suffix.lower()}.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            }
+            for suffix in ("A", "B", "C")
+        ]
+        system["nodes"][0]["public_contracts"] = [
+            item["id"] for item in system["contracts"]
+        ]
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-CONTRACT",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            }
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        for suffix in ("a", "b", "c"):
+            repo.write_json(
+                f"engineering/contracts/{suffix}.json",
+                {"type": "string", "description": f"{suffix} base"},
+            )
+        base = repo.commit("aggregate comparison baseline")
+        repo.write_json(
+            "engineering/contracts/c.json",
+            {"type": "string", "description": "c head"},
+        )
+        head = repo.commit("aggregate comparison change")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        with patch.object(ARCHITECTURE, "MAX_PARSED_NODES", 5):
+            result = FIT._contract_compatibility(diff._head_state.snapshot, diff)
+        self.assertEqual(result.status, "unsupported")
+        self.assertIn("unsupported compatibility semantics", " ".join(result.findings))
+
+    def test_added_contract_has_no_nonexistent_baseline_but_change_remains_fail_closed(self) -> None:
+        system = _system()
+        rules = _rules()
+        rules["contract_policies"] = [{
+            "id": "FIT-CONTRACT",
+            "contract_kinds": ["json_schema"],
+            "compatibility": "consumer_accepts_old",
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        base = repo.commit("pre-contract baseline")
+        added = copy.deepcopy(system)
+        added["contracts"] = [{
+            "id": "CONTRACT-UNSUPPORTED",
+            "kind": "json_schema",
+            "path": "engineering/contracts/unsupported.json",
+            "version": "1",
+            "role": "consumer",
+            "compatibility": "consumer_accepts_old",
+        }]
+        added["nodes"][0]["public_contracts"] = ["CONTRACT-UNSUPPORTED"]
+        repo.model(added, rules)
+        document = _json_schema({"value": {"type": "string"}})
+        document["properties"]["value"]["dependentRequired"] = {"value": ["other"]}
+        repo.write_json("engineering/contracts/unsupported.json", document)
+        head = repo.commit("unsupported contract addition")
+        report = self._evaluate(repo, base, head, pre_risk="yellow")
+        result = self._results(report)["contract_compatibility"]
+        self.assertEqual(result.status, "pass", result.findings)
+        self.assertEqual(report.status, "pass")
+
+        document["properties"]["value"]["dependentRequired"] = {
+            "value": ["changed"]
+        }
+        repo.write_json("engineering/contracts/unsupported.json", document)
+        changed = repo.commit("change unsupported contract")
+        changed_report = self._evaluate(repo, head, changed, pre_risk="yellow")
+        changed_result = self._results(changed_report)["contract_compatibility"]
+        self.assertEqual(changed_result.status, "unsupported")
+        self.assertEqual(changed_report.status, "fail")
+        self.assertIn("CONTRACT-UNSUPPORTED", " ".join(changed_result.findings))
+
+    def test_added_rich_factory_contracts_resolve_from_head_inventory(self) -> None:
+        system = _system()
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-OPENAPI",
+                "contract_kinds": ["openapi"],
+                "compatibility": "bidirectional",
+                "severity": "error",
+            },
+            {
+                "id": "FIT-JSON-PRODUCER",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "producer_accepted_by_old",
+                "severity": "error",
+            },
+            {
+                "id": "FIT-EVENT-CONSUMER",
+                "contract_kinds": ["event"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            },
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        base = repo.commit("factory contract predecessor")
+
+        contracts = [
+            {
+                "compatibility": "bidirectional",
+                "id": "CONTRACT-FACTORY-EXECUTION-OPENAPI",
+                "kind": "openapi",
+                "path": "factory/contracts/openapi/factory-execution.v1.json",
+                "role": "bidirectional",
+                "version": "1",
+            },
+            {
+                "compatibility": "consumer_accepts_old",
+                "id": "CONTRACT-FACTORY-EXECUTION-EVENT",
+                "kind": "event",
+                "path": "factory/contracts/schemas/execution-event.v1.json",
+                "role": "consumer",
+                "version": "1",
+            },
+            {
+                "compatibility": "producer_accepted_by_old",
+                "id": "CONTRACT-FACTORY-EXECUTION-INVOCATION",
+                "kind": "json_schema",
+                "path": "factory/contracts/schemas/execution-invocation.v1.json",
+                "role": "producer",
+                "version": "1",
+            },
+            {
+                "compatibility": "producer_accepted_by_old",
+                "id": "CONTRACT-FACTORY-TASK-PACKET",
+                "kind": "json_schema",
+                "path": "factory/contracts/schemas/task-packet.v1.json",
+                "role": "producer",
+                "version": "1",
+            },
+            {
+                "compatibility": "producer_accepted_by_old",
+                "id": "CONTRACT-FACTORY-WORKSPACE-RESULT",
+                "kind": "json_schema",
+                "path": "factory/contracts/schemas/workspace-result.v1.json",
+                "role": "producer",
+                "version": "1",
+            },
+        ]
+        added = copy.deepcopy(system)
+        added["contracts"] = contracts
+        added["nodes"][0]["public_contracts"] = [contracts[0]["id"]]
+        added["nodes"][1]["public_contracts"] = [
+            contract["id"] for contract in contracts[1:]
+        ]
+        repo.model(added, rules)
+        for contract in contracts:
+            source = ROOT / contract["path"]
+            repo.write_json(contract["path"], json.loads(source.read_text()))
+        head = repo.commit("add rich factory contracts")
+
+        result = self._results(self._evaluate(repo, base, head))[
+            "contract_compatibility"
+        ]
+        self.assertEqual(result.status, "pass", result.findings)
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {
+                *(contract["id"] for contract in contracts),
+                "FIT-OPENAPI",
+                "FIT-JSON-PRODUCER",
+                "FIT-EVENT-CONSUMER",
+            },
+        )
+
+    def test_added_landing_contracts_have_supported_closed_semantics(self) -> None:
+        source = ARCHITECTURE.load_architecture(ROOT)
+        contracts = [
+            copy.deepcopy(contract)
+            for contract in source.system["contracts"]
+            if contract["id"].startswith("CONTRACT-FACTORY-LANDING-")
+        ]
+        self.assertEqual({contract["id"] for contract in contracts}, {
+            "CONTRACT-FACTORY-LANDING-ATTEMPT-V1", "CONTRACT-FACTORY-LANDING-EVALUATION-V1",
+            "CONTRACT-FACTORY-LANDING-INPUT-V1", "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
+            "CONTRACT-FACTORY-LANDING-PROVIDER-EVIDENCE-V1", "CONTRACT-FACTORY-LANDING-PROVIDER-EVIDENCE-V2",
+            "CONTRACT-FACTORY-LANDING-SITE-ARTIFACT-V1", "CONTRACT-FACTORY-LANDING-SPEC-V1",
+            "CONTRACT-FACTORY-LANDING-PROVIDER-OBSERVATION-V1",
+            "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V1",
+            "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
+            "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
+            "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
+            "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
+        })
+        system = _system()
+        rules = _rules()
+        rules["contract_policies"] = [
+            {
+                "id": "FIT-OPENAPI",
+                "contract_kinds": ["openapi"],
+                "compatibility": "bidirectional",
+                "severity": "error",
+            },
+            {
+                "id": "FIT-JSON-CONSUMER",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "consumer_accepts_old",
+                "severity": "error",
+            },
+            {
+                "id": "FIT-JSON-PRODUCER",
+                "contract_kinds": ["json_schema"],
+                "compatibility": "producer_accepted_by_old",
+                "severity": "error",
+            },
+        ]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        base = repo.commit("landing contract predecessor")
+        added = copy.deepcopy(system)
+        added["contracts"] = contracts
+        added["nodes"][0]["public_contracts"] = [
+            contract["id"] for contract in contracts
+        ]
+        repo.model(added, rules)
+        for contract in contracts:
+            repo.write_json(
+                contract["path"],
+                json.loads((ROOT / contract["path"]).read_text(encoding="utf-8")),
+            )
+        head = repo.commit("add closed landing contracts")
+
+        result = self._results(self._evaluate(repo, base, head))[
+            "contract_compatibility"
+        ]
+
+        self.assertEqual(result.status, "pass", result.findings)
+        self.assertEqual(
+            set(result.applicability.scanned_scope),
+            {
+                *(contract["id"] for contract in contracts),
+                "FIT-JSON-CONSUMER",
+                "FIT-JSON-PRODUCER",
+                "FIT-OPENAPI",
+            },
+        )
+
+    def test_migration_history_and_required_phases_fail_closed(self) -> None:
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("migrations/001_expand.sql", "CREATE TABLE item(id integer);\n")
+        head = repo.commit("incomplete migration")
+        result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual(result.status, "fail")
+        self.assertIn("missing phases", " ".join(result.findings))
+
+        repo.write_text(
+            "migrations/001_migrate.sql",
+            "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n",
+        )
+        repo.write_text("migrations/001_contract.sql", "ALTER TABLE item DROP COLUMN legacy;\n")
+        complete = repo.commit("complete migration")
+        result = self._results(self._evaluate(repo, head, complete))["migration_safety"]
+        self.assertEqual(result.status, "pass")
+        repo.write_text("migrations/001_expand.sql", "DROP TABLE item;\n")
+        rewritten = repo.commit("rewrite history")
+        result = self._results(self._evaluate(repo, complete, rewritten))["migration_safety"]
+        self.assertEqual(result.status, "fail")
+        self.assertIn("immutable", " ".join(result.findings))
+
+    def test_canonical_migrations_seed_phased_version_history(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["migrations", "package/resources"]
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": True,
+            "severity": "error",
+        }]
+        canonical = (
+            "001_schema.sql",
+            "002_operational_indexes.sql",
+            "003_database_roles.sql",
+        )
+
+        def seeded_repo() -> tuple[GitArchitectureRepo, str]:
+            repo = GitArchitectureRepo(self)
+            repo.model(system, rules)
+            for name in canonical:
+                for prefix in ("migrations", "package/resources"):
+                    repo.write_text(f"{prefix}/{name}", f"-- canonical {name}\n")
+            return repo, repo.commit("canonical migration history")
+
+        phased = {
+            "expand": "CREATE TABLE item(id integer);\n",
+            "migrate": "UPDATE item SET id = id WHERE id BETWEEN 1 AND 100;\n",
+            "contract": "ALTER TABLE item DROP COLUMN legacy;\n",
+        }
+        repo, base = seeded_repo()
+        for phase, source in phased.items():
+            for prefix in ("migrations", "package/resources"):
+                repo.write_text(f"{prefix}/004_{phase}.sql", source)
+        successor = repo.commit("phased successor")
+        result = self._results(self._evaluate(repo, base, successor))["migration_safety"]
+        with self.subTest(successor="004"):
+            self.assertEqual(result.status, "pass", result.findings)
+
+        for version in ("001", "002", "003"):
+            with self.subTest(duplicate=version):
+                repo, base = seeded_repo()
+                for phase, source in phased.items():
+                    for prefix in ("migrations", "package/resources"):
+                        repo.write_text(f"{prefix}/{version}_{phase}.sql", source)
+                duplicate = repo.commit(f"duplicate canonical version {version}")
+                result = self._results(self._evaluate(repo, base, duplicate))["migration_safety"]
+                self.assertEqual(result.status, "fail", result.findings)
+                self.assertIn("duplicate migration version", " ".join(result.findings))
+
+        collisions = (
+            "001_schema",
+            "002_Operational_Indexes",
+            "nested/003_DATABASE_ROLES",
+        )
+        for group in collisions:
+            with self.subTest(canonical_group_collision=group):
+                repo, base = seeded_repo()
+                for phase, source in phased.items():
+                    for prefix in ("migrations", "package/resources"):
+                        repo.write_text(f"{prefix}/{group}_{phase}.sql", source)
+                duplicate = repo.commit(f"reuse canonical group {group}")
+                result = self._results(self._evaluate(repo, base, duplicate))["migration_safety"]
+                self.assertEqual(result.status, "fail", result.findings)
+                self.assertIn("duplicate migration version", " ".join(result.findings))
+
+    def test_migration_history_requires_declared_resource_mirror(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["migrations", "package/resources"]
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": True,
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        repo.write_text("migrations/001_expand.sql", "CREATE TABLE item(id integer);\n")
+        repo.write_text("migrations/001_migrate.sql", "UPDATE item SET id = id;\n")
+        repo.write_text("migrations/001_contract.sql", "ALTER TABLE item ADD COLUMN done integer;\n")
+        head = repo.commit("unmirrored migration")
+        result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual(result.status, "fail")
+        self.assertIn("mirror", " ".join(result.findings))
+
+    def test_migration_mirror_only_change_is_applicable_and_fails_drift(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["migrations", "package/resources"]
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": True,
+            "severity": "error",
+        }]
+        repo, _initial = self._repo(system=system, rules=rules)
+        sources = {
+            "001_expand.sql": "CREATE TABLE item(id integer);\n",
+            "001_migrate.sql": "UPDATE item SET id = id WHERE id BETWEEN 1 AND 100;\n",
+            "001_contract.sql": "ALTER TABLE item DROP COLUMN legacy;\n",
+        }
+        for name, source in sources.items():
+            repo.write_text(f"migrations/{name}", source)
+            repo.write_text(f"package/resources/{name}", source)
+        base = repo.commit("mirrored migration base")
+        exact_unchanged = self._results(self._evaluate(repo, base, base))["migration_safety"]
+        clean_diff = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        worktree_unchanged = self._results(FIT.evaluate_fitness(
+            repo.root, FIT.load_architecture(repo.root), clean_diff,
+            clean_diff.changed_paths, pre_risk="green",
+        ))["migration_safety"]
+        for result in (exact_unchanged, worktree_unchanged):
+            self.assertEqual(result.status, "not_applicable")
+            self.assertEqual(result.applicability.reason_code, "no_matching_sql_change")
+            for prefix in ("migrations", "package/resources"):
+                for name in sources:
+                    self.assertIn(f"{prefix}/{name}", result.applicability.scanned_scope)
+        repo.write_text(
+            "package/resources/001_expand.sql",
+            "CREATE TABLE item(id bigint);\n",
+        )
+        worktree_diff = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        worktree = self._results(FIT.evaluate_fitness(
+            repo.root, FIT.load_architecture(repo.root), worktree_diff,
+            worktree_diff.changed_paths, pre_risk="green",
+        ))["migration_safety"]
+        head = repo.commit("mirror-only drift")
+        result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual((result.status, worktree.status), ("fail", "fail"))
+        self.assertIn("package/resources/001_expand.sql", result.applicability.scanned_scope)
+        self.assertIn("mirror differs", " ".join(result.findings))
+
+    def test_migration_planning_and_blob_comparison_are_aggregate_bounded(self) -> None:
+        system = _system()
+        system["nodes"][0]["repository_paths"] = ["migrations", "package/resources"]
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }]
+        repo, _initial = self._repo(system=system, rules=rules)
+        sources = {
+            "001_expand.sql": "CREATE TABLE item(id integer);\n",
+            "001_migrate.sql": "UPDATE item SET id = id WHERE id BETWEEN 1 AND 100;\n",
+            "001_contract.sql": "ALTER TABLE item DROP COLUMN legacy;\n",
+        }
+        for name, source in sources.items():
+            repo.write_text(f"migrations/{name}", source)
+            repo.write_text(f"package/resources/{name}", source)
+        base = repo.commit("migration batch base")
+        updated = {
+            **sources,
+            "001_expand.sql": "CREATE TABLE item(id bigint);\n",
+        }
+        for name, source in updated.items():
+            repo.write_text(f"migrations/{name}", source)
+            repo.write_text(f"package/resources/{name}", source)
+        head = repo.commit("paired migration update")
+
+        with patch.object(FIT, "_migration_roots", wraps=FIT._migration_roots) as roots, \
+             patch.object(FIT, "read_diff_file", side_effect=AssertionError("singleton migration read")), \
+             patch.object(FIT, "read_diff_files", wraps=FIT.read_diff_files) as batches:
+            exact = self._results(self._evaluate(repo, base, head))["migration_safety"]
+            worktree_diff = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+            worktree = self._results(FIT.evaluate_fitness(
+                repo.root,
+                FIT.load_architecture(repo.root),
+                worktree_diff,
+                worktree_diff.changed_paths,
+                pre_risk="green",
+            ))["migration_safety"]
+            repo.write_text("package/resources/001_expand.sql", "CREATE TABLE item(id numeric);\n")
+            mismatch_diff = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+            mismatch = self._results(FIT.evaluate_fitness(
+                repo.root, FIT.load_architecture(repo.root), mismatch_diff,
+                mismatch_diff.changed_paths, pre_risk="green",
+            ))["migration_safety"]
+        self.assertEqual((exact.status, worktree.status, mismatch.status), ("pass", "pass", "fail"))
+        self.assertIn("mirror differs", " ".join(mismatch.findings))
+        self.assertEqual(roots.call_count, 3)
+        self.assertEqual(batches.call_count, 3)
+
+    def test_migration_work_and_published_findings_have_explicit_limits(self) -> None:
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        for version in range(1, 7):
+            repo.write_text(
+                f"migrations/{version:03d}_expand.sql",
+                "ALTER TABLE item ADD COLUMN value text NOT NULL;\n",
+            )
+        head = repo.commit("migration limit stress")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        snapshot = diff._head_state.snapshot
+        with patch.object(FIT, "MAX_MIGRATION_WORK", 0), \
+             patch.object(FIT, "_migration_roots", side_effect=AssertionError("roots after zero work")), \
+             patch.object(FIT, "_matches", side_effect=AssertionError("matching after zero work")), \
+             patch.object(FIT, "_repository_paths", side_effect=AssertionError("inventory after zero work")):
+            zero = FIT._migration_safety(repo.root, snapshot, diff)
+        cheap_work = sum(len(rule["path_prefixes"]) for rule in rules["migration_policies"]) * sum(
+            max(1, len(node["repository_paths"])) for node in snapshot.system["nodes"]
+        )
+        with patch.object(FIT, "MAX_MIGRATION_WORK", cheap_work), \
+             patch.object(FIT, "_migration_roots", wraps=FIT._migration_roots) as roots, \
+             patch.object(FIT, "_matches", side_effect=AssertionError("matching after root limit")), \
+             patch.object(FIT, "_repository_paths", side_effect=AssertionError("inventory after root limit")):
+            root_limited = FIT._migration_safety(repo.root, snapshot, diff)
+        for result in (zero, root_limited):
+            self.assertEqual(result.status, "unsupported")
+            self.assertIn("work limit", " ".join(result.findings))
+        self.assertEqual(roots.call_count, 1)
+
+        with patch.object(FIT, "MAX_MIGRATION_WORK", 4, create=True), \
+             patch.object(FIT, "read_diff_files", side_effect=AssertionError("blob read after work limit")) as reads, \
+             patch.object(FIT._MigrationAnalysis, "source", side_effect=AssertionError("SQL analysis after work limit")) as sources:
+            limited = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual(limited.status, "unsupported")
+        self.assertIn("work limit", " ".join(limited.findings))
+        reads.assert_not_called()
+        sources.assert_not_called()
+
+        with patch.object(FIT, "MAX_MIGRATION_FINDINGS", 3, create=True):
+            capped = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual(capped.status, "unsupported")
+        self.assertEqual(len(capped.findings), 3)
+        self.assertIn("finding limit", capped.findings[-1])
+
+    def test_migration_shared_root_memberships_are_charged_before_matching(self) -> None:
+        rules = _rules()
+        template = {
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }
+        rules["migration_policies"] = [
+            {"id": f"FIT-MIGRATION-{index:03d}", **template} for index in range(256)
+        ]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("migrations/0001_expand.sql", "CREATE TABLE item(id integer);\n")
+        head = repo.commit("shared migration policy root")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        sample = diff.artifacts[0]
+        paths = tuple(f"migrations/{index:04d}_expand.sql" for index in range(3_328))
+        bounded_diff = replace(
+            diff,
+            changed_paths=paths,
+            artifacts=tuple(replace(sample, path=path) for path in paths),
+        )
+        with patch.object(FIT, "_matches", side_effect=AssertionError("matching after membership limit")), \
+             patch.object(FIT, "_repository_paths", side_effect=AssertionError("inventory after membership limit")):
+            result = FIT._migration_safety(repo.root, diff._head_state.snapshot, bounded_diff)
+        self.assertEqual(result.status, "unsupported")
+        self.assertIn("work limit", " ".join(result.findings))
+
+    def test_migration_empty_selector_amplification_is_bounded_after_validation_bypass(self) -> None:
+        rules = _rules()
+        rooted = {
+            "id": "FIT-MIGRATION-ROOTED",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }
+        rules["migration_policies"] = [rooted]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("migrations/0001_expand.sql", "CREATE TABLE item(id integer);\n")
+        head = repo.commit("rooted migration policy")
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        sample = diff.artifacts[0]
+        paths = tuple(f"migrations/{index:04d}_expand.sql" for index in range(1_000))
+        bypassed_rules = copy.deepcopy(diff._head_state.snapshot.rules)
+        bypassed_rules["migration_policies"] = [
+            {**rooted, "id": f"FIT-MIGRATION-EMPTY-{index:03d}", "path_prefixes": []}
+            for index in range(255)
+        ] + [rooted]
+        snapshot = replace(diff._head_state.snapshot, rules=bypassed_rules)
+        bounded_diff = replace(
+            diff,
+            changed_paths=paths,
+            artifacts=tuple(replace(sample, path=path) for path in paths),
+        )
+        with patch.object(FIT, "_repository_paths", side_effect=AssertionError("inventory after plan limit")):
+            result = FIT._migration_safety(repo.root, snapshot, bounded_diff)
+        self.assertEqual(result.status, "unsupported")
+        self.assertIn("work limit", " ".join(result.findings))
+
+        bounded_inventory = tuple(f"migrations/{index:04d}_expand.sql" for index in range(16))
+        small_diff = replace(diff, changed_paths=(sample.path,), artifacts=(sample,))
+        with patch.object(FIT, "_repository_paths", return_value=bounded_inventory), \
+             patch.object(FIT, "_MigrationPlan", side_effect=AssertionError("plan after inventory limit")) as plans, \
+             patch.object(FIT, "read_diff_files", side_effect=AssertionError("read after inventory limit")) as reads, \
+             patch.object(FIT._MigrationAnalysis, "source", side_effect=AssertionError("source after inventory limit")) as sources:
+            inventory_limited = FIT._migration_safety(repo.root, snapshot, small_diff)
+        self.assertEqual(inventory_limited.status, "unsupported")
+        self.assertIn("work limit", " ".join(inventory_limited.findings))
+        plans.assert_not_called()
+        reads.assert_not_called()
+        sources.assert_not_called()
+
+    def test_migration_blob_statement_and_finding_limits_stop_early(self) -> None:
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        sources = {
+            "001_expand.sql": "CREATE TABLE item(id integer);\n",
+            "001_migrate.sql": "UPDATE item SET id=id WHERE id BETWEEN 1 AND 2;\n",
+            "001_contract.sql": "ALTER TABLE item DROP COLUMN legacy;\n",
+        }
+        for name, source in sources.items():
+            repo.write_text(f"migrations/{name}", source)
+        head = repo.commit("migration aggregate limits")
+        with patch.object(FIT, "MAX_MIGRATION_BATCH_PATHS", 1), \
+             patch.object(FIT, "MAX_MIGRATION_BYTES", 8, create=True), \
+             patch.object(FIT, "read_diff_files", wraps=FIT.read_diff_files) as reads:
+            byte_limited = self._results(self._evaluate(repo, base, head))["migration_safety"]
+            byte_calls = reads.call_count
+
+        bounded = "UPDATE item SET id=id WHERE id BETWEEN 1 AND 2;\n" * 6
+        repo.write_text("migrations/001_migrate.sql", bounded)
+        statement_head = repo.commit("migration statement limit")
+        with patch.object(FIT, "MAX_MIGRATION_STATEMENTS", 2, create=True), \
+             patch.object(FIT, "_bounded_migrate_predicate", wraps=FIT._bounded_migrate_predicate) as predicates:
+            statement_limited = self._results(
+                self._evaluate(repo, head, statement_head)
+            )["migration_safety"]
+            statement_calls = predicates.call_count
+
+        unsafe = "UPDATE item SET id=id WHERE id = 1;\n" * 6
+        repo.write_text("migrations/001_migrate.sql", unsafe)
+        finding_head = repo.commit("migration finding limit")
+        with patch.object(FIT, "MAX_MIGRATION_FINDINGS", 3), \
+             patch.object(FIT, "_bounded_migrate_predicate", wraps=FIT._bounded_migrate_predicate) as predicates:
+            finding_limited = self._results(
+                self._evaluate(repo, statement_head, finding_head)
+            )["migration_safety"]
+            finding_calls = predicates.call_count
+        for label, result, calls, marker in (
+            ("bytes", byte_limited, byte_calls, "byte limit"),
+            ("statements", statement_limited, statement_calls, "statement work limit"),
+            ("findings", finding_limited, finding_calls, "finding limit"),
+        ):
+            with self.subTest(bound=label):
+                self.assertEqual(result.status, "unsupported")
+                self.assertIn(marker, " ".join(result.findings))
+                self.assertEqual(calls, 1 if label == "bytes" else 2)
+
+        class NoSplit(str):
+            def split(self, *args, **kwargs):
+                raise AssertionError("eager SQL split")
+
+        bounded_statement = "UPDATE item SET id=id WHERE id BETWEEN 1 AND 2;"
+        huge_source = bounded_statement * 3 + ";" * (8 * 1024 * 1024)
+        original_sub = FIT.re.sub
+
+        def no_split_sub(*args, **kwargs):
+            return NoSplit(original_sub(*args, **kwargs))
+
+        analysis = FIT._MigrationAnalysis()
+        with patch.object(FIT, "MAX_MIGRATION_STATEMENTS", 2), \
+             patch.object(FIT.re, "sub", side_effect=no_split_sub), \
+             patch.object(FIT, "_bounded_migrate_predicate", wraps=FIT._bounded_migrate_predicate) as predicates, \
+             self.assertRaisesRegex(FIT.ArchitectureError, "statement work limit"):
+            analysis.source("FIT-MIGRATION", "migrations/001_migrate.sql", "migrate", huge_source)
+        self.assertEqual((analysis.statements, predicates.call_count), (2, 2))
+
+    def test_migration_content_and_versions_are_conservative_for_every_status(self) -> None:
+        cases = (
+            (
+                "not null expand",
+                "migrations/001_expand.sql",
+                "ALTER TABLE item ADD COLUMN name text NOT NULL;\n",
+                "fail",
+            ),
+            (
+                "unbounded migrate",
+                "migrations/001_migrate.sql",
+                "DELETE FROM item;\n",
+                "fail",
+            ),
+            (
+                "unknown migrate safety",
+                "migrations/001_migrate.sql",
+                "VACUUM item;\n",
+                "unsupported",
+            ),
+            (
+                "tautological marker migrate",
+                "migrations/001_migrate.sql",
+                "-- adaptive-grok: bounded\n-- adaptive-grok: resumable\n"
+                "DELETE FROM item WHERE 1=1;\n",
+                "fail",
+            ),
+            (
+                "version gap",
+                "migrations/003_expand.sql",
+                "CREATE TABLE item(id integer);\n",
+                "fail",
+            ),
+        )
+        for label, unsafe_path, unsafe_source, expected in cases:
+            with self.subTest(label=label):
+                rules = _rules()
+                rules["migration_policies"] = [{
+                    "id": "FIT-MIGRATION",
+                    "path_prefixes": ["migrations"],
+                    "required_phases": ["expand", "migrate", "contract"],
+                    "immutable_history": False,
+                    "severity": "error",
+                }]
+                repo, base = self._repo(rules=rules)
+                version = "003" if "version" in label else "001"
+                safe = {
+                    f"migrations/{version}_expand.sql": "CREATE TABLE item(id integer);\n",
+                    f"migrations/{version}_migrate.sql": (
+                        "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n"
+                    ),
+                    f"migrations/{version}_contract.sql": "ALTER TABLE item DROP COLUMN legacy;\n",
+                }
+                safe[unsafe_path] = unsafe_source
+                for path, source in safe.items():
+                    repo.write_text(path, source)
+                head = repo.commit(label)
+                result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+                self.assertEqual(result.status, expected)
+
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), rules)
+        for phase, source in (
+            ("expand", "CREATE TABLE item(id integer);\n"),
+            (
+                "migrate",
+                "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n",
+            ),
+            ("contract", "ALTER TABLE item DROP COLUMN legacy;\n"),
+        ):
+            repo.write_text(f"migrations/001_{phase}.sql", source)
+        base = repo.commit("safe migration base")
+        repo.write_text("migrations/001_migrate.sql", "UPDATE item SET id = id;\n")
+        head = repo.commit("modified unsafe migrate")
+        result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+        self.assertEqual(result.status, "fail")
+
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), rules)
+        duplicate_base = repo.commit("duplicate base")
+        for group in ("001_alpha", "001_beta"):
+            for phase, source in (
+                ("expand", "CREATE TABLE item(id integer);\n"),
+                (
+                    "migrate",
+                    "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n",
+                ),
+                ("contract", "ALTER TABLE item DROP COLUMN legacy;\n"),
+                ):
+                repo.write_text(f"migrations/{group}_{phase}.sql", source)
+        duplicate_head = repo.commit("duplicate version inventory")
+        duplicate = self._results(
+            self._evaluate(repo, duplicate_base, duplicate_head)
+        )["migration_safety"]
+        self.assertEqual(duplicate.status, "fail")
+        self.assertIn("duplicate", " ".join(duplicate.findings))
+
+        bounded_repo, bounded_base = self._repo(rules=rules)
+        for phase, source in (
+            ("expand", "CREATE TABLE item(id integer);\n"),
+            (
+                "migrate",
+                "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n",
+            ),
+            ("contract", "ALTER TABLE item DROP COLUMN legacy;\n"),
+        ):
+            bounded_repo.write_text(f"migrations/001_{phase}.sql", source)
+        bounded_head = bounded_repo.commit("bounded range migration")
+        bounded = self._results(
+            self._evaluate(bounded_repo, bounded_base, bounded_head)
+        )["migration_safety"]
+        self.assertEqual(bounded.status, "pass")
+
+    def test_migration_phase_identity_rejects_duplicate_artifacts(self) -> None:
+        rules = _rules()
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": False,
+            "severity": "error",
+        }]
+        cases = (
+            (
+                "suffix variants",
+                {
+                    "migrations/001_expand.sql": "CREATE TABLE item(id integer);\n",
+                    "migrations/001_expand_copy.sql": "CREATE TABLE other(id integer);\n",
+                    "migrations/001_migrate.sql": (
+                        "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n"
+                    ),
+                    "migrations/001_contract.sql": "ALTER TABLE item DROP COLUMN legacy;\n",
+                },
+            ),
+            (
+                "duplicate subdirectories",
+                {
+                    f"migrations/{directory}/001_{phase}.sql": source
+                    for directory in ("one", "two")
+                    for phase, source in (
+                        ("expand", "CREATE TABLE item(id integer);\n"),
+                        (
+                            "migrate",
+                            "UPDATE item SET id = id WHERE id >= 1 AND id <= 100;\n",
+                        ),
+                        ("contract", "ALTER TABLE item DROP COLUMN legacy;\n"),
+                    )
+                },
+            ),
+        )
+        for label, files in cases:
+            with self.subTest(label=label):
+                repo, base = self._repo(rules=rules)
+                for path, source in files.items():
+                    repo.write_text(path, source)
+                head = repo.commit(label)
+                result = self._results(self._evaluate(repo, base, head))["migration_safety"]
+                self.assertEqual(result.status, "fail")
+                self.assertIn("duplicate migration artifact", " ".join(result.findings))
+
+    def test_unsupported_applicable_source_analysis_fails_the_report(self) -> None:
+        rules = _rules()
+        rules["path_boundaries"] = [{
+            "id": "FIT-MODULE",
+            "source_prefixes": ["src"],
+            "forbidden_dependency_prefixes": ["trust-ci"],
+            "severity": "error",
+        }]
+        repo, base = self._repo(rules=rules)
+        repo.write_text("src/broken.py", "if :\n")
+        head = repo.commit("unparseable")
+        report = self._evaluate(repo, base, head)
+        result = self._results(report)["module_boundary"]
+        self.assertEqual(result.status, "unsupported")
+        self.assertEqual(report.status, "fail")
+
+    def test_not_applicable_has_auditable_inventory_evidence(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("docs/guide.md", "documentation only\n")
+        head = repo.commit("docs")
+        report = self._evaluate(repo, base, head)
+        for result in report.results:
+            if result.status == "not_applicable":
+                self.assertTrue(result.applicability.predicate)
+                self.assertTrue(result.applicability.reason_code)
+                self.assertIsInstance(result.applicability.scanned_scope, tuple)
+                self.assertRegex(result.applicability.inventory_digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(report.exemption_state, "eligible")
+
+    def test_not_applicable_binds_declared_and_repository_inventory(self) -> None:
+        system = _system()
+        system["contracts"] = [{
+            "id": "CONTRACT-TEST",
+            "kind": "json_schema",
+            "path": "engineering/contracts/test.json",
+            "version": "1",
+            "role": "consumer",
+            "compatibility": "consumer_accepts_old",
+        }]
+        rules = _rules()
+        rules["contract_policies"] = [{
+            "id": "FIT-CONTRACT",
+            "contract_kinds": ["json_schema"],
+            "compatibility": "consumer_accepts_old",
+            "severity": "error",
+        }]
+        rules["migration_policies"] = [{
+            "id": "FIT-MIGRATION",
+            "path_prefixes": ["migrations"],
+            "required_phases": ["expand", "migrate", "contract"],
+            "immutable_history": True,
+            "severity": "error",
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        repo.write_json("engineering/contracts/test.json", _json_schema({"id": {"type": "string"}}))
+        base = repo.commit("inventory base")
+        repo.write_text("docs/one.md", "one\n")
+        first_head = repo.commit("first docs")
+        first = self._results(self._evaluate(repo, base, first_head))
+        repo.write_text("docs/two.md", "two\n")
+        second_head = repo.commit("second docs")
+        second = self._results(self._evaluate(repo, base, second_head))
+        for category, subjects in (
+            ("contract_compatibility", {"CONTRACT-TEST", "FIT-CONTRACT"}),
+            ("migration_safety", {"migrations", "FIT-MIGRATION"}),
+        ):
+            self.assertEqual(first[category].status, "not_applicable")
+            self.assertTrue(subjects <= set(first[category].applicability.scanned_scope))
+            self.assertNotEqual(
+                first[category].applicability.inventory_digest,
+                second[category].applicability.inventory_digest,
+            )
+
+    def test_capped_process_stops_output_and_timeout_producers(self) -> None:
+        self.assertTrue(hasattr(DIFF, "_run_capped"), "incremental capped runner is absent")
+        for label, code, timeout in (
+            (
+                "output",
+                "import os, pathlib\n"
+                "[os.write(1, b'x' * 65536) for _ in range(64)]\n"
+                "pathlib.Path(os.environ['SENTINEL']).write_text('completed')\n",
+                5.0,
+            ),
+            (
+                "timeout",
+                "import os, pathlib, time\n"
+                "time.sleep(0.5)\n"
+                "pathlib.Path(os.environ['SENTINEL']).write_text('completed')\n",
+                0.05,
+            ),
+        ):
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as directory:
+                    sentinel = Path(directory) / "completed"
+                    environment = {"SENTINEL": str(sentinel)}
+                    started = time.monotonic()
+                    with self.assertRaises(FIT.ArchitectureError):
+                        DIFF._run_capped(
+                            [sys.executable, "-c", code],
+                            cwd=Path(directory),
+                            env=environment,
+                            stdout_limit=1024,
+                            stderr_limit=1024,
+                            timeout=timeout,
+                        )
+                    self.assertLess(time.monotonic() - started, 0.4)
+                    self.assertFalse(sentinel.exists())
+
+    def test_capped_process_reaps_children_when_selector_setup_fails(self) -> None:
+        real_popen = DIFF.subprocess.Popen
+        for stage in ("selector", "set_blocking", "register"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                processes = []
+
+                def capture_popen(*args, **kwargs):
+                    process = real_popen(*args, **kwargs)
+                    processes.append(process)
+                    return process
+
+                selector = DIFF.selectors.DefaultSelector()
+                if stage == "selector":
+                    setup_patch = patch.object(
+                        DIFF.selectors,
+                        "DefaultSelector",
+                        side_effect=OSError("forced selector failure"),
+                    )
+                elif stage == "set_blocking":
+                    setup_patch = patch.object(
+                        DIFF.os,
+                        "set_blocking",
+                        side_effect=OSError("forced set_blocking failure"),
+                    )
+                else:
+                    setup_patch = patch.object(
+                        selector,
+                        "register",
+                        side_effect=OSError("forced register failure"),
+                    )
+                selector_patch = (
+                    patch.object(DIFF.selectors, "DefaultSelector", return_value=selector)
+                    if stage == "register"
+                    else None
+                )
+                caught = None
+                try:
+                    with patch.object(DIFF.subprocess, "Popen", side_effect=capture_popen):
+                        if selector_patch is None:
+                            with setup_patch:
+                                DIFF._run_capped(
+                                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                                    cwd=Path(directory),
+                                    env={},
+                                    stdout_limit=1024,
+                                    stderr_limit=1024,
+                                    timeout=5.0,
+                                )
+                        else:
+                            with selector_patch, setup_patch:
+                                DIFF._run_capped(
+                                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                                    cwd=Path(directory),
+                                    env={},
+                                    stdout_limit=1024,
+                                    stderr_limit=1024,
+                                    timeout=5.0,
+                                )
+                except Exception as exc:  # asserted after leak cleanup
+                    caught = exc
+                self.assertEqual(len(processes), 1)
+                alive = processes[0].poll() is None
+                if alive:
+                    os.killpg(processes[0].pid, signal.SIGKILL)
+                    processes[0].wait()
+                selector.close()
+                self.assertIsInstance(caught, FIT.ArchitectureError)
+                self.assertFalse(alive, f"{stage} setup failure leaked the process group")
+
+    def test_git_exact_and_worktree_modes_disable_hostile_local_fsmonitor(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        head = repo.commit("head")
+        sentinel = repo.root / "fsmonitor-ran"
+        hook = repo.root / "hostile-fsmonitor"
+        hook.write_text(
+            f"#!/bin/sh\n: > '{sentinel}'\nexit 0\n",
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+        repo.git("config", "core.fsmonitor", str(hook))
+
+        FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+        for arguments in (
+            ["ls-files", "-s", "-z"],
+            ["diff", "--name-only", "-z", "HEAD"],
+            ["ls-files", "--others", "--exclude-standard", "-z"],
+        ):
+            with self.subTest(arguments=arguments):
+                DIFF._git(repo.root, arguments)
+        self.assertFalse(sentinel.exists())
+
+    def test_repo_git_commands_trust_only_the_exact_root_under_different_owner(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        head = repo.commit("head")
+        real_environment = DIFF._git_environment
+        real_run_capped = DIFF._run_capped
+        commands: list[tuple[tuple[str, ...], Path]] = []
+
+        def different_owner_environment() -> dict[str, str]:
+            return {
+                **real_environment(),
+                "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+            }
+
+        def capture_command(command, **kwargs):
+            commands.append((tuple(command), Path(kwargs["cwd"])))
+            return real_run_capped(command, **kwargs)
+
+        with (
+            patch.object(DIFF, "_git_environment", side_effect=different_owner_environment),
+            patch.object(DIFF, "_run_capped", side_effect=capture_command),
+        ):
+            exact = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+            worktree = FIT.diff_architecture(repo.root, base_sha=base, worktree=True)
+
+        canonical_root = repo.root.resolve()
+        repo_commands = [command for command, cwd in commands if cwd == canonical_root]
+        self.assertTrue(repo_commands)
+        for command in repo_commands:
+            with self.subTest(command=command):
+                trust_entries = [
+                    argument for argument in command if argument.startswith("safe.directory=")
+                ]
+                self.assertEqual(trust_entries, [f"safe.directory={canonical_root}"])
+        no_index_commands = [command for command, _cwd in commands if "--no-index" in command]
+        self.assertTrue(no_index_commands)
+        for command in no_index_commands:
+            with self.subTest(command=command):
+                self.assertFalse(any(argument.startswith("safe.directory=") for argument in command))
+        self.assertEqual(exact.head_sha, head)
+        self.assertEqual(worktree.head_kind, "worktree")
+
+    def test_line_stats_are_linear_and_have_an_explicit_line_ceiling(self) -> None:
+        self.assertTrue(hasattr(DIFF, "MAX_LINE_STAT_LINES"), "line-stat ceiling is absent")
+        before = (b"x\n" * 6_000) + b"before\n"
+        after = (b"x\n" * 6_000) + b"after\n"
+        started = time.monotonic()
+        self.assertEqual(DIFF._line_stats(before, after), (1, 1))
+        self.assertLess(time.monotonic() - started, 0.25)
+        disjoint_before = b"first\nunchanged one\nunchanged two\nlast\n"
+        disjoint_after = b"changed first\nunchanged one\nunchanged two\nchanged last\n"
+        self.assertEqual(DIFF._line_stats(disjoint_before, disjoint_after), (2, 2))
+
+        repo, _architecture_base = self._repo()
+        repo.write_text("src/disjoint.py", disjoint_before.decode("utf-8"))
+        source_base = repo.commit("source base")
+        repo.write_text("src/disjoint.py", disjoint_after.decode("utf-8"))
+        source_head = repo.commit("disjoint changes")
+        artifact = next(
+            item
+            for item in FIT.diff_architecture(
+                repo.root, base_sha=source_base, head_sha=source_head
+            ).artifacts
+            if item.path == "src/disjoint.py"
+        )
+        self.assertEqual((artifact.added_lines, artifact.deleted_lines), (2, 2))
+        oversized = b"x\n" * (DIFF.MAX_LINE_STAT_LINES + 1)
+        with self.assertRaises(FIT.ArchitectureError):
+            DIFF._line_stats(oversized, b"")
+        over_bytes = b"x" * (DIFF.MAX_ANALYZED_FILE_BYTES + 1)
+        with self.assertRaises(FIT.ArchitectureError):
+            DIFF._line_stats(over_bytes, b"")
+
+    def test_risk_is_monotonic_and_architecture_expansion_revokes_exemption(self) -> None:
+        system = _system()
+        rules = _rules()
+        rules["risk_escalations"] = [{
+            "id": "FIT-EXPANSION",
+            "triggers": ["new_edge", "new_service", "new_trust_crossing"],
+            "risk": "red",
+            "severity": "error",
+        }]
+        repo, base = self._repo(system=system, rules=rules)
+        changed = copy.deepcopy(system)
+        changed["nodes"][0]["type"] = "service"
+        changed["edges"].append({
+            **copy.deepcopy(changed["edges"][0]),
+            "id": "EDGE-B-A",
+            "from": "NODE-B",
+            "to": "NODE-A",
+        })
+        repo.model(changed, rules)
+        head = repo.commit("expand")
+        report = self._evaluate(repo, base, head, pre_risk="red")
+        self.assertEqual(report.pre_risk, "red")
+        self.assertEqual(report.escalation, "red")
+        self.assertEqual(report.post_risk, "red")
+        self.assertIn("new_edge", report.triggers)
+        self.assertIn("new_service", report.triggers)
+        self.assertEqual(report.exemption_state, "revoked")
+        self.assertIn("architecture", report.required_scopes)
+
+    def test_evidence_core_and_digest_are_deterministic(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("README.md", "head\n")
+        head = repo.commit("head")
+        first = FIT.architecture_evidence(
+            repo.root, base_sha=base, head_sha=head, pre_risk="yellow"
+        )
+        second = FIT.architecture_evidence(
+            repo.root, base_sha=base, head_sha=head, pre_risk="yellow"
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first["architecture_contract_version"], 1)
+        self.assertEqual(first["exact_base_sha"], base)
+        self.assertEqual(first["exact_head_sha"], head)
+        self.assertRegex(first["architecture_evidence_digest"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("timestamp", first)
+
+    def test_architecture_cli_is_deterministic_and_labels_worktree_evidence(self) -> None:
+        repo, base = self._repo()
+        script = ROOT / "scripts/grok_architecture.py"
+
+        def invoke(*args: str):
+            return subprocess.run(
+                [sys.executable, str(script), "--root", str(repo.root), *args],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        first = invoke("summary", "--json")
+        second = invoke("summary", "--json")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(json.loads(first.stdout)["architecture_id"], "ARCH-TEST")
+
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        worktree = invoke("fitness", "--base", base, "--worktree", "--json")
+        self.assertEqual(worktree.returncode, 0, worktree.stderr)
+        payload = json.loads(worktree.stdout)
+        self.assertEqual(payload["head_kind"], "worktree")
+        self.assertNotIn("exact_head_sha", payload)
+
+    def test_architecture_cli_exact_diff_and_diagram_check(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("src/app.py", "VALUE = 1\n")
+        head = repo.commit("head")
+        script = ROOT / "scripts/grok_architecture.py"
+        repo.write_text(
+            ".grok-stack/runtime/active-route.json",
+            json.dumps({"base_commit": "0" * 40, "head_commit": "f" * 40}),
+        )
+        exact = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "diff", "--base", base, "--head", head, "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(exact.returncode, 0, exact.stderr)
+        self.assertEqual(json.loads(exact.stdout)["exact_head_sha"], head)
+        generated = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "diagram", "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        rendered_payload = json.loads(generated.stdout)
+        self.assertIn("artifacts", rendered_payload)
+        self.assertEqual(rendered_payload["checked"], False)
+        self.assertEqual(rendered_payload["mismatches"], [])
+        self.assertEqual(
+            tuple(rendered_payload["artifacts"]),
+            ("container", "context", "data-flow", "deployment", "trust-boundary"),
+        )
+        generated_dir = repo.root / "architecture/generated"
+        generated_dir.mkdir()
+        for name, value in rendered_payload["artifacts"].items():
+            (generated_dir / f"{name}.mmd").write_text(value, encoding="utf-8")
+        checked = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "diagram", "--check", "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        (repo.root / "architecture/generated/context.mmd").write_text("stale\n", encoding="utf-8")
+        stale = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "diagram", "--check", "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(stale.returncode, 1)
+        for child in generated_dir.iterdir():
+            child.unlink()
+        generated_dir.rmdir()
+        with tempfile.TemporaryDirectory() as outside_raw:
+            outside = Path(outside_raw)
+            generated_dir.symlink_to(outside, target_is_directory=True)
+            escaped_write = subprocess.run(
+                [sys.executable, str(script), "--root", str(repo.root), "diagram", "--json"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            escaped_check = subprocess.run(
+                [sys.executable, str(script), "--root", str(repo.root), "diagram", "--check", "--json"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(escaped_write.returncode, 0)
+            self.assertEqual(json.loads(escaped_write.stdout)["checked"], False)
+            self.assertEqual(escaped_check.returncode, 2)
+            self.assertEqual(tuple(outside.iterdir()), ())
+
+            generated_dir.unlink()
+            generated_dir.mkdir()
+            outside_file = outside / "outside.mmd"
+            outside_file.write_text("outside\n", encoding="utf-8")
+            (generated_dir / "context.mmd").symlink_to(outside_file)
+            final_link = subprocess.run(
+                [sys.executable, str(script), "--root", str(repo.root), "diagram", "--json"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(final_link.returncode, 0)
+            self.assertEqual(outside_file.read_text(encoding="utf-8"), "outside\n")
+
+    def test_architecture_cli_invalid_model_is_nonzero_and_bootstrap_is_explicit(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("architecture/system.yaml", "{}\n")
+        invalid = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/grok_architecture.py"), "--root", str(repo.root), "validate", "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertFalse(json.loads(invalid.stdout)["ok"])
+
+        unavailable = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/grok_architecture.py"), "--root", str(repo.root), "diff", "--base", "f" * 40, "--head", base, "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(unavailable.returncode, 0)
+        self.assertIn("not an available commit object", unavailable.stdout + unavailable.stderr)
+
+        bootstrap_repo, frozen_base, adopted = self._bootstrap_repo()
+        with patch.object(DIFF, "ADOPTION_BASE_SHA", frozen_base):
+            bootstrap = FIT.diff_architecture(
+                bootstrap_repo.root,
+                base_sha=frozen_base,
+                head_sha=adopted,
+            )
+        self.assertTrue(bootstrap.baseline_introduced)
+        self.assertEqual(bootstrap.base_sha, frozen_base)
+        self.assertEqual(bootstrap.head_sha, adopted)
+
+    def test_exact_cli_diff_and_fitness_ignore_mutable_worktree_models(self) -> None:
+        repo, base = self._repo()
+        repo.write_text("README.md", "exact head\n")
+        head = repo.commit("exact head")
+        script = ROOT / "scripts/grok_architecture.py"
+
+        repo.write_text("architecture/system.yaml", "{}\n")
+        exact_diff = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "diff", "--base", base, "--head", head, "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(exact_diff.returncode, 0, exact_diff.stdout + exact_diff.stderr)
+        self.assertEqual(json.loads(exact_diff.stdout)["exact_head_sha"], head)
+
+        (repo.root / "architecture/system.yaml").unlink()
+        (repo.root / "architecture/rules.yaml").unlink()
+        exact_fitness = subprocess.run(
+            [sys.executable, str(script), "--root", str(repo.root), "fitness", "--base", base, "--head", head, "--json"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(
+            exact_fitness.returncode,
+            0,
+            exact_fitness.stdout + exact_fitness.stderr,
+        )
+        payload = json.loads(exact_fitness.stdout)
+        self.assertEqual(payload["head_kind"], "commit")
+        self.assertEqual(payload["fitness_status"], "pass")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,8 @@
+{
+  "at": "2026-09-21T08:33:06.245105+00:00",
+  "command": "getent ahostsv4 <redacted-tailnet-host>",
+  "exit_code": 0,
+  "stdout": "<redacted-ip>   STREAM <redacted-tailnet-host>\n<redacted-ip>   DGRAM  \n<redacted-ip>   RAW    \n<redacted-ip>   STREAM \n<redacted-ip>   DGRAM  \n<redacted-ip>   RAW    \n<redacted-ip>    STREAM \n<redacted-ip>    DGRAM  \n<redacted-ip>    RAW    \n",
+  "stderr": "",
+  "elapsed_s": 0.090143
+}
