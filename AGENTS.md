@@ -1,5 +1,14 @@
 # Getzilla Engineering Contract
 
+## Working order: vibe first, factory second
+
+Build what the user asked for first, then apply the factory to it.
+
+1. **Vibe phase.** Get the requested feature or project working quickly on its own branch, so the user can see and try it. No route, change package or review wave is required while exploring; keep it out of protected branches.
+2. **Factory phase.** Apply Getzilla to the working result before it can merge: route it, record the change package and specs, run architecture and governance fitness, tests and `python3 scripts/getzilla_verify.py --mode pr`, collect the route's independent reviews, and open the pull request for the App-owned Trust CI check.
+
+Nothing reaches a protected branch without the factory phase. The vibe phase decides *what* to build; the factory phase decides whether it is safe to keep.
+
 ## Mandatory startup algorithm: measure, then dispatch
 
 **Step zero precedes all other startup work, including backlog/route inspection, dependency planning, agent spawning and CPU-heavy commands.** Complete resource discovery below and record its snapshot locally first; attach it to the change package after selecting the route. Only then inspect backlog/routes, plan dependencies, dispatch work, assign isolated writers and apply verification/delivery gates, in that order.

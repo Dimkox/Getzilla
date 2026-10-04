@@ -16,6 +16,10 @@ Getzilla installs a local Grok/Codex-style agent workflow into another repositor
 
 The heavy Trust CI, signed approvals and external holdout checks are the safety layer for merge authority. They are not needed to read the repo, create an install plan, run the local demo, or try the simple agent loop.
 
+## Working order
+
+Vibe-code the feature or project the user wants first; then apply the factory to the working result (route, change package, fitness checks, tests, reviews, pull request and Trust CI). Nothing merges without the factory phase. Details: [AGENTS.md](AGENTS.md#working-order-vibe-first-factory-second).
+
 ## First run: simple path
 
 ```bash
