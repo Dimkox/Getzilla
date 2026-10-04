@@ -1,5 +1,7 @@
 # Getzilla v2.1.1
 
+> **Origin.** Getzilla is the renamed successor of the [predecessor project](https://github.com/Dimkox/adaptive-grok-build-pro/tree/939bbd2701856e993641851d44ed4b8ab445d2e1). This repository was started on 2026-10-05 from that project's PR #242 head `939bbd2701856e993641851d44ed4b8ab445d2e1` without its git history. Pull-request numbers, releases, tags and checks mentioned in historical sections below belong to the predecessor repository. Renamed: the core package and stack (`.getzilla/getzilla`), `scripts/getzilla_*.py`, `getzilla_factory`, `getzilla_delivery` and the `GETZILLA_*` test variables. Kept on purpose: the Grok Build CLI contract (`.grok/`), Grok provider settings, the deployed Trust CI identity (`adaptive-trust-ci/verified`, App `adaptive-trust-ci`) and L5 runtime paths (`adaptive-l5`). Installs made before the rename are upgraded through `scripts/install_into.py --plan`, which reports the pre-rename stack files for retirement.
+
 MIT-licensed tooling for task-routed AI-assisted development, external verification and human-controlled delivery with **Grok Build**.
 
 ## What it does in five minutes
