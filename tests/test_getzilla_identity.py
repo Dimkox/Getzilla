@@ -23,6 +23,8 @@ HISTORICAL_PREFIXES = (
     "tests/fixtures/",
     "factory/tests/fixtures/",
     "trust-ci/tests/fixtures/",
+    # applied database migrations are checksum-bound and immutable
+    "factory/src/getzilla_factory/resources/",
 )
 HISTORICAL_FILES = frozenset(
     {

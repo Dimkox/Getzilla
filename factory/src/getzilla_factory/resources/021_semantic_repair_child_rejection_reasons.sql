@@ -17,7 +17,7 @@
 --
 -- The envelope can never be confused with a binding: the binding branch of this
 -- function already requires exactly four keys (schema_version,
--- child_proposal_digest, child_task_id, child_intent_digest) and getzilla_factory
+-- child_proposal_digest, child_task_id, child_intent_digest) and adaptive_factory
 -- validates the rejection key against a closed allowlist before any payload parse, so
 -- an unknown reason cannot reach the caller and invalid_object stays reserved for
 -- genuinely malformed payloads.
