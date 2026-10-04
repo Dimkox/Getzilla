@@ -113,6 +113,18 @@ TARGET_OWNED_GOVERNANCE = frozenset(
 # MANAGED_* answers what the stack owns, kept_local answers what this repo overrode.
 STACK_SYNC_RECORD = ".getzilla/AGBP_SYNC.json"
 MAX_SYNC_RECORD_BYTES = 65536
+# Targets installed before the Getzilla rename carry the stack under these names.
+# The planner reads their sync record and reports their files for retirement; it
+# never deletes them itself.
+LEGACY_STACK_DIR = ".grok-stack"
+LEGACY_STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+LEGACY_PATH_RULES = (
+    (re.compile(r"^\.grok-stack/adaptive_grok/"), ".getzilla/getzilla/"),
+    (re.compile(r"^\.grok-stack/"), ".getzilla/"),
+    (re.compile(r"^scripts/grok_([a-z_]+)\.py$"), r"scripts/getzilla_\1.py"),
+)
+LEGACY_SCRIPT_PATTERN = re.compile(r"^grok_[a-z_]+\.py$")
+MAX_LEGACY_REPORT_ENTRIES = 4096
 EMPTY_DIRECTORIES = (
     "engineering/changes",
     "engineering/adr",
@@ -752,9 +764,27 @@ def _read_target_relative(target: Path, relative: str, *, limit: int) -> bytes |
         binding.close()
 
 
+def legacy_to_current_path(path: str) -> str:
+    """Map a pre-rename managed path (.grok-stack, scripts/grok_*) to its Getzilla path."""
+    for pattern, replacement in LEGACY_PATH_RULES:
+        mapped, count = pattern.subn(replacement, path)
+        if count:
+            return mapped
+    return path
+
+
+def _sync_record(target: Path) -> tuple[bytes | None, bool]:
+    """Raw sync record and whether it came from a pre-rename (legacy) stack."""
+    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    if raw is not None:
+        return raw, False
+    raw = _read_target_relative(target, LEGACY_STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    return raw, raw is not None
+
+
 def _kept_local(target: Path) -> frozenset[str]:
     """Paths the target declares it owns, from its stack sync record (may be absent)."""
-    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    raw, legacy = _sync_record(target)
     if raw is None:
         return frozenset()
     try:
@@ -782,11 +812,15 @@ def _kept_local(target: Path) -> frozenset[str]:
     for path, digest in digests.items():
         if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise UnsafeInstallTarget("stack sync record kept_local_sha256 has invalid digest")
+    if legacy:
+        kept = [legacy_to_current_path(item) for item in kept]
+        if len(set(kept)) != len(kept):
+            raise UnsafeInstallTarget("legacy stack sync record kept_local collides after the Getzilla rename")
     return frozenset(kept)
 
 
 def _kept_local_digests(target: Path) -> dict[str, str]:
-    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    raw, legacy = _sync_record(target)
     if raw is None:
         return {}
     try:
@@ -794,7 +828,37 @@ def _kept_local_digests(target: Path) -> dict[str, str]:
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise UnsafeInstallTarget("stack sync record is not valid UTF-8 JSON") from exc
     value = record.get("kept_local_sha256", {}) if isinstance(record, dict) else {}
-    return dict(value) if isinstance(value, dict) else {}
+    digests = dict(value) if isinstance(value, dict) else {}
+    if legacy:
+        digests = {legacy_to_current_path(path): digest for path, digest in digests.items()}
+    return digests
+
+
+def _legacy_migration(target: Path) -> list[dict[str, str]]:
+    """Report pre-rename stack files in target; the planner never removes them itself."""
+    absolute = Path(os.path.abspath(target))
+    found: list[str] = []
+    stack = absolute / LEGACY_STACK_DIR
+    if stack.is_dir() and not stack.is_symlink():
+        for directory, subdirectories, files in os.walk(stack, followlinks=False):
+            subdirectories[:] = sorted(
+                name for name in subdirectories
+                if not (Path(directory) / name).is_symlink() and name != "__pycache__"
+            )
+            for name in sorted(files):
+                found.append((Path(directory) / name).relative_to(absolute).as_posix())
+                if len(found) > MAX_LEGACY_REPORT_ENTRIES:
+                    raise UnsafeInstallTarget("legacy stack has too many files to report safely")
+    scripts = absolute / "scripts"
+    if scripts.is_dir() and not scripts.is_symlink():
+        for name in sorted(os.listdir(scripts)):
+            if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not (scripts / name).is_symlink():
+                found.append(f"scripts/{name}")
+    return [
+        {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
+         "reason": "pre-Getzilla stack path; remove after the plan is applied"}
+        for path in found
+    ]
 
 
 def _target_state(target: Path) -> str:
@@ -871,6 +935,7 @@ def _make_plan(
         "target_state": state,
         "kept": keep_reports,
         "entries": [entry.manifest() for entry in deliverable],
+        "legacy_migration": _legacy_migration(target) if state == "directory" else [],
         "dependency_advice": _dependency_advice(
             source,
             include_dependencies=include_dependencies,

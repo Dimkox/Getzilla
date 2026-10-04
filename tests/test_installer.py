@@ -304,6 +304,56 @@ class InstallerTests(unittest.TestCase):
         (record / "AGBP_SYNC.json").write_text(json.dumps(payload), encoding="utf-8")
         return root
 
+    def test_legacy_grok_stack_record_is_honoured_and_legacy_files_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "t"
+            legacy = target / ".grok-stack"
+            (legacy / "adaptive_grok").mkdir(parents=True)
+            (legacy / "adaptive_grok/state.py").write_text("# old\n", encoding="utf-8")
+            routing = legacy / "config/routing.json"
+            routing.parent.mkdir()
+            routing.write_bytes((ROOT / ".getzilla/config/routing.json").read_bytes())
+            (legacy / "AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": [".grok-stack/config/routing.json"]}),
+                encoding="utf-8",
+            )
+            (target / "scripts").mkdir()
+            (target / "scripts/grok_verify.py").write_text("# old\n", encoding="utf-8")
+            (target / "scripts/custom_tool.py").write_text("# theirs\n", encoding="utf-8")
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertEqual(_snapshot(target), before)
+            self.assertEqual(
+                {item["path"]: item["state"] for item in plan["kept"]},
+                {".getzilla/config/routing.json": "absent"},
+            )
+            self.assertNotIn(".getzilla/config/routing.json", {entry["path"] for entry in plan["entries"]})
+            retire = {item["path"]: item["replacement"] for item in plan["legacy_migration"]}
+            self.assertEqual(retire[".grok-stack/adaptive_grok/state.py"], ".getzilla/getzilla/state.py")
+            self.assertEqual(retire[".grok-stack/config/routing.json"], ".getzilla/config/routing.json")
+            self.assertEqual(retire["scripts/grok_verify.py"], "scripts/getzilla_verify.py")
+            self.assertNotIn("scripts/custom_tool.py", retire)
+            self.assertTrue(all(item["action"] == "RETIRE" for item in plan["legacy_migration"]))
+
+    def test_current_sync_record_wins_over_legacy_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, [".coveragerc"])
+            legacy = root / ".grok-stack"
+            legacy.mkdir()
+            (legacy / "AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]}), encoding="utf-8"
+            )
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual([item["path"] for item in plan["kept"]], [".coveragerc"])
+            self.assertEqual(MODULE.legacy_to_current_path("scripts/grok_status.py"), "scripts/getzilla_status.py")
+            self.assertEqual(MODULE.legacy_to_current_path("README.md"), "README.md")
+
+    def test_fresh_target_plan_has_empty_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = MODULE.plan_install(ROOT, Path(tmp) / "absent")
+            self.assertEqual(plan["legacy_migration"], [])
+
     def test_keep_list_absent_file_is_reported_and_never_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = self._consumer_with_record(Path(tmp) / "t", [".coveragerc"])
