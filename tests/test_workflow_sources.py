@@ -41,7 +41,7 @@ def _components() -> dict[str, dict]:
 
 
 def _readme_rows() -> dict[str, dict[str, str]]:
-    text = (ROOT / 'README.md').read_text(encoding='utf-8')
+    text = (ROOT / 'docs/REFERENCE.md').read_text(encoding='utf-8')
     section = re.search(
         r'### Workflow sources[^\n]*\n\n\| Component \| Pinned \| Upstream \| Observed latest \| Observed \|\n\| --- \| --- \| --- \| --- \| --- \|\n((?:\|[^\n]*\|\n)+)',
         text,

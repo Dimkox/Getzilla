@@ -189,7 +189,7 @@ class ProjectStateTests(unittest.TestCase):
         for field in ('active_delivery', 'current_unreleased_change', 'active_source_delivery'):
             self.assertEqual(state[field]['record_scope'], 'historical')
         start = (ROOT / 'START_HERE.md').read_text(encoding='utf-8')
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        readme = (ROOT / 'docs/REFERENCE.md').read_text(encoding='utf-8')
         active_line = next(line for line in start.splitlines() if line.startswith('- **Active delivery:**'))
         for document in (active_line, _section(readme, 'Current state')):
             self.assertIn('PR #241', document)
@@ -718,7 +718,7 @@ class ProjectStateTests(unittest.TestCase):
 
     def test_m4_handoff_does_not_make_an_unconditional_stale_package_claim(self) -> None:
         surfaces = (
-            'README.md',
+            'docs/REFERENCE.md',
             'START_HERE.md',
             'packages/README.md',
             'PROJECT_STATE.json',
@@ -783,7 +783,7 @@ class ProjectStateTests(unittest.TestCase):
         )
 
         current_docs = [
-            ROOT / "README.md",
+            ROOT / "docs/REFERENCE.md",
             ROOT / "START_HERE.md",
             ROOT / "DARK_FACTORY_ROADMAP.md",
             ROOT / "engineering/changes/20260831-implement-a-new-m4-application-feature-on-exact-b7f288/schedule.md",
@@ -951,7 +951,7 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(trust["required_check"], CURRENT_CHECK)
         self.assertEqual(trust["github_app_id"], CURRENT_APP_ID)
         current_sections = (
-            _section((ROOT / "README.md").read_text(encoding="utf-8"), "Current state"),
+            _section((ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8"), "Current state"),
             _section((ROOT / "START_HERE.md").read_text(encoding="utf-8"), "Current project state"),
         )
         for section in current_sections:
