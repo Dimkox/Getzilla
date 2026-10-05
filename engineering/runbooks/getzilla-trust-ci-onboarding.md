@@ -2,90 +2,121 @@
 
 ## Objective
 
-Make the existing self-hosted Trust CI service verify `Dimkox/Getzilla` pull requests exactly as it verifies the predecessor repository, without renaming or redeploying the service. Getzilla reuses the deployed identity on purpose: the GitHub App `adaptive-trust-ci` (App ID `4694114`), the Check Run context `adaptive-trust-ci/verified@<policy-sha12>`, the `adaptive_trust_ci` package and the server paths under `/etc/adaptive-trust-ci`, `/srv/adaptive-trust-ci` and `/opt/adaptive-grok-build-pro/trust-ci`.
+Make the existing self-hosted Trust CI service verify `Dimkox/Getzilla` and **every other `Dimkox` repository with Getzilla installed**, without renaming the service. Getzilla reuses the deployed identity on purpose: the GitHub App `adaptive-trust-ci` (App ID `4694114`), the Check Run context `adaptive-trust-ci/verified@<policy-sha12>`, the `adaptive_trust_ci` package and the server paths under `/etc/adaptive-trust-ci` and `/opt/adaptive-grok-build-pro/trust-ci`.
 
-Nothing in this repository changes the deployed service. Every step below is an operator action on the CI host or on GitHub, reviewed like any other change to merge authority.
+Nothing in this repository changes the deployed service. Every step below is an operator action on the CI host or in GitHub settings.
 
-## What is already true
+## How "any repository" works
 
-- The GitHub App `adaptive-trust-ci` is installed with **All repositories**, so `Dimkox/Getzilla` already sends pull-request webhooks to the service.
-- The service rejects unknown repositories before enqueue. Until the deployed policy names `Dimkox/Getzilla`, Getzilla pull requests get no Check Run.
+The policy catalog has two kinds of profiles:
 
-## 1. Bring the deployed policy to catalog mode
+- **exact profiles** (`repository_profiles`) for repositories with their own commands and holdout: `Dimkox/adaptive-grok-build-pro` (predecessor) and `Dimkox/Getzilla`;
+- an **owner profile** (`owner_profiles`) for every other `Dimkox/*` repository. It runs `python3 scripts/getzilla_verify.py --mode pr --no-record --json` and the generic [consumer holdout](../../trust-ci/holdout.consumer.example/validate.py), which refuses repositories without Getzilla installed.
 
-Repository-scoped profiles exist only in catalog mode (`repository_profiles`). Legacy mode (`allowed_repositories` plus root `commands` and `holdout`) runs one command set for every repository, and those commands name predecessor paths such as `scripts/grok_verify.py`, which do not exist in Getzilla.
+Repositories of any other owner are still rejected before enqueue, even if they install the App. That is what makes it safe to make the App public.
 
-Check which shape is deployed:
+Owner profiles need the Trust CI code from this repository. The currently deployed code understands exact profiles only and silently ignores `owner_profiles`.
 
-```bash
-sudo python3 -c "import json; p=json.load(open('/opt/adaptive-grok-build-pro/trust-ci/runtime/policy.json')); print('catalog' if 'repository_profiles' in p else 'legacy')"
-```
-
-If it prints `legacy`, convert it following [Profile rollout and rollback](../../trust-ci/README.md#profile-rollout-and-rollback): move the existing root `commands` and `holdout` into a `Dimkox/adaptive-grok-build-pro` profile unchanged, add the paired `holdout.host_path`, and remove `allowed_repositories`.
-
-## 2. Add the Getzilla profile
-
-Add this profile next to the predecessor's. It is the `Dimkox/Getzilla` entry of [`trust-ci/config/policy.example.json`](../../trust-ci/config/policy.example.json); only the holdout digest changes to the digest of the holdout you install in step 3.
-
-```json
-{
-  "repository": "Dimkox/Getzilla",
-  "commands": [
-    {"name": "root-unittest", "argv": ["python3", "-m", "unittest", "discover", "-s", "tests"], "timeout_seconds": 900, "required": true},
-    {"name": "trust-ci-unittest", "argv": ["python3", "-m", "unittest", "discover", "-s", "trust-ci/tests"], "timeout_seconds": 900, "required": true},
-    {"name": "compileall", "argv": ["python3", "-m", "compileall", "-q", ".getzilla/getzilla", "scripts", "trust-ci/src"], "timeout_seconds": 300, "required": true},
-    {"name": "repository-verification", "argv": ["python3", "scripts/getzilla_verify.py", "--mode", "pr", "--no-record", "--json"], "timeout_seconds": 1200, "required": true}
-  ],
-  "holdout": {
-    "path": "/etc/adaptive-trust-ci/holdout/getzilla",
-    "host_path": "/etc/adaptive-trust-ci/holdout/getzilla",
-    "digest": "<output of holdout-digest from step 3>",
-    "commands": [
-      {"name": "adaptive-holdout", "argv": ["python3", "/holdout/validate.py", "/workspace"], "timeout_seconds": 300, "required": true}
-    ]
-  }
-}
-```
-
-The runner image does not change: Getzilla needs the same Python toolchain as the predecessor.
-
-## 3. Install a Getzilla holdout bundle
-
-The deployed holdout checks named source files, so the predecessor's bundle fails on Getzilla. Copy it and apply the same path mapping as the rename, then pin its digest:
+## 0. Variables on the CI host
 
 ```bash
-sudo cp -a /etc/adaptive-trust-ci/holdout/adaptive-grok-build-pro /etc/adaptive-trust-ci/holdout/getzilla
-sudo find /etc/adaptive-trust-ci/holdout/getzilla -type f -name '*.py' -exec sed -i \
+CHECKOUT=/opt/adaptive-grok-build-pro          # deployed Trust CI checkout
+POLICY=$CHECKOUT/trust-ci/runtime/policy.json   # deployed policy
+ROOT=/etc/adaptive-trust-ci/holdout            # TRUST_CI_HOLDOUT_PATH and TRUST_CI_HOLDOUT_HOST_PATH
+SRC=/opt/getzilla-src                          # reviewed Getzilla source
+REF=<reviewed Getzilla commit on main>
+tci() { sudo -E PYTHONPATH="$SRC/trust-ci/src" PYTHONDONTWRITEBYTECODE=1 python3 -m adaptive_trust_ci.cli "$@"; }
+```
+
+If `TRUST_CI_HOLDOUT_PATH` and `TRUST_CI_HOLDOUT_HOST_PATH` differ in your env files, stage the bundles under both and pass both roots to the planner.
+
+## 1. Fetch the reviewed Getzilla source
+
+```bash
+sudo git clone https://github.com/Dimkox/Getzilla.git "$SRC"
+sudo git -C "$SRC" checkout --detach "$REF"
+```
+
+## 2. Stage the holdout bundles (drain workers first)
+
+Catalog holdouts must be strict subdirectories of the trusted root, so the current bundle is copied unchanged into a per-repository directory.
+
+```bash
+LEGACY=$(sudo python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['holdout']['path'])" "$POLICY")
+LEGACY_DIGEST=$(sudo python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['holdout']['digest'])" "$POLICY")
+sudo install -d "$ROOT/adaptive-grok-build-pro" "$ROOT/getzilla" "$ROOT/owner-dimkox"
+sudo find "$LEGACY" -mindepth 1 -maxdepth 1 \
+  ! -name adaptive-grok-build-pro ! -name getzilla ! -name owner-dimkox \
+  -exec cp -a {} "$ROOT/adaptive-grok-build-pro/" \;
+test "$(tci holdout-digest --path "$ROOT/adaptive-grok-build-pro")" = "$LEGACY_DIGEST" && echo predecessor bundle OK
+
+# Getzilla: same bundle, renamed paths
+sudo cp -a "$ROOT/adaptive-grok-build-pro/." "$ROOT/getzilla/"
+sudo find "$ROOT/getzilla" -type f -name '*.py' -exec sed -i \
   -e 's#\.grok-stack/adaptive_grok#.getzilla/getzilla#g' \
   -e 's#\.grok-stack#.getzilla#g' \
   -e 's#scripts/grok_\([a-z_]*\)\.py#scripts/getzilla_\1.py#g' \
   -e 's#adaptive_factory#getzilla_factory#g' \
   -e 's#adaptive_delivery#getzilla_delivery#g' {} +
-adaptive-trust-ci holdout-digest --path /etc/adaptive-trust-ci/holdout/getzilla
+
+# every other Dimkox repository with Getzilla installed
+sudo cp -a "$SRC/trust-ci/holdout.consumer.example/." "$ROOT/owner-dimkox/"
+sudo find "$ROOT" -name __pycache__ -prune -exec rm -rf {} +
 ```
 
-Use the source directory your deployment actually mounts if it differs. Review the diff of the copied bundle before trusting it; the example bundle in [`trust-ci/holdout.example`](../../trust-ci/holdout.example/) shows the expected result.
+If the deployed policy is already a catalog, skip the `LEGACY` lines: copy the predecessor's existing profile directory instead.
 
-## 4. Mind the policy epochs
-
-- Converting legacy to catalog changes the predecessor's policy digest, so its Check Run name changes. Re-run `branch-protect` for `Dimkox/adaptive-grok-build-pro` with the new name after you observe a green App-owned check under it, exactly as in [Trust CI rollout](trust-ci-rollout.md).
-- Once the deployed policy is already in catalog mode, adding the Getzilla profile rotates only Getzilla's epoch.
-
-## 5. Prove, then protect Getzilla
-
-Follow [Prove the App-owned policy epoch before protection](trust-ci-rollout.md#prove-the-app-owned-policy-epoch-before-protection) on a small Getzilla pull request, then bind `main`:
+## 3. Plan the new policy
 
 ```bash
-TRUST_CI_GITHUB_ADMIN_TOKEN=<temporary-admin-token> \
-TRUST_CI_GITHUB_APP_ID='4694114' \
-adaptive-trust-ci branch-protect \
-  --policy /opt/adaptive-grok-build-pro/trust-ci/runtime/policy.json \
-  --repository Dimkox/Getzilla \
-  --branch main \
-  --required-reviews 0
+sudo PYTHONPATH="$SRC/trust-ci/src" PYTHONDONTWRITEBYTECODE=1 python3 -m adaptive_trust_ci.onboarding \
+  --policy "$POLICY" \
+  --out "$CHECKOUT/trust-ci/runtime/policy.catalog.json" \
+  --owner Dimkox \
+  --holdout-root "$ROOT" --holdout-host-root "$ROOT" \
+  --getzilla-bundle "$ROOT/getzilla" \
+  --owner-bundle "$ROOT/owner-dimkox"
 ```
 
-Applying protection before a green App-owned check exists can lock the repository.
+The planner never touches the deployed policy. It prints, per repository, the check name before and after (`rerun_branch_protect: true` means branch protection must be rebound) and the holdout bundles with their digests. Review the diff between `policy.json` and `policy.catalog.json` before installing it.
+
+## 4. Deploy the Trust CI code that understands owner profiles
+
+Point the deployed checkout at Getzilla and roll out API and worker exactly as in [Trust CI rollout](trust-ci-rollout.md) (build, pin image digests, verify the supply chain). The runner image does not change.
+
+```bash
+sudo git -C "$CHECKOUT" remote set-url origin https://github.com/Dimkox/Getzilla.git
+sudo git -C "$CHECKOUT" fetch origin
+sudo git -C "$CHECKOUT" checkout --detach "$REF"
+sudo cp "$CHECKOUT/trust-ci/runtime/policy.catalog.json" "$POLICY"
+# then: build/pin api and worker, docker compose up -d api worker, per trust-ci-rollout.md
+```
+
+`runtime/` is untracked, so the checkout switch keeps the deployed policy, keys and env files.
+
+## 5. Prove, then protect each repository
+
+For Getzilla, the predecessor and each `Dimkox` repository you want gated: open a small pull request, confirm the App-owned `adaptive-trust-ci/verified@<epoch>` Check Run on its exact head (see [Prove the App-owned policy epoch](trust-ci-rollout.md#prove-the-app-owned-policy-epoch-before-protection)), then bind its `main`. `branch-protect` now resolves the repository's own profile, so the check name comes from the policy:
+
+```bash
+export TRUST_CI_GITHUB_ADMIN_TOKEN=<temporary-admin-token> TRUST_CI_GITHUB_APP_ID=4694114
+for repo in Dimkox/Getzilla Dimkox/adaptive-grok-build-pro; do   # add more Dimkox repos here
+  tci branch-protect --policy "$POLICY" --repository "$repo" --branch main --required-reviews 0
+done
+unset TRUST_CI_GITHUB_ADMIN_TOKEN
+```
+
+Protecting a repository before a green App-owned check exists for its current epoch locks it. The predecessor's epoch changes when a legacy policy becomes a catalog; rebind it after its first green check under the new name.
+
+## 6. Make the GitHub App public
+
+1. Deploy the worker from this repository (step 4) and set `TRUST_CI_GITHUB_INSTALLATION_ID=auto` in `env/worker.env`, then restart the worker. A numeric ID would keep the worker publishing only to your own account's installation.
+2. GitHub → **Settings → Developer settings → GitHub Apps → adaptive-trust-ci → Advanced → Danger zone → Make public**.
+3. Optional: fill in the App's description and homepage (`https://github.com/Dimkox/Getzilla`) so its public install page explains what it does.
+
+Making it public is effectively one-way: GitHub does not let a public App become private again while it is installed on other accounts.
+
+Strangers can install it, but the service only enqueues repositories covered by an exact or owner profile; everything else is rejected before any code runs on the CI host. To serve another account, add an owner profile for it (or an exact profile per repository) with the planner, review it and install it like any policy change.
 
 ## Why Getzilla started from a direct import
 

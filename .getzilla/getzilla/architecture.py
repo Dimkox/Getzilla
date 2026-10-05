@@ -965,6 +965,7 @@ _NON_AUTHORITATIVE_REPOSITORY_DIRECTORIES = {
     PurePosixPath("engineering/contracts/examples"),
     PurePosixPath("examples"),
     PurePosixPath("trust-ci/holdout.example"),
+    PurePosixPath("trust-ci/holdout.consumer.example"),
 }
 
 

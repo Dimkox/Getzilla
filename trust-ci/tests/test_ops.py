@@ -143,15 +143,18 @@ class OperationsTests(unittest.TestCase):
 
         raw = json.loads((ROOT / 'trust-ci/config/policy.example.json').read_text(encoding='utf-8'))
         catalog = PolicyCatalog.from_dict(raw)
-        self.assertEqual(catalog.profile_count, 2)
+        self.assertEqual(catalog.profile_count, 3)
         paths = {profile.holdout.host_path for profile in catalog.profiles}
-        self.assertEqual(len(paths), 2)
+        self.assertEqual(len(paths), 3)
         for profile in catalog.profiles:
             self.assertTrue(profile.holdout.path.is_absolute())
             self.assertTrue(profile.holdout.host_path.is_absolute())
             self.assertRegex(profile.holdout.digest, r'^[0-9a-f]{64}$')
         adaptive = catalog.resolve_repository('Dimkox/Getzilla')
         self.assertEqual(adaptive.holdout.digest, bundle_digest(ROOT / 'trust-ci/holdout.example'))
+        consumer = catalog.resolve_repository('Dimkox/any-new-repository')
+        self.assertEqual(consumer.owner_scope, 'Dimkox')
+        self.assertEqual(consumer.holdout.digest, bundle_digest(ROOT / 'trust-ci/holdout.consumer.example'))
 
     def test_branch_protection_is_app_bound_and_actions_independent(self) -> None:
         payload = branch_protection_payload('adaptive-trust-ci/verified', app_id=12345)

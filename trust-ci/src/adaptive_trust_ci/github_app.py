@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -39,10 +40,22 @@ def generate_app_jwt(app_id: int, private_key_pem: bytes, *, now: datetime) -> s
     return f'{signing_input.decode("ascii")}.{_b64url(signature)}'
 
 
+_REPOSITORY_RE = re.compile(r'^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$')
+_TOKEN_PERMISSIONS = {'checks': 'write', 'contents': 'read', 'pull_requests': 'read'}
+
+
 @dataclass
 class GitHubAppAuth:
+    """GitHub App credentials.
+
+    With a fixed ``installation_id`` the App acts for one account, as before.
+    With ``installation_id=None`` (a public App installed on many accounts) each
+    repository's installation is looked up with the App JWT and every token is
+    restricted to that single repository.
+    """
+
     app_id: int
-    installation_id: int
+    installation_id: int | None
     private_key_path: Path
     transport: Transport | None = None
     api_url: str = 'https://api.github.com'
@@ -51,17 +64,77 @@ class GitHubAppAuth:
     _cached_token: str | None = field(init=False, default=None)
     _cached_expiry: datetime | None = field(init=False, default=None)
     _lock: threading.Lock = field(init=False, default_factory=threading.Lock)
+    _repository_tokens: dict[str, tuple[str, datetime]] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         if isinstance(self.app_id, bool) or self.app_id <= 0:
             raise ValueError('GitHub App ID must be positive')
-        if isinstance(self.installation_id, bool) or self.installation_id <= 0:
+        if self.installation_id is not None and (
+            isinstance(self.installation_id, bool) or self.installation_id <= 0
+        ):
             raise ValueError('GitHub App installation ID must be positive')
         self.private_key_path = self.private_key_path.resolve()
         self.api_url = self.api_url.rstrip('/')
         self.transport = self.transport or UrllibTransport()
 
+    def _jwt_headers(self, now: datetime) -> dict[str, str]:
+        try:
+            private_key = self.private_key_path.read_bytes()
+        except OSError as exc:
+            raise GitHubError(f'cannot read GitHub App private key: {self.private_key_path}') from exc
+        return {
+            'Accept': 'application/vnd.github+json',
+            'Authorization': f'Bearer {generate_app_jwt(self.app_id, private_key, now=now)}',
+            'Content-Type': 'application/json',
+            'User-Agent': 'adaptive-trust-ci/2.1.0',
+            'X-GitHub-Api-Version': self.api_version,
+        }
+
+    def _token_from(self, status: int, response: object, now: datetime) -> tuple[str, datetime]:
+        if status != 201 or not isinstance(response, dict):
+            raise GitHubError(f'GitHub App token request returned {status}: {response}')
+        token = str(response.get('token') or '').strip()
+        expires_at = response.get('expires_at')
+        if not token or not isinstance(expires_at, str):
+            raise GitHubError('GitHub App token response is missing token or expires_at')
+        expiry = parse_datetime(expires_at)
+        if expiry <= now:
+            raise GitHubError('GitHub App returned an already expired installation token')
+        return token, expiry
+
+    def token_for(self, repository: str) -> str:
+        """Installation token usable for ``repository`` only (or the fixed installation)."""
+        if self.installation_id is not None:
+            return self.installation_token()
+        match = _REPOSITORY_RE.fullmatch(repository)
+        if not match or {match.group(1), match.group(2)} & {'.', '..'}:
+            raise GitHubError(f'invalid repository for an installation token: {repository!r}')
+        with self._lock:
+            now = self.now_fn().astimezone(timezone.utc)
+            cached = self._repository_tokens.get(repository)
+            if cached and cached[1] > now + timedelta(minutes=2):
+                return cached[0]
+            assert self.transport is not None
+            headers = self._jwt_headers(now)
+            status, installation = self.transport.request(
+                'GET', f'{self.api_url}/repos/{repository}/installation', headers, None
+            )
+            if status != 200 or not isinstance(installation, dict) or not isinstance(installation.get('id'), int) \
+                    or isinstance(installation.get('id'), bool) or installation['id'] <= 0:
+                raise GitHubError(f'GitHub App is not installed on {repository} ({status})')
+            status, response = self.transport.request(
+                'POST',
+                f"{self.api_url}/app/installations/{installation['id']}/access_tokens",
+                headers,
+                {'repositories': [match.group(2)], 'permissions': dict(_TOKEN_PERMISSIONS)},
+            )
+            token, expiry = self._token_from(status, response, now)
+            self._repository_tokens[repository] = (token, expiry)
+            return token
+
     def installation_token(self) -> str:
+        if self.installation_id is None:
+            raise GitHubError('no fixed installation configured; use token_for(repository)')
         with self._lock:
             now = self.now_fn().astimezone(timezone.utc)
             if self._cached_token and self._cached_expiry and self._cached_expiry > now + timedelta(minutes=2):

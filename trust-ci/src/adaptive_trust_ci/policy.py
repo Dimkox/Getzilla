@@ -12,6 +12,7 @@ from .models import canonical_json, require_digest, require_repository
 
 _IMAGE_DIGEST_RE = re.compile(r"^(?:sha256:[0-9a-f]{64}|.+@sha256:[0-9a-f]{64})$")
 _MAX_POLICY_PATH_BYTES = 4096
+_OWNER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 class PolicyError(ValueError):
@@ -186,6 +187,8 @@ class Policy:
     holdout: HoldoutSpec
     approval_rules: tuple[ApprovalRule, ...]
     digest: str
+    # Set only for catalog owner profiles: every repository of this owner.
+    owner_scope: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> 'Policy':
@@ -200,7 +203,7 @@ class Policy:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> 'Policy':
+    def from_dict(cls, data: Mapping[str, Any], *, owner_scope: str | None = None) -> 'Policy':
         if data.get('schema_version') != 1:
             raise PolicyError('unsupported policy schema_version')
         repositories = data.get('allowed_repositories')
@@ -233,6 +236,11 @@ class Policy:
             raise PolicyError('repository and holdout command names must be globally unique')
 
         normalized_repositories = tuple(sorted({str(item).strip() for item in repositories if str(item).strip()}))
+        if owner_scope is None:
+            if any('*' in item for item in normalized_repositories):
+                raise PolicyError('allowed_repositories must name exact owner/name repositories')
+        elif normalized_repositories != (f'{owner_scope}/*',):
+            raise PolicyError('an owner profile covers exactly one owner')
         status_context = str(data.get('status_context', '')).strip()
         pipeline = str(data.get('pipeline', '')).strip()
         if not status_context or '@' in status_context or not pipeline:
@@ -270,6 +278,7 @@ class Policy:
             holdout=holdout,
             approval_rules=parsed_rules,
             digest=digest,
+            owner_scope=owner_scope,
         )
 
     @property
@@ -282,7 +291,13 @@ class Policy:
         return frozenset(rule.scope for rule in self.approval_rules)
 
     def allows_repository(self, repository: str) -> bool:
-        return repository in self.allowed_repositories
+        if self.owner_scope is None:
+            return repository in self.allowed_repositories
+        try:
+            normalized = require_repository(repository)
+        except ValueError:
+            return False
+        return normalized == repository and repository.split('/', 1)[0] == self.owner_scope
 
     def required_scopes(self, paths: Iterable[str]) -> set[str]:
         exact_paths = [_validated_repo_relative(path, label='changed path') for path in paths]
@@ -325,17 +340,21 @@ class PolicyCatalog:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> 'PolicyCatalog':
-        if 'repository_profiles' not in data:
+        if 'repository_profiles' not in data and 'owner_profiles' not in data:
             return cls.from_policy(Policy.from_dict(data))
 
         if any(key in data for key in ('allowed_repositories', 'commands', 'holdout')):
             raise PolicyError('mixed legacy and repository profile policy forms are forbidden')
-        profiles_raw = data.get('repository_profiles')
-        if not isinstance(profiles_raw, list) or not profiles_raw:
-            raise PolicyError('repository_profiles must be non-empty')
+        profiles_raw = data.get('repository_profiles', [])
+        owners_raw = data.get('owner_profiles', [])
+        if not isinstance(profiles_raw, list) or not isinstance(owners_raw, list):
+            raise PolicyError('repository_profiles and owner_profiles must be lists')
+        if not profiles_raw and not owners_raw:
+            raise PolicyError('repository_profiles must be non-empty unless owner_profiles are configured')
 
         common = dict(data)
-        del common['repository_profiles']
+        common.pop('repository_profiles', None)
+        common.pop('owner_profiles', None)
         repositories: list[str] = []
         profiles: list[Policy] = []
         for profile_raw in profiles_raw:
@@ -376,6 +395,43 @@ class PolicyCatalog:
                 raise PolicyError('repository profile holdout.host_path is required')
             profiles.append(Policy.from_dict(effective))
 
+        # Owner profiles cover every repository of one owner that has no exact
+        # profile. They are explicit: there is no global wildcard or fallback.
+        owners: list[str] = []
+        for owner_raw in owners_raw:
+            if not isinstance(owner_raw, Mapping):
+                raise PolicyError('every owner profile must be an object')
+            if set(owner_raw) != {'owner', 'commands', 'holdout'}:
+                raise PolicyError('owner profile keys must be exactly owner, commands, and holdout')
+            owner = owner_raw.get('owner')
+            if not isinstance(owner, str) or not _OWNER_RE.fullmatch(owner):
+                raise PolicyError('owner profile owner must be an exact GitHub owner login')
+            if owner in owners:
+                raise PolicyError('owner profile owners must be unique')
+            if not isinstance(owner_raw.get('commands'), list) or not isinstance(owner_raw.get('holdout'), Mapping):
+                raise PolicyError('owner profile commands and holdout are required')
+            holdout_input = owner_raw['holdout']
+            for path_key in ('path', 'host_path'):
+                raw_path = holdout_input.get(path_key)
+                if isinstance(raw_path, str) and '..' in Path(raw_path).parts:
+                    raise PolicyError('owner profile holdout paths must not contain parent traversal')
+            host_path = holdout_input.get('host_path')
+            if not isinstance(host_path, str) or not host_path or host_path.strip() != host_path or not Path(host_path).is_absolute():
+                raise PolicyError('owner profile holdout.host_path is required')
+            canonical_holdout = dict(holdout_input)
+            for path_key in ('path', 'host_path'):
+                if isinstance(canonical_holdout.get(path_key), str):
+                    canonical_holdout[path_key] = str(Path(canonical_holdout[path_key]).resolve())
+            effective = {
+                **common,
+                'allowed_repositories': [f'{owner}/*'],
+                'commands': owner_raw['commands'],
+                'holdout': canonical_holdout,
+            }
+            owners.append(owner)
+            repositories.append(f'{owner}/*')
+            profiles.append(Policy.from_dict(effective, owner_scope=owner))
+
         ordered = sorted(zip(repositories, profiles), key=lambda item: item[0])
         digest_data = {
             'schema_version': 1,
@@ -398,10 +454,16 @@ class PolicyCatalog:
         return len(self.profiles)
 
     def resolve_repository(self, repository: str) -> Policy:
-        matches = [profile for profile in self.profiles if profile.allows_repository(repository)]
-        if len(matches) != 1:
-            raise PolicyError(f'repository {repository!r} is not configured')
-        return matches[0]
+        exact = [profile for profile in self.profiles
+                 if profile.owner_scope is None and repository in profile.allowed_repositories]
+        if len(exact) == 1:
+            return exact[0]
+        if not exact:
+            owned = [profile for profile in self.profiles
+                     if profile.owner_scope is not None and profile.allows_repository(repository)]
+            if len(owned) == 1:
+                return owned[0]
+        raise PolicyError(f'repository {repository!r} is not configured')
 
     def resolve_bound(self, repository: str, policy_digest: str) -> Policy:
         profile = self.resolve_repository(repository)

@@ -84,6 +84,81 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(PolicyError, 'not active'):
             first.resolve_bound('Dimkox/ii-tonya-platform', first.resolve_repository('Dimkox/Getzilla').digest)
 
+    def _owner_catalog(self) -> dict:
+        data = catalog_data()
+        data['owner_profiles'] = [
+            {
+                'owner': 'Dimkox',
+                'commands': [
+                    {
+                        'name': 'getzilla-verify',
+                        'argv': ['python3', 'scripts/getzilla_verify.py', '--mode', 'pr', '--no-record', '--json'],
+                        'timeout_seconds': 1200,
+                        'required': True,
+                    },
+                ],
+                'holdout': {**policy_data(holdout_digest='c' * 64)['holdout'], 'host_path': '/srv/holdouts/owner-dimkox'},
+            },
+        ]
+        return data
+
+    def test_owner_profile_covers_every_repository_of_that_owner_only(self) -> None:
+        catalog = PolicyCatalog.from_dict(self._owner_catalog())
+        exact = catalog.resolve_repository('Dimkox/Getzilla')
+        self.assertEqual(exact.commands[0].name, 'unit')
+        for repository in ('Dimkox/new-project', 'Dimkox/openclaw-airgap-farm'):
+            profile = catalog.resolve_repository(repository)
+            self.assertEqual(profile.owner_scope, 'Dimkox')
+            self.assertEqual(profile.commands[0].name, 'getzilla-verify')
+            self.assertIs(catalog.resolve_bound(repository, profile.digest), profile)
+        for repository in ('someone-else/project', 'dimkox/new-project', 'Dimkox/*', 'Dimkox', 'Dimkox/a/b'):
+            with self.assertRaisesRegex(PolicyError, 'not configured'):
+                catalog.resolve_repository(repository)
+
+    def test_owner_profiles_alone_form_a_catalog(self) -> None:
+        data = self._owner_catalog()
+        data['repository_profiles'] = []
+        catalog = PolicyCatalog.from_dict(data)
+        self.assertEqual(catalog.mode, 'catalog')
+        self.assertEqual(catalog.resolve_repository('Dimkox/Getzilla').owner_scope, 'Dimkox')
+        del data['repository_profiles']
+        self.assertEqual(PolicyCatalog.from_dict(data).digest, catalog.digest)
+
+    def test_adding_an_owner_profile_keeps_exact_profile_epochs(self) -> None:
+        plain = PolicyCatalog.from_dict(catalog_data())
+        owned = PolicyCatalog.from_dict(self._owner_catalog())
+        for repository in ('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform'):
+            self.assertEqual(plain.resolve_repository(repository).check_name,
+                             owned.resolve_repository(repository).check_name)
+        self.assertNotEqual(plain.digest, owned.digest)
+
+    def test_owner_profiles_are_validated(self) -> None:
+        cases = (
+            ({'owner': '*'}, 'owner login'),
+            ({'owner': 'Dimkox/x'}, 'owner login'),
+            ({'owner': ''}, 'owner login'),
+            ({'unexpected': True}, 'owner profile keys'),
+        )
+        for patch, message in cases:
+            data = self._owner_catalog()
+            data['owner_profiles'][0].update(patch)
+            with self.subTest(patch=patch), self.assertRaisesRegex(PolicyError, message):
+                PolicyCatalog.from_dict(data)
+        data = self._owner_catalog()
+        data['owner_profiles'].append(copy.deepcopy(data['owner_profiles'][0]))
+        with self.assertRaisesRegex(PolicyError, 'unique'):
+            PolicyCatalog.from_dict(data)
+        data = self._owner_catalog()
+        del data['owner_profiles'][0]['holdout']['host_path']
+        with self.assertRaisesRegex(PolicyError, 'host_path'):
+            PolicyCatalog.from_dict(data)
+
+    def test_legacy_policy_never_accepts_a_wildcard_repository(self) -> None:
+        data = policy_data()
+        data['allowed_repositories'] = ['Dimkox/*']
+        with self.assertRaisesRegex(PolicyError, 'exact owner/name'):
+            Policy.from_dict(data)
+
     def test_catalog_rejects_mixed_legacy_fields(self) -> None:
         data = catalog_data()
         data['commands'] = []
