@@ -2,6 +2,8 @@
 
 This is the exact script that produced the `rename:` commit of the Getzilla import from the predecessor at `c4e506f3d3a45e000f5b9f9121f698c1d16814e3` (final PR #242 head, tree-identical to its merged `f97966c`). It is kept as a record of what was renamed and what was deliberately kept; it is not part of the product and is not meant to be run again on this tree.
 
+Getzilla later replaced its root `README.md` with a short plain-language introduction. The script therefore ends by moving the predecessor's detailed README to `docs/REFERENCE.md` (relative links get a `../` prefix) and pointing the tests that read it there, so syncs bring predecessor README changes into the reference instead of the short README.
+
 Follow-up commits on the same branch restored a few files byte-for-byte (checksum-bound migration 021, frozen v1 contracts) and quoted frozen predecessor records verbatim in tests; the script below already encodes those exclusions.
 
 ```python
@@ -183,8 +185,35 @@ def main() -> int:
             if not dry:
                 (root / dest).parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(['git', '-C', str(root), 'mv', '-k', rel, dest], check=True)
+    if not dry:
+        relocate_readme(root)
     print(f'content edited: {edited} files; paths moved: {moved}')
     return 0
+
+
+# Getzilla keeps its own short README.md. The predecessor's detailed README
+# lives on as docs/REFERENCE.md, so its changes land there during syncs.
+REFERENCE = 'docs/REFERENCE.md'
+RELATIVE_LINK = re.compile(r'\]\((?!https?://|mailto:|#|/)([^)\s]+)\)')
+README_READ = re.compile(r'''ROOT / (["'])README\.md\1''')
+
+
+def relocate_readme(root: Path) -> None:
+    readme = root / 'README.md'
+    if not readme.is_file() or (root / REFERENCE).exists():
+        return
+    text = RELATIVE_LINK.sub(lambda m: f'](../{m.group(1)})', readme.read_text(encoding='utf-8'))
+    subprocess.run(['git', '-C', str(root), 'mv', 'README.md', REFERENCE], check=True)
+    (root / REFERENCE).write_text(text, encoding='utf-8')
+    tests = subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--', 'tests', 'trust-ci/tests'],
+                           check=True, capture_output=True).stdout.decode().split('\0')
+    for rel in filter(None, tests):
+        path = root / rel
+        if rel.endswith('.py') and not frozen(rel) and not path.is_symlink():
+            source = path.read_text(encoding='utf-8')
+            moved = README_READ.sub(lambda m: f'ROOT / {m.group(1)}{REFERENCE}{m.group(1)}', source)
+            if moved != source:
+                path.write_text(moved, encoding='utf-8')
 
 
 if __name__ == '__main__':
