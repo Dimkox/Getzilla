@@ -1,6 +1,6 @@
 # Getzilla rename rules
 
-This is the exact script that produced the `rename:` commit of the Getzilla import from the predecessor at `939bbd2701856e993641851d44ed4b8ab445d2e1`. It is kept as a record of what was renamed and what was deliberately kept; it is not part of the product and is not meant to be run again on this tree.
+This is the exact script that produced the `rename:` commit of the Getzilla import from the predecessor at `c4e506f3d3a45e000f5b9f9121f698c1d16814e3` (final PR #242 head, tree-identical to its merged `f97966c`). It is kept as a record of what was renamed and what was deliberately kept; it is not part of the product and is not meant to be run again on this tree.
 
 Follow-up commits on the same branch restored a few files byte-for-byte (checksum-bound migration 021, frozen v1 contracts) and quoted frozen predecessor records verbatim in tests; the script below already encodes those exclusions.
 

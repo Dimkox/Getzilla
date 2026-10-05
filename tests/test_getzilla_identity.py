@@ -45,6 +45,7 @@ LEGACY_AWARE_FILES = frozenset(
         "tests/test_getzilla_identity.py",
         "engineering/runbooks/getzilla-trust-ci-onboarding.md",
         "engineering/runbooks/getzilla-rename-rules.md",
+        "engineering/runbooks/getzilla-upstream-sync.md",
     }
 )
 # Allowed references to the predecessor: links to its PRs, releases and pinned
