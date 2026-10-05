@@ -10,40 +10,40 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory import landing_contracts
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_artifact_retention import RetainedLandingArtifact
-from adaptive_factory.landing_artifact import (
+from getzilla_factory import landing_contracts
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_artifact_retention import RetainedLandingArtifact
+from getzilla_factory.landing_artifact import (
     DEPLOY_MEMBERS,
     LandingArtifactError,
     ExactGitLandingArtifactSource,
     LandingArtifactPackager,
 )
-from adaptive_factory.landing_contracts import (
+from getzilla_factory.landing_contracts import (
     LandingInputV1,
     LandingProviderEvidenceV1,
     StaticLandingSpecV1,
 )
-from adaptive_factory.landing_coordinator import LandingCoordinator
-from adaptive_factory.landing_evaluation import DeterministicLandingEvaluator
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_provider import (
+from getzilla_factory.landing_coordinator import LandingCoordinator
+from getzilla_factory.landing_evaluation import DeterministicLandingEvaluator
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_provider import (
     LandingNormalizationOutcome,
     LandingNormalizationRequest,
 )
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_renderer import (
     DeterministicLandingRenderer,
     ExactGitLandingWorkspace,
     TARGET_REPOSITORY_ID,
 )
-from adaptive_factory.landing_runtime import (
+from getzilla_factory.landing_runtime import (
     CoordinatedLandingArtifactBuilder,
     CoordinatedLandingArtifactResult,
 )
-from adaptive_factory.landing_service import LandingArtifactBuildResult
-from adaptive_factory.landing_service import LandingApplicationService, LandingServiceError
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
-from adaptive_factory.models import Actor
+from getzilla_factory.landing_service import LandingArtifactBuildResult
+from getzilla_factory.landing_service import LandingApplicationService, LandingServiceError
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory.models import Actor
 from factory.tests.test_landing_renderer import landing_spec, sealed_target
 
 
@@ -165,7 +165,7 @@ class CoordinatedLandingArtifactBuilderTests(unittest.TestCase):
         with sealed_target() as (target, base_sha, base_tree), tempfile.TemporaryDirectory(
             prefix="landing-reader-versions-",
         ) as directory, patch.multiple(
-            "adaptive_factory.landing_service", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
+            "getzilla_factory.landing_service", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
         ):
             root = Path(directory)
             (root / "scratch").mkdir(mode=0o700)
@@ -278,11 +278,11 @@ class CoordinatedLandingArtifactBuilderTests(unittest.TestCase):
         with sealed_target() as (target, base_sha, base_tree), tempfile.TemporaryDirectory(
             prefix="landing-runtime-durable-"
         ) as directory, patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):

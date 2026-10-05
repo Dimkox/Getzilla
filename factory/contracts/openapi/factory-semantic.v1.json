@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Adaptive Factory Local Semantic Validation API",
+    "title": "Getzilla Factory Local Semantic Validation API",
     "version": "1.0.0",
     "description": "Bounded local-only M6 semantic validation API. The frozen M4 control API and M5 execution APIs remain separately contracted."
   },

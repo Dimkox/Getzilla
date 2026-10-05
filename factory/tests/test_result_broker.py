@@ -2,11 +2,11 @@ import json
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.contracts import ContractError
+from getzilla_factory.contracts import ContractError
 
 
 def broker(**limits):
-    from adaptive_factory.result_broker import ResultBroker
+    from getzilla_factory.result_broker import ResultBroker
 
     return ResultBroker(policy_version="result-sanitizer/1", **limits)
 
@@ -35,7 +35,7 @@ class ResultBrokerTests(unittest.TestCase):
                 self.assertIsNone(value.sanitized_payload)
 
     def test_policy_limits_and_metadata_reject_invalid_configuration(self):
-        from adaptive_factory.result_broker import ResultBroker
+        from getzilla_factory.result_broker import ResultBroker
 
         for limit in ("max_bytes", "max_records", "max_depth", "max_chunks"):
             for value in (True, False, 1.5, float("nan"), float("inf"), 0, -1, 2**63):
@@ -95,14 +95,14 @@ class ResultBrokerTests(unittest.TestCase):
                     raise AssertionError("oversized chunk copied")
                 super().extend(chunk)
 
-        with patch("adaptive_factory.result_broker.bytearray", GuardedBuffer, create=True):
+        with patch("getzilla_factory.result_broker.bytearray", GuardedBuffer, create=True):
             value = broker(max_bytes=4).sanitize_candidate(
                 channel="native_tool_result", content_type="text/plain", chunks=[b"12345"],
             )
         self.assertEqual((value.outcome, value.reason_code), ("rejected", "result_too_large"))
 
     def test_typed_envelope_failures_and_unknown_channel_parity(self):
-        from adaptive_factory.result_contracts import ResultEnvelopeV1
+        from getzilla_factory.result_contracts import ResultEnvelopeV1
 
         wire = broker().sanitize_candidate(
             channel="native_tool_result", content_type="text/plain", chunks=[b"safe"],
@@ -116,7 +116,7 @@ class ResultBrokerTests(unittest.TestCase):
                 ResultEnvelopeV1.from_dict({**wire, field: "\ud800"})
         with self.assertRaises(ContractError):
             ResultEnvelopeV1.from_dict({**wire, "channel": "unknown"})
-        from adaptive_factory.contracts import canonical_digest
+        from getzilla_factory.contracts import canonical_digest
         for payload in ('{"Authorization":"contract-canary"}',
                         '{"nested":{"password":{"value":"contract-canary"}}}',
                         '{"a":1,"a":2}', '{"value":NaN}', '{"value":"\\ud800"}',
@@ -128,7 +128,7 @@ class ResultBrokerTests(unittest.TestCase):
                 })
 
     def test_closed_contract_outcomes_and_semantic_parity(self):
-        from adaptive_factory.result_contracts import ResultEnvelopeV1
+        from getzilla_factory.result_contracts import ResultEnvelopeV1
 
         envelope = broker().sanitize_candidate(
             channel="native_tool_result", content_type="application/json",
@@ -150,7 +150,7 @@ class ResultBrokerTests(unittest.TestCase):
                 ResultEnvelopeV1.from_dict(mutation)
 
     def test_runtime_channels_are_unavailable_and_stream_is_not_consumed(self):
-        from adaptive_factory.result_contracts import RESULT_CHANNELS
+        from getzilla_factory.result_contracts import RESULT_CHANNELS
 
         for channel in RESULT_CHANNELS:
             consumed = []

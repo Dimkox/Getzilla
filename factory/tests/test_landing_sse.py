@@ -1,4 +1,4 @@
-"""Execution coverage for the bounded Qwen Omni SSE decoder (factory/src/adaptive_factory/landing_sse.py).
+"""Execution coverage for the bounded Qwen Omni SSE decoder (factory/src/getzilla_factory/landing_sse.py).
 
 The decoder is the only place where provider bytes become landing text, so these tests pin the
 size ceilings, the frame ordering it refuses, and the fact that reasoning/audio/tool payloads are
@@ -11,11 +11,11 @@ import hashlib
 from types import SimpleNamespace
 import unittest
 
-from adaptive_factory.landing_provider import (
+from getzilla_factory.landing_provider import (
     LandingProviderError,
     MAX_PROVIDER_OUTPUT_BYTES,
 )
-from adaptive_factory.landing_sse import QwenOmniStreamDecoder
+from getzilla_factory.landing_sse import QwenOmniStreamDecoder
 
 MODEL_ID = "qwen3.5-omni-plus-2026-03-15"
 LINE_LIMIT = 524_288

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_ENTRIES = frozenset(
     {
-        ".agents", ".coveragerc", ".gitattributes", ".gitignore", ".grok-stack", ".grok", ".specify", ".superpowers",
+        ".agents", ".coveragerc", ".gitattributes", ".gitignore", ".getzilla", ".grok", ".specify", ".superpowers",
         "AGENTS.md", "CHANGELOG.md", "DARK_FACTORY_ROADMAP.md", "GROK_BUILD_HANDOFF.md",
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
         "FACTORY_UNIFIED_UPGRADE_TZ_v1.5_FINAL.md",
@@ -197,7 +197,7 @@ class StructureTests(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(ROOT / 'scripts/grok_architecture.py'),
+                str(ROOT / 'scripts/getzilla_architecture.py'),
                 '--root',
                 str(frozen),
                 'summary',
@@ -224,16 +224,16 @@ class StructureTests(unittest.TestCase):
             "mistakes.md",
             "Makefile",
             ".grok/hooks/adaptive.json",
-            ".grok-stack/config/routing.json",
-            ".grok-stack/config/policy.json",
-            "scripts/grok_route.py",
-            "scripts/grok_change.py",
-            "scripts/grok_spec.py",
-            "scripts/grok_artifacts.py",
-            "scripts/grok_verify.py",
-            "scripts/grok_review.py",
-            "scripts/grok_approve.py",
-            "scripts/grok_deploy.py",
+            ".getzilla/config/routing.json",
+            ".getzilla/config/policy.json",
+            "scripts/getzilla_route.py",
+            "scripts/getzilla_change.py",
+            "scripts/getzilla_spec.py",
+            "scripts/getzilla_artifacts.py",
+            "scripts/getzilla_verify.py",
+            "scripts/getzilla_review.py",
+            "scripts/getzilla_approve.py",
+            "scripts/getzilla_deploy.py",
             "scripts/install_into.py",
             "architecture/adoption.json",
             "architecture/system.yaml",
@@ -243,11 +243,11 @@ class StructureTests(unittest.TestCase):
             "architecture/generated/deployment.mmd",
             "architecture/generated/data-flow.mmd",
             "architecture/generated/trust-boundary.mmd",
-            ".grok-stack/templates/architecture/system.example.yaml",
-            ".grok-stack/templates/architecture/rules.example.yaml",
+            ".getzilla/templates/architecture/system.example.yaml",
+            ".getzilla/templates/architecture/rules.example.yaml",
             "schemas/architecture-system.schema.json",
             "schemas/architecture-rules.schema.json",
-            "scripts/grok_architecture.py",
+            "scripts/getzilla_architecture.py",
             "governance/rules/index.json",
             "governance/debt/index.json",
             "governance/canonical-examples/index.json",
@@ -255,15 +255,15 @@ class StructureTests(unittest.TestCase):
             "schemas/debt-entry.schema.json",
             "schemas/canonical-example.schema.json",
             "schemas/governance-handoff-v1.schema.json",
-            "scripts/grok_governance.py",
-            ".grok-stack/adaptive_grok/workflow_artifacts.py",
+            "scripts/getzilla_governance.py",
+            ".getzilla/getzilla/workflow_artifacts.py",
             "schemas/workflow-source-v1.schema.json",
             "schemas/workflow-task-graph-v1.schema.json",
             "schemas/workflow-convergence-report-v1.schema.json",
-            "factory/src/adaptive_factory/semantic_contracts.py",
-            "factory/src/adaptive_factory/semantic_adjudication.py",
-            "factory/src/adaptive_factory/semantic_bridge.py",
-            "factory/src/adaptive_factory/semantic_repair.py",
+            "factory/src/getzilla_factory/semantic_contracts.py",
+            "factory/src/getzilla_factory/semantic_adjudication.py",
+            "factory/src/getzilla_factory/semantic_bridge.py",
+            "factory/src/getzilla_factory/semantic_repair.py",
             "factory/contracts/jsonschema/repair-directive.v1.schema.json",
             "factory/contracts/jsonschema/semantic-coverage.v1.schema.json",
             "factory/contracts/jsonschema/semantic-execution-binding.v1.schema.json",
@@ -279,20 +279,20 @@ class StructureTests(unittest.TestCase):
             "factory/contracts/jsonschema/landing-provider-evidence.v1.schema.json",
             "factory/contracts/jsonschema/landing-site-artifact.v1.schema.json",
             "factory/contracts/jsonschema/static-landing-spec.v1.schema.json",
-            "factory/src/adaptive_factory/landing_artifact.py",
-            "factory/src/adaptive_factory/landing_artifact_retention.py",
-            "factory/src/adaptive_factory/landing_contracts.py",
-            "factory/src/adaptive_factory/landing_coordinator.py",
-            "factory/src/adaptive_factory/landing_evaluation.py",
-            "factory/src/adaptive_factory/landing_intake.py",
-            "factory/src/adaptive_factory/landing_normalizer.py",
-            "factory/src/adaptive_factory/landing_provider.py",
-            "factory/src/adaptive_factory/landing_renderer.py",
-            "factory/src/adaptive_factory/landing_runtime.py",
-            "factory/src/adaptive_factory/landing_service.py",
-            "factory/src/adaptive_factory/landing_sqlite_store.py",
-            "factory/src/adaptive_factory/resources/landing-normalization-draft.v1.schema.json",
-            "delivery/src/adaptive_delivery/landing_publisher.py",
+            "factory/src/getzilla_factory/landing_artifact.py",
+            "factory/src/getzilla_factory/landing_artifact_retention.py",
+            "factory/src/getzilla_factory/landing_contracts.py",
+            "factory/src/getzilla_factory/landing_coordinator.py",
+            "factory/src/getzilla_factory/landing_evaluation.py",
+            "factory/src/getzilla_factory/landing_intake.py",
+            "factory/src/getzilla_factory/landing_normalizer.py",
+            "factory/src/getzilla_factory/landing_provider.py",
+            "factory/src/getzilla_factory/landing_renderer.py",
+            "factory/src/getzilla_factory/landing_runtime.py",
+            "factory/src/getzilla_factory/landing_service.py",
+            "factory/src/getzilla_factory/landing_sqlite_store.py",
+            "factory/src/getzilla_factory/resources/landing-normalization-draft.v1.schema.json",
+            "delivery/src/getzilla_delivery/landing_publisher.py",
         )
         for relative in required:
             self.assertTrue((ROOT / relative).exists(), relative)
@@ -340,11 +340,11 @@ class StructureTests(unittest.TestCase):
                     )
 
         for relative in (
-            ".agents/skills/adaptive-delivery/SKILL.md",
-            ".grok/skills/adaptive-delivery/SKILL.md",
+            ".agents/skills/getzilla-delivery/SKILL.md",
+            ".grok/skills/getzilla-delivery/SKILL.md",
             ".agents/skills/verification-evidence/SKILL.md",
             ".grok/skills/verification-evidence/SKILL.md",
-            ".grok-stack/templates/change/evidence/README.md",
+            ".getzilla/templates/change/evidence/README.md",
             "AGENTS.md",
         ):
             with self.subTest(document=relative):
@@ -376,9 +376,9 @@ class StructureTests(unittest.TestCase):
                 )
 
         for relative in (
-            ".agents/skills/adaptive-delivery/SKILL.md",
-            ".grok/skills/adaptive-delivery/SKILL.md",
-            ".grok-stack/templates/change/evidence/README.md",
+            ".agents/skills/getzilla-delivery/SKILL.md",
+            ".grok/skills/getzilla-delivery/SKILL.md",
+            ".getzilla/templates/change/evidence/README.md",
         ):
             with self.subTest(report_workflow=relative):
                 content = (ROOT / relative).read_text(encoding="utf-8").lower()
@@ -391,7 +391,7 @@ class StructureTests(unittest.TestCase):
                     or "fingerprint before and after" in content
                 )
 
-        report_template = (ROOT / ".grok-stack/templates/change/evidence/README.md").read_text(encoding="utf-8").lower()
+        report_template = (ROOT / ".getzilla/templates/change/evidence/README.md").read_text(encoding="utf-8").lower()
         for requirement in (
             "head and tree fingerprint before/after",
             "scratch path",
@@ -417,7 +417,7 @@ class StructureTests(unittest.TestCase):
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
         self.assertEqual(version, "2.1.1")
-        self.assertTrue(readme.startswith(f"# Adaptive Grok Build Pro v{version}\n"))
+        self.assertTrue(readme.startswith(f"# Getzilla v{version}\n"))
         self.assertIn("Identity: **2.1.1 published release**", readme)
         self.assertTrue(
             changelog.startswith("# Changelog\n\n## 2.1.1 — 2026-10-03 (published)\n")
@@ -426,11 +426,11 @@ class StructureTests(unittest.TestCase):
             "product version: 2.1.1 published (latest published release: v2.1.1; U5/U6 default-off and not live-qualified)",
             roadmap,
         )
-        sys.path.insert(0, str(ROOT / ".grok-stack"))
+        sys.path.insert(0, str(ROOT / ".getzilla"))
         try:
-            import adaptive_grok
+            import getzilla
 
-            self.assertEqual(adaptive_grok.__version__, version)
+            self.assertEqual(getzilla.__version__, version)
         finally:
             sys.path.pop(0)
 
@@ -885,8 +885,8 @@ class StructureTests(unittest.TestCase):
                 self.assertIn("content", response, f"{operation_id}:{status}")
 
     def test_m6_semantic_openapi_has_supported_exact_baseline_semantics(self) -> None:
-        sys.path.insert(0, str(ROOT / ".grok-stack"))
-        from adaptive_grok.architecture import (
+        sys.path.insert(0, str(ROOT / ".getzilla"))
+        from getzilla.architecture import (
             compare_contracts,
             contract_inventory,
             load_architecture,
@@ -917,7 +917,7 @@ class StructureTests(unittest.TestCase):
             "architecture/generated/context.mmd",
             "schemas/architecture-system.schema.json",
             "schemas/architecture-rules.schema.json",
-            "scripts/grok_architecture.py",
+            "scripts/getzilla_architecture.py",
         ):
             self.assertIn(f"]({relative})", readme, relative)
         self.assertIn("architecture/adoption.json", quickstart)
@@ -985,14 +985,16 @@ class StructureTests(unittest.TestCase):
 
         reviewed_head = "<reviewed-40-character-head-sha>"
         adoption_base = "25bfbe59ea188d9687b20a9caad19e7db3d031f8"
-        self.assertIn("python3 scripts/grok_architecture.py summary --json", test_plan)
+        # The M2 change package is a frozen record and names the predecessor CLI.
+        architecture_cli = "python3 scripts/grok_architecture.py"  # predecessor-record
+        self.assertIn(f"{architecture_cli} summary --json", test_plan)
         self.assertIn(
-            f"python3 scripts/grok_architecture.py diff --base {adoption_base} "
+            f"{architecture_cli} diff --base {adoption_base} "
             f"--head {reviewed_head} --json",
             test_plan,
         )
         self.assertIn(
-            f"python3 scripts/grok_architecture.py fitness --base {adoption_base} "
+            f"{architecture_cli} fitness --base {adoption_base} "
             f"--head {reviewed_head} --pre-risk red --json",
             test_plan,
         )
@@ -1048,19 +1050,19 @@ class StructureTests(unittest.TestCase):
             self.assertTrue((ROOT / relative).is_file(), relative)
 
     def test_local_policy_protects_control_plane(self) -> None:
-        policy = json.loads((ROOT / ".grok-stack/config/policy.json").read_text(encoding="utf-8"))
+        policy = json.loads((ROOT / ".getzilla/config/policy.json").read_text(encoding="utf-8"))
         protected = set(policy["protected_paths"])
         for expected in (
             ".github/**",
             ".grok/**",
-            ".grok-stack/**",
+            ".getzilla/**",
             "AGENTS.md",
             "trust-ci/**",
         ):
             self.assertIn(expected, protected)
         self.assertTrue(
-            "scripts/grok_verify.py" in protected or "scripts/grok_*.py" in protected,
-            "local policy must protect scripts/grok_verify.py",
+            "scripts/getzilla_verify.py" in protected or "scripts/getzilla_*.py" in protected,
+            "local policy must protect scripts/getzilla_verify.py",
         )
 
     def test_trust_ci_policy_uses_immutable_sandbox_and_external_status(self) -> None:

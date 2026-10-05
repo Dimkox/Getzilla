@@ -15,14 +15,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok.receipts import get_receipt, validate_evidence  # noqa: E402
-from adaptive_grok.util import tree_fingerprint  # noqa: E402
+from getzilla.receipts import get_receipt, validate_evidence  # noqa: E402
+from getzilla.util import tree_fingerprint  # noqa: E402
 
 
 def _load_artifacts():
-    path = ROOT / ".grok-stack/adaptive_grok/workflow_artifacts.py"
+    path = ROOT / ".getzilla/getzilla/workflow_artifacts.py"
     spec = importlib.util.spec_from_file_location("workflow_artifacts_adversarial", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -473,19 +473,19 @@ class CanonicalReceiptTests(unittest.TestCase):
     def test_deep_receipt_json_normalizes_recursion_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / ".grok-stack/runtime/receipts/route/verification.json"
+            path = root / ".getzilla/runtime/receipts/route/verification.json"
             path.parent.mkdir(parents=True)
             path.write_text("[" * 1500 + "]" * 1500, encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 get_receipt(root, "route", "verification")
-            with patch("adaptive_grok.receipts.json.loads", side_effect=RecursionError("deep")):
+            with patch("getzilla.receipts.json.loads", side_effect=RecursionError("deep")):
                 with self.assertRaises(RuntimeError):
                     get_receipt(root, "route", "verification")
 
     def test_minimal_forgery_is_not_current_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / ".grok-stack/runtime/receipts/route/verification.json"
+            path = root / ".getzilla/runtime/receipts/route/verification.json"
             path.parent.mkdir(parents=True)
             path.write_text(
                 json.dumps({"status": "pass", "tree_fingerprint": tree_fingerprint(root)}),
@@ -497,7 +497,7 @@ class CanonicalReceiptTests(unittest.TestCase):
     def test_receipt_symlink_and_fifo_fail_without_following_or_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            receipts = root / ".grok-stack/runtime/receipts/route"
+            receipts = root / ".getzilla/runtime/receipts/route"
             receipts.mkdir(parents=True)
             outside = root / "outside.json"
             outside.write_text("{}", encoding="utf-8")
@@ -537,7 +537,7 @@ class SerializedCasTests(unittest.TestCase):
         return ARTIFACTS.canonical_json(graph)
 
     def _recovery_paths(self, root: Path, target: Path) -> list[Path]:
-        runtime = root / ".grok-stack/runtime/workflow-cas/change"
+        runtime = root / ".getzilla/runtime/workflow-cas/change"
         return [*runtime.glob(".agb-recovery-*"), *target.parent.glob(".agb-stage-*")]
 
     def test_interposed_publication_race_preserves_competing_value(self) -> None:

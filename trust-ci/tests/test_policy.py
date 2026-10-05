@@ -18,9 +18,9 @@ def catalog_data() -> dict:
         **common,
         'repository_profiles': [
             {
-                'repository': 'Dimkox/adaptive-grok-build-pro',
+                'repository': 'Dimkox/Getzilla',
                 'commands': policy_data()['commands'],
-                'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/adaptive-grok-build-pro'},
+                'holdout': {**policy_data(holdout_digest='a' * 64)['holdout'], 'host_path': '/srv/holdouts/getzilla'},
             },
             {
                 'repository': 'Dimkox/ii-tonya-platform',
@@ -44,12 +44,12 @@ class PolicyTests(unittest.TestCase):
         catalog = PolicyCatalog.from_dict(policy_data())
         self.assertEqual(catalog.mode, 'legacy')
         self.assertEqual(catalog.digest, legacy.digest)
-        self.assertEqual(catalog.resolve_repository('Dimkox/adaptive-grok-build-pro').check_name, legacy.check_name)
+        self.assertEqual(catalog.resolve_repository('Dimkox/Getzilla').check_name, legacy.check_name)
         self.assertEqual(catalog.profile_count, 1)
 
     def test_catalog_resolves_exact_isolated_profiles(self) -> None:
         catalog = PolicyCatalog.from_dict(catalog_data())
-        a = catalog.resolve_repository('Dimkox/adaptive-grok-build-pro')
+        a = catalog.resolve_repository('Dimkox/Getzilla')
         b = catalog.resolve_repository('Dimkox/ii-tonya-platform')
         self.assertNotEqual(a.digest, b.digest)
         self.assertEqual(a.commands[0].name, 'unit')
@@ -63,8 +63,8 @@ class PolicyTests(unittest.TestCase):
         changed = copy.deepcopy(first)
         changed['repository_profiles'][0]['commands'][0]['name'] = 'unit-v2'
         updated = PolicyCatalog.from_dict(changed)
-        self.assertNotEqual(original.resolve_repository('Dimkox/adaptive-grok-build-pro').digest,
-                            updated.resolve_repository('Dimkox/adaptive-grok-build-pro').digest)
+        self.assertNotEqual(original.resolve_repository('Dimkox/Getzilla').digest,
+                            updated.resolve_repository('Dimkox/Getzilla').digest)
         self.assertEqual(original.resolve_repository('Dimkox/ii-tonya-platform').digest,
                          updated.resolve_repository('Dimkox/ii-tonya-platform').digest)
         reordered = copy.deepcopy(first)
@@ -76,13 +76,13 @@ class PolicyTests(unittest.TestCase):
         changed = catalog_data()
         changed['max_attempts'] = 4
         second = PolicyCatalog.from_dict(changed)
-        for repository in ('Dimkox/adaptive-grok-build-pro', 'Dimkox/ii-tonya-platform'):
+        for repository in ('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform'):
             self.assertNotEqual(first.resolve_repository(repository).digest,
                                 second.resolve_repository(repository).digest)
         profile = first.resolve_repository('Dimkox/ii-tonya-platform')
         self.assertIs(first.resolve_bound('Dimkox/ii-tonya-platform', profile.digest), profile)
         with self.assertRaisesRegex(PolicyError, 'not active'):
-            first.resolve_bound('Dimkox/ii-tonya-platform', first.resolve_repository('Dimkox/adaptive-grok-build-pro').digest)
+            first.resolve_bound('Dimkox/ii-tonya-platform', first.resolve_repository('Dimkox/Getzilla').digest)
 
     def test_catalog_rejects_mixed_legacy_fields(self) -> None:
         data = catalog_data()
@@ -117,14 +117,14 @@ class PolicyTests(unittest.TestCase):
         first = catalog_data()
         second = copy.deepcopy(first)
         second['repository_profiles'][0]['holdout']['path'] = '/opt/adaptive-trust-ci/./holdout'
-        second['repository_profiles'][0]['holdout']['host_path'] = '/srv/holdouts/./adaptive-grok-build-pro'
+        second['repository_profiles'][0]['holdout']['host_path'] = '/srv/holdouts/./getzilla'
         self.assertEqual(
-            PolicyCatalog.from_dict(first).resolve_repository('Dimkox/adaptive-grok-build-pro').digest,
-            PolicyCatalog.from_dict(second).resolve_repository('Dimkox/adaptive-grok-build-pro').digest,
+            PolicyCatalog.from_dict(first).resolve_repository('Dimkox/Getzilla').digest,
+            PolicyCatalog.from_dict(second).resolve_repository('Dimkox/Getzilla').digest,
         )
 
     def test_catalog_rejects_duplicate_and_wildcard_repositories(self) -> None:
-        for repository in ('Dimkox/adaptive-grok-build-pro', 'Dimkox/*'):
+        for repository in ('Dimkox/Getzilla', 'Dimkox/*'):
             data = catalog_data()
             data['repository_profiles'][1]['repository'] = repository
             with self.assertRaisesRegex(PolicyError, 'repository'):
@@ -238,7 +238,7 @@ class PolicyTests(unittest.TestCase):
     def test_approval_globs_preserve_exact_repo_relative_identity(self) -> None:
         policy = Policy.from_dict(policy_data())
         governance = next(rule for rule in policy.approval_rules if rule.scope == 'governance')
-        self.assertIn('.grok-stack/**', governance.globs)
+        self.assertIn('.getzilla/**', governance.globs)
         self.assertIn('.grok/**', governance.globs)
         self.assertIn('.github/**', governance.globs)
         self.assertIn('.coveragerc', governance.globs)
@@ -247,7 +247,7 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('exact/line\nname.txt', governance.globs)
         self.assertIn('exact/tab\tname.txt', governance.globs)
         for path in (
-            '.grok-stack/runtime/active-route.json',
+            '.getzilla/runtime/active-route.json',
             '.grok/prompt\nname.md',
             '.github/tab\tname.yml',
             '.coveragerc',
@@ -294,8 +294,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_repository_allowlist_is_exact(self) -> None:
         policy = Policy.from_dict(policy_data())
-        self.assertTrue(policy.allows_repository('Dimkox/adaptive-grok-build-pro'))
-        self.assertFalse(policy.allows_repository('dimkox/adaptive-grok-build-pro'))
+        self.assertTrue(policy.allows_repository('Dimkox/Getzilla'))
+        self.assertFalse(policy.allows_repository('dimkox/getzilla'))
 
 
 if __name__ == '__main__':

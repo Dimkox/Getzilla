@@ -11,10 +11,10 @@ import os
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.cli import main as cli_main
-from adaptive_factory.contracts import TaskIntakeV1
-from adaptive_factory.models import (
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.cli import main as cli_main
+from getzilla_factory.contracts import TaskIntakeV1
+from getzilla_factory.models import (
     Actor,
     FactoryAttemptV1,
     FactoryEventHistoryPageV1,
@@ -27,13 +27,13 @@ from adaptive_factory.models import (
     TaskProjection,
     TaskStatus,
 )
-from adaptive_factory.service import (
+from getzilla_factory.service import (
     FactoryService,
     SnapshotBrokerIntegrityError,
     SnapshotBrokerUnavailable,
 )
-from adaptive_factory.settings import SettingsError, read_token_file
-from adaptive_factory.store import IntegrityError, IntakeResult, StoreError, TransitionError
+from getzilla_factory.settings import SettingsError, read_token_file
+from getzilla_factory.store import IntegrityError, IntakeResult, StoreError, TransitionError
 from factory.tests.test_contracts import valid_intake
 
 
@@ -939,7 +939,7 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("shell_command", response.text)
 
     def test_database_contention_returns_stable_bounded_unavailable_error(self):
-        from adaptive_factory import store as store_module
+        from getzilla_factory import store as store_module
 
         error_type = getattr(store_module, "StoreUnavailable", StoreError)
         self.service.intake = mock.Mock(side_effect=error_type("internal database detail"))
@@ -1134,7 +1134,7 @@ class ApiTests(unittest.TestCase):
             with mock.patch.object(os, "O_NOFOLLOW", None):
                 with self.assertRaises(SettingsError):
                     read_token_file(token)
-            with mock.patch("adaptive_factory.settings.os.geteuid", return_value=os.geteuid() + 1):
+            with mock.patch("getzilla_factory.settings.os.geteuid", return_value=os.geteuid() + 1):
                 with self.assertRaises(SettingsError):
                     read_token_file(token)
 

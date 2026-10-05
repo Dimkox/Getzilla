@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.policy import evaluate_pre_tool
+from getzilla.policy import evaluate_pre_tool
 from tests._support import project_copy
 
 
@@ -48,7 +48,7 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 self.assertFalse(allowed, f'{command}: {reason}')
 
     def test_wrapper_retains_workflow_dispatch_forbidden_invariant(self):
-        source = (ROOT / '.grok-stack/adaptive_grok/policy.py').read_text(encoding='utf-8')
+        source = (ROOT / '.getzilla/getzilla/policy.py').read_text(encoding='utf-8')
         self.assertIn('workflow-dispatch', source)
         self.assertIn('forbidden', source.lower())
 

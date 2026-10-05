@@ -150,7 +150,7 @@ class OperationsTests(unittest.TestCase):
             self.assertTrue(profile.holdout.path.is_absolute())
             self.assertTrue(profile.holdout.host_path.is_absolute())
             self.assertRegex(profile.holdout.digest, r'^[0-9a-f]{64}$')
-        adaptive = catalog.resolve_repository('Dimkox/adaptive-grok-build-pro')
+        adaptive = catalog.resolve_repository('Dimkox/Getzilla')
         self.assertEqual(adaptive.holdout.digest, bundle_digest(ROOT / 'trust-ci/holdout.example'))
 
     def test_branch_protection_is_app_bound_and_actions_independent(self) -> None:

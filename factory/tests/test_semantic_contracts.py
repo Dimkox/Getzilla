@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 import unittest
 
-from adaptive_factory.contracts import ContractError, canonical_digest
-from adaptive_factory.semantic_contracts import (
+from getzilla_factory.contracts import ContractError, canonical_digest
+from getzilla_factory.semantic_contracts import (
     RepairDirectiveV1,
     RequirementRefV1,
     SemanticCoverageV1,

@@ -73,7 +73,7 @@ class HoldoutChangeSpecTests(unittest.TestCase):
     def test_independent_exact_sha_validation_passes(self) -> None:
         head, _ = self._commit_spec(json.dumps(_valid("20260826-holdout"), sort_keys=True).encode())
         self.module.validate(self.root, base_sha=self.base, head_sha=head)
-        self.assertNotIn("adaptive_grok.spec", MODULE_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn("getzilla.spec", MODULE_PATH.read_text(encoding="utf-8"))
 
     def test_missing_sha_and_malformed_json_fail_closed(self) -> None:
         with self.assertRaises(SystemExit):

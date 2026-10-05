@@ -67,7 +67,7 @@ def derive_inventory(lock: Path) -> dict:
         data = tomllib.loads(content.decode())
         packages = []
         for package in data["package"]:
-            if package["name"] == "adaptive-factory":
+            if package["name"] == "getzilla-factory":
                 continue
             selected = _selected_wheel(package)
             if selected is not None:
@@ -178,7 +178,7 @@ def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inv
             if target in files:
                 raise InstallerError("WHEEL_FILE_COLLISION")
             files[target] = (payload, 0o644)
-    tracked = _git(repository, "ls-files", "factory/src/adaptive_factory").splitlines()
+    tracked = _git(repository, "ls-files", "factory/src/getzilla_factory").splitlines()
     if not tracked:
         raise InstallerError("INVALID_SOURCE")
     for relative in tracked:

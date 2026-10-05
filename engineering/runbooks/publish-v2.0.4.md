@@ -4,15 +4,15 @@ Human-owned runbook. Agents must not run `git push`, `git tag`, or `gh release`.
 
 ## Checks
 
-1. `python3 scripts/grok_status.py` — change is `ready`, evidence gaps empty
-2. `make verify` (source of truth) / `python3 scripts/grok_verify.py --mode pr`
-3. `python3 scripts/grok_deploy.py` — dry-run prints the commands below
-4. Only when you are ready to publish: `python3 scripts/grok_approve.py production --reason "publish v2.0.4"`
-5. Optional: `python3 scripts/grok_deploy.py --record` — writes receipt `deploy`/`prepared`
+1. `python3 scripts/getzilla_status.py` — change is `ready`, evidence gaps empty
+2. `make verify` (source of truth) / `python3 scripts/getzilla_verify.py --mode pr`
+3. `python3 scripts/getzilla_deploy.py` — dry-run prints the commands below
+4. Only when you are ready to publish: `python3 scripts/getzilla_approve.py production --reason "publish v2.0.4"`
+5. Optional: `python3 scripts/getzilla_deploy.py --record` — writes receipt `deploy`/`prepared`
 
 ## Printed commands (human-owned)
 
-`grok_deploy.py` prints the current branch. Typical sequence:
+`getzilla_deploy.py` prints the current branch. Typical sequence:
 
 ```bash
 python3 scripts/package_stack.py
@@ -39,4 +39,4 @@ If `packages/` was updated after a failed publish, remove the unpublished 2.0.4 
 
 ## Agent rule
 
-The agent never runs `git push`, `gh release`, `docker push`, or `npm publish`. `scripts/grok_deploy.py` only prepares and prints.
+The agent never runs `git push`, `gh release`, `docker push`, or `npm publish`. `scripts/getzilla_deploy.py` only prepares and prints.

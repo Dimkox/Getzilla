@@ -10,11 +10,11 @@ import unittest
 import warnings
 import zipfile
 
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_contracts import (
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_contracts import (
     LandingInputV1, LandingContractError, StaticLandingSpecV1,
 )
-from adaptive_factory.landing_normalizer import (
+from getzilla_factory.landing_normalizer import (
     LANDING_NORMALIZATION_DRAFT_SCHEMA_SHA256,
     LANDING_NORMALIZER_PROMPT_SHA256,
     CodexExecutionResult,
@@ -24,7 +24,7 @@ from adaptive_factory.landing_normalizer import (
     normalize_landing_text,
     decode_landing_draft,
 )
-from adaptive_factory.landing_provider import LandingNormalizationRequest
+from getzilla_factory.landing_provider import LandingNormalizationRequest
 
 
 NOW = datetime(2026, 9, 5, 12, 30, tzinfo=timezone.utc)

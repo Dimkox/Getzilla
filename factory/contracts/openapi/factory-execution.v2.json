@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Adaptive Factory Isolated Execution API",
+    "title": "Getzilla Factory Isolated Execution API",
     "version": "2.0.0",
     "description": "Additive contract fragment for the six provider-neutral execution operations served by the same local factory process. Wire paths under /v2/execution provide closed route-specific responses while the byte-stable v1 contract remains available for compatibility."
   },

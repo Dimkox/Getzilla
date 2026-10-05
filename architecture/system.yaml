@@ -1751,13 +1751,13 @@
         "factory/.env.example",
         "factory/contracts/openapi",
         "factory/runtime",
-        "factory/src/adaptive_factory/api.py",
-        "factory/src/adaptive_factory/cli.py",
-        "factory/src/adaptive_factory/landing_backend_api.py",
-        "factory/src/adaptive_factory/landing_host.py",
-        "factory/src/adaptive_factory/landing_server.py",
-        "factory/src/adaptive_factory/server.py",
-        "factory/src/adaptive_factory/settings.py",
+        "factory/src/getzilla_factory/api.py",
+        "factory/src/getzilla_factory/cli.py",
+        "factory/src/getzilla_factory/landing_backend_api.py",
+        "factory/src/getzilla_factory/landing_host.py",
+        "factory/src/getzilla_factory/landing_server.py",
+        "factory/src/getzilla_factory/server.py",
+        "factory/src/getzilla_factory/settings.py",
         "factory/tests/test_runtime_installer.py",
         "factory/tests/test_landing_host.py",
         "factory/tests/test_landing_server.py",
@@ -1788,24 +1788,24 @@
         "factory/.gitignore",
         "factory/README.md",
         "factory/pyproject.toml",
-        "factory/src/adaptive_factory/__init__.py",
-        "factory/src/adaptive_factory/_fpf_snapshot_data.py",
-        "factory/src/adaptive_factory/admin.py",
-        "factory/src/adaptive_factory/bb_contracts.py",
-        "factory/src/adaptive_factory/context_contracts.py",
-        "factory/src/adaptive_factory/contracts.py",
-        "factory/src/adaptive_factory/decision_contracts.py",
-        "factory/src/adaptive_factory/fpf_snapshot.py",
-        "factory/src/adaptive_factory/migrations.py",
-        "factory/src/adaptive_factory/models.py",
-        "factory/src/adaptive_factory/model_rotator_registry.py",
-        "factory/src/adaptive_factory/prediction_contracts.py",
-        "factory/src/adaptive_factory/recovery.py",
-        "factory/src/adaptive_factory/vibevm_store.py",
-        "factory/src/adaptive_factory/service.py",
-        "factory/src/adaptive_factory/state.py",
-        "factory/src/adaptive_factory/store.py",
-        "factory/src/adaptive_factory/v15_contracts.py",
+        "factory/src/getzilla_factory/__init__.py",
+        "factory/src/getzilla_factory/_fpf_snapshot_data.py",
+        "factory/src/getzilla_factory/admin.py",
+        "factory/src/getzilla_factory/bb_contracts.py",
+        "factory/src/getzilla_factory/context_contracts.py",
+        "factory/src/getzilla_factory/contracts.py",
+        "factory/src/getzilla_factory/decision_contracts.py",
+        "factory/src/getzilla_factory/fpf_snapshot.py",
+        "factory/src/getzilla_factory/migrations.py",
+        "factory/src/getzilla_factory/models.py",
+        "factory/src/getzilla_factory/model_rotator_registry.py",
+        "factory/src/getzilla_factory/prediction_contracts.py",
+        "factory/src/getzilla_factory/recovery.py",
+        "factory/src/getzilla_factory/vibevm_store.py",
+        "factory/src/getzilla_factory/service.py",
+        "factory/src/getzilla_factory/state.py",
+        "factory/src/getzilla_factory/store.py",
+        "factory/src/getzilla_factory/v15_contracts.py",
         "factory/tests",
         "tests/test_factory_v15_decisions.py"
       ],
@@ -1828,7 +1828,7 @@
       "public_contracts": [],
       "repository_paths": [
         "factory/compose.yaml",
-        "factory/src/adaptive_factory/resources"
+        "factory/src/getzilla_factory/resources"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1856,10 +1856,10 @@
       ],
       "repository_paths": [
         "factory/contracts/schemas",
-        "factory/src/adaptive_factory/execution_contracts.py",
-        "factory/src/adaptive_factory/pricing.py",
-        "factory/src/adaptive_factory/protocol.py",
-        "factory/src/adaptive_factory/semantic_bridge.py"
+        "factory/src/getzilla_factory/execution_contracts.py",
+        "factory/src/getzilla_factory/pricing.py",
+        "factory/src/getzilla_factory/protocol.py",
+        "factory/src/getzilla_factory/semantic_bridge.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1877,10 +1877,10 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/adapters/__init__.py",
-        "factory/src/adaptive_factory/adapters/base.py",
-        "factory/src/adaptive_factory/adapters/codex.py",
-        "factory/src/adaptive_factory/adapters/grok.py"
+        "factory/src/getzilla_factory/adapters/__init__.py",
+        "factory/src/getzilla_factory/adapters/base.py",
+        "factory/src/getzilla_factory/adapters/codex.py",
+        "factory/src/getzilla_factory/adapters/grok.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1903,9 +1903,9 @@
         "CONTRACT-FACTORY-V15-RESULT-CHANNEL-QUALIFICATION-V2"
       ],
       "repository_paths": [
-        "factory/src/adaptive_factory/brokers.py",
-        "factory/src/adaptive_factory/result_broker.py",
-        "factory/src/adaptive_factory/result_contracts.py"
+        "factory/src/getzilla_factory/brokers.py",
+        "factory/src/getzilla_factory/result_broker.py",
+        "factory/src/getzilla_factory/result_contracts.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1924,8 +1924,8 @@
       "public_contracts": [],
       "repository_paths": [
         "factory/contracts/jsonschema/native-result-handoff.v1.schema.json",
-        "factory/src/adaptive_factory/result_dispatch.py",
-        "factory/src/adaptive_factory/result_dispatch_cli.py"
+        "factory/src/getzilla_factory/result_dispatch.py",
+        "factory/src/getzilla_factory/result_dispatch_cli.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1945,7 +1945,7 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/workspace.py"
+        "factory/src/getzilla_factory/workspace.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -1964,8 +1964,8 @@
       "public_contracts": [],
       "repository_paths": [
         ".grok",
-        ".grok-stack/adaptive_grok",
-        ".grok-stack/templates"
+        ".getzilla/getzilla",
+        ".getzilla/templates"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2043,12 +2043,12 @@
         "CONTRACT-GOVERNANCE-HANDOFF-V1"
       ],
       "repository_paths": [
-        ".grok-stack/adaptive_grok/governance.py",
+        ".getzilla/getzilla/governance.py",
         "schemas/canonical-example.schema.json",
         "schemas/debt-entry.schema.json",
         "schemas/governance-handoff-v1.schema.json",
         "schemas/governance-rule.schema.json",
-        "scripts/grok_governance.py"
+        "scripts/getzilla_governance.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2284,9 +2284,9 @@
         "CONTRACT-FACTORY-SEMANTIC-VERDICT-V1"
       ],
       "repository_paths": [
-        "factory/src/adaptive_factory/semantic_adjudication.py",
-        "factory/src/adaptive_factory/semantic_contracts.py",
-        "factory/src/adaptive_factory/semantic_repair.py"
+        "factory/src/getzilla_factory/semantic_adjudication.py",
+        "factory/src/getzilla_factory/semantic_contracts.py",
+        "factory/src/getzilla_factory/semantic_repair.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2311,8 +2311,8 @@
         "CONTRACT-FACTORY-M7-TASK-EVIDENCE-V1"
       ],
       "repository_paths": [
-        "factory/src/adaptive_factory/shadow_contracts.py",
-        "factory/src/adaptive_factory/shadow_evaluation.py"
+        "factory/src/getzilla_factory/shadow_contracts.py",
+        "factory/src/getzilla_factory/shadow_evaluation.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2330,8 +2330,8 @@
       "owner": "local factory operators and human reviewers",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/autonomy.py",
-        "factory/src/adaptive_factory/m7_autonomy_bridge.py"
+        "factory/src/getzilla_factory/autonomy.py",
+        "factory/src/getzilla_factory/m7_autonomy_bridge.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2369,27 +2369,27 @@
         "factory/contracts/jsonschema/landing-provider-evidence.v2.schema.json",
         "factory/contracts/jsonschema/landing-site-artifact.v1.schema.json",
         "factory/contracts/jsonschema/static-landing-spec.v1.schema.json",
-        "factory/src/adaptive_factory/landing_artifact.py",
-        "factory/src/adaptive_factory/landing_artifact_retention.py",
-        "factory/src/adaptive_factory/landing_backup.py",
-        "factory/src/adaptive_factory/landing_contracts.py",
-        "factory/src/adaptive_factory/landing_coordinator.py",
-        "factory/src/adaptive_factory/landing_evaluation.py",
-        "factory/src/adaptive_factory/landing_failover_contracts.py",
-        "factory/src/adaptive_factory/landing_host_config.py",
-        "factory/src/adaptive_factory/landing_http.py",
-        "factory/src/adaptive_factory/landing_intake.py",
-        "factory/src/adaptive_factory/landing_media.py",
-        "factory/src/adaptive_factory/landing_normalizer.py",
-        "factory/src/adaptive_factory/landing_observation.py",
-        "factory/src/adaptive_factory/landing_provider.py",
-        "factory/src/adaptive_factory/landing_publication_cli.py",
-        "factory/src/adaptive_factory/landing_renderer.py",
-        "factory/src/adaptive_factory/landing_runtime.py",
-        "factory/src/adaptive_factory/landing_service.py",
-        "factory/src/adaptive_factory/landing_sse.py",
-        "factory/src/adaptive_factory/resources/landing-normalization-draft.v1.schema.json",
-        "factory/src/adaptive_factory/resources/landing_pdf_worker.py",
+        "factory/src/getzilla_factory/landing_artifact.py",
+        "factory/src/getzilla_factory/landing_artifact_retention.py",
+        "factory/src/getzilla_factory/landing_backup.py",
+        "factory/src/getzilla_factory/landing_contracts.py",
+        "factory/src/getzilla_factory/landing_coordinator.py",
+        "factory/src/getzilla_factory/landing_evaluation.py",
+        "factory/src/getzilla_factory/landing_failover_contracts.py",
+        "factory/src/getzilla_factory/landing_host_config.py",
+        "factory/src/getzilla_factory/landing_http.py",
+        "factory/src/getzilla_factory/landing_intake.py",
+        "factory/src/getzilla_factory/landing_media.py",
+        "factory/src/getzilla_factory/landing_normalizer.py",
+        "factory/src/getzilla_factory/landing_observation.py",
+        "factory/src/getzilla_factory/landing_provider.py",
+        "factory/src/getzilla_factory/landing_publication_cli.py",
+        "factory/src/getzilla_factory/landing_renderer.py",
+        "factory/src/getzilla_factory/landing_runtime.py",
+        "factory/src/getzilla_factory/landing_service.py",
+        "factory/src/getzilla_factory/landing_sse.py",
+        "factory/src/getzilla_factory/resources/landing-normalization-draft.v1.schema.json",
+        "factory/src/getzilla_factory/resources/landing_pdf_worker.py",
         "factory/contracts/jsonschema/landing-provider-observation.v1.schema.json",
         "factory/contracts/jsonschema/landing-backend-capability.v1.schema.json",
         "factory/contracts/jsonschema/landing-attempt-status.v1.schema.json",
@@ -2412,8 +2412,8 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/landing_extra_providers.py",
-        "factory/src/adaptive_factory/landing_live_executors.py",
+        "factory/src/getzilla_factory/landing_extra_providers.py",
+        "factory/src/getzilla_factory/landing_live_executors.py",
         "factory/tests/test_landing_live_executors.py",
         "factory/tests/test_landing_failover_providers.py"
       ],
@@ -2449,7 +2449,7 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/landing_sqlite_store.py"
+        "factory/src/getzilla_factory/landing_sqlite_store.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -2469,7 +2469,7 @@
       "repository_paths": [
         "delivery/contracts/jsonschema/landing-publication-request.v1.schema.json",
         "delivery/pyproject.toml",
-        "delivery/src/adaptive_delivery",
+        "delivery/src/getzilla_delivery",
         "delivery/tests"
       ],
       "runtime": {
@@ -2619,11 +2619,11 @@
         "CONTRACT-ADAPTIVE-DEMO-OPENAPI"
       ],
       "repository_paths": [
-        ".grok-stack/adaptive_grok/demo.py",
-        ".grok-stack/adaptive_grok/demo_http.py",
-        ".grok-stack/demo",
+        ".getzilla/getzilla/demo.py",
+        ".getzilla/getzilla/demo_http.py",
+        ".getzilla/demo",
         "engineering/contracts/openapi/adaptive-demo.v1.json",
-        "scripts/grok_demo.py",
+        "scripts/getzilla_demo.py",
         "tests/test_demo.py"
       ],
       "runtime": {
@@ -2660,11 +2660,11 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/adaptive_factory/landing_failover.py",
-        "factory/src/adaptive_factory/landing_failover_config.py",
-        "factory/src/adaptive_factory/landing_failover_journal.py",
-        "factory/src/adaptive_factory/landing_failover_cli.py",
-        "factory/src/adaptive_factory/landing_failover_transport.py",
+        "factory/src/getzilla_factory/landing_failover.py",
+        "factory/src/getzilla_factory/landing_failover_config.py",
+        "factory/src/getzilla_factory/landing_failover_journal.py",
+        "factory/src/getzilla_factory/landing_failover_cli.py",
+        "factory/src/getzilla_factory/landing_failover_transport.py",
         "factory/tests/test_landing_failover.py",
         "factory/tests/test_landing_failover_cli.py",
         "factory/tests/test_landing_failover_recovery.py",
@@ -2712,11 +2712,11 @@
         "CONTRACT-WORKFLOW-TASK-GRAPH-V1"
       ],
       "repository_paths": [
-        ".grok-stack/adaptive_grok/workflow_artifacts.py",
+        ".getzilla/getzilla/workflow_artifacts.py",
         "schemas/workflow-convergence-report-v1.schema.json",
         "schemas/workflow-source-v1.schema.json",
         "schemas/workflow-task-graph-v1.schema.json",
-        "scripts/grok_artifacts.py"
+        "scripts/getzilla_artifacts.py"
       ],
       "runtime": {
         "evidence": "source_described",

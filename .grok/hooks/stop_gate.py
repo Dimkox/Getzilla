@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-for _p in (Path.cwd(), Path.cwd() / ".grok-stack"):
+for _p in (Path.cwd(), Path.cwd() / ".getzilla"):
     s = str(_p)
     if s not in sys.path:
         sys.path.insert(0, s)
@@ -22,9 +22,9 @@ def main() -> None:
         payload = read_payload()
         root = root_from(payload)
         try:
-            from adaptive_grok.package_status import collect_worktree, diagnostic_messages, inspect_package, receipt_inputs_unavailable
-            from adaptive_grok.receipts import validate_evidence
-            from adaptive_grok.state import get_active_change, get_active_route, reset_stop_attempt, update_route
+            from getzilla.package_status import collect_worktree, diagnostic_messages, inspect_package, receipt_inputs_unavailable
+            from getzilla.receipts import validate_evidence
+            from getzilla.state import get_active_change, get_active_route, reset_stop_attempt, update_route
         except Exception:
             emit({})
             return

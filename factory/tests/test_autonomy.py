@@ -7,7 +7,7 @@ import hashlib
 import json
 import unittest
 
-from adaptive_factory.autonomy import (
+from getzilla_factory.autonomy import (
     AutonomyProfileV1,
     AutonomyTupleV1,
     CohortEvidenceV1,
@@ -17,9 +17,9 @@ from adaptive_factory.autonomy import (
     demote_profile,
     evaluate_autonomy,
 )
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.m7_autonomy_bridge import M7AutonomyBridgeV1
-from adaptive_factory.shadow_evaluation import aggregate_shadow_cohort, evaluate_shadow_cohort
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.m7_autonomy_bridge import M7AutonomyBridgeV1
+from getzilla_factory.shadow_evaluation import aggregate_shadow_cohort, evaluate_shadow_cohort
 
 
 SYNTHETIC_ALGORITHM_FIXTURES_ONLY = True

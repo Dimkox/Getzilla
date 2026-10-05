@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from adaptive_factory.protocol import CanonicalEvent, EventStreamParser, ProtocolError, ProtocolLimits
+from getzilla_factory.protocol import CanonicalEvent, EventStreamParser, ProtocolError, ProtocolLimits
 
 
 TASK = "task-001"

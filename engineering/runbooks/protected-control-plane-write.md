@@ -1,16 +1,16 @@
 # Protected control-plane writes
 
-Opaque shell rewrites of `.grok/**`, `.grok-stack/**`, `AGENTS.md`, Trust CI, governance files, and repository policy remain blocked even when a local path grant exists. Commands such as `sed -i`, redirection, heredoc-to-target, `python -c`, formatter `--fix`, and arbitrary copy/move operations are too broad to audit safely.
+Opaque shell rewrites of `.grok/**`, `.getzilla/**`, `AGENTS.md`, Trust CI, governance files, and repository policy remain blocked even when a local path grant exists. Commands such as `sed -i`, redirection, heredoc-to-target, `python -c`, formatter `--fix`, and arbitrary copy/move operations are too broad to audit safely.
 
 Use a normal structured `Edit`, `Write`, or `apply_patch` call for a single coherent edit. For a multi-file batch, use the validated writer below.
 
 ## 1. Create one exact grant covering every target
 
 ```bash
-python3 scripts/grok_approve.py protected-path \
+python3 scripts/getzilla_approve.py protected-path \
   --action protected-path-write \
   --resource '.grok/agents/*.md' \
-  --resource '.grok-stack/config/routing.json' \
+  --resource '.getzilla/config/routing.json' \
   --reason 'Apply reviewed agent reasoning policy'
 ```
 
@@ -41,8 +41,8 @@ Use `MISSING` as `expected_sha256` only when creating a new file under an existi
 ## 3. Validate, then apply atomically
 
 ```bash
-python3 scripts/grok_protected_write.py --manifest /tmp/control-plane-write.json --dry-run
-python3 scripts/grok_protected_write.py --manifest /tmp/control-plane-write.json
+python3 scripts/getzilla_protected_write.py --manifest /tmp/control-plane-write.json --dry-run
+python3 scripts/getzilla_protected_write.py --manifest /tmp/control-plane-write.json
 ```
 
 The writer validates the complete batch before the first mutation:

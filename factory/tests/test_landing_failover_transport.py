@@ -8,11 +8,11 @@ import threading
 import time
 import unittest
 
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_failover import FailoverCoordinator
-from adaptive_factory.landing_failover_config import FailoverConfig
-from adaptive_factory.landing_failover_journal import CallerJournal
-from adaptive_factory.landing_failover_transport import BackendAmbiguous, BackendUnavailable, UnixLandingBackend
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_failover import FailoverCoordinator
+from getzilla_factory.landing_failover_config import FailoverConfig
+from getzilla_factory.landing_failover_journal import CallerJournal
+from getzilla_factory.landing_failover_transport import BackendAmbiguous, BackendUnavailable, UnixLandingBackend
 from factory.tests.test_landing_failover import configuration, ScriptedBackends
 
 

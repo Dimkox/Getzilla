@@ -13,20 +13,20 @@ PROJECT = Path(__file__).resolve().parents[1]
 
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(prefix='adaptive-grok-test-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='getzilla-test-') as tmp:
         root = Path(tmp) / 'project'
         root.mkdir()
-        for rel in ('.grok', '.agents', '.grok-stack', '.superpowers'):
+        for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
             src = PROJECT / rel
             if not src.is_dir():
                 continue
             def ignore(directory: str, names: list[str]) -> set[str]:
                 omitted = set(shutil.ignore_patterns('__pycache__', '*.pyc')(directory, names))
-                if minimal_runtime and Path(directory) == PROJECT / '.grok-stack/adaptive_grok':
+                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
                     omitted.update(name for name in names if name != '__init__.py')
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore)
-        runtime = root / '.grok-stack/runtime'
+        runtime = root / '.getzilla/runtime'
         if runtime.exists():
             for child in runtime.iterdir():
                 if child.name == '.gitkeep':

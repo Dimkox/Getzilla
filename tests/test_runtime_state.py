@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.state import runtime_lock
-from adaptive_grok.util import runtime_dir
+from getzilla.state import runtime_lock
+from getzilla.util import runtime_dir
 from tests._support import project_copy
 
 

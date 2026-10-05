@@ -12,11 +12,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from adaptive_factory import landing_server, landing_sqlite_store, server
-from adaptive_factory.models import Actor
-from adaptive_factory.settings import FactorySettings, SettingsError
-from adaptive_factory.landing_service import LandingServiceError
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory import landing_server, landing_sqlite_store, server
+from getzilla_factory.models import Actor
+from getzilla_factory.settings import FactorySettings, SettingsError
+from getzilla_factory.landing_service import LandingServiceError
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
 
 
 class LandingServerOwnershipTests(unittest.TestCase):
@@ -55,8 +55,8 @@ class LandingServerOwnershipTests(unittest.TestCase):
     def test_default_off_owns_store_without_source_or_credentials_and_closes_twice(self):
         with (
             patch.object(landing_server, "_trusted_source", side_effect=AssertionError("source read")),
-            patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("key read")),
-            patch("adaptive_factory.landing_live_executors.api_key_from_environ", side_effect=AssertionError("key read")),
+            patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("key read")),
+            patch("getzilla_factory.landing_live_executors.api_key_from_environ", side_effect=AssertionError("key read")),
         ):
             owned = self.compose()
         self.assert_writer_active()
@@ -112,8 +112,8 @@ class LandingServerOwnershipTests(unittest.TestCase):
 
         with (
             patch.object(landing_server, "_trusted_source"),
-            patch("adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")),
-            patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=credential),
+            patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")),
+            patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=credential),
             self.assertRaisesRegex(RuntimeError, "stop before HTTP"),
         ):
             self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="qwen-intl"))
@@ -124,8 +124,8 @@ class LandingServerOwnershipTests(unittest.TestCase):
         self.open_store()
         with (
             patch.object(landing_server, "_trusted_source"),
-            patch("adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"),
-            patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("key read")) as credential,
+            patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"),
+            patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("key read")) as credential,
             self.assertRaises(LandingServiceError) as raised,
         ):
             self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="qwen-intl"))
@@ -133,18 +133,18 @@ class LandingServerOwnershipTests(unittest.TestCase):
         credential.assert_not_called()
 
     def test_invalid_source_or_other_provider_never_reads_qwen_file(self):
-        with patch("adaptive_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("Qwen read")) as credential:
+        with patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("Qwen read")) as credential:
             with (
                 patch.object(landing_server, "_trusted_source"),
-                patch("adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=RuntimeError("invalid source")),
+                patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=RuntimeError("invalid source")),
                 self.assertRaisesRegex(RuntimeError, "invalid source"),
             ):
                 self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="qwen-intl"))
             with (
                 patch.object(landing_server, "_trusted_source"),
-                patch("adaptive_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"),
-                patch("adaptive_factory.landing_live_executors.api_key_from_environ", return_value="synthetic-test-key"),
-                patch("adaptive_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("grok selected")),
+                patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"),
+                patch("getzilla_factory.landing_live_executors.api_key_from_environ", return_value="synthetic-test-key"),
+                patch("getzilla_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("grok selected")),
                 self.assertRaisesRegex(RuntimeError, "grok selected"),
             ):
                 self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="grok-vision"))

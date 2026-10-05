@@ -19,7 +19,7 @@ class ProtectedWriteHookTests(unittest.TestCase):
             )
         self.assertEqual(code, 0, stderr)
         self.assertEqual(data['decision'], 'deny')
-        self.assertIn('grok_protected_write.py', data['reason'])
+        self.assertIn('getzilla_protected_write.py', data['reason'])
         self.assertIn('exact protected-path grant', data['reason'])
 
     def test_validated_batch_writer_invocation_is_not_blocked_by_shell_gate(self) -> None:
@@ -31,7 +31,7 @@ class ProtectedWriteHookTests(unittest.TestCase):
                     'cwd': str(root),
                     'tool_name': 'run_terminal_command',
                     'tool_input': {
-                        'command': 'python3 scripts/grok_protected_write.py --manifest /tmp/control-plane.json'
+                        'command': 'python3 scripts/getzilla_protected_write.py --manifest /tmp/control-plane.json'
                     },
                 },
             )
@@ -48,7 +48,7 @@ class ProtectedWriteHookTests(unittest.TestCase):
                     'tool_name': 'run_terminal_command',
                     'tool_input': {
                         'command': (
-                            'python3 scripts/grok_protected_write.py --manifest /tmp/control-plane.json '
+                            'python3 scripts/getzilla_protected_write.py --manifest /tmp/control-plane.json '
                             '&& printf x >> AGENTS.md'
                         )
                     },

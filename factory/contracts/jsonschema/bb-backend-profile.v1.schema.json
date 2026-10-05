@@ -3,7 +3,7 @@
   "$id": "urn:adaptive-factory:bb-backend-profile:v1",
   "x-admission": {
     "level": "structural",
-    "semantic_validator": "adaptive_factory.bb_contracts.BBBackendProfileV1.from_dict",
+    "semantic_validator": "getzilla_factory.bb_contracts.BBBackendProfileV1.from_dict",
     "semantic_validation_required": true,
     "semantic_checks": ["default_off", "bounded_limits", "deadline_order", "known_capabilities"]
   },

@@ -19,14 +19,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-import adaptive_grok.governance as governance
-import adaptive_grok.architecture_diff as architecture_diff
-from adaptive_grok.architecture import ArchitectureError
-from adaptive_grok.architecture_fitness import architecture_evidence
-from adaptive_grok.spec import SpecError, load_schema, validate_schema
-from adaptive_grok.governance import (
+import getzilla.governance as governance
+import getzilla.architecture_diff as architecture_diff
+from getzilla.architecture import ArchitectureError
+from getzilla.architecture_fitness import architecture_evidence
+from getzilla.spec import SpecError, load_schema, validate_schema
+from getzilla.governance import (
     ActorRef,
     DebtRecord,
     ExampleRecord,
@@ -511,7 +511,7 @@ class GovernanceLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(GovernanceError, "document byte limit"):
             load_bytes(oversized)
 
-        with mock.patch("adaptive_grok.governance.MAX_PARSED_NODES", 3):
+        with mock.patch("getzilla.governance.MAX_PARSED_NODES", 3):
             with self.assertRaisesRegex(GovernanceError, "parsed-node limit"):
                 load_bytes(b'{"value":[1,2]}')
 
@@ -546,13 +546,13 @@ class GovernanceLoaderTests(unittest.TestCase):
                 )
 
             with mock.patch(
-                "adaptive_grok.governance.os.fstat",
+                "getzilla.governance.os.fstat",
                 side_effect=changed_identity,
             ):
                 return real_read(item)
 
         with mock.patch(
-            "adaptive_grok.governance._read_pinned_authority_bytes",
+            "getzilla.governance._read_pinned_authority_bytes",
             side_effect=changed_read,
         ):
             with self.assertRaisesRegex(GovernanceError, "changed while reading"):
@@ -587,7 +587,7 @@ class GovernanceLoaderTests(unittest.TestCase):
             return data
 
         with mock.patch(
-            "adaptive_grok.governance._read_pinned_authority_bytes",
+            "getzilla.governance._read_pinned_authority_bytes",
             side_effect=swap_after_four_reads,
         ):
             with self.assertRaisesRegex(GovernanceError, "repository root changed"):
@@ -614,7 +614,7 @@ class GovernanceLoaderTests(unittest.TestCase):
                     return data
 
                 with mock.patch(
-                    "adaptive_grok.governance._read_pinned_authority_bytes",
+                    "getzilla.governance._read_pinned_authority_bytes",
                     side_effect=swap_nested,
                 ):
                     with self.assertRaisesRegex(
@@ -747,7 +747,7 @@ class GovernanceLoaderTests(unittest.TestCase):
         )
         for constant, root, message in fixtures:
             with self.subTest(constant=constant):
-                with mock.patch(f"adaptive_grok.governance.{constant}", 0):
+                with mock.patch(f"getzilla.governance.{constant}", 0):
                     with self.assertRaisesRegex(GovernanceError, message):
                         load_governance(root)
 
@@ -1649,7 +1649,7 @@ class GovernanceHandoffTests(unittest.TestCase):
         return subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "scripts" / "grok_governance.py"),
+                str(ROOT / "scripts" / "getzilla_governance.py"),
                 "--root",
                 str(root),
                 *arguments,
@@ -2317,7 +2317,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         root = _make_fixture(self)
         (root / "mistakes.md").write_bytes(b"# mistakes\n")
         (root / "decisions.md").symlink_to(root / "mistakes.md")
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/grok_governance.py"), "--root", str(root), "project"],
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/getzilla_governance.py"), "--root", str(root), "project"],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["code"], "io")
@@ -2326,7 +2326,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         root = _make_fixture(self)
         (root / "decisions.md").write_bytes(b"# decisions\n")
         (root / "mistakes.md").write_bytes(b"# mistakes\n")
-        cli = runpy.run_path(str(ROOT / "scripts/grok_governance.py"))
+        cli = runpy.run_path(str(ROOT / "scripts/getzilla_governance.py"))
         globals_ = cli["main"].__globals__
         real_merge = cli["_merge_projection"]
         emitted: list[object] = []
@@ -2338,7 +2338,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
             return merged
 
         with mock.patch.dict(globals_, {"_merge_projection": mutate, "_emit": emitted.append}):
-            with mock.patch.object(sys, "argv", ["grok_governance.py", "--root", str(root), "project"]):
+            with mock.patch.object(sys, "argv", ["getzilla_governance.py", "--root", str(root), "project"]):
                 self.assertEqual(cli["main"](), 2)
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["code"], "io")

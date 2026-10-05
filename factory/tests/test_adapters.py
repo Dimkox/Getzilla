@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from adaptive_factory.adapters import (
+from getzilla_factory.adapters import (
     AdapterError,
     AdapterRegistry,
     CodexAdapter,
@@ -9,7 +9,7 @@ from adaptive_factory.adapters import (
     TrustedExecutionProfile,
     select_adapter,
 )
-from adaptive_factory.execution_contracts import ExecutionContractError, ExecutionSelectionV1
+from getzilla_factory.execution_contracts import ExecutionContractError, ExecutionSelectionV1
 from factory.tests.test_execution_contracts import valid_packet
 
 

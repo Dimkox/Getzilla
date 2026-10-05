@@ -7,20 +7,20 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.change import start_change, transition
-from adaptive_grok.human_gates import gate_statuses, record_gate_decision
-from adaptive_grok.policy import evaluate_pre_tool
-from adaptive_grok.router import build_route
-from adaptive_grok.state import add_approval, set_active_route
+from getzilla.change import start_change, transition
+from getzilla.human_gates import gate_statuses, record_gate_decision
+from getzilla.policy import evaluate_pre_tool
+from getzilla.router import build_route
+from getzilla.state import add_approval, set_active_route
 from tests._support import project_copy
 
 
 class HumanGateTests(unittest.TestCase):
     def _active_change(self, root: Path, gates: list[str]):
         subprocess.run(
-            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/adaptive-grok-build-pro.git'],
+            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
             cwd=root,
             check=True,
         )
@@ -216,7 +216,7 @@ class HumanGateTests(unittest.TestCase):
     def test_local_grant_and_trust_ci_file_cannot_satisfy_gate(self) -> None:
         with project_copy(git=True) as root:
             self._active_change(root, [])
-            route = json.loads((root / '.grok-stack/runtime/active-route.json').read_text(encoding='utf-8'))
+            route = json.loads((root / '.getzilla/runtime/active-route.json').read_text(encoding='utf-8'))
             package = root / 'engineering/changes' / route['change_id']
             evidence = package / 'evidence'
             evidence.mkdir(exist_ok=True)
@@ -286,7 +286,7 @@ class HumanGateTests(unittest.TestCase):
                 action='git-push-branch',
             )
             add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
-            route = json.loads((root / '.grok-stack/runtime/active-route.json').read_text(encoding='utf-8'))
+            route = json.loads((root / '.getzilla/runtime/active-route.json').read_text(encoding='utf-8'))
             route['human_gates'] = []
             set_active_route(root, route)
 
@@ -321,7 +321,7 @@ class HumanGateTests(unittest.TestCase):
                 actions=['external-write'],
                 resources=[target],
             )
-            route = json.loads((root / '.grok-stack/runtime/active-route.json').read_text(encoding='utf-8'))
+            route = json.loads((root / '.getzilla/runtime/active-route.json').read_text(encoding='utf-8'))
             route['human_gates'] = []
             set_active_route(root, route)
 
@@ -343,7 +343,7 @@ class HumanGateTests(unittest.TestCase):
         with project_copy(git=True) as root:
             self._active_change(root, ['scope_and_design_approval', 'production_action_approval'])
             proc = subprocess.run(
-                [sys.executable, str(ROOT / 'scripts/grok_status.py')],
+                [sys.executable, str(ROOT / 'scripts/getzilla_status.py')],
                 cwd=root,
                 text=True,
                 capture_output=True,
@@ -364,7 +364,7 @@ class HumanGateTests(unittest.TestCase):
             proc = subprocess.run(
                 [
                     sys.executable,
-                    str(ROOT / 'scripts/grok_gate.py'),
+                    str(ROOT / 'scripts/getzilla_gate.py'),
                     'decide',
                     'production_action_approval',
                     'approved',

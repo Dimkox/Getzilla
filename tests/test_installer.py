@@ -132,7 +132,7 @@ class InstallerTests(unittest.TestCase):
                     template.write_bytes(old + b'\n# changed after validated inventory read\n')
                     template.chmod(0o600)
                 return result
-            with patch.object(MODULE, 'MANAGED_DIRS', ('.grok-stack',)), \
+            with patch.object(MODULE, 'MANAGED_DIRS', ('.getzilla',)), \
                  patch.object(MODULE, 'MANAGED_FILES', tuple(sorted(MODULE.ROOT_HOOK_SHIMS))), \
                  patch.object(MODULE._SourceTree, 'read', mutate_after_bound_read):
                 payload = {entry.path: entry for entry in MODULE.build_payload(source)}
@@ -204,7 +204,7 @@ class InstallerTests(unittest.TestCase):
                 readme = target / "factory/README.md"
                 self.assertEqual(_broken_local_links(readme, target), [])
                 self.assertIn("Upstream-only", readme.read_text())
-                self.assertIn("https://github.com/Dimkox/adaptive-grok-build-pro/",
+                self.assertIn("https://github.com/Dimkox/Getzilla/",
                               readme.read_text())
                 agents = target / "AGENTS.md"
                 self.assertEqual(_broken_local_links(agents, target), [])
@@ -250,7 +250,7 @@ class InstallerTests(unittest.TestCase):
             target = Path(tmp) / "consumer"
             payload = MODULE.build_payload(ROOT)
             MODULE.materialize_new(ROOT, target)
-            templates = target / ".grok-stack/templates"
+            templates = target / ".getzilla/templates"
             template_paths = {path.name for path in templates.glob("consumer-*")}
             self.assertEqual(template_paths, {
                 "consumer-AGENTS.md.tmpl", "consumer-factory-README.md.tmpl",
@@ -288,7 +288,7 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaises(MODULE.UnsafeInstallTarget):
                 MODULE.materialize_new(ROOT, target)
             self.assertEqual(_snapshot(target), before)
-            (target / ".grok-stack/AGBP_SYNC.json").write_text(
+            (target / ".getzilla/AGBP_SYNC.json").write_text(
                 json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]})
             )
             before_conflict = _snapshot(target)
@@ -298,11 +298,88 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(agents.read_bytes(), original)
 
     def _consumer_with_record(self, root: Path, kept: list[str] | object) -> Path:
-        record = root / ".grok-stack"
+        record = root / ".getzilla"
         record.mkdir(parents=True)
         payload = {"schema_version": 1, "kept_local": kept} if isinstance(kept, list) else kept
         (record / "AGBP_SYNC.json").write_text(json.dumps(payload), encoding="utf-8")
         return root
+
+    def test_legacy_grok_stack_record_is_honoured_and_legacy_files_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "t"
+            legacy = target / ".grok-stack"
+            (legacy / "adaptive_grok").mkdir(parents=True)
+            (legacy / "adaptive_grok/state.py").write_text("# old\n", encoding="utf-8")
+            routing = legacy / "config/routing.json"
+            routing.parent.mkdir()
+            routing.write_bytes((ROOT / ".getzilla/config/routing.json").read_bytes())
+            (legacy / "AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": [".grok-stack/config/routing.json"]}),
+                encoding="utf-8",
+            )
+            (target / "scripts").mkdir()
+            (target / "scripts/grok_verify.py").write_text("# old\n", encoding="utf-8")
+            (target / "scripts/custom_tool.py").write_text("# theirs\n", encoding="utf-8")
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertEqual(_snapshot(target), before)
+            self.assertEqual(
+                {item["path"]: item["state"] for item in plan["kept"]},
+                {".getzilla/config/routing.json": "absent"},
+            )
+            self.assertNotIn(".getzilla/config/routing.json", {entry["path"] for entry in plan["entries"]})
+            retire = {item["path"]: item["replacement"] for item in plan["legacy_migration"]}
+            self.assertEqual(retire[".grok-stack/adaptive_grok/state.py"], ".getzilla/getzilla/state.py")
+            self.assertEqual(retire[".grok-stack/config/routing.json"], ".getzilla/config/routing.json")
+            self.assertEqual(retire["scripts/grok_verify.py"], "scripts/getzilla_verify.py")
+            self.assertNotIn("scripts/custom_tool.py", retire)
+            self.assertEqual(MODULE.legacy_to_current_path("factory/src/adaptive_factory/cli.py"),
+                             "factory/src/getzilla_factory/cli.py")
+            self.assertEqual(MODULE.legacy_to_current_path(".agents/skills/adaptive-delivery/SKILL.md"),
+                             ".agents/skills/getzilla-delivery/SKILL.md")
+            self.assertTrue(all(item["action"] == "RETIRE" for item in plan["legacy_migration"]))
+
+    def test_current_sync_record_wins_over_legacy_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "t"
+            self._consumer_with_record(root, [".coveragerc"])
+            legacy = root / ".grok-stack"
+            legacy.mkdir()
+            (legacy / "AGBP_SYNC.json").write_text(
+                json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]}), encoding="utf-8"
+            )
+            plan = MODULE.plan_install(ROOT, root)
+            self.assertEqual([item["path"] for item in plan["kept"]], [".coveragerc"])
+            self.assertEqual(MODULE.legacy_to_current_path("scripts/grok_status.py"), "scripts/getzilla_status.py")
+            self.assertEqual(MODULE.legacy_to_current_path("README.md"), "README.md")
+
+    def test_previous_release_install_upgrades_with_a_replacement_for_every_retired_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "consumer"
+            for relative in (
+                ".grok-stack/adaptive_grok/state.py",
+                ".grok-stack/config/routing.json",
+                "scripts/grok_status.py",
+                "factory/src/adaptive_factory/cli.py",
+                ".agents/skills/adaptive-delivery/SKILL.md",
+                ".grok/skills/adaptive-delivery/SKILL.md",
+            ):
+                path = target / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# previous release\n", encoding="utf-8")
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertEqual(_snapshot(target), before)
+            delivered = {entry["path"] for entry in plan["entries"]}
+            retired = plan["legacy_migration"]
+            self.assertEqual(len(retired), 6)
+            for item in retired:
+                self.assertIn(item["replacement"], delivered, item)
+
+    def test_fresh_target_plan_has_empty_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = MODULE.plan_install(ROOT, Path(tmp) / "absent")
+            self.assertEqual(plan["legacy_migration"], [])
 
     def test_keep_list_absent_file_is_reported_and_never_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -341,13 +418,13 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "t"
             self._consumer_with_record(root, [".coveragerc", "bandit.yaml",
-                                              ".grok-stack/config/routing.json"])
+                                              ".getzilla/config/routing.json"])
             for path in (".coveragerc", "bandit.yaml"):
                 (root / path).write_bytes((ROOT / path).read_bytes())
             actions = {item["path"]: item["state"] for item in MODULE.plan_install(ROOT, root)["kept"]}
             self.assertEqual(actions[".coveragerc"], "identical")
             self.assertEqual(actions["bandit.yaml"], "identical")
-            self.assertEqual(actions[".grok-stack/config/routing.json"], "absent")
+            self.assertEqual(actions[".getzilla/config/routing.json"], "absent")
 
     def test_declared_divergence_digest_is_bound_to_kept_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -384,7 +461,7 @@ class InstallerTests(unittest.TestCase):
     def test_symlinked_keep_record_or_path_is_not_silently_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "t"
-            stack_dir = root / ".grok-stack"
+            stack_dir = root / ".getzilla"
             stack_dir.mkdir(parents=True)
             outside = Path(tmp) / "outside.json"
             outside.write_text('{"schema_version": 1, "kept_local": [".coveragerc"]}', encoding="utf-8")
@@ -403,14 +480,14 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(plan["target_state"], "directory")
 
     def test_nested_managed_dir_path_kept_across_states(self) -> None:
-        routing = ".grok-stack/config/routing.json"
+        routing = ".getzilla/config/routing.json"
         with tempfile.TemporaryDirectory() as tmp:
             root = self._consumer_with_record(Path(tmp) / "t", [routing])
             (root / "plan").mkdir()
             plan = MODULE.plan_install(ROOT, root)
             self.assertEqual({item["path"]: item["state"] for item in plan["kept"]}, {routing: "absent"})
             source = (ROOT / routing).read_bytes()
-            nested_dir = root / ".grok-stack" / "config"
+            nested_dir = root / ".getzilla" / "config"
             nested_dir.mkdir(parents=True)
             (nested_dir / "routing.json").write_bytes(source)
             plan = MODULE.plan_install(ROOT, root)
@@ -432,7 +509,7 @@ class InstallerTests(unittest.TestCase):
     def test_oversized_sync_record_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "t"
-            stack = root / ".grok-stack"
+            stack = root / ".getzilla"
             stack.mkdir(parents=True)
             (stack / "AGBP_SYNC.json").write_text(
                 json.dumps({"schema_version": 1, "kept_local": ["x" * 40000, "y" * 40000]}), encoding="utf-8")
@@ -549,13 +626,13 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(len(generic_paths), len(set(generic_paths)))
         self.assertIn("AGENTS.md", generic_paths)
         for expected in (
-            ".grok-stack/adaptive_grok/governance.py",
-            ".grok-stack/templates/change/architecture.md",
-            ".grok-stack/templates/change/requirements.md",
-            "scripts/grok_governance.py",
-            "scripts/grok_artifacts.py",
-            "scripts/grok_history.py",
-            ".grok-stack/adaptive_grok/history.py",
+            ".getzilla/getzilla/governance.py",
+            ".getzilla/templates/change/architecture.md",
+            ".getzilla/templates/change/requirements.md",
+            "scripts/getzilla_governance.py",
+            "scripts/getzilla_artifacts.py",
+            "scripts/getzilla_history.py",
+            ".getzilla/getzilla/history.py",
             "schemas/canonical-example.schema.json",
             "schemas/debt-entry.schema.json",
             "schemas/governance-handoff-v1.schema.json",
@@ -569,13 +646,13 @@ class InstallerTests(unittest.TestCase):
             "factory/contracts/openapi/factory-execution.v1.json",
             "factory/pyproject.toml",
             "factory/uv.lock",
-            "factory/src/adaptive_factory/store.py",
-            "factory/src/adaptive_factory/admin.py",
-            "factory/src/adaptive_factory/resources/003_budgets_kills_reconciliation.sql",
-            "factory/src/adaptive_factory/resources/008_allocation_release_authority.sql",
-            "factory/src/adaptive_factory/resources/009_authority_audit_and_history_indexes.sql",
-            "factory/src/adaptive_factory/resources/010_authority_accounting_and_cleanup.sql",
-            "factory/src/adaptive_factory/resources/011_legacy_accounting_quarantine.sql",
+            "factory/src/getzilla_factory/store.py",
+            "factory/src/getzilla_factory/admin.py",
+            "factory/src/getzilla_factory/resources/003_budgets_kills_reconciliation.sql",
+            "factory/src/getzilla_factory/resources/008_allocation_release_authority.sql",
+            "factory/src/getzilla_factory/resources/009_authority_audit_and_history_indexes.sql",
+            "factory/src/getzilla_factory/resources/010_authority_accounting_and_cleanup.sql",
+            "factory/src/getzilla_factory/resources/011_legacy_accounting_quarantine.sql",
             "factory/tests/run_disposable_exit.py",
             "factory/tests/postgres_restart_probe.py",
             "factory/tests/test_postgres_integration.py",
@@ -672,7 +749,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertFalse((target / authority).exists(), authority)
             self.assertEqual(_stage_names(parent), [])
             result = subprocess.run(
-                ["python3", "scripts/grok_architecture.py", "--help"],
+                ["python3", "scripts/getzilla_architecture.py", "--help"],
                 cwd=target,
                 text=True,
                 capture_output=True,
@@ -681,7 +758,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
             history_help = subprocess.run(
-                [sys.executable, "scripts/grok_history.py", "--help"],
+                [sys.executable, "scripts/getzilla_history.py", "--help"],
                 cwd=target,
                 text=True,
                 capture_output=True,
@@ -951,7 +1028,7 @@ class InstallerTests(unittest.TestCase):
                 guidance.write_text("bitrix guidance\n", encoding="utf-8")
                 payload = source / "payload.bin"
                 payload.write_bytes(b"managed payload\n")
-                toolchain = source / ".grok-stack/config/toolchain.json"
+                toolchain = source / ".getzilla/config/toolchain.json"
                 toolchain.parent.mkdir(parents=True)
                 toolchain.write_text('{"tools": []}\n', encoding="utf-8")
                 victim = {
@@ -1251,14 +1328,14 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("read-only plan", default.stdout.lower())
             self.assertEqual(default.stdout.count(MODULE.LEGACY_PLAN_NOTICE), 1)
             self.assertEqual(_snapshot(existing), before)
-            self.assertTrue((target / "scripts/grok_verify.py").is_file())
+            self.assertTrue((target / "scripts/getzilla_verify.py").is_file())
             self.assertTrue((target / "factory/runtime/setup_manager.py").is_file())
             self.assertFalse((target / ".github/workflows").exists())
-            self.assertTrue((target / "scripts/grok_agent.py").is_file())
-            self.assertFalse((target / ".grok-stack/runtime/agent-state.json").exists())
-            self.assertFalse((target / ".grok-stack/runtime/.agents.guard").exists())
+            self.assertTrue((target / "scripts/getzilla_agent.py").is_file())
+            self.assertFalse((target / ".getzilla/runtime/agent-state.json").exists())
+            self.assertFalse((target / ".getzilla/runtime/.agents.guard").exists())
             command = subprocess.run(
-                ["python3", "scripts/grok_agent.py", "watchdog"], cwd=target,
+                ["python3", "scripts/getzilla_agent.py", "watchdog"], cwd=target,
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(command.returncode, 0, command.stderr)

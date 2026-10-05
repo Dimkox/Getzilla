@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import unittest
 
-from adaptive_factory.landing_contracts import (
+from getzilla_factory.landing_contracts import (
     LandingAttemptV1,
     LandingContractError,
     LandingEvaluationV1,
@@ -14,8 +14,8 @@ from adaptive_factory.landing_contracts import (
     SiteArtifactV1,
     StaticLandingSpecV1,
 )
-from adaptive_factory import landing_contracts
-from adaptive_factory.contracts import canonical_json
+from getzilla_factory import landing_contracts
+from getzilla_factory.contracts import canonical_json
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -37,9 +37,9 @@ def main() -> int:
     workflows = root / '.github' / 'workflows'
     require(not workflows.exists(), 'GitHub Actions workflows are forbidden')
 
-    approve = text(root, 'scripts/grok_approve.py')
+    approve = text(root, 'scripts/getzilla_approve.py')
     require('external_trust_ci_authority' in approve, 'local approval CLI must disclaim Trust CI authority')
-    state = text(root, '.grok-stack/adaptive_grok/state.py')
+    state = text(root, '.getzilla/getzilla/state.py')
     require("'git_head'" in state, 'delegated grant must bind git_head')
     require("'tree_fingerprint'" in state, 'delegated grant must bind tree fingerprint')
 
@@ -52,12 +52,12 @@ def main() -> int:
     github_source = text(root, 'trust-ci/src/adaptive_trust_ci/github.py')
     require("'checks': [{'context': status_context, 'app_id': app_id}]" in github_source, 'branch protection must bind context to app_id')
 
-    policy_source = text(root, '.grok-stack/adaptive_grok/policy.py')
+    policy_source = text(root, '.getzilla/getzilla/policy.py')
     require('workflow-dispatch' in policy_source and 'forbidden' in policy_source.lower(), 'workflow dispatch must be forbidden')
 
     for rel in (
-        '.grok-stack/adaptive_grok/state.py',
-        '.grok-stack/adaptive_grok/policy.py',
+        '.getzilla/getzilla/state.py',
+        '.getzilla/getzilla/policy.py',
         'trust-ci/src/adaptive_trust_ci/api.py',
         'trust-ci/src/adaptive_trust_ci/worker.py',
         'trust-ci/src/adaptive_trust_ci/runner.py',

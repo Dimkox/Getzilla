@@ -3,12 +3,12 @@ import traceback
 import unittest
 from unittest.mock import MagicMock, patch
 
-from adaptive_factory import semantic_repair
-from adaptive_factory.contracts import ContractError, canonical_digest
-from adaptive_factory.models import Actor
-from adaptive_factory.semantic_adjudication import adjudicate
-from adaptive_factory.semantic_contracts import SemanticCoverageV1, SemanticFindingV1, SemanticSubjectV1
-from adaptive_factory.semantic_repair import (
+from getzilla_factory import semantic_repair
+from getzilla_factory.contracts import ContractError, canonical_digest
+from getzilla_factory.models import Actor
+from getzilla_factory.semantic_adjudication import adjudicate
+from getzilla_factory.semantic_contracts import SemanticCoverageV1, SemanticFindingV1, SemanticSubjectV1
+from getzilla_factory.semantic_repair import (
     RepairChildProposalV1,
     RepairChildTaskBindingV1,
     RepairEscalationV1,
@@ -16,8 +16,8 @@ from adaptive_factory.semantic_repair import (
     SemanticRepairRequestV1,
     plan_repair,
 )
-from adaptive_factory.service import AuthorizationError, FactoryService
-from adaptive_factory.store import PostgresSemanticCoordinatorStore, StoreError
+from getzilla_factory.service import AuthorizationError, FactoryService
+from getzilla_factory.store import PostgresSemanticCoordinatorStore, StoreError
 from .test_semantic_contracts import coverage, finding, subject
 from .test_semantic_persistence import FakeConnection, FakeCursor
 

@@ -6,10 +6,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok.architecture import load_architecture  # noqa: E402
-from adaptive_grok.architecture_fitness import _owner_for_path  # noqa: E402
+from getzilla.architecture import load_architecture  # noqa: E402
+from getzilla.architecture_fitness import _owner_for_path  # noqa: E402
 
 
 class PilotArchitectureTests(unittest.TestCase):

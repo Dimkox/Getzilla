@@ -18,14 +18,14 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok import python_test_runner as runner
-from adaptive_grok import receipts
-from adaptive_grok import util
-from adaptive_grok import verification as verifier
-from adaptive_grok.router import build_route
-from adaptive_grok.state import set_active_route
+from getzilla import python_test_runner as runner
+from getzilla import receipts
+from getzilla import util
+from getzilla import verification as verifier
+from getzilla.router import build_route
+from getzilla.state import set_active_route
 from tests._support import project_copy as full_project_copy
 
 
@@ -91,10 +91,10 @@ class VerifierRecoveryTests(unittest.TestCase):
             report = verifier.verify(root, mode='fast')
             self.assertEqual(receipts.get_receipt(root, route['route_id'], 'verification')['status'], 'pass')
             with patch.object(verifier, 'verify', return_value=report), patch.object(util, 'find_root', return_value=root), \
-                 patch.object(sys, 'argv', ['grok_verify.py', '--json']), \
+                 patch.object(sys, 'argv', ['getzilla_verify.py', '--json']), \
                  contextlib.redirect_stdout(BrokenOutput()), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
-                    runpy.run_path(str(ROOT / 'scripts/grok_verify.py'), run_name='__main__')
+                    runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
             self.assertEqual(caught.exception.code, 1)
             stored = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(stored['status'], 'fail')
@@ -109,10 +109,10 @@ class VerifierRecoveryTests(unittest.TestCase):
         with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
             report = verifier.verify(root, mode='fast')
             with patch.object(verifier, 'verify', return_value=report), patch.object(util, 'find_root', return_value=root), \
-                 patch.object(sys, 'argv', ['grok_verify.py', '--json']), \
+                 patch.object(sys, 'argv', ['getzilla_verify.py', '--json']), \
                  contextlib.redirect_stdout(InterruptedOutput()), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
-                    runpy.run_path(str(ROOT / 'scripts/grok_verify.py'), run_name='__main__')
+                    runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
             self.assertEqual(caught.exception.code, 143)
             stored = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(stored['status'], 'fail')
@@ -163,10 +163,10 @@ class VerifierRecoveryTests(unittest.TestCase):
             report = verifier.verify(root, mode='fast', record=False)
         error_output = io.StringIO()
         with patch.object(verifier, 'verify', return_value=report), \
-             patch.object(sys, 'argv', ['grok_verify.py', '--json', '--no-record']), \
+             patch.object(sys, 'argv', ['getzilla_verify.py', '--json', '--no-record']), \
              contextlib.redirect_stdout(BrokenOutput()), contextlib.redirect_stderr(error_output):
             with self.assertRaises(SystemExit) as caught:
-                runpy.run_path(str(ROOT / 'scripts/grok_verify.py'), run_name='__main__')
+                runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
         self.assertEqual(caught.exception.code, 1)
         retained = json.loads(error_output.getvalue())
         self.assertEqual(retained['check_status'], 'fail')
@@ -255,7 +255,7 @@ class VerifierRecoveryTests(unittest.TestCase):
             stored = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(stored['status'], 'fail')
             self.assertEqual(stored['details']['terminal_state'], 'cancelled')
-            self.assertFalse(list((root / '.grok-stack/runtime/receipts' / route['route_id']).glob('.verification.json.*')))
+            self.assertFalse(list((root / '.getzilla/runtime/receipts' / route['route_id']).glob('.verification.json.*')))
 
     def test_focused_receipt_failure_retains_selected_scope(self):
         with routed_fixture() as (root, _):
@@ -431,7 +431,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
             child = 'import os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM, signal.SIG_IGN); Path("owned.pid").write_text(str(os.getpid())); time.sleep(30)'
             controller_code = (
                 'import json,os,sys\nfrom pathlib import Path\n'
-                'from adaptive_grok.python_test_runner import execute\n'
+                'from getzilla.python_test_runner import execute\n'
                 'try:\n'
                 f' execute([sys.executable,"-c",{child!r}],Path.cwd(),os.environ.copy())\n'
                 'except SystemExit as exc:\n'
@@ -439,7 +439,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
                 ' raise\n'
             )
             unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
-            controller = subprocess.Popen([sys.executable, '-c', controller_code], cwd=root, env={**os.environ, 'PYTHONPATH': str(ROOT / '.grok-stack')})
+            controller = subprocess.Popen([sys.executable, '-c', controller_code], cwd=root, env={**os.environ, 'PYTHONPATH': str(ROOT / '.getzilla')})
             try:
                 deadline = time.monotonic() + 5
                 while not pid_file.exists() and time.monotonic() < deadline:
@@ -693,7 +693,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(report['checks'][-1]['name'], 'receipt-recording')
             self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
-            self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('reports/*.json')))
+            self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_oversized_report_still_fails_and_invalidates_prior_receipt(self):
         with routed_fixture() as (root, route):
@@ -771,7 +771,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                 envelope = json.loads(path.read_bytes())
                 reference = envelope['details']['_verification_report']
                 digest = hashlib.sha256(content).hexdigest()
-                reference.update(sha256=digest, bytes=len(content), path=f'.grok-stack/runtime/receipts/{route["route_id"]}/reports/{digest}.json')
+                reference.update(sha256=digest, bytes=len(content), path=f'.getzilla/runtime/receipts/{route["route_id"]}/reports/{digest}.json')
                 (root / reference['path']).write_bytes(content)
                 path.write_text(json.dumps(envelope), encoding='utf-8')
                 with self.assertRaises(RuntimeError):
@@ -807,8 +807,8 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                 with fault, observer, self.assertRaises((OSError, RuntimeError)):
                     receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, interrupt_check=cancel if boundary in ('cancel', 'post-rename-cancel') else None)
                 self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
-                self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('*.tmp')))
-                self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('reports/*.json')))
+                self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('*.tmp')))
+                self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_verification_classification_serialization_faults_retire_prior_pass(self):
         for failure, error in (('circular', ValueError), ('unserializable', TypeError)):
@@ -823,8 +823,8 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                     receipts.write_receipt(root, 'verification', 'pass', details=details)
                 self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
                 self.assertEqual(receipts.validate_evidence(root, route), ['verification: missing receipt'])
-                self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('*.tmp')))
-                self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('reports/*.json')))
+                self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('*.tmp')))
+                self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_report_publication_rejects_symlink_directory_without_external_write(self):
         with routed_fixture() as (root, route):
@@ -863,7 +863,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             for kind in sorted(receipts.RECEIPT_KINDS - {'verification'}):
                 with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'receipt exceeds the byte limit'):
                     receipts.write_receipt(root, kind, 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
-            self.assertFalse(list((root / '.grok-stack/runtime/receipts').rglob('reports/*.json')))
+            self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_same_tree_new_head_invalidates_receipt(self):
         with routed_fixture() as (root, route):

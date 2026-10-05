@@ -1,10 +1,12 @@
-# Adaptive Grok Build Pro v2.1.1
+# Getzilla v2.1.1
+
+> **Origin.** Getzilla is the renamed successor of the [predecessor project](https://github.com/Dimkox/adaptive-grok-build-pro/tree/c4e506f3d3a45e000f5b9f9121f698c1d16814e3). This repository was started on 2026-10-05 from that project's final PR #242 head (identical to its merged main commit `f97966c`) `c4e506f3d3a45e000f5b9f9121f698c1d16814e3` without its git history. Pull-request numbers, releases, tags and checks mentioned in historical sections below belong to the predecessor repository. Renamed: the core package and stack (`.getzilla/getzilla`), `scripts/getzilla_*.py`, `getzilla_factory`, `getzilla_delivery` and the `GETZILLA_*` test variables. Kept on purpose: the Grok Build CLI contract (`.grok/`), Grok provider settings, the deployed Trust CI identity (`adaptive-trust-ci/verified`, App `adaptive-trust-ci`) and L5 runtime paths (`adaptive-l5`). Installs made before the rename are upgraded through `scripts/install_into.py --plan`, which reports the pre-rename stack files for retirement.
 
 MIT-licensed tooling for task-routed AI-assisted development, external verification and human-controlled delivery with **Grok Build**.
 
 ## What it does in five minutes
 
-Adaptive Grok Build Pro installs a local Grok/Codex-style agent workflow into another repository. The short path is:
+Getzilla installs a local Grok/Codex-style agent workflow into another repository. The short path is:
 
 1. inspect a target repository without changing it;
 2. apply the accepted plan as a reviewed branch change in the target repository;
@@ -14,12 +16,16 @@ Adaptive Grok Build Pro installs a local Grok/Codex-style agent workflow into an
 
 The heavy Trust CI, signed approvals and external holdout checks are the safety layer for merge authority. They are not needed to read the repo, create an install plan, run the local demo, or try the simple agent loop.
 
+## Working order
+
+Vibe-code the feature or project the user wants first; then apply the factory to the working result (route, change package, fitness checks, tests, reviews, pull request and Trust CI). Nothing merges without the factory phase. Details: [AGENTS.md](AGENTS.md#working-order-vibe-first-factory-second).
+
 ## First run: simple path
 
 ```bash
-git clone https://github.com/Dimkox/adaptive-grok-build-pro.git
-cd adaptive-grok-build-pro
-python3 scripts/grok_doctor.py --offer-install
+git clone https://github.com/Dimkox/Getzilla.git
+cd getzilla
+python3 scripts/getzilla_doctor.py --offer-install
 python3 scripts/install_into.py --plan /absolute/path/to/your/repo
 ```
 
@@ -33,10 +39,10 @@ Then open the target in Grok, trust the project hooks, and give one concrete tas
 
 ```bash
 cd /absolute/path/to/your/repo
-python3 scripts/grok_route.py "Добавить поведение с явными критериями приёмки" --session first-task --json
-python3 scripts/grok_change.py start --title "Первая задача"
-python3 scripts/grok_status.py
-python3 scripts/grok_verify.py --mode pr
+python3 scripts/getzilla_route.py "Добавить поведение с явными критериями приёмки" --session first-task --json
+python3 scripts/getzilla_change.py start --title "Первая задача"
+python3 scripts/getzilla_status.py
+python3 scripts/getzilla_verify.py --mode pr
 ```
 
 This gives you a candidate and evidence. It does not merge, deploy, publish, or mutate production systems.
@@ -45,7 +51,7 @@ This gives you a candidate and evidence. It does not merge, deploy, publish, or 
 
 - `scripts/install_into.py`: read-only install planning for existing repos and no-replace materialization for absent repos.
 - `.agents/skills/`: domain skills for agent work, including Bitrix, API/events, frontend, data, security and release tasks.
-- `.grok-stack/`: local routing, verification, architecture, governance and receipt code.
+- `.getzilla/`: local routing, verification, architecture, governance and receipt code.
 - `factory/`, `delivery/`, `pilot/`: default-off factory, staged delivery and pilot boundaries.
 - `trust-ci/`: optional separately deployed merge authority. It is advanced operator infrastructure, not part of the first run.
 - `engineering/changes/`, `decisions.md`, `mistakes.md`: durable evidence and lessons for later agents.
@@ -79,7 +85,7 @@ Known weak seams this line is closing:
 - A timeout or interrupted verifier is incomplete, not a pass.
 - A restarted attempt cannot reuse an old model/config/profile identity without requalification.
 
-The price is deliberate. For a small personal patch this can feel too heavy. For an autonomous agent touching someone else's repository, the route, change package, fitness checks, receipts, external holdout and human merge gate are the safety boundary. The published release is `v2.1.1`; the external pilot remains unqualified, and publication does not confer production authority.
+The price is deliberate. For a small personal patch this can feel too heavy. For an autonomous agent touching someone else's repository, the route, change package, fitness checks, receipts, external holdout and human merge gate are the safety boundary. The published release is `v2.1.1`. Liqvera is a completed owner-accepted factory-built product; empirical autonomy qualification and production authority remain separate.
 
 ## Advanced startup baseline
 
@@ -105,24 +111,25 @@ The source tree also carries closed default-off BB contracts, an authenticated o
 | 2.1.0 candidate capabilities | U5 prediction artifacts are observation-only and require declared history before they can report availability. U6's pinned FPF snapshot can only emit deterministic evaluation evidence; external qualification remains `not_qualified`/not established and all authority effects remain `none`. |
 | Installed L5 (September 19) | Primary Qwen is accepted at `f12807c2` / `qwen-omni-intl`; Grok stays accepted at `26a0d3d`. Both are **active and enabled**. Separate Omni remains at `e7d0f72`. |
 | Proven runtime result (September 19) | Primary Qwen Omni produced `artifact_ready` in **4.991 s**, usage **766/195**; separate readback made zero POSTs. Grok previously completed in **26.947 s**. [Exact evidence and limits](engineering/runbooks/l5-primary-continuation-2026-09-19.md). |
-| Remaining acceptance | A full external pilot with maintainer acceptance, a qualifying M8 cohort/activation, and general M9 operational qualification are **not established**. L5 artifact generation establishes no public-site publication. |
+| Completed product | M8 **DONE**: owner confirms the working Liqvera Mezo Buildathon demo was built by this factory. Released `v0.0.5` source `19284fb07fedd4909672c7e9a641cb066efbb7cc` pins factory `v2.0.19` / `cb9af4073ba6c3d515145164d771c75ebdfa3224`. Accepted-product dependencies and M8/M9 follow-up planning are unblocked; [exact provenance and boundaries](PROJECT_STATE.json) distinguish owner acceptance from runtime telemetry. |
+| Remaining acceptance | M7 durable current lookup, 30 distinct exact-profile tasks, M8 cohort/activation, complete cost/intervention accounting, and general M9 signed environment/recovery qualification remain unestablished. Factory-runtime public-site publication is also unestablished. Another first completed pilot is not required. |
 
 Historical `v2.0.19` delivery records the source line through PR #193 in release-sync PR #189. Its [release-sync change package](engineering/changes/20260922-release-v2-0-19-from-candidate-5d93fc3-0ea342/brief.md) and [artifact-child package](engineering/changes/20260924-build-v2-0-19-artifact-child-from-merged-release-09407b/brief.md) preserve separate source verification, artifact provenance and publication; they do not instruct another artifact build, tag or release of published `v2.1.1`.
 
 Source templates default to live execution off. The observed Qwen and Grok services use separately provisioned configurations with live execution explicitly enabled.
 
-- Current source adds [`adaptive-landing-submit`](engineering/runbooks/l5-provider-failover.md): durable text/safe-DOCX submission through Qwen → Grok → OpenAI → Claude → OpenRouter, authenticated capability/attempt APIs, and atomic SQLite observations. Ambiguous submissions reconcile the same child; existing artifacts prevent further generation. Grok and primary Qwen now have accepted direct runtime results; the three added providers/full chain remain unqualified for inference. Monetary cost remains unknown; publication stays separate.
+- Current source adds [`getzilla-landing-submit`](engineering/runbooks/l5-provider-failover.md): durable text/safe-DOCX submission through Qwen → Grok → OpenAI → Claude → OpenRouter, authenticated capability/attempt APIs, and atomic SQLite observations. Ambiguous submissions reconcile the same child; existing artifacts prevent further generation. Grok and primary Qwen now have accepted direct runtime results; the three added providers/full chain remain unqualified for inference. Monetary cost remains unknown; publication stays separate.
 - Trust CI repository-scoped immutable profiles are implemented in code and documented by the example catalog; the worker uses `TRUST_CI_HOLDOUT_PATH` and `TRUST_CI_HOLDOUT_HOST_PATH` as independently configured trusted roots, validated binary-first before dependency construction. The capability is pending a separately reviewed and approved server-side policy/holdout installation; no deployed policy or branch protection is changed by it.
 
 Start with [START_HERE.md](START_HERE.md) and [PROJECT_STATE.json](PROJECT_STATE.json). Runtime operation is described in the [L5 runbook](engineering/runbooks/l5-production-runtime.md); milestone acceptance remains in the [roadmap](DARK_FACTORY_ROADMAP.md). Delivery is PR-only: the App-owned `adaptive-trust-ci/verified@06ecf1c875bc` check from GitHub App ID `<redacted-app-id>` must cover the exact PR head. Local receipts are preflight evidence. **No GitHub Actions:** this repository keeps deployed verification policy and holdout validation outside the PR-controlled tree, runs checks on the exact SHA, and binds the required result to its GitHub App identity.
 
 ## Optional Python test workers
 
-The existing runner remains unchanged without opt-in. To select automatic workers, create `.grok-test-runner.json` containing `{"schema_version":1,"workers":"auto"}`; `GROK_TEST_WORKERS` overrides the requested value after the configuration file is validated. Accepted requests are `auto` or an integer from 0 through 64. Explicit integers are not quota-clamped, and `GROK_TEST_WORKERS=0` selects sequential execution.
+The existing runner remains unchanged without opt-in. To select automatic workers, create `.getzilla-test-runner.json` containing `{"schema_version":1,"workers":"auto"}`; `GETZILLA_TEST_WORKERS` overrides the requested value after the configuration file is validated. Accepted requests are `auto` or an integer from 0 through 64. Explicit integers are not quota-clamped, and `GETZILLA_TEST_WORKERS=0` selects sequential execution.
 
 On Linux, `auto` uses the minimum of 28, process affinity or CPU-count fallback, and finite CPU quotas visible through actual cgroup membership and mounts. Finite quotas use `max(1, quota // period)`; malformed, unreadable or ambiguous capacity conservatively selects one worker. This does not establish hidden ancestor limits, reserved CPU time or available PID/memory capacity.
 
-Where this runner cannot provide its required parallel-process cleanup, a positive request selects the existing `unittest-degraded` engine before execution. Supported parallel execution retains its strict pins; measured serial execution retains pinned coverage. An actual failed parallel run is never retried serially. The implementation lives in `.grok-stack/adaptive_grok/python_test_runner.py` and its private `_cpu_capacity.py` helper; native Windows and older-interpreter qualification remain separate from fixture-based evidence.
+Where this runner cannot provide its required parallel-process cleanup, a positive request selects the existing `unittest-degraded` engine before execution. Supported parallel execution retains its strict pins; measured serial execution retains pinned coverage. An actual failed parallel run is never retried serially. The implementation lives in `.getzilla/getzilla/python_test_runner.py` and its private `_cpu_capacity.py` helper; native Windows and older-interpreter qualification remain separate from fixture-based evidence.
 
 ## Как пользоваться опубликованной версией 2.1.1
 
@@ -131,8 +138,8 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
 1. Получите исходники и зафиксируйте, что именно проверяете:
 
    ```bash
-   git clone https://github.com/Dimkox/adaptive-grok-build-pro.git
-   cd adaptive-grok-build-pro
+   git clone https://github.com/Dimkox/Getzilla.git
+   cd getzilla
    git fetch --all --prune
    git switch --detach v2.1.1
    git rev-parse HEAD
@@ -143,7 +150,7 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
 2. Проверьте инструменты:
 
    ```bash
-   python3 scripts/grok_doctor.py --offer-install
+   python3 scripts/getzilla_doctor.py --offer-install
    ```
 
    Doctor выводит состояние и предложения установки; он не устанавливает зависимости за вас. Для локального стека нужны Python ≥3.10 и Git ≥2.34; для Python-пакета factory — Python ≥3.11. Grok Build CLI нужен для TUI: установите его отдельно и выполните `grok` для входа. Node/npm, PHP/Composer нужны соответствующим профилям, Docker — отдельному операторскому/проверочному окружению. Старый `scripts/bootstrap.sh` удалён; используйте явные команды doctor/install из этого README.
@@ -164,35 +171,35 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
    python3 scripts/install_into.py --materialize-new /absolute/path/to/new/repo
    ```
 
-   Эта команда создаёт файлы: сначала проверенный соседний staging-каталог, затем атомарно публикует новую цель. Существующая цель, symlink или отсутствие требуемых no-follow/renameat2 возможностей приводят к отказу. Установка доставляет scripts/, .grok/, .grok-stack/, AGENTS.md и исходный factory payload; не запускает сервис, миграции или inference. trust-ci/ и GitHub Actions не устанавливаются. Архитектурные system.yaml/rules.yaml/adoption.json принадлежат целевому проекту и требуют отдельного ручного принятия.
+   Эта команда создаёт файлы: сначала проверенный соседний staging-каталог, затем атомарно публикует новую цель. Существующая цель, symlink или отсутствие требуемых no-follow/renameat2 возможностей приводят к отказу. Установка доставляет scripts/, .grok/, .getzilla/, AGENTS.md и исходный factory payload; не запускает сервис, миграции или inference. trust-ci/ и GitHub Actions не устанавливаются. Архитектурные system.yaml/rules.yaml/adoption.json принадлежат целевому проекту и требуют отдельного ручного принятия.
 
 4. Откройте целевой проект в Grok Build, доверьте проверенные project hooks через `/hooks-trust` и сформулируйте одну конкретную задачу. UserPromptSubmit создаёт локальный маршрут. Если интеграция не вызвала hook, создайте его явно:
 
    ```bash
    cd /absolute/path/to/your/repo
-   python3 scripts/grok_route.py "Добавить нужное поведение с указанными критериями приёмки" --session first-task --json
-   python3 scripts/grok_route.py --show --json
-   python3 scripts/grok_change.py start --title "Первая задача"
-   python3 scripts/grok_gate.py status
-   python3 scripts/grok_status.py
+   python3 scripts/getzilla_route.py "Добавить нужное поведение с указанными критериями приёмки" --session first-task --json
+   python3 scripts/getzilla_route.py --show --json
+   python3 scripts/getzilla_change.py start --title "Первая задача"
+   python3 scripts/getzilla_gate.py status
+   python3 scripts/getzilla_status.py
    ```
 
-   `grok_route.py` создаёт маршрут, а `grok_change.py start` — пакет новой задачи; если пакет уже существует, повторный `start` пропустите. Создание маршрута/пакета пишет локальное состояние .grok-stack/runtime/active-route.json и engineering/changes/<id>/. Не перезаписывайте уже активную задачу новым маршрутом. Используйте `/adaptive-delivery`: только выбранные allowed_agents, один write_agent на изолированную ветку/worktree, проверки и независимые reviewers. Если route.human_gates содержит scope_and_design_approval, человек сначала утверждает конкретный scope/design; `grok_gate.py decide` лишь фиксирует уже принятое решение, не выдаёт внешнее разрешение. Production/external actions требуют собственного точного делегирования и применимых внешних approvals.
+   `getzilla_route.py` создаёт маршрут, а `getzilla_change.py start` — пакет новой задачи; если пакет уже существует, повторный `start` пропустите. Создание маршрута/пакета пишет локальное состояние .getzilla/runtime/active-route.json и engineering/changes/<id>/. Не перезаписывайте уже активную задачу новым маршрутом. Используйте `/getzilla-delivery`: только выбранные allowed_agents, один write_agent на изолированную ветку/worktree, проверки и независимые reviewers. Если route.human_gates содержит scope_and_design_approval, человек сначала утверждает конкретный scope/design; `getzilla_gate.py decide` лишь фиксирует уже принятое решение, не выдаёт внешнее разрешение. Production/external actions требуют собственного точного делегирования и применимых внешних approvals.
 
 5. Для уже реально созданного дочернего агента heartbeat/watchdog дают наблюдаемость. Hook SubagentStart регистрирует его автоматически; при отсутствии hook:
 
    ```bash
-   python3 scripts/grok_agent.py start --agent-id child-1 --agent-type SELECTED_ROLE
+   python3 scripts/getzilla_agent.py start --agent-id child-1 --agent-type SELECTED_ROLE
    ```
 
    SELECTED_ROLE берите из маршрута; сохраните возвращённые generation, route_id и task_id. Ниже замените GENERATION/ROUTE/TASK точными значениями ответа, а не названием задачи:
 
    ```bash
-   python3 scripts/grok_agent.py heartbeat --agent-id child-1 --generation GENERATION --route-id ROUTE --task-id TASK
-   python3 scripts/grok_agent.py progress --agent-id child-1 --generation GENERATION --route-id ROUTE --task-id TASK --checkpoint implementation
-   python3 scripts/grok_agent.py watchdog
-   python3 scripts/grok_agent.py watch --iterations 12 --interval 5
-   python3 scripts/grok_status.py
+   python3 scripts/getzilla_agent.py heartbeat --agent-id child-1 --generation GENERATION --route-id ROUTE --task-id TASK
+   python3 scripts/getzilla_agent.py progress --agent-id child-1 --generation GENERATION --route-id ROUTE --task-id TASK --checkpoint implementation
+   python3 scripts/getzilla_agent.py watchdog
+   python3 scripts/getzilla_agent.py watch --iterations 12 --interval 5
+   python3 scripts/getzilla_status.py
    ```
 
    heartbeat/progress обновляют локальный agent-state.json; watchdog/watch читают диагностические записи и печатают JSON. По умолчанию предупреждения начинаются после 180 секунд без heartbeat и 600 секунд без полезного checkpoint. Watch ограничен числом итераций; фонового daemon нет. Свежий heartbeat не доказывает продвижение. При зависании: status-request → реальное сообщение контроллера → status-ack после ответа. Для восстановления: interrupt-request → реальное native interrupt → interrupt-ack после наблюдаемого подтверждения → resume → native followup тому же агенту с новой generation. Watchdog сам никого не прерывает и не заменяет writer; подробные команды — engineering/runbooks/local-agent-watchdog.md.
@@ -202,13 +209,13 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
    ```bash
    git status --short
    git diff
-   python3 scripts/grok_verify.py --mode fast --no-record --test tests.test_quality_gates --test tests.test_python_test_runner.NamedSmokeTests --budget 180
-   python3 scripts/grok_status.py
+   python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --test tests.test_python_test_runner.NamedSmokeTests --budget 180
+   python3 scripts/getzilla_status.py
    ```
 
    PR/release по умолчанию останавливают последующие проверки при первом отказе, неизвестном статусе или недопустимом skip. Отчёт сохраняет реальный результат и явно помечает незапущенные проверки; source-stability и финальный QG остаются обязательными. `--keep-going` собирает диагностику, сохраняя архитектурный preflight и правила admission. Именованный fast smoke требует чистый committed HEAD, `--no-record` и явные unittest-имена; бюджет subprocess — 1–180 секунд (по умолчанию 180), после таймаута добавляется ограниченная очистка процесса и проверка идентичности. Он не создаёт и не заменяет receipt. Полный успешный PR gate может занять больше 180 секунд; smoke или таймаут не заменяют его.
 
-   После CPU-снимка и маршрутизации зафиксируйте trusted base/HEAD и staged/unstaged/untracked inventory. Именованные controls выше — observation, без receipt и scope admission. Затем все независимые route-selected reviewers проверяют кандидат; полные отчёты сохраняются в engineering/changes/<id>/evidence/. Закоммитьте отчёты и заморозьте дерево. Единственный финальный qualifying local gate — `python3 scripts/grok_verify.py --mode pr`: его fail-closed selector выбирает scope по действительному base..HEAD и dirty inventory до тяжёлых checks. Зафиксируйте profile/reason, проверенные пути и skips; skipped не означает passed. Этот gate пишет локальный receipt в .grok-stack/runtime/receipts/<route-id>/ и может идти параллельно с внешним App-owned exact-head Trust CI после точного delegated UNVERIFIED branch transport. Полный local gate до review не требуется. Status показывает evidence_gaps, package_incomplete и agent_diagnostics; изменение дерева делает прежние receipts устаревшими.
+   После CPU-снимка и маршрутизации зафиксируйте trusted base/HEAD и staged/unstaged/untracked inventory. Именованные controls выше — observation, без receipt и scope admission. Затем все независимые route-selected reviewers проверяют кандидат; полные отчёты сохраняются в engineering/changes/<id>/evidence/. Закоммитьте отчёты и заморозьте дерево. Единственный финальный qualifying local gate — `python3 scripts/getzilla_verify.py --mode pr`: его fail-closed selector выбирает scope по действительному base..HEAD и dirty inventory до тяжёлых checks. Зафиксируйте profile/reason, проверенные пути и skips; skipped не означает passed. Этот gate пишет локальный receipt в .getzilla/runtime/receipts/<route-id>/ и может идти параллельно с внешним App-owned exact-head Trust CI после точного delegated UNVERIFIED branch transport. Полный local gate до review не требуется. Status показывает evidence_gaps, package_incomplete и agent_diagnostics; изменение дерева делает прежние receipts устаревшими.
 
 7. Доставка — отдельная ветка и PR. Только явно делегированные push/PR/merge/publish операции выполняются с точными ресурсами и соответствующими grants. Прямой push в main запрещён. Локальный PASS не разрешает merge: внешний GitHub App должен выдать adaptive-trust-ci/verified@<policy-sha12> на точный актуальный PR HEAD, а человек — требуемые подписанные approvals вне среды агента. Изменение HEAD/base/policy/holdout требует новой проверки и approvals. Установленный consumer stack не разворачивает эту внешнюю службу; её настраивает оператор отдельно.
 
@@ -216,17 +223,17 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
 
 ## Verification scope selection
 
-At [startup](AGENTS.md#second-mandatory-startup-step-select-verification-scope-before-heavy-work), after measured capacity and route/dependency scheduling, record trusted base/HEAD plus the staged/unstaged/untracked inventory. Bounded committed-HEAD controls are observations, without scope admission or verification receipts. Independent selected reviews precede the sole final qualifying local `python3 scripts/grok_verify.py --mode pr` run on the committed/frozen report-containing candidate. Its unchanged selector derives scope before its heavy checks. Record profile/reason, exact identities, path digest and skips; no manual "factory unaffected" heuristic or historical component pass expands its closed allowlist. Historical evidence retains its original exact Git identity and scope and never becomes a fresh pass. External exact-head Trust CI and approvals remain mandatory. Ten minutes is an unconfirmed delivery target; serial PostgreSQL and Core/PostgreSQL overlap have not been optimized by this change.
+At [startup](AGENTS.md#second-mandatory-startup-step-select-verification-scope-before-heavy-work), after measured capacity and route/dependency scheduling, record trusted base/HEAD plus the staged/unstaged/untracked inventory. Bounded committed-HEAD controls are observations, without scope admission or verification receipts. Independent selected reviews precede the sole final qualifying local `python3 scripts/getzilla_verify.py --mode pr` run on the committed/frozen report-containing candidate. Its unchanged selector derives scope before its heavy checks. Record profile/reason, exact identities, path digest and skips; no manual "factory unaffected" heuristic or historical component pass expands its closed allowlist. Historical evidence retains its original exact Git identity and scope and never becomes a fresh pass. External exact-head Trust CI and approvals remain mandatory. Ten minutes is an unconfirmed delivery target; serial PostgreSQL and Core/PostgreSQL overlap have not been optimized by this change.
 
-`grok_verify --mode pr` and `--mode release` classify the changed-path inventory before choosing what to run. A release documentation/state successor changes only prose, the dated state model, tracked release bytes, and the modules that bind them; it cannot move an executed product statement, so it does not owe a full-suite coverage run.
+`getzilla_verify --mode pr` and `--mode release` classify the changed-path inventory before choosing what to run. A release documentation/state successor changes only prose, the dated state model, tracked release bytes, and the modules that bind them; it cannot move an executed product statement, so it does not owe a full-suite coverage run.
 
 Admission is decided by **explicit content role, never by the directory name alone**: named prose/dated state, tracked release bytes and exactly the five binding test modules listed below. Admitted content is re-derived by a module this lane itself runs (root identity, the dated state model and package bytes from the lockstep trio; README's Workflow-sources table from `tests/test_workflow_sources.py`; a delivered change package's route record from `tests/test_repo_router.py`), or has no machine binding to lose (per-change workflow records, ADRs, backlogs, reviews, runbooks). Two prose-looking classes are rejected even though they live under a documentation path — `docs/bitrix-local-AGENTS.md`, which `scripts/install_into.py` installs verbatim as `local/AGENTS.md` into every consumer Bitrix install (agent-executed instructions shipped as product), and any `<anything>/evidence/historical-*` bundle, whose bytes `tests/test_history.py` pins to a literal sha256 (declared-immutable evidence). There is accordingly no `docs/` prefix: admitted documentation is a named file set plus `docs/superpowers/plans/`, `docs/superpowers/specs/` and the `engineering/` prose directories, and a new prose file is not admitted until it is declared.
 
 The focused profile `docs-state-focused` still runs the spec, architecture, governance, workflow-artifact, secret, contract, SQL, Ruff, Bandit, pilot and factory-unit checks, plus five admitted modules: the lockstep trio `tests/test_structure.py`, `tests/test_project_state.py`, `tests/test_manifest_package.py` and the two binding tests whose subject is admitted content, `tests/test_workflow_sources.py` (README's Workflow-sources table) and `tests/test_repo_router.py` (a delivered change package's route record). It skips three checks and says so: the full-discovery runner it replaced (`python-unittest` here, `pytest` in a consumer install whose runner is pytest), `coverage`, and `factory-postgres-exit`. Measured on this checkout: the serial `coverage run -m unittest discover -s tests` path costs 629 s, the five admitted modules about 14 s.
 
-Selection is closed and fail-closed. Any path outside the explicit allowlist — every `.grok-stack/`, `scripts/`, `trust-ci/`, `factory/`, `pilot/`, `architecture/`, `schemas/`, `governance/`, `engineering/contracts/`, hook, `Makefile`, config and dotfile path, every `tests/` module outside the five, and any unnormalized path — keeps the full PR suite, as do an empty or invalid inventory, a deleted/renamed/copied/unmerged Git status, a status channel not positively reported as trusted, an unresolvable comparison base, an absent route, and an absent admitted module. The classifier's own modules sit outside its allowlist, so a change to the shortcut can never be verified by the shortcut.
+Selection is closed and fail-closed. Any path outside the explicit allowlist — every `.getzilla/`, `scripts/`, `trust-ci/`, `factory/`, `pilot/`, `architecture/`, `schemas/`, `governance/`, `engineering/contracts/`, hook, `Makefile`, config and dotfile path, every `tests/` module outside the five, and any unnormalized path — keeps the full PR suite, as do an empty or invalid inventory, a deleted/renamed/copied/unmerged Git status, a status channel not positively reported as trusted, an unresolvable comparison base, an absent route, and an absent admitted module. The classifier's own modules sit outside its allowlist, so a change to the shortcut can never be verified by the shortcut.
 
-The profile, its reason code, the exact admitted paths and each skipped check are reported by the `docs-state-scope` check and stored as `docs_state_scope` in the receipt with `evidence_kind` `verification:docs-state-focused` or `verification:full-pr-suite`. `python3 scripts/grok_verify.py --mode pr --full-scope` (or `GROK_VERIFY_FORCE_FULL=1`) forces the full suite regardless of classification. Exact-tree fingerprint binding, independent reviews and the App-owned external Trust CI check are unchanged by scope selection; the implementation is `.grok-stack/adaptive_grok/verification_scope.py`.
+The profile, its reason code, the exact admitted paths and each skipped check are reported by the `docs-state-scope` check and stored as `docs_state_scope` in the receipt with `evidence_kind` `verification:docs-state-focused` or `verification:full-pr-suite`. `python3 scripts/getzilla_verify.py --mode pr --full-scope` (or `GETZILLA_VERIFY_FORCE_FULL=1`) forces the full suite regardless of classification. Exact-tree fingerprint binding, independent reviews and the App-owned external Trust CI check are unchanged by scope selection; the implementation is `.getzilla/getzilla/verification_scope.py`.
 
 ## Delivery history
 
@@ -255,7 +262,7 @@ The profile, its reason code, the exact admitted paths and each skipped check ar
 9. [`trust-ci/README.md`](trust-ci/README.md)
 10. [`factory/README.md`](factory/README.md)
 11. [delivered design-partner pilot package](engineering/changes/20260905-feature-implement-a-single-operator-codex-github-0ce2d6/brief.md)
-12. `.grok-stack/runtime/active-route.json` if present (machine-local route; it may be absent in a clean clone and is not merge authority)
+12. `.getzilla/runtime/active-route.json` if present (machine-local route; it may be absent in a clean clone and is not merge authority)
 13. This README’s [map](#map) and [executable architecture](#executable-architecture)
 
 ## How work runs
@@ -278,12 +285,12 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [`.grok/skills/`](.grok/skills/)
 - [`.grok/agents/`](.grok/agents/)
 - [`.grok/hooks/`](.grok/hooks/)
-- [Hook compatibility template](.grok-stack/templates/hook_root_shim.py) — the installer generates nine root aliases in consumer projects; canonical source hooks live in `.grok/hooks/`.
-- [`scripts/grok_route.py`](scripts/grok_route.py)
-- [`scripts/grok_change.py`](scripts/grok_change.py)
-- [`scripts/grok_agent.py`](scripts/grok_agent.py) — local heartbeat, progress, bounded watchdog and acknowledged same-task recovery; [operator runbook](engineering/runbooks/local-agent-watchdog.md)
-- [`scripts/grok_spec.py`](scripts/grok_spec.py)
-- [`scripts/grok_artifacts.py`](scripts/grok_artifacts.py)
+- [Hook compatibility template](.getzilla/templates/hook_root_shim.py) — the installer generates nine root aliases in consumer projects; canonical source hooks live in `.grok/hooks/`.
+- [`scripts/getzilla_route.py`](scripts/getzilla_route.py)
+- [`scripts/getzilla_change.py`](scripts/getzilla_change.py)
+- [`scripts/getzilla_agent.py`](scripts/getzilla_agent.py) — local heartbeat, progress, bounded watchdog and acknowledged same-task recovery; [operator runbook](engineering/runbooks/local-agent-watchdog.md)
+- [`scripts/getzilla_spec.py`](scripts/getzilla_spec.py)
+- [`scripts/getzilla_artifacts.py`](scripts/getzilla_artifacts.py)
 - [`schemas/change-spec.schema.json`](schemas/change-spec.schema.json)
 - [workflow source schema](schemas/workflow-source-v1.schema.json)
 - [workflow task graph schema](schemas/workflow-task-graph-v1.schema.json)
@@ -293,7 +300,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [architecture adoption marker](architecture/adoption.json)
 - [architecture system schema](schemas/architecture-system.schema.json)
 - [architecture rules schema](schemas/architecture-rules.schema.json)
-- [architecture CLI](scripts/grok_architecture.py)
+- [architecture CLI](scripts/getzilla_architecture.py)
 - [generated architecture views](architecture/generated/context.mmd)
 - [governance rules](governance/rules/index.json)
 - [governance debt](governance/debt/index.json)
@@ -302,14 +309,14 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [debt schema](schemas/debt-entry.schema.json)
 - [canonical-example schema](schemas/canonical-example.schema.json)
 - [governance handoff schema](schemas/governance-handoff-v1.schema.json)
-- [governance CLI](scripts/grok_governance.py)
-- [`scripts/grok_verify.py`](scripts/grok_verify.py)
-- [`scripts/grok_review.py`](scripts/grok_review.py)
-- [`scripts/grok_approve.py`](scripts/grok_approve.py) — exact action/resource delegated local grant only
-- [`scripts/grok_deploy.py`](scripts/grok_deploy.py)
-- [`scripts/grok_doctor.py`](scripts/grok_doctor.py)
-- [`scripts/grok_demo.py`](scripts/grok_demo.py)
-- [local demo assets and fixtures](.grok-stack/demo/index.html)
+- [governance CLI](scripts/getzilla_governance.py)
+- [`scripts/getzilla_verify.py`](scripts/getzilla_verify.py)
+- [`scripts/getzilla_review.py`](scripts/getzilla_review.py)
+- [`scripts/getzilla_approve.py`](scripts/getzilla_approve.py) — exact action/resource delegated local grant only
+- [`scripts/getzilla_deploy.py`](scripts/getzilla_deploy.py)
+- [`scripts/getzilla_doctor.py`](scripts/getzilla_doctor.py)
+- [`scripts/getzilla_demo.py`](scripts/getzilla_demo.py)
+- [local demo assets and fixtures](.getzilla/demo/index.html)
 - [local demo OpenAPI v1 contract](engineering/contracts/openapi/adaptive-demo.v1.json)
 - [investor demo guide](docs/INVESTOR_DEMO.md)
 - [`scripts/install_into.py`](scripts/install_into.py)
@@ -337,7 +344,7 @@ The first run above is intentionally small. These subsystems exist for teams tha
 - Governance checks for candidate-owned inputs, reviewed lifecycle, exact evidence digests, canonical examples and intentional-debt records.
 - Advisory Spec Kit, BMAD and Superpowers imports. These are parsed as workflow artifacts; they never become route, approval, receipt, governance or merge authority.
 - Default-off factory, delivery and pilot boundaries under `factory/`, `delivery/` and `pilot/`.
-- Local verification and review receipts via `scripts/grok_*.py`.
+- Local verification and review receipts via `scripts/getzilla_*.py`.
 - Offline [historical evidence accounting](engineering/runbooks/historical-autonomy-evidence.md).
 - Optional independently deployed Trust CI with GitHub App-owned policy checks, external holdout validation and signed exact-SHA attestations.
 
@@ -353,21 +360,21 @@ Declared repository paths are exclusive ownership boundaries. A more-specific ne
 - [data flow](architecture/generated/data-flow.mmd)
 - [trust boundary](architecture/generated/trust-boundary.mmd)
 
-The [architecture CLI](scripts/grok_architecture.py) is dependency-free and bounded. `validate`, `summary`, and `drift` inspect the current target-owned model. `diagram` renders all five literal artifacts to stdout without mutating the repository; `diagram --check` performs a no-follow comparison against the checked-in projections. `diff` and `fitness` require an explicit base plus an exact 40-character head SHA or `--worktree`; exact inputs are read from Git objects and do not consult mutable route state. Worktree evidence is diagnostic and never claims an exact head SHA.
+The [architecture CLI](scripts/getzilla_architecture.py) is dependency-free and bounded. `validate`, `summary`, and `drift` inspect the current target-owned model. `diagram` renders all five literal artifacts to stdout without mutating the repository; `diagram --check` performs a no-follow comparison against the checked-in projections. `diff` and `fitness` require an explicit base plus an exact 40-character head SHA or `--worktree`; exact inputs are read from Git objects and do not consult mutable route state. Worktree evidence is diagnostic and never claims an exact head SHA.
 
 Architecture change growth is governed by six finite overlapping error rules. The original M2 rule remains unchanged over its exact six non-factory prefixes (`1,000,000` bytes / `10,820` lines / `5,000` AST); separate rules bound the seven-prefix aggregate and the `factory`, `factory/src`, `factory/contracts`, and `factory/tests` scopes. Every matching rule is enforced independently with complete path-segment matching, and unknown line metrics fail closed; minification and stacked-route partitioning are not budget substitutes.
 
 ```bash
-python3 scripts/grok_architecture.py validate --json
-python3 scripts/grok_architecture.py summary --json
-python3 scripts/grok_architecture.py drift --json
-python3 scripts/grok_architecture.py diagram --json
-python3 scripts/grok_architecture.py diagram --check --json
-python3 scripts/grok_architecture.py diff --base <40-char-sha> --head <40-char-sha> --json
-python3 scripts/grok_architecture.py fitness --base <40-char-sha> --head <40-char-sha> --pre-risk red --json
+python3 scripts/getzilla_architecture.py validate --json
+python3 scripts/getzilla_architecture.py summary --json
+python3 scripts/getzilla_architecture.py drift --json
+python3 scripts/getzilla_architecture.py diagram --json
+python3 scripts/getzilla_architecture.py diagram --check --json
+python3 scripts/getzilla_architecture.py diff --base <40-char-sha> --head <40-char-sha> --json
+python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40-char-sha> --pre-risk red --json
 ```
 
-Diagram rendering is stdout-only and repository-read-only. To update a checked-in projection, apply the reviewed rendered text through the normal source-edit workflow and then run `diagram --check`; projections are never authority. Malformed, unknown, unsafe, excessive, partially missing, or applicable-but-unsupported adopted architecture fails closed. Installer-delivered examples live under [`.grok-stack/templates/architecture/`](.grok-stack/templates/architecture/system.example.yaml), but every plan and payload excludes the consumer-owned `architecture/system.yaml`, `architecture/rules.yaml`, and `architecture/adoption.json`; follow the manual review-and-adopt sequence in [QUICKSTART.md](QUICKSTART.md).
+Diagram rendering is stdout-only and repository-read-only. To update a checked-in projection, apply the reviewed rendered text through the normal source-edit workflow and then run `diagram --check`; projections are never authority. Malformed, unknown, unsafe, excessive, partially missing, or applicable-but-unsupported adopted architecture fails closed. Installer-delivered examples live under [`.getzilla/templates/architecture/`](.getzilla/templates/architecture/system.example.yaml), but every plan and payload excludes the consumer-owned `architecture/system.yaml`, `architecture/rules.yaml`, and `architecture/adoption.json`; follow the manual review-and-adopt sequence in [QUICKSTART.md](QUICKSTART.md).
 
 The M4 factory is modeled as an isolated local-preflight trust domain with only Unix HTTP and its own PostgreSQL edge. Installer payloads include its source, migrations, OpenAPI contract, locked dependency solution, mandatory disposable verification harness and placeholder-only local configuration, but never credentials, sockets, databases or runtime state. Installation does not run migrations, run verification or activate a service.
 
@@ -380,17 +387,17 @@ The canonical M3 authority is the three target-owned JSON registries under [`gov
 Validation runs after typed-spec and architecture validation. A configured governance failure prevents any local verification or review receipt from being recorded. Successful local receipt cores include `governance_contract_version`, `governance_digest`, and a domain-separated `governance_evidence_digest` bound to current rule/debt/example/schema state, M2 architecture digest, applicable Git commits, and the worktree fingerprint. These local bindings are not the exact committed `GovernanceHandoffV1` and are never merge authority.
 
 ```bash
-python3 scripts/grok_governance.py validate --json
-python3 scripts/grok_governance.py summary --json
-python3 scripts/grok_governance.py check-projections
-python3 scripts/grok_governance.py handoff --base <40-char-sha> --head <40-char-sha> --architecture-evidence <path> --json
+python3 scripts/getzilla_governance.py validate --json
+python3 scripts/getzilla_governance.py summary --json
+python3 scripts/getzilla_governance.py check-projections
+python3 scripts/getzilla_governance.py handoff --base <40-char-sha> --head <40-char-sha> --architecture-evidence <path> --json
 ```
 
 `project` prints proposed non-authoritative `decisions.md` and `mistakes.md` content without writing; `check-projections` compares those views without mutation. Exact handoff publication additionally requires a clean exact Git state, independently rederived M2 evidence, matching base/head SHAs, and zero governance findings.
 
 ## Requirements
 
-Pins are **minimum or newer**. `built` is the version this local stack was verified on. If a tool is missing or older than minimum, `python3 scripts/grok_doctor.py` prints an **install offer** for the fallback (or install a newer version).
+Pins are **minimum or newer**. `built` is the version this local stack was verified on. If a tool is missing or older than minimum, `python3 scripts/getzilla_doctor.py` prints an **install offer** for the fallback (or install a newer version).
 
 | Tool | Minimum | Built | Fallback | Required |
 | --- | --- | --- | --- | --- |
@@ -408,10 +415,10 @@ Pins are **minimum or newer**. `built` is the version this local stack was verif
 | Cosign | 2.0 | — | 2.4 | supply-chain sign/verify (optional) |
 
 ```bash
-python3 scripts/grok_doctor.py --offer-install
+python3 scripts/getzilla_doctor.py --offer-install
 ```
 
-Machine-readable local pins: `.grok-stack/config/toolchain.json` (its `workflow_sources` block pins the advisory workflow-document parsers). Trust CI uses separately built API, worker and runner images pinned by immutable SHA-256 digest in deployment and server policy.
+Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_sources` block pins the advisory workflow-document parsers). Trust CI uses separately built API, worker and runner images pinned by immutable SHA-256 digest in deployment and server policy.
 
 ### Workflow sources (advisory parsers — not installed by this stack)
 
@@ -421,7 +428,7 @@ Machine-readable local pins: `.grok-stack/config/toolchain.json` (its `workflow_
 | BMAD Method | 6.12.0 | bmad-code-org/BMAD-METHOD | 6.12.0 | 2026-09-15 |
 | GitHub Spec Kit | 1.0.7 | github/spec-kit | 1.0.7 | 2026-09-15 |
 
-These rows are dated currency observations for the workflow artifact adapters, not install targets; `tests/test_workflow_sources.py` keeps them bound to `.grok-stack/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the [upstream format amendment](docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md).
+These rows are dated currency observations for the workflow artifact adapters, not install targets; `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the [upstream format amendment](docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md).
 
 ## Install into a project
 
@@ -446,7 +453,7 @@ Materialization builds and verifies one owned sibling stage and publishes it wit
 ```text
 .grok/            → project .grok/          (config, hooks, agents, skills)
 .agents/skills/   → project .agents/skills/
-.grok-stack/      → project .grok-stack/
+.getzilla/      → project .getzilla/
 scripts/          → project scripts/
 AGENTS.md         → project AGENTS.md
 decisions.md      → project decisions.md
@@ -467,7 +474,7 @@ grok            # start TUI
 Invoke the main controller skill:
 
 ```text
-/adaptive-delivery
+/getzilla-delivery
 ```
 
 or just describe a development task — Grok should pick up skills from `.grok/skills/`.
@@ -476,30 +483,30 @@ The independent `trust-ci/` service is deployed once as infrastructure; it is no
 
 ## Scripts
 
-Local loop: measured route → change → bounded committed-HEAD observations → independent selected reviews → persist reports/commit/freeze → one final local PR gate, parallel with App-owned exact-head Trust CI after exact delegated UNVERIFIED branch transport → current receipts/protected PR eligibility. `scripts/grok_deploy.py` is prepare-only and must not bypass protected-branch or exact-SHA requirements.
+Local loop: measured route → change → bounded committed-HEAD observations → independent selected reviews → persist reports/commit/freeze → one final local PR gate, parallel with App-owned exact-head Trust CI after exact delegated UNVERIFIED branch transport → current receipts/protected PR eligibility. `scripts/getzilla_deploy.py` is prepare-only and must not bypass protected-branch or exact-SHA requirements.
 
-Declared route `human_gates` require a separate decision in the active change package. The package stores the initial gate declaration and a digest; a missing or changed declaration in the active route or route snapshot fails closed. Inspect gate status with `python3 scripts/grok_gate.py status`; record only an explicit operator decision with `python3 scripts/grok_gate.py decide <gate> <approved|rejected> --reason "..." --actor "..."` (production decisions also require `--action`; approve the migration plan with `--action migration-plan`; external-write decisions require exact `--action external-write --resource ...`). Decisions are bound to the active route, change, gate and scope digest. They are mutable local workflow evidence, not authenticated human identity, delegated grants, Trust CI signed approvals or merge authority. Production and external-write operations still require their exact delegated grants.
+Declared route `human_gates` require a separate decision in the active change package. The package stores the initial gate declaration and a digest; a missing or changed declaration in the active route or route snapshot fails closed. Inspect gate status with `python3 scripts/getzilla_gate.py status`; record only an explicit operator decision with `python3 scripts/getzilla_gate.py decide <gate> <approved|rejected> --reason "..." --actor "..."` (production decisions also require `--action`; approve the migration plan with `--action migration-plan`; external-write decisions require exact `--action external-write --resource ...`). Decisions are bound to the active route, change, gate and scope digest. They are mutable local workflow evidence, not authenticated human identity, delegated grants, Trust CI signed approvals or merge authority. Production and external-write operations still require their exact delegated grants.
 
 | Script | Role |
 |--------|------|
-| `scripts/grok_route.py` | Classify / show route |
-| `scripts/grok_change.py` | Start durable local change package |
-| `scripts/grok_governance.py` | Validate/summarize target-owned governance, check read-only projections, and emit an exact clean-state handoff |
-| `scripts/grok_status.py` | Local runtime status |
-| `scripts/grok_gate.py` | Inspect or record route-bound local human-gate decisions |
-| `scripts/grok_verify.py` | Local verification preflight (unittest, Ruff, Bandit, measured coverage in `pr`/`release`) |
-| `scripts/grok_review.py` | Record local review receipt |
-| `scripts/grok_approve.py` | Delegated local action/resource grant bound to repository, route, change, exact HEAD and tree fingerprint; not accepted by Trust CI |
-| `scripts/grok_deploy.py` | Prepare-only human last mile |
-| `scripts/grok_doctor.py` | Local health check |
-| `scripts/grok_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
+| `scripts/getzilla_route.py` | Classify / show route |
+| `scripts/getzilla_change.py` | Start durable local change package |
+| `scripts/getzilla_governance.py` | Validate/summarize target-owned governance, check read-only projections, and emit an exact clean-state handoff |
+| `scripts/getzilla_status.py` | Local runtime status |
+| `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
+| `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, measured coverage in `pr`/`release`) |
+| `scripts/getzilla_review.py` | Record local review receipt |
+| `scripts/getzilla_approve.py` | Delegated local action/resource grant bound to repository, route, change, exact HEAD and tree fingerprint; not accepted by Trust CI |
+| `scripts/getzilla_deploy.py` | Prepare-only human last mile |
+| `scripts/getzilla_doctor.py` | Local health check |
+| `scripts/getzilla_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
 | `scripts/install_into.py` | Plan an existing repository read-only or atomically materialize an absent new target |
 | `adaptive-trust-ci` | External API, worker, migration, signed approvals, holdout verification, attestation verification and app-bound branch protection |
 
 ## Local browser demo
 
 ```bash
-python3 scripts/grok_demo.py --open
+python3 scripts/getzilla_demo.py --open
 ```
 
 The command binds only `127.0.0.1`, prints `http://127.0.0.1:8765/`, and needs no frontend build, package installation, database, credential or Git query. The tour computes route and typed-spec previews in memory, reads architecture and governance summaries from this checkout, and shows bundled sample verification evidence. Nothing is written and nothing leaves the host. Press `Ctrl-C` to stop.
@@ -521,7 +528,7 @@ Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts
 python3 scripts/package_stack.py
 ```
 
-Creates `dist/adaptive-grok-build-pro-v<VERSION>.zip` and its checksum sidecar. See the [release package and operator guide](packages/README.md) for published artifacts and packaging requirements.
+Creates `dist/getzilla-v<VERSION>.zip` and its checksum sidecar. See the [release package and operator guide](packages/README.md) for published artifacts and packaging requirements.
 
 ## Bitrix
 

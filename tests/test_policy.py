@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.policy import WRITE_ROLES, evaluate_pre_tool, production_action, write_roles
-from adaptive_grok.router import build_route
-from adaptive_grok.state import (
+from getzilla.policy import WRITE_ROLES, evaluate_pre_tool, production_action, write_roles
+from getzilla.router import build_route
+from getzilla.state import (
     add_approval,
     approvals_path,
     has_valid_approval,
@@ -27,7 +27,7 @@ from tests._support import project_copy
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(
-            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/adaptive-grok-build-pro.git'],
+            ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
             cwd=root,
             check=True,
         )
@@ -171,7 +171,7 @@ class PolicyTests(unittest.TestCase):
         with project_copy() as root:
             allowed, reason = evaluate_pre_tool(root, {
                 'tool_name': 'Bash',
-                'tool_input': {'command': 'python3 scripts/grok_approve.py production --profile release --reason "ship"'},
+                'tool_input': {'command': 'python3 scripts/getzilla_approve.py production --profile release --reason "ship"'},
             })
             self.assertTrue(allowed, reason)
 
@@ -186,7 +186,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_direct_http_write_requires_resource_bound_external_grant(self) -> None:
         with github_project() as root:
-            command = 'curl -X POST https://api.github.com/repos/Dimkox/adaptive-grok-build-pro/issues -d "{}"'
+            command = 'curl -X POST https://api.github.com/repos/Dimkox/Getzilla/issues -d "{}"'
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertFalse(allowed)
             self.assertIn('api.github.com', reason or '')
@@ -196,7 +196,7 @@ class PolicyTests(unittest.TestCase):
                 'create issue',
                 5,
                 actions=['external-write'],
-                resources=['https://api.github.com/repos/Dimkox/adaptive-grok-build-pro/*'],
+                resources=['https://api.github.com/repos/Dimkox/Getzilla/*'],
             )
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertTrue(allowed, reason)
@@ -217,7 +217,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_protected_path_requires_exact_resource_grant(self) -> None:
         with github_project() as root:
-            target = '.grok-stack/adaptive_grok/policy.py'
+            target = '.getzilla/getzilla/policy.py'
             allowed, _ = evaluate_pre_tool(root, {'tool_name': 'Write', 'tool_input': {'path': target}})
             self.assertFalse(allowed)
             add_approval(
@@ -226,7 +226,7 @@ class PolicyTests(unittest.TestCase):
                 'reviewed policy edit',
                 5,
                 actions=['protected-path-write'],
-                resources=['.grok-stack/adaptive_grok/policy.py'],
+                resources=['.getzilla/getzilla/policy.py'],
             )
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Write', 'tool_input': {'path': target}})
             self.assertTrue(allowed, reason)
@@ -268,9 +268,9 @@ class PolicyTests(unittest.TestCase):
     def test_routing_write_roles_match_constant_and_fallback(self) -> None:
         with project_copy() as root:
             self.assertEqual(write_roles(root), set(WRITE_ROLES))
-            (root / '.grok-stack/config/routing.json').unlink()
+            (root / '.getzilla/config/routing.json').unlink()
             self.assertEqual(write_roles(root), set(WRITE_ROLES))
-            (root / '.grok-stack/config/routing.json').write_text('{', encoding='utf-8')
+            (root / '.getzilla/config/routing.json').write_text('{', encoding='utf-8')
             self.assertEqual(write_roles(root), set(WRITE_ROLES))
 
     def test_blocks_second_different_write_agent(self) -> None:

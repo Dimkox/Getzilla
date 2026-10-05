@@ -1,15 +1,15 @@
 import unittest
 
-from adaptive_factory.contracts import canonical_digest, canonical_json
-from adaptive_factory.semantic_adjudication import adjudicate
-from adaptive_factory.semantic_contracts import (
+from getzilla_factory.contracts import canonical_digest, canonical_json
+from getzilla_factory.semantic_adjudication import adjudicate
+from getzilla_factory.semantic_contracts import (
     SemanticCoverageV1,
     SemanticFindingV1,
     SemanticSubjectV1,
     ValidatorIdentityV1,
 )
-from adaptive_factory import store as store_module
-from adaptive_factory.store import StoreError
+from getzilla_factory import store as store_module
+from getzilla_factory.store import StoreError
 from .test_semantic_contracts import coverage, finding, subject, validator
 from .test_semantic_persistence import FakeConnection, FakeCursor
 

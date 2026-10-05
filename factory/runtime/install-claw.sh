@@ -36,7 +36,7 @@ install -d -m 0755 /opt/adaptive-l5 /opt/adaptive-l5/releases /opt/adaptive-l5/s
 mkdir -m 0755 "$release_root"
 git -c "safe.directory=$control_checkout" -c protocol.file.allow=always clone --no-local --no-hardlinks --no-checkout -- "$control_checkout" "$release_root/repository"
 git -C "$release_root/repository" checkout --detach "$control_sha"
-git -C "$release_root/repository" remote set-url origin https://github.com/Dimkox/adaptive-grok-build-pro.git
+git -C "$release_root/repository" remote set-url origin https://github.com/Dimkox/Getzilla.git
 if [ ! -e "$source_root" ]; then
     git -c "safe.directory=$landing_checkout" -c protocol.file.allow=always clone --no-local --no-hardlinks --no-checkout -- "$landing_checkout" "$source_root"
     git -C "$source_root" checkout --detach "$landing_sha"

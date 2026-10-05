@@ -11,15 +11,15 @@ from typing import Any
 
 HOOK_DIR = Path(__file__).resolve().parent
 REPO_CANDIDATE = HOOK_DIR.parents[1]
-STACK = REPO_CANDIDATE / '.grok-stack'
+STACK = REPO_CANDIDATE / '.getzilla'
 if str(STACK) not in sys.path:
     sys.path.insert(0, str(STACK))
 
-from adaptive_grok._policy_legacy import (
+from getzilla._policy_legacy import (
     _unwrap_execution_wrappers,
     analyze_command_authority,
 )
-from adaptive_grok.util import find_root
+from getzilla.util import find_root
 
 TOOL_ALIASES = {
     'run_terminal_command': 'Bash',
@@ -92,7 +92,7 @@ class RootContext:
 
 def _recognized_root(value: Path) -> Path | None:
     root = find_root(value.resolve())
-    return root.resolve() if (root / '.grok-stack').is_dir() else None
+    return root.resolve() if (root / '.getzilla').is_dir() else None
 
 
 def _literal_xargs_command(words: list[str]) -> list[str] | None:

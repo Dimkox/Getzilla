@@ -1,6 +1,6 @@
 # Landing submission with ordered provider failover
 
-`adaptive-landing-submit` submits landing text or safe DOCX through independent Unix-socket backends and retains one selected artifact. Configure the command once, then use the same logical job ID for submission, status, and recovery. Direct requests to an individual backend socket remain single-provider requests.
+`getzilla-landing-submit` submits landing text or safe DOCX through independent Unix-socket backends and retains one selected artifact. Configure the command once, then use the same logical job ID for submission, status, and recovery. Direct requests to an individual backend socket remain single-provider requests.
 
 ## Provider order and bounds
 
@@ -34,7 +34,7 @@ The config digest is part of every logical request. Preserve the exact old confi
 
 Reuse the immutable-release installer, private-root layout and service template from the [runtime handoff](l5-production-runtime.md). Provision separate `adaptive-l5-openai`, `adaptive-l5-anthropic` and `adaptive-l5-openrouter` units with their own socket/runtime directory, actors file, state, quarantine, scratch, output and publication-state roots. Their host JSON uses the existing closed schema with `selected_profile` set to `openai`, `anthropic` or `openrouter`; keep `live_enabled=false` until the exact operational rollout is authorized. All five hosts and the caller must use the same new compatible release before full-chain qualification.
 
-For each host, pass `--provider-env-file /absolute/private/providers.env` to `adaptive-landing-server`. The private file loader selects only the matching assignment below, permits optional quotes, and never evaluates shell syntax or imports unrelated environment values. File errors fail closed. Disabled hosts do not read credentials.
+For each host, pass `--provider-env-file /absolute/private/providers.env` to `getzilla-landing-server`. The private file loader selects only the matching assignment below, permits optional quotes, and never evaluates shell syntax or imports unrelated environment values. File errors fail closed. Disabled hosts do not read credentials.
 
 | Provider | Selected assignment |
 |---|---|
@@ -53,9 +53,9 @@ Anthropic uses its native Messages adapter and includes cache-read/cache-creatio
 Use the installed release's binary. Example commands run as the already provisioned L5 owner; the input path must be private and readable by that owner:
 
 ```sh
-sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/adaptive-landing-submit --config /etc/adaptive-l5/failover.json submit --job-id landing-20260915-001 --input /var/lib/adaptive-l5-inputs/brief.txt --media-type text/plain
-sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/adaptive-landing-submit --config /etc/adaptive-l5/failover.json status --job-id landing-20260915-001
-sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/adaptive-landing-submit --config /etc/adaptive-l5/failover.json resume --job-id landing-20260915-001
+sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/getzilla-landing-submit --config /etc/adaptive-l5/failover.json submit --job-id landing-20260915-001 --input /var/lib/adaptive-l5-inputs/brief.txt --media-type text/plain
+sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/getzilla-landing-submit --config /etc/adaptive-l5/failover.json status --job-id landing-20260915-001
+sudo runuser -u adaptive-l5 -- /opt/adaptive-l5/releases/EXACT_MERGED_SHA/venv/bin/getzilla-landing-submit --config /etc/adaptive-l5/failover.json resume --job-id landing-20260915-001
 ```
 
 `--media-type` defaults to `text/plain`; for DOCX supply its full MIME type. Job IDs contain 1–128 characters, start with an ASCII letter/digit, and then allow letters, digits, `.`, `_`, `:`, and `-`.
@@ -83,9 +83,9 @@ The journal retains ambiguous input for recovery until expiry. Terminal completi
 
 ## Backend upgrade and rollback
 
-Upgrade every configured dedicated `adaptive-landing-server` before adopting the CLI. It requires authenticated `GET /v2/landing-backend` and `GET /v2/landing-jobs/{job_id}/attempt`; old v1-only hosts do not qualify. Capability, actor, source, and profile bindings are checked before POST, and expected actor/profile headers bind the POST itself. The old closed v1 responses remain available to direct clients.
+Upgrade every configured dedicated `getzilla-landing-server` before adopting the CLI. It requires authenticated `GET /v2/landing-backend` and `GET /v2/landing-jobs/{job_id}/attempt`; old v1-only hosts do not qualify. Capability, actor, source, and profile bindings are checked before POST, and expected actor/profile headers bind the POST itself. The old closed v1 responses remain available to direct clients.
 
-Backend startup validates SQLite v1, adds the observation column transactionally, and upgrades to v2. Historical rows retain null observations and do not become fallback evidence. Stop the service/publication writer and take a consistent `adaptive-landing-state backup --config PATH --snapshot NEW_PRIVATE_PATH` before upgrading; retain its manifest digest. The new backup reader accepts v1 and v2. The caller journal is separate and is not included in that backend snapshot.
+Backend startup validates SQLite v1, adds the observation column transactionally, and upgrades to v2. Historical rows retain null observations and do not become fallback evidence. Stop the service/publication writer and take a consistent `getzilla-landing-state backup --config PATH --snapshot NEW_PRIVATE_PATH` before upgrading; retain its manifest digest. The new backup reader accepts v1 and v2. The caller journal is separate and is not included in that backend snapshot.
 
 For containment, pause new CLI work and preserve the original configs, journal, and child identities. New direct Qwen submissions can use a schema-compatible backend. Old binaries cannot open a v2 backend store: downgrade only through a stopped, default-off, consistent pre-upgrade snapshot restore, preserving later state for reconciliation. Never replay pending provider work to reconstruct a lost store or rewrite retained evidence. See the existing L5 runtime backup/restore runbook for exact same-path restore and artifact limits.
 

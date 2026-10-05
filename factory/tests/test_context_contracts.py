@@ -5,7 +5,7 @@ import importlib.util
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.contracts import ContractError
+from getzilla_factory.contracts import ContractError
 
 
 def context_facts():
@@ -52,8 +52,8 @@ def context_facts():
 
 class ContextContractTests(unittest.TestCase):
     def contract(self):
-        self.assertIsNotNone(importlib.util.find_spec("adaptive_factory.context_contracts"), "context contract missing")
-        return importlib.import_module("adaptive_factory.context_contracts").ContextManifestV1
+        self.assertIsNotNone(importlib.util.find_spec("getzilla_factory.context_contracts"), "context contract missing")
+        return importlib.import_module("getzilla_factory.context_contracts").ContextManifestV1
 
     def test_semantic_identity_is_order_and_timestamp_independent(self):
         cls = self.contract()
@@ -130,7 +130,7 @@ class ContextContractTests(unittest.TestCase):
                 cls.from_dict(facts)
 
     def test_source_content_always_passes_through_safe_text(self):
-        module = importlib.import_module("adaptive_factory.context_contracts")
+        module = importlib.import_module("getzilla_factory.context_contracts")
         facts = context_facts()
         with patch.object(module, "safe_text", wraps=module.safe_text) as guarded:
             module.ContextManifestV1.from_dict(facts)

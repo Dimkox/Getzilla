@@ -9,7 +9,7 @@ from pathlib import Path
 from tests import test_architecture_fitness as fixture
 
 ROOT = Path(__file__).resolve().parents[1]
-PREFIX = "factory/src/adaptive_factory/"
+PREFIX = "factory/src/getzilla_factory/"
 OFFLINE = frozenset(PREFIX + name for name in (
     "landing_artifact.py", "landing_artifact_retention.py", "landing_contracts.py",
     "landing_coordinator.py", "landing_evaluation.py", "landing_intake.py",

@@ -10,11 +10,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_architecture_model import ARCH, DIAGRAMS, ROOT, _rules, _system
-from adaptive_grok.doctor import run_doctor
-from adaptive_grok.state import set_active_route
-from adaptive_grok.verification import verify
-from adaptive_grok import verification as verifier
-from adaptive_grok.python_test_runner import RunCancelled
+from getzilla.doctor import run_doctor
+from getzilla.state import set_active_route
+from getzilla.verification import verify
+from getzilla import verification as verifier
+from getzilla.python_test_runner import RunCancelled
 
 SYSTEM = "architecture/system.yaml"
 RULES = "architecture/rules.yaml"
@@ -245,7 +245,7 @@ class ArchitectureInputTests(unittest.TestCase):
         self.assertEqual(report["architecture"]["receipt_status"], "not_recorded")
         check, = [item for item in report["checks"] if item["name"] == "architecture-inputs"]
         self.assertTrue(any(item.get("code") == "receipt-not-recorded" for item in check["details"]))
-        self.assertFalse((root / ".grok-stack/runtime/receipts/input-refusal/verification.json").exists())
+        self.assertFalse((root / ".getzilla/runtime/receipts/input-refusal/verification.json").exists())
 
     def test_refusal_followed_by_cancellation_never_rebinds_receipt(self) -> None:
         root = self._project()

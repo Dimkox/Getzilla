@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from adaptive_factory.execution_contracts import (
+from getzilla_factory.execution_contracts import (
     ExecutionContractError,
     RunManifestV1,
     TaskPacketV1,

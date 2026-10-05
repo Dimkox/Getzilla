@@ -1,6 +1,6 @@
-# Adaptive Grok runtime state
-.grok-stack/runtime/*
-!.grok-stack/runtime/.gitkeep
+# Getzilla runtime state
+.getzilla/runtime/*
+!.getzilla/runtime/.gitkeep
 
 # Secrets and local environment
 .env
@@ -68,4 +68,4 @@ bitrix/tmp/
 
 # Docker local data
 .docker-data/
-.grok-test-runner.json
+.getzilla-test-runner.json

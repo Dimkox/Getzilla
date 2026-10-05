@@ -18,15 +18,15 @@ from unittest.mock import patch
 
 import httpx
 
-from adaptive_factory import landing_live_executors as live
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_contracts import decode_provider_evidence
-from adaptive_factory.landing_http import HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingNormalizer
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
-from adaptive_factory.settings import SettingsError
-from adaptive_factory.landing_artifact import DEPLOY_MEMBERS
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_live_executors import (
+from getzilla_factory import landing_live_executors as live
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_contracts import decode_provider_evidence
+from getzilla_factory.landing_http import HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingNormalizer
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory.settings import SettingsError
+from getzilla_factory.landing_artifact import DEPLOY_MEMBERS
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_live_executors import (
     CURRENT_LANDING_HOST_REQUIREMENTS,
     CURRENT_PYTHON_SHA256,
     GROK_API_KEY_ENV,
@@ -43,13 +43,13 @@ from adaptive_factory.landing_live_executors import (
     grok_landing_executor,
     qwen_landing_executor,
 )
-from adaptive_factory.landing_provider import LandingProviderError, LandingNormalizationRequest
-from adaptive_factory.landing_http import HTTP_PROFILES
-from adaptive_factory.landing_failover_config import PROVIDER_ORDER
-from adaptive_factory.settings import LANDING_PROVIDERS
-from adaptive_factory.landing_renderer import TARGET_REPOSITORY_ID
-from adaptive_factory.landing_runtime import implemented_live_binding
-from adaptive_factory.models import Actor
+from getzilla_factory.landing_provider import LandingProviderError, LandingNormalizationRequest
+from getzilla_factory.landing_http import HTTP_PROFILES
+from getzilla_factory.landing_failover_config import PROVIDER_ORDER
+from getzilla_factory.settings import LANDING_PROVIDERS
+from getzilla_factory.landing_renderer import TARGET_REPOSITORY_ID
+from getzilla_factory.landing_runtime import implemented_live_binding
+from getzilla_factory.models import Actor
 from factory.tests.test_landing_normalizer import draft, source
 from factory.tests.test_landing_contracts import provider_facts
 from factory.tests.test_landing_renderer import sealed_target
@@ -114,7 +114,7 @@ class LandingLiveExecutorTests(unittest.TestCase):
         self.assertIn("httpx==0.28.1", project["dependencies"])
 
     def test_factory_server_does_not_import_httpx_or_live_executors(self) -> None:
-        source = (FACTORY_ROOT / "src/adaptive_factory/server.py").read_text(encoding="utf-8")
+        source = (FACTORY_ROOT / "src/getzilla_factory/server.py").read_text(encoding="utf-8")
         imported = set()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):
@@ -126,7 +126,7 @@ class LandingLiveExecutorTests(unittest.TestCase):
         self.assertNotIn("landing_live_executors", imported)
 
     def test_landing_runtime_does_not_import_httpx(self) -> None:
-        source = (FACTORY_ROOT / "src/adaptive_factory/landing_runtime.py").read_text(encoding="utf-8")
+        source = (FACTORY_ROOT / "src/getzilla_factory/landing_runtime.py").read_text(encoding="utf-8")
         imported = set()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):
@@ -484,9 +484,9 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
 
     def test_malformed_sections_persist_controlled_reason_and_evidence(self) -> None:
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
+            "getzilla_factory.landing_renderer", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
+            "getzilla_factory.landing_service", TARGET_BASE_SHA=base_sha, TARGET_BASE_TREE=base_tree,
         ):
             for index, sections in enumerate((None, 3, True)):
                 with self.subTest(sections=sections):
@@ -521,11 +521,11 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
     def test_grok_compose_seals_complete_artifact_with_mocked_http(self) -> None:
         payload = b"Build a bounded landing candidate"
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):
@@ -560,11 +560,11 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
     def test_qwen_compose_seals_complete_artifact_with_mocked_http(self) -> None:
         payload = b"Build a bounded landing candidate"
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):
@@ -594,10 +594,10 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
             self.assertEqual(2, retained.to_dict()["schema_version"])
             self.assertEqual(2, retained.provider_evidence.schema_version)
             self.assertEqual("normalized", retained.provider_evidence.disposition)
-            from adaptive_factory.landing_runtime import create_landing_artifact_builder
-            from adaptive_factory.landing_service import LandingApplicationService
-            from adaptive_factory.landing_artifact_retention import RetainedLandingArtifact
-            from adaptive_factory.landing_artifact import LandingArtifactError
+            from getzilla_factory.landing_runtime import create_landing_artifact_builder
+            from getzilla_factory.landing_service import LandingApplicationService
+            from getzilla_factory.landing_artifact_retention import RetainedLandingArtifact
+            from getzilla_factory.landing_artifact import LandingArtifactError
             from factory.tests.test_landing_runtime import BoundProvider, PROFILE_DIGEST
             native = LandingApplicationService(
                 self.store, self.blobs, BoundProvider(), profile_digest=PROFILE_DIGEST,
@@ -628,11 +628,11 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
             legacy = reopened.get("tenant-1", TARGET_REPOSITORY_ID, "legacy-job")
             self.assertEqual(legacy_bytes, canonical_json(legacy.sealed_artifact.to_dict()))
             reopened.close()
-            from adaptive_factory.landing_backup import create_snapshot, restore_snapshot
-            from adaptive_factory.landing_host import LandingHostConfig
-            from adaptive_factory.settings import FactorySettings
-            from adaptive_factory.landing_publication_cli import _bundle
-            from adaptive_delivery.landing_publication_contracts import PublicationTargetV1
+            from getzilla_factory.landing_backup import create_snapshot, restore_snapshot
+            from getzilla_factory.landing_host import LandingHostConfig
+            from getzilla_factory.settings import FactorySettings
+            from getzilla_factory.landing_publication_cli import _bundle
+            from getzilla_delivery.landing_publication_contracts import PublicationTargetV1
             publication = self.root / "publication"
             publication.mkdir(mode=0o700)
             backup_config = LandingHostConfig(FactorySettings(
@@ -696,11 +696,11 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
     def test_compose_env_landing_grok_seals_with_mocked_http(self) -> None:
         payload = b"Build a bounded landing candidate"
         with sealed_target() as (target, base_sha, base_tree), patch.multiple(
-            "adaptive_factory.landing_renderer",
+            "getzilla_factory.landing_renderer",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ), patch.multiple(
-            "adaptive_factory.landing_service",
+            "getzilla_factory.landing_service",
             TARGET_BASE_SHA=base_sha,
             TARGET_BASE_TREE=base_tree,
         ):

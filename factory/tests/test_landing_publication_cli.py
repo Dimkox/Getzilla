@@ -14,15 +14,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_delivery.landing_filesystem import FilesystemLandingPublisher, private_root
-from adaptive_delivery.landing_publication import LandingPublicationCoordinator, PublicationStore
-from adaptive_delivery.landing_publication_contracts import (
+from getzilla_delivery.landing_filesystem import FilesystemLandingPublisher, private_root
+from getzilla_delivery.landing_publication import LandingPublicationCoordinator, PublicationStore
+from getzilla_delivery.landing_publication_contracts import (
     PublicationBundle, PublicationError, PublicationRequestV1, PublicationTargetV1,
 )
-from adaptive_factory import landing_publication_cli
-from scripts import grok_landing_publish
-from adaptive_factory.contracts import canonical_json
-from adaptive_factory.landing_artifact import ExactGitLandingArtifactSource, LandingArtifactPackager
+from getzilla_factory import landing_publication_cli
+from scripts import getzilla_landing_publish
+from getzilla_factory.contracts import canonical_json
+from getzilla_factory.landing_artifact import ExactGitLandingArtifactSource, LandingArtifactPackager
 from factory.tests.test_landing_artifact import candidate_fixture
 
 
@@ -115,7 +115,7 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         self.assertEqual("staged", self.coordinator.apply(saved["request"]["request_digest"], lambda request: "a" * 64)["phase"])
         activation = self.prepare("activate", "test-activate")
         digest = activation["request"]["request_digest"]
-        with patch("adaptive_delivery.landing_filesystem.os.replace", side_effect=OSError("pointer interrupted")):
+        with patch("getzilla_delivery.landing_filesystem.os.replace", side_effect=OSError("pointer interrupted")):
             result = self.coordinator.apply(digest, lambda request: "b" * 64)
         self.assertEqual("needs_human", result["phase"])
         self.assertEqual("effect_ambiguous_no_replay", result["reason"])
@@ -182,7 +182,7 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
             self.coordinator.prepare(request_id="stale-restore", action="restore", restore_from=activation_digest)
 
     def test_restore_returns_to_prior_release_and_rejects_stale_lineage(self):
-        from adaptive_factory.landing_contracts import StaticLandingSpecV1
+        from getzilla_factory.landing_contracts import StaticLandingSpecV1
         from factory.tests.test_landing_renderer import landing_spec
 
         def apply(action, request_id):
@@ -225,14 +225,14 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         grant = {
             "schema_version": 2, "authorization": "delegated-local-grant",
-            "repository": "Dimkox/adaptive-grok-build-pro", **config,
+            "repository": "Dimkox/Getzilla", **config,
             "git_head": "c" * 40, "tree_fingerprint": "d" * 64,
             "scope": "external-write", "actions": ["external-write"], "resources": [request.resource],
             "source": "explicit-user-consent", "id": "e" * 16,
             "created_at": (now - timedelta(minutes=1)).isoformat(),
             "expires_at": (now + timedelta(minutes=1)).isoformat(),
         }
-        from adaptive_grok.state import SCOPE_ACTIONS
+        from getzilla.state import SCOPE_ACTIONS
         self.assertEqual(set(grant["actions"]), SCOPE_ACTIONS[grant["scope"]])
         cases = [[{**grant, "expires_at": (now - timedelta(seconds=1)).isoformat()}],
                  [{**grant, "repository": "another/repository"}], [{**grant, "tree_fingerprint": "f" * 64}],
@@ -242,24 +242,24 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
                  [{**grant, "created_at": (now + timedelta(minutes=1)).isoformat()}],
                  [{**grant, "expires_at": (now + timedelta(days=2)).isoformat()}]]
         with ExitStack() as stack:
-            stack.enter_context(patch("adaptive_grok.state.get_active_route", return_value=config))
-            stack.enter_context(patch("adaptive_grok.state.get_active_change", return_value={"change_id": "test-change"}))
-            stack.enter_context(patch("adaptive_grok.util.git_head", return_value="c" * 40))
-            stack.enter_context(patch("adaptive_grok.util.git_output", return_value="https://github.com/Dimkox/adaptive-grok-build-pro.git"))
-            stack.enter_context(patch("adaptive_grok.util.tree_fingerprint", return_value="d" * 64))
-            with patch.object(grok_landing_publish, "read_private_file", return_value=json.dumps([grant]).encode()):
-                self.assertEqual(64, len(grok_landing_publish._authority(config, self.root, request)))
+            stack.enter_context(patch("getzilla.state.get_active_route", return_value=config))
+            stack.enter_context(patch("getzilla.state.get_active_change", return_value={"change_id": "test-change"}))
+            stack.enter_context(patch("getzilla.util.git_head", return_value="c" * 40))
+            stack.enter_context(patch("getzilla.util.git_output", return_value="https://github.com/Dimkox/Getzilla.git"))
+            stack.enter_context(patch("getzilla.util.tree_fingerprint", return_value="d" * 64))
+            with patch.object(getzilla_landing_publish, "read_private_file", return_value=json.dumps([grant]).encode()):
+                self.assertEqual(64, len(getzilla_landing_publish._authority(config, self.root, request)))
             current_grant = {**grant, "grant_binding_digest": grant["tree_fingerprint"]}
             current_grant.pop("tree_fingerprint")
-            with patch.object(grok_landing_publish, "read_private_file", return_value=json.dumps([current_grant]).encode()):
-                self.assertEqual(64, len(grok_landing_publish._authority(config, self.root, request)))
+            with patch.object(getzilla_landing_publish, "read_private_file", return_value=json.dumps([current_grant]).encode()):
+                self.assertEqual(64, len(getzilla_landing_publish._authority(config, self.root, request)))
             for grants in cases:
                 with self.subTest(grants=grants), patch.object(
-                    grok_landing_publish, "read_private_file", return_value=json.dumps(grants).encode(),
+                    getzilla_landing_publish, "read_private_file", return_value=json.dumps(grants).encode(),
                 ):
                     with self.assertRaisesRegex(PublicationError, "publication_exact_grant_unavailable"):
                         self.coordinator.apply(request.request_digest,
-                                               lambda value: grok_landing_publish._authority(config, self.root, value))
+                                               lambda value: getzilla_landing_publish._authority(config, self.root, value))
                 self.assertEqual("prepared", self.store.get(request.request_digest)["phase"])
                 self.assertFalse((self.target_root / "releases").exists())
 
@@ -269,10 +269,10 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
                 {**current_grant, "tree_fingerprint": "d" * 64},
             ):
                 with self.subTest(malformed=malformed), patch.object(
-                    grok_landing_publish, "read_private_file", return_value=json.dumps([malformed]).encode(),
+                    getzilla_landing_publish, "read_private_file", return_value=json.dumps([malformed]).encode(),
                 ):
                     with self.assertRaisesRegex(PublicationError, "publication_exact_grant_unavailable"):
-                        grok_landing_publish._authority(config, self.root, request)
+                        getzilla_landing_publish._authority(config, self.root, request)
 
     def test_direct_apply_requires_injected_authority_before_config_or_state_access(self):
         for authority in (None, "not-a-callback", object()):
@@ -289,26 +289,26 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         request = PublicationRequestV1.from_dict(self.prepare()["request"])
         config = {"route_id": "test-route", "change_id": "test-change"}
         with ExitStack() as stack:
-            stack.enter_context(patch("adaptive_grok.state.get_active_route", return_value=config))
-            stack.enter_context(patch("adaptive_grok.state.get_active_change", return_value=config))
-            stack.enter_context(patch("adaptive_grok.util.git_output", return_value="https://github.com/Dimkox/adaptive-grok-build-pro.git"))
-            stack.enter_context(patch.object(grok_landing_publish, "read_private_file", side_effect=AssertionError("grant read before identity")))
+            stack.enter_context(patch("getzilla.state.get_active_route", return_value=config))
+            stack.enter_context(patch("getzilla.state.get_active_change", return_value=config))
+            stack.enter_context(patch("getzilla.util.git_output", return_value="https://github.com/Dimkox/Getzilla.git"))
+            stack.enter_context(patch.object(getzilla_landing_publish, "read_private_file", side_effect=AssertionError("grant read before identity")))
             for head, fingerprint in ((None, "d" * 64), ("c" * 40, ""), ("invalid", "d" * 64)):
                 with self.subTest(head=head, fingerprint=fingerprint), patch(
-                    "adaptive_grok.util.git_head", return_value=head
-                ), patch("adaptive_grok.util.tree_fingerprint", return_value=fingerprint):
+                    "getzilla.util.git_head", return_value=head
+                ), patch("getzilla.util.tree_fingerprint", return_value=fingerprint):
                     with self.assertRaisesRegex(PublicationError, "publication_control_identity"):
-                        grok_landing_publish._authority(config, self.root, request)
+                        getzilla_landing_publish._authority(config, self.root, request)
 
     def test_authority_rejects_github_suffix_hosts_and_accepts_exact_remote_forms(self):
         request = PublicationRequestV1.from_dict(self.prepare()["request"])
         config = {"route_id": "test-route", "change_id": "test-change"}
         with ExitStack() as stack:
-            stack.enter_context(patch("adaptive_grok.state.get_active_route", return_value=config))
-            stack.enter_context(patch("adaptive_grok.state.get_active_change", return_value=config))
-            stack.enter_context(patch("adaptive_grok.util.git_head", return_value="c" * 40))
-            stack.enter_context(patch("adaptive_grok.util.tree_fingerprint", return_value="d" * 64))
-            stack.enter_context(patch.object(grok_landing_publish, "read_private_file", return_value=b"[]"))
+            stack.enter_context(patch("getzilla.state.get_active_route", return_value=config))
+            stack.enter_context(patch("getzilla.state.get_active_change", return_value=config))
+            stack.enter_context(patch("getzilla.util.git_head", return_value="c" * 40))
+            stack.enter_context(patch("getzilla.util.tree_fingerprint", return_value="d" * 64))
+            stack.enter_context(patch.object(getzilla_landing_publish, "read_private_file", return_value=b"[]"))
             for prefix, expected in (
                 ("https://github.com/", "publication_exact_grant_unavailable"),
                 ("git@github.com:", "publication_exact_grant_unavailable"),
@@ -316,13 +316,13 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
                 ("https://evilgithub.com/", "publication_control_repository"),
                 ("https://github.com@evilgithub.com/", "publication_control_repository"),
             ):
-                with self.subTest(prefix=prefix), patch("adaptive_grok.util.git_output", return_value=prefix + "Dimkox/adaptive-grok-build-pro.git"):
+                with self.subTest(prefix=prefix), patch("getzilla.util.git_output", return_value=prefix + "Dimkox/Getzilla.git"):
                     with self.assertRaisesRegex(PublicationError, expected):
-                        grok_landing_publish._authority(config, self.root, request)
+                        getzilla_landing_publish._authority(config, self.root, request)
 
-            with patch("adaptive_grok.util.git_output", return_value="https://github.com/Dimkox/adaptive-grok-build-pro.git.git"):
+            with patch("getzilla.util.git_output", return_value="https://github.com/Dimkox/Getzilla.git.git"):
                 with self.assertRaisesRegex(PublicationError, "publication_control_repository"):
-                    grok_landing_publish._authority(config, self.root, request)
+                    getzilla_landing_publish._authority(config, self.root, request)
 
     def test_publication_paths_reject_double_slash_alias_before_read_or_open(self):
         alias = Path("/" + str(self.target_root))
@@ -364,10 +364,10 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(landing_publication_cli, "_config", return_value=(config, self.target)), patch.object(
             landing_publication_cli, "_bundle", return_value=self.bundle
-        ), patch("adaptive_delivery.landing_publication.PublicationStore", return_value=self.store), patch.object(
-            grok_landing_publish, "_authority", return_value="a" * 64
+        ), patch("getzilla_delivery.landing_publication.PublicationStore", return_value=self.store), patch.object(
+            getzilla_landing_publish, "_authority", return_value="a" * 64
         ), redirect_stdout(output):
-            self.assertEqual(0, grok_landing_publish.main([
+            self.assertEqual(0, getzilla_landing_publish.main([
                 "apply", "--live", "--config", "synthetic-config", "--request-digest", saved["request"]["request_digest"],
             ]))
         self.assertEqual("staged", json.loads(output.getvalue())["phase"])

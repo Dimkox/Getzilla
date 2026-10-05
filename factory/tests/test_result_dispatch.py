@@ -6,9 +6,9 @@ import socketserver
 import tempfile
 import threading
 import unittest
-from adaptive_factory.contracts import canonical_digest
+from getzilla_factory.contracts import canonical_digest
 
-from adaptive_factory.result_dispatch import (
+from getzilla_factory.result_dispatch import (
     DispatchClaim,
     DispatchOutcome,
     ResultDispatcher,
@@ -384,7 +384,7 @@ class UdsResultHandoffClientTests(unittest.TestCase):
     def test_missing_socket_fails_as_closed_configuration_error(self):
         with self.assertRaisesRegex(ValueError, "socket identity"):
             UdsResultHandoffClient(
-                Path("/run/adaptive-factory/missing-model.sock"),
+                Path("/run/getzilla-factory/missing-model.sock"),
                 "secret-token-value", timeout_seconds=1,
             )
 

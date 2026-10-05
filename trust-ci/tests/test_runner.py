@@ -114,7 +114,7 @@ class RunnerTests(unittest.TestCase):
         self.store = MemoryStore()
         self.signer = Signer.generate()
         request = JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=9,
             base_sha=sha('a'),
             head_sha=sha('b'),
@@ -296,7 +296,7 @@ class RunnerTests(unittest.TestCase):
                 'trust-ci/line\nbreak.txt',
                 'trust-ci/tab\tname.txt',
                 'trust-ci/back\\slash.txt',
-                '.grok-stack/runtime/active-route.json',
+                '.getzilla/runtime/active-route.json',
                 '.grok/prompt\nname.md',
                 '.github/tab\tname.yml',
                 '.coveragerc',
@@ -409,7 +409,7 @@ class RunnerTests(unittest.TestCase):
         catalog = PolicyCatalog.from_dict({
             **common,
             'repository_profiles': [
-                {'repository': 'Dimkox/adaptive-grok-build-pro', 'commands': policy_data()['commands'],
+                {'repository': 'Dimkox/Getzilla', 'commands': policy_data()['commands'],
                  'holdout': {**policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)['holdout'],
                              'host_path': '/host/holdouts/a'}},
                 {'repository': 'Dimkox/ii-tonya-platform',
@@ -419,7 +419,7 @@ class RunnerTests(unittest.TestCase):
             ],
         })
         observations = []
-        for index, repository in enumerate(('Dimkox/adaptive-grok-build-pro', 'Dimkox/ii-tonya-platform')):
+        for index, repository in enumerate(('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform')):
             policy = catalog.resolve_repository(repository)
             request = JobRequest(repository, 20 + index, sha('c'), sha(str(index + 3)), 'feat/catalog', 'main')
             job, _ = self.store.enqueue(request, policy.digest, policy.max_attempts, now=now())
@@ -585,7 +585,7 @@ class RunnerTests(unittest.TestCase):
         github = FakeGitHub()
         runner, executor, _, _ = self.build_runner(
             changed_files=[
-                '.grok-stack/runtime/active-route.json',
+                '.getzilla/runtime/active-route.json',
                 '.grok/prompt\nname.md',
                 '.github/tab\tname.yml',
                 '.coveragerc',
@@ -619,7 +619,7 @@ class RunnerTests(unittest.TestCase):
         self.store.record_approval(payload, sign_approval(payload, human), now=now())
         runner, executor, _, _ = self.build_runner(
             changed_files=[
-                '.grok-stack/runtime/active-route.json',
+                '.getzilla/runtime/active-route.json',
                 '.grok/prompt\nname.md',
                 '.github/tab\tname.yml',
                 '.coveragerc',
@@ -708,7 +708,7 @@ class RunnerTests(unittest.TestCase):
         catalog_data = {
             **common,
             'repository_profiles': [{
-                'repository': 'Dimkox/adaptive-grok-build-pro',
+                'repository': 'Dimkox/Getzilla',
                 'commands': policy_data()['commands'],
                 'holdout': {
                     **policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)['holdout'],
@@ -717,8 +717,8 @@ class RunnerTests(unittest.TestCase):
             }],
         }
         old_catalog = PolicyCatalog.from_dict(catalog_data)
-        old_policy = old_catalog.resolve_repository('Dimkox/adaptive-grok-build-pro')
-        request = JobRequest('Dimkox/adaptive-grok-build-pro', 19, sha('c'), sha('d'), 'feat/catalog', 'main')
+        old_policy = old_catalog.resolve_repository('Dimkox/Getzilla')
+        request = JobRequest('Dimkox/Getzilla', 19, sha('c'), sha('d'), 'feat/catalog', 'main')
         old_job, _ = self.store.enqueue(request, old_policy.digest, old_policy.max_attempts, now=now())
         old_claimed = self.store.claim('catalog-worker-1', old_policy.lease_seconds, now=now())
         assert old_claimed is not None

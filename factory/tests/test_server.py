@@ -12,12 +12,12 @@ from unittest.mock import Mock, patch
 import httpx
 import uvicorn
 
-from adaptive_factory import admin as admin_module
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.migrations import discover_migrations
-from adaptive_factory.models import Actor
-from adaptive_factory.server import ServerError, build_app, load_actors, prepare_unix_socket
-from adaptive_factory.settings import FactorySettings, SettingsError
+from getzilla_factory import admin as admin_module
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.migrations import discover_migrations
+from getzilla_factory.models import Actor
+from getzilla_factory.server import ServerError, build_app, load_actors, prepare_unix_socket
+from getzilla_factory.settings import FactorySettings, SettingsError
 
 # server._runtime_readiness() only accepts a readiness report whose schema_version equals
 # len(discover_migrations()); stubs that claim "ready" must track that or the fail-closed
@@ -43,7 +43,7 @@ class ServerTests(unittest.TestCase):
         return Registry(), ArtifactVerifier(), SnapshotBroker()
 
     def test_semantic_login_provisioners_bind_distinct_capability_roles(self):
-        with patch("adaptive_factory.admin._provision_semantic_login") as provision:
+        with patch("getzilla_factory.admin._provision_semantic_login") as provision:
             admin_module.provision_semantic_validator_login(
                 "postgresql://owner", "validator_login", "bounded-validator-password"
             )
@@ -78,16 +78,16 @@ class ServerTests(unittest.TestCase):
             semantic_coordinator_database_url="postgresql://semantic-coordinator",
         )
         with (
-            patch("adaptive_factory.server.PostgresFactoryStore") as runtime_store,
-            patch("adaptive_factory.server.PostgresArtifactAttestationStore") as attestor,
-            patch("adaptive_factory.server.PostgresSemanticCoordinatorStore") as coordinator,
-            patch("adaptive_factory.server.PostgresSemanticValidatorStore") as validator,
-            patch("adaptive_factory.server.PostgresSemanticAdjudicatorStore") as adjudicator,
-            patch("adaptive_factory.server._runtime_readiness"),
-            patch("adaptive_factory.server.load_actors", return_value={}),
-            patch("adaptive_factory.server.Authenticator"),
+            patch("getzilla_factory.server.PostgresFactoryStore") as runtime_store,
+            patch("getzilla_factory.server.PostgresArtifactAttestationStore") as attestor,
+            patch("getzilla_factory.server.PostgresSemanticCoordinatorStore") as coordinator,
+            patch("getzilla_factory.server.PostgresSemanticValidatorStore") as validator,
+            patch("getzilla_factory.server.PostgresSemanticAdjudicatorStore") as adjudicator,
+            patch("getzilla_factory.server._runtime_readiness"),
+            patch("getzilla_factory.server.load_actors", return_value={}),
+            patch("getzilla_factory.server.Authenticator"),
             patch(
-                "adaptive_factory.server.create_app",
+                "getzilla_factory.server.create_app",
                 side_effect=lambda service, _auth, **_options: service,
             ),
         ):
@@ -112,15 +112,15 @@ class ServerTests(unittest.TestCase):
             semantic_adjudicator_database_url="postgresql://semantic-adjudicator",
         )
         with (
-            patch("adaptive_factory.server.PostgresFactoryStore"),
-            patch("adaptive_factory.server.PostgresSemanticCoordinatorStore") as coordinator,
-            patch("adaptive_factory.server.PostgresSemanticValidatorStore") as validator,
-            patch("adaptive_factory.server.PostgresSemanticAdjudicatorStore") as adjudicator,
-            patch("adaptive_factory.server._runtime_readiness"),
-            patch("adaptive_factory.server.load_actors", return_value={}),
-            patch("adaptive_factory.server.Authenticator"),
+            patch("getzilla_factory.server.PostgresFactoryStore"),
+            patch("getzilla_factory.server.PostgresSemanticCoordinatorStore") as coordinator,
+            patch("getzilla_factory.server.PostgresSemanticValidatorStore") as validator,
+            patch("getzilla_factory.server.PostgresSemanticAdjudicatorStore") as adjudicator,
+            patch("getzilla_factory.server._runtime_readiness"),
+            patch("getzilla_factory.server.load_actors", return_value={}),
+            patch("getzilla_factory.server.Authenticator"),
             patch(
-                "adaptive_factory.server.create_app",
+                "getzilla_factory.server.create_app",
                 side_effect=lambda service, _auth, **_options: service,
             ),
         ):
@@ -176,14 +176,14 @@ class ServerTests(unittest.TestCase):
         artifact_broker.attest_artifact = Mock()
         snapshot_broker.snapshot = Mock()
         with (
-            patch("adaptive_factory.server.PostgresFactoryStore") as runtime_store,
+            patch("getzilla_factory.server.PostgresFactoryStore") as runtime_store,
             patch(
-                "adaptive_factory.server.PostgresArtifactAttestationStore"
+                "getzilla_factory.server.PostgresArtifactAttestationStore"
             ) as attestor_store,
-            patch("adaptive_factory.server.load_actors", return_value={}),
-            patch("adaptive_factory.server.Authenticator"),
+            patch("getzilla_factory.server.load_actors", return_value={}),
+            patch("getzilla_factory.server.Authenticator"),
             patch(
-                "adaptive_factory.server.create_app",
+                "getzilla_factory.server.create_app",
                 side_effect=lambda service, _auth, **_options: service,
             ),
         ):
@@ -291,12 +291,12 @@ class ServerTests(unittest.TestCase):
             ):
                 with (
                     patch(
-                        "adaptive_factory.server.PostgresFactoryStore"
+                        "getzilla_factory.server.PostgresFactoryStore"
                     ) as runtime_store,
                     patch(
-                        "adaptive_factory.server.PostgresArtifactAttestationStore"
+                        "getzilla_factory.server.PostgresArtifactAttestationStore"
                     ) as attestor_store,
-                    patch("adaptive_factory.server.load_actors") as load,
+                    patch("getzilla_factory.server.load_actors") as load,
                 ):
                     runtime_store.return_value.readiness.return_value = (
                         runtime_readiness
@@ -336,7 +336,7 @@ class ServerTests(unittest.TestCase):
                 build_app(settings, **dependencies)
 
     def test_main_accepts_explicit_composition_before_preparing_socket(self):
-        from adaptive_factory import server
+        from getzilla_factory import server
 
         settings = FactorySettings(
             "postgresql://runtime",
@@ -431,10 +431,10 @@ class ServerTests(unittest.TestCase):
             frozenset({"*"}),
         )
         with (
-            patch("adaptive_factory.server.PostgresFactoryStore") as runtime_store,
-            patch("adaptive_factory.server.PostgresArtifactAttestationStore") as attestor,
+            patch("getzilla_factory.server.PostgresFactoryStore") as runtime_store,
+            patch("getzilla_factory.server.PostgresArtifactAttestationStore") as attestor,
             patch(
-                "adaptive_factory.server.load_actors", return_value={token: actor}
+                "getzilla_factory.server.load_actors", return_value={token: actor}
             ),
         ):
             runtime_store.return_value.readiness.return_value = {

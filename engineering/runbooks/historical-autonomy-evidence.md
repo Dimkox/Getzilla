@@ -1,17 +1,17 @@
 # Historical delivery and autonomy evidence accounting
 
-`scripts/grok_history.py` summarizes one explicitly selected local JSON snapshot. It separates PR observations, identified work units, imported task-acceptance claims, measured operator interventions and exact-profile metadata. The implementation is in `.grok-stack/adaptive_grok/history.py`; the consumer installer includes both files.
+`scripts/getzilla_history.py` summarizes one explicitly selected local JSON snapshot. It separates PR observations, identified work units, imported task-acceptance claims, measured operator interventions and exact-profile metadata. The implementation is in `.getzilla/getzilla/history.py`; the consumer installer includes both files.
 
 Run the public synthetic example:
 
 ```bash
-python3 scripts/grok_history.py examples/historical-evidence/synthetic.json
+python3 scripts/getzilla_history.py examples/historical-evidence/synthetic.json
 ```
 
 Keep real snapshots, source artifacts and detailed reports outside a public checkout. Select the snapshot explicitly and redirect stdout only to an operator-chosen private location when retaining a report:
 
 ```bash
-python3 scripts/grok_history.py /private/evidence/snapshot.json > /private/evidence/report.json
+python3 scripts/getzilla_history.py /private/evidence/snapshot.json > /private/evidence/report.json
 ```
 
 The CLI reads that regular file once, prints deterministic JSON, and exits `0` on success. Invalid inputs produce a bounded schema error on stderr and exit `2`. It does not discover repositories, collect history, read credentials, fetch references, invoke subprocesses, write runtime state or authorize effects. Source-reference strings are opaque, untrusted data; their presence is a provenance claim, not verification that an artifact exists or says what the importer claims.

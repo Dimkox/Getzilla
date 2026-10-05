@@ -37,7 +37,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.repo = self.base / "repo"
-        package = self.repo / "factory/src/adaptive_factory"
+        package = self.repo / "factory/src/getzilla_factory"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("__version__='1.2.3'\n")
         (package / "server.py").write_text("raise SystemExit(0)\n")
@@ -54,7 +54,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         lock = self.repo / "factory/uv.lock"
         lock.write_text(
             'version = 1\nrevision = 3\nrequires-python = ">=3.12,<3.13"\n\n'
-            '[[package]]\nname = "adaptive-factory"\nversion = "1.2.3"\n\n'
+            '[[package]]\nname = "getzilla-factory"\nversion = "1.2.3"\n\n'
             '[[package]]\nname = "demo"\nversion = "1.0.0"\n'
             f'wheels = [{{ url = "https://invalid.example/{wheel.name}", '
             f'hash = "sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}", size = {wheel.stat().st_size} }}]\n'
@@ -88,7 +88,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
             archive_sha256=first["archive_sha256"], manifest_sha256=first["manifest_sha256"],
         )
         names = {name for name, _, _ in verified.files}
-        self.assertIn("app/adaptive_factory/server.py", names)
+        self.assertIn("app/getzilla_factory/server.py", names)
         self.assertIn("site-packages/demo/__init__.py", names)
 
     def test_output_stem_with_dotted_version_is_preserved(self):

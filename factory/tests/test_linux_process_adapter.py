@@ -47,7 +47,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.release = self.root / "releases" / ("a" * 64)
         self.runtime_directory = Path(self.temp.name) / "run"
         self.runtime_directory.mkdir(mode=0o700)
-        package = self.release / "app" / "adaptive_factory"
+        package = self.release / "app" / "getzilla_factory"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("")
         (package / "server.py").write_text(
@@ -76,7 +76,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.assertTrue(self.adapter.status(self.release, timeout=2))
         self.assertTrue(self.adapter.health(self.release, timeout=2))
         record = json.loads((self.root / "state/process" / (self.release.name + ".json")).read_text())
-        self.assertEqual(record["argv"], ["/usr/bin/python3.12", "-m", "adaptive_factory.server"])
+        self.assertEqual(record["argv"], ["/usr/bin/python3.12", "-m", "getzilla_factory.server"])
         self.assertEqual(record["release"], self.release.name)
         self.assertNotIn("HOME", record)
         with self.assertRaises(setup.InstallerError) as error:
@@ -113,7 +113,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
                "path=os.environ['FACTORY_SOCKET_PATH']; s=socket.socket(socket.AF_UNIX); "
                "s.bind(path); s.listen(); time.sleep(60)\n")
         )
-        (self.release / "app/adaptive_factory/server.py").write_text(source)
+        (self.release / "app/getzilla_factory/server.py").write_text(source)
         self.adapter.config["environment"]["FACTORY_TEST_CHILD_PID"] = str(pid_file)
         return pid_file
 
@@ -161,7 +161,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
             "path=os.environ['FACTORY_SOCKET_PATH']; s=socket.socket(socket.AF_UNIX); "
             "s.bind(path); s.listen(); time.sleep(60)\n"
         )
-        (self.release / "app/adaptive_factory/server.py").write_text(source)
+        (self.release / "app/getzilla_factory/server.py").write_text(source)
         self.adapter.start(self.release, timeout=3)
         record_path = self.root / "state/process" / (self.release.name + ".json")
         self.adapter.stop(self.release, timeout=1)
@@ -182,7 +182,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
             "path=os.environ['FACTORY_SOCKET_PATH']; s=socket.socket(socket.AF_UNIX); "
             "s.bind(path); s.listen(); time.sleep(.3)\n"
         )
-        (self.release / "app/adaptive_factory/server.py").write_text(source)
+        (self.release / "app/getzilla_factory/server.py").write_text(source)
         self.adapter.start(self.release, timeout=3)
         record_path = self.root / "state/process" / (self.release.name + ".json")
         record = json.loads(record_path.read_text())
@@ -280,9 +280,9 @@ class LinuxProcessAdapterTests(unittest.TestCase):
             " c.close()\n"
         ).encode()
         archive = Path(self.temp.name) / (version + ".zip")
-        name = "app/adaptive_factory/server.py"
+        name = "app/getzilla_factory/server.py"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
-            for path, content in (("app/adaptive_factory/__init__.py", b""), (name, source)):
+            for path, content in (("app/getzilla_factory/__init__.py", b""), (name, source)):
                 info = zipfile.ZipInfo(path)
                 info.create_system = 3
                 info.external_attr = (stat.S_IFREG | 0o644) << 16

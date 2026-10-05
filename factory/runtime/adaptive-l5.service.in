@@ -9,7 +9,7 @@ User=adaptive-l5
 Group=adaptive-l5
 UMask=0077
 WorkingDirectory=@RELEASE_ROOT@/repository
-ExecStart=@RELEASE_ROOT@/venv/bin/adaptive-landing-server --config @RELEASE_ROOT@/landing-host.json
+ExecStart=@RELEASE_ROOT@/venv/bin/getzilla-landing-server --config @RELEASE_ROOT@/landing-host.json
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/adaptive-l5/provider.conf

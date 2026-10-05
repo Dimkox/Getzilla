@@ -1,19 +1,19 @@
 from datetime import datetime, timezone
 import unittest
 
-from adaptive_factory.adapters import AdapterConformance, AdapterRegistry, TrustedExecutionProfile
-from adaptive_factory.contracts import canonical_digest
-from adaptive_factory.execution_contracts import ExecutionContractError, ExecutionSelectionV1, WorkspaceResultV1
-from adaptive_factory.models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
-from adaptive_factory.service import (
+from getzilla_factory.adapters import AdapterConformance, AdapterRegistry, TrustedExecutionProfile
+from getzilla_factory.contracts import canonical_digest
+from getzilla_factory.execution_contracts import ExecutionContractError, ExecutionSelectionV1, WorkspaceResultV1
+from getzilla_factory.models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
+from getzilla_factory.service import (
     AuthorizationError,
     FactoryService,
     SnapshotBrokerIntegrityError,
     SnapshotBrokerUnavailable,
 )
-from adaptive_factory.brokers import ProposalContext
-from adaptive_factory.store import FenceError, StoreError
-from adaptive_factory.workspace import (
+from getzilla_factory.brokers import ProposalContext
+from getzilla_factory.store import FenceError, StoreError
+from getzilla_factory.workspace import (
     ArtifactAttestationUnavailable,
     ArtifactAttestationV1,
     WorkspaceSnapshotRequest,
@@ -88,7 +88,7 @@ class FakeExecutionStore:
         return self.grant
 
     def get_task(self, task_id):
-        from adaptive_factory.models import TaskProjection, TaskStatus
+        from getzilla_factory.models import TaskProjection, TaskStatus
         return TaskProjection(task_id, "owner/repository", TaskStatus.LEASED, 1, "0" * 64, "0" * 64, GRANT.expires_at)
 
     def execution_material(self, grant):
@@ -113,7 +113,7 @@ class FakeExecutionStore:
         self.calls.append(("start", grant, packet, manifest, actor, kwargs))
         if self.start_error is not None:
             raise self.start_error
-        from adaptive_factory.models import ExecutionGrant
+        from getzilla_factory.models import ExecutionGrant
         return ExecutionGrant(grant, packet.packet_digest, manifest.manifest_digest, manifest.workspace_handle, manifest.provider_id, ExecutionStage.PREPARED)
 
     def release(self, grant, outcome, actor, now, **kwargs):

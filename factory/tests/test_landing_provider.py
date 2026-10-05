@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from adaptive_factory.landing_contracts import LandingInputV1
-from adaptive_factory.landing_provider import (
+from getzilla_factory.landing_contracts import LandingInputV1
+from getzilla_factory.landing_provider import (
     FixedCommandLandingProvider,
     LandingNormalizationOutcome,
     LandingNormalizationRequest,
@@ -128,7 +128,7 @@ class LandingProviderTests(unittest.TestCase):
             reads.append(True)
             raise AssertionError("unavailable provider read the blob")
 
-        with patch("adaptive_factory.landing_provider.subprocess.Popen", side_effect=AssertionError("spawned")):
+        with patch("getzilla_factory.landing_provider.subprocess.Popen", side_effect=AssertionError("spawned")):
             outcome = UnavailableLandingProvider(clock=clock()).normalize(request, read_blob)
         self.assertIsNone(outcome.spec)
         self.assertEqual(outcome.evidence.disposition, "provider_unavailable")
@@ -189,7 +189,7 @@ class LandingProviderTests(unittest.TestCase):
     def test_blob_digest_mismatch_fails_without_process(self):
         source = landing_input(b"expected")
         configured = profile()
-        with patch("adaptive_factory.landing_provider.subprocess.Popen", side_effect=AssertionError("spawned")):
+        with patch("getzilla_factory.landing_provider.subprocess.Popen", side_effect=AssertionError("spawned")):
             with self.assertRaisesRegex(LandingProviderError, "blob_digest_mismatch"):
                 FixedCommandLandingProvider(configured, clock=clock()).normalize(
                     LandingNormalizationRequest(source, configured.profile_digest), lambda: b"changed"

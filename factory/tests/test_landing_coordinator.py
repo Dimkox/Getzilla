@@ -4,14 +4,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from adaptive_factory.landing_contracts import LandingEvaluationV1, landing_digest
-from adaptive_factory.landing_coordinator import (
+from getzilla_factory.landing_contracts import LandingEvaluationV1, landing_digest
+from getzilla_factory.landing_coordinator import (
     LANDING_WRITER_ID,
     MAX_LANDING_ATTEMPTS,
     LandingCoordinator,
 )
-from adaptive_factory.landing_evaluation import DeterministicLandingEvaluator
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_evaluation import DeterministicLandingEvaluator
+from getzilla_factory.landing_renderer import (
     DeterministicLandingRenderer,
     ExactGitLandingWorkspace,
 )

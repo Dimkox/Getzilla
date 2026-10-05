@@ -30,7 +30,7 @@ class SigningTests(unittest.TestCase):
         self.payload = ApprovalPayload.new(
             actor="dmitry",
             key_id=self.signer.key_id,
-            repository="Dimkox/adaptive-grok-build-pro",
+            repository="Dimkox/Getzilla",
             pr_number=42,
             base_sha=sha("a"),
             head_sha=sha("b"),
@@ -125,7 +125,7 @@ class SigningTests(unittest.TestCase):
     def test_pre_m1_attestation_signature_and_store_replay_remain_valid(self) -> None:
         legacy = {
             'schema_version': 1, 'attestation_id': 'legacy-attestation', 'job_id': 'job-1',
-            'repository': 'Dimkox/adaptive-grok-build-pro', 'pr_number': 42,
+            'repository': 'Dimkox/Getzilla', 'pr_number': 42,
             'base_sha': sha('a'), 'head_sha': sha('b'), 'policy_digest': digest('c'),
             'status': 'passed', 'command_results': [], 'changed_files': ['docs/x.md'],
             'approved_scopes': [], 'started_at': now().isoformat(), 'completed_at': now().isoformat(),
@@ -159,7 +159,7 @@ class SigningTests(unittest.TestCase):
     def test_attestation_coverage_is_strict_and_bounded(self) -> None:
         legacy = {
             'schema_version': 1, 'attestation_id': 'new-attestation', 'job_id': 'job-1',
-            'repository': 'Dimkox/adaptive-grok-build-pro', 'pr_number': 42,
+            'repository': 'Dimkox/Getzilla', 'pr_number': 42,
             'base_sha': sha('a'), 'head_sha': sha('b'), 'policy_digest': digest('c'),
             'status': 'passed', 'command_results': [], 'changed_files': [], 'approved_scopes': [],
             'started_at': now().isoformat(), 'completed_at': now().isoformat(), 'key_id': self.signer.key_id,
@@ -175,7 +175,7 @@ class SigningTests(unittest.TestCase):
     def test_attestation_coverage_accepts_stable_spec_qualified_ids(self) -> None:
         data = {
             'schema_version': 1, 'attestation_id': 'new-attestation', 'job_id': 'job-1',
-            'repository': 'Dimkox/adaptive-grok-build-pro', 'pr_number': 42,
+            'repository': 'Dimkox/Getzilla', 'pr_number': 42,
             'base_sha': sha('a'), 'head_sha': sha('b'), 'policy_digest': digest('c'),
             'status': 'failed', 'command_results': [], 'changed_files': [], 'approved_scopes': [],
             'started_at': now().isoformat(), 'completed_at': now().isoformat(), 'key_id': self.signer.key_id,
@@ -193,7 +193,7 @@ class SigningTests(unittest.TestCase):
     def test_signed_spec_metadata_detects_digest_and_coverage_tampering(self) -> None:
         data = {
             'schema_version': 1, 'attestation_id': 'new-attestation', 'job_id': 'job-1',
-            'repository': 'Dimkox/adaptive-grok-build-pro', 'pr_number': 42,
+            'repository': 'Dimkox/Getzilla', 'pr_number': 42,
             'base_sha': sha('a'), 'head_sha': sha('b'), 'policy_digest': digest('c'),
             'status': 'passed', 'command_results': [], 'changed_files': [], 'approved_scopes': [],
             'started_at': now().isoformat(), 'completed_at': now().isoformat(), 'key_id': self.signer.key_id,

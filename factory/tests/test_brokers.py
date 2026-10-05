@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_factory.brokers import (
+from getzilla_factory.brokers import (
     ArtifactProposal,
     BrokerError,
     NoteProposal,
@@ -10,7 +10,7 @@ from adaptive_factory.brokers import (
     UsageProposal,
     proposal_idempotency_key,
 )
-from adaptive_factory.protocol import CanonicalEvent
+from getzilla_factory.protocol import CanonicalEvent
 
 
 TASK = "task-001"

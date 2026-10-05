@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANAGED_DIRS = (
     ".grok",
     ".agents",
-    ".grok-stack",
+    ".getzilla",
     "factory/contracts",
     "factory/runtime",
     "factory/src",
@@ -42,20 +42,20 @@ MANAGED_FILES = (
     "factory/tests/test_server.py",
     "factory/tests/test_service.py",
     "factory/tests/test_state.py",
-    "scripts/grok_architecture.py",
-    "scripts/grok_governance.py",
-    "scripts/grok_history.py",
-    "scripts/grok_route.py",
-    "scripts/grok_change.py",
-    "scripts/grok_spec.py",
-    "scripts/grok_artifacts.py",
-    "scripts/grok_verify.py",
-    "scripts/grok_review.py",
-    "scripts/grok_approve.py",
-    "scripts/grok_doctor.py",
-    "scripts/grok_status.py",
-    "scripts/grok_agent.py",
-    "scripts/grok_deploy.py",
+    "scripts/getzilla_architecture.py",
+    "scripts/getzilla_governance.py",
+    "scripts/getzilla_history.py",
+    "scripts/getzilla_route.py",
+    "scripts/getzilla_change.py",
+    "scripts/getzilla_spec.py",
+    "scripts/getzilla_artifacts.py",
+    "scripts/getzilla_verify.py",
+    "scripts/getzilla_review.py",
+    "scripts/getzilla_approve.py",
+    "scripts/getzilla_doctor.py",
+    "scripts/getzilla_status.py",
+    "scripts/getzilla_agent.py",
+    "scripts/getzilla_deploy.py",
     "session_start.py",
     "user_prompt_submit.py",
     "pre_tool_use.py",
@@ -93,8 +93,8 @@ ROOT_HOOK_SHIMS = frozenset(
         "session_end.py",
     }
 )
-ROOT_HOOK_SHIM_TEMPLATE = ".grok-stack/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".grok-stack/runtime/",)
+ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
+SKIP_PREFIXES = (".getzilla/runtime/",)
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -111,8 +111,29 @@ TARGET_OWNED_GOVERNANCE = frozenset(
 )
 # A consumer repository declares its own-overridden managed paths in this record;
 # MANAGED_* answers what the stack owns, kept_local answers what this repo overrode.
-STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+STACK_SYNC_RECORD = ".getzilla/AGBP_SYNC.json"
 MAX_SYNC_RECORD_BYTES = 65536
+# Targets installed before the Getzilla rename carry the stack under these names.
+# The planner reads their sync record and reports their files for retirement; it
+# never deletes them itself.
+LEGACY_STACK_DIR = ".grok-stack"
+LEGACY_STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+# Directories an install made before the rename owns entirely.
+LEGACY_MANAGED_DIRS = (
+    ".grok-stack",
+    "factory/src/adaptive_factory",
+    ".agents/skills/adaptive-delivery",
+    ".grok/skills/adaptive-delivery",
+)
+LEGACY_PATH_RULES = (
+    (re.compile(r"^\.grok-stack/adaptive_grok/"), ".getzilla/getzilla/"),
+    (re.compile(r"^\.grok-stack/"), ".getzilla/"),
+    (re.compile(r"^scripts/grok_([a-z_]+)\.py$"), r"scripts/getzilla_\1.py"),
+    (re.compile(r"^factory/src/adaptive_factory/"), "factory/src/getzilla_factory/"),
+    (re.compile(r"^(\.agents|\.grok)/skills/adaptive-delivery/"), r"\1/skills/getzilla-delivery/"),
+)
+LEGACY_SCRIPT_PATTERN = re.compile(r"^grok_[a-z_]+\.py$")
+MAX_LEGACY_REPORT_ENTRIES = 4096
 EMPTY_DIRECTORIES = (
     "engineering/changes",
     "engineering/adr",
@@ -124,8 +145,8 @@ EMPTY_DIRECTORIES = (
 )
 MANAGED_START = "<!-- ADAPTIVE-GROK-PRO:START -->"
 MANAGED_END = "<!-- ADAPTIVE-GROK-PRO:END -->"
-CONSUMER_AGENTS_TEMPLATE = ".grok-stack/templates/consumer-AGENTS.md.tmpl"
-CONSUMER_FACTORY_README_TEMPLATE = ".grok-stack/templates/consumer-factory-README.md.tmpl"
+CONSUMER_AGENTS_TEMPLATE = ".getzilla/templates/consumer-AGENTS.md.tmpl"
+CONSUMER_FACTORY_README_TEMPLATE = ".getzilla/templates/consumer-factory-README.md.tmpl"
 LEGACY_PLAN_NOTICE = (
     "NOTICE: legacy install mode now emits a read-only plan; "
     "use --materialize-new only for an absent target."
@@ -662,7 +683,7 @@ def _dependency_advice(
         return []
     with _SourceTree(source) as tree:
         content, _mode = tree.read(
-            ".grok-stack/config/toolchain.json",
+            ".getzilla/config/toolchain.json",
             MAX_TOOLCHAIN_BYTES,
         )
     try:
@@ -752,9 +773,27 @@ def _read_target_relative(target: Path, relative: str, *, limit: int) -> bytes |
         binding.close()
 
 
+def legacy_to_current_path(path: str) -> str:
+    """Map a pre-rename managed path (.grok-stack, scripts/grok_*) to its Getzilla path."""
+    for pattern, replacement in LEGACY_PATH_RULES:
+        mapped, count = pattern.subn(replacement, path)
+        if count:
+            return mapped
+    return path
+
+
+def _sync_record(target: Path) -> tuple[bytes | None, bool]:
+    """Raw sync record and whether it came from a pre-rename (legacy) stack."""
+    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    if raw is not None:
+        return raw, False
+    raw = _read_target_relative(target, LEGACY_STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    return raw, raw is not None
+
+
 def _kept_local(target: Path) -> frozenset[str]:
     """Paths the target declares it owns, from its stack sync record (may be absent)."""
-    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    raw, legacy = _sync_record(target)
     if raw is None:
         return frozenset()
     try:
@@ -782,11 +821,15 @@ def _kept_local(target: Path) -> frozenset[str]:
     for path, digest in digests.items():
         if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise UnsafeInstallTarget("stack sync record kept_local_sha256 has invalid digest")
+    if legacy:
+        kept = [legacy_to_current_path(item) for item in kept]
+        if len(set(kept)) != len(kept):
+            raise UnsafeInstallTarget("legacy stack sync record kept_local collides after the Getzilla rename")
     return frozenset(kept)
 
 
 def _kept_local_digests(target: Path) -> dict[str, str]:
-    raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    raw, legacy = _sync_record(target)
     if raw is None:
         return {}
     try:
@@ -794,7 +837,42 @@ def _kept_local_digests(target: Path) -> dict[str, str]:
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise UnsafeInstallTarget("stack sync record is not valid UTF-8 JSON") from exc
     value = record.get("kept_local_sha256", {}) if isinstance(record, dict) else {}
-    return dict(value) if isinstance(value, dict) else {}
+    digests = dict(value) if isinstance(value, dict) else {}
+    if legacy:
+        digests = {legacy_to_current_path(path): digest for path, digest in digests.items()}
+    return digests
+
+
+def _legacy_migration(target: Path) -> list[dict[str, str]]:
+    """Report pre-rename stack files in target; the planner never removes them itself."""
+    absolute = Path(os.path.abspath(target))
+    found: list[str] = []
+    for managed in LEGACY_MANAGED_DIRS:
+        stack = absolute / managed
+        if not stack.is_dir() or stack.is_symlink() or any(
+            (absolute / Path(*Path(managed).parts[:depth])).is_symlink()
+            for depth in range(1, len(Path(managed).parts))
+        ):
+            continue
+        for directory, subdirectories, files in os.walk(stack, followlinks=False):
+            subdirectories[:] = sorted(
+                name for name in subdirectories
+                if not (Path(directory) / name).is_symlink() and name != "__pycache__"
+            )
+            for name in sorted(files):
+                found.append((Path(directory) / name).relative_to(absolute).as_posix())
+                if len(found) > MAX_LEGACY_REPORT_ENTRIES:
+                    raise UnsafeInstallTarget("legacy stack has too many files to report safely")
+    scripts = absolute / "scripts"
+    if scripts.is_dir() and not scripts.is_symlink():
+        for name in sorted(os.listdir(scripts)):
+            if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not (scripts / name).is_symlink():
+                found.append(f"scripts/{name}")
+    return [
+        {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
+         "reason": "pre-Getzilla stack path; remove after the plan is applied"}
+        for path in found
+    ]
 
 
 def _target_state(target: Path) -> str:
@@ -871,6 +949,7 @@ def _make_plan(
         "target_state": state,
         "kept": keep_reports,
         "entries": [entry.manifest() for entry in deliverable],
+        "legacy_migration": _legacy_migration(target) if state == "directory" else [],
         "dependency_advice": _dependency_advice(
             source,
             include_dependencies=include_dependencies,
@@ -1402,7 +1481,7 @@ def install(
     if with_ci:
         raise SystemExit(
             "GitHub Actions is forbidden. Use local `make verify` / "
-            "`python3 scripts/grok_verify.py --mode pr`."
+            "`python3 scripts/getzilla_verify.py --mode pr`."
         )
     if force:
         raise SystemExit(
@@ -1423,7 +1502,7 @@ def install(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Plan a read-only Adaptive Grok installation or atomically materialize "
+            "Plan a read-only Getzilla installation or atomically materialize "
             "a new absent target."
         )
     )

@@ -11,11 +11,11 @@ from delivery.tests.synthetic_fixtures import (
     synthetic_promotion,
 )
 
-from adaptive_delivery import controller as controller_module
-from adaptive_delivery.contracts import DeliveryEvidenceV1
-from adaptive_delivery.controller import DryRunController, EvidenceChainError
-from adaptive_delivery.fake_environment import AdapterBoundaryError, FakeEnvironmentAdapter
-from adaptive_delivery.recovery import choose_recovery
+from getzilla_delivery import controller as controller_module
+from getzilla_delivery.contracts import DeliveryEvidenceV1
+from getzilla_delivery.controller import DryRunController, EvidenceChainError
+from getzilla_delivery.fake_environment import AdapterBoundaryError, FakeEnvironmentAdapter
+from getzilla_delivery.recovery import choose_recovery
 
 
 def _replace_evidence(evidence: DeliveryEvidenceV1, **updates) -> DeliveryEvidenceV1:

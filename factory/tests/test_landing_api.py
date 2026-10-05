@@ -11,22 +11,22 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.landing_contracts import LandingProviderEvidenceV1, SiteArtifactV1
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_provider import (
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.landing_contracts import LandingProviderEvidenceV1, SiteArtifactV1
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_provider import (
     FixedCommandLandingProvider,
     LandingNormalizationOutcome,
     LandingProviderError,
     UnavailableLandingProvider,
     unavailable_landing_profile,
 )
-from adaptive_factory.landing_renderer import TARGET_REPOSITORY_ID
-from adaptive_factory.landing_service import (
+from getzilla_factory.landing_renderer import TARGET_REPOSITORY_ID
+from getzilla_factory.landing_service import (
     InMemoryLandingJobStore,
     LandingApplicationService,
 )
-from adaptive_factory.models import Actor
+from getzilla_factory.models import Actor
 from factory.tests.test_api import FakeService
 from factory.tests.test_landing_provider import clock as provider_clock
 from factory.tests.test_landing_provider import profile as fixture_profile
@@ -182,7 +182,7 @@ class LandingApiTests(unittest.TestCase):
     def test_routes_are_visible_and_default_provider_is_unavailable_without_blob_read(self):
         client = self.client()
         with patch(
-            "adaptive_factory.landing_provider.subprocess.Popen",
+            "getzilla_factory.landing_provider.subprocess.Popen",
             side_effect=AssertionError("default provider started a process"),
         ):
             submitted = client.post(
@@ -427,7 +427,7 @@ class LandingApiTests(unittest.TestCase):
 
         migrations = (
             path
-            for path in Path("factory/src/adaptive_factory/resources").glob(
+            for path in Path("factory/src/getzilla_factory/resources").glob(
                 "[0-9][0-9][0-9]_*.sql"
             )
             if int(path.name[:3]) <= 18

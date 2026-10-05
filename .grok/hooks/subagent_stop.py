@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from _lib import agent_generation, agent_id, agent_type, emit, read_payload, root_from
-from adaptive_grok.state import record_agent_stop
+from getzilla.state import record_agent_stop
 
 
 def main() -> None:

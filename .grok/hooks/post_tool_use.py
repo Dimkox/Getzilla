@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from _lib import agent_generation, agent_id, emit, read_payload, root_from
-from adaptive_grok.agent_lifecycle import observe_tool
-from adaptive_grok.receipts import invalidate_receipts
-from adaptive_grok.state import get_active_route
-from adaptive_grok.util import dump_json, load_json, runtime_dir, tree_fingerprint
+from getzilla.agent_lifecycle import observe_tool
+from getzilla.receipts import invalidate_receipts
+from getzilla.state import get_active_route
+from getzilla.util import dump_json, load_json, runtime_dir, tree_fingerprint
 
 
 def main() -> None:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from _lib import emit, read_payload, root_from
-from adaptive_grok.util import dump_json, now_utc, runtime_dir
+from getzilla.util import dump_json, now_utc, runtime_dir
 
 
 def main() -> None:

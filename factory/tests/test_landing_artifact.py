@@ -13,8 +13,8 @@ import unittest
 from unittest import mock
 import zipfile
 
-from adaptive_factory import landing_artifact
-from adaptive_factory.landing_artifact import (
+from getzilla_factory import landing_artifact
+from getzilla_factory.landing_artifact import (
     CONTROL_REPOSITORY_ID,
     DEPLOY_MEMBERS,
     ExactGitLandingArtifactSource,
@@ -23,10 +23,10 @@ from adaptive_factory.landing_artifact import (
     PROHIBITED_DEPLOY_MEMBERS,
     deploy_members_for_source,
 )
-from adaptive_factory.landing_contracts import strict_json_object
-from adaptive_factory.landing_coordinator import LandingCoordinator
-from adaptive_factory.landing_evaluation import DeterministicLandingEvaluator
-from adaptive_factory.landing_renderer import (
+from getzilla_factory.landing_contracts import strict_json_object
+from getzilla_factory.landing_coordinator import LandingCoordinator
+from getzilla_factory.landing_evaluation import DeterministicLandingEvaluator
+from getzilla_factory.landing_renderer import (
     DeterministicLandingRenderer,
     ExactGitLandingWorkspace,
     TARGET_REPOSITORY_ID,

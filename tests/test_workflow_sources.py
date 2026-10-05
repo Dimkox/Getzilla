@@ -19,9 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 import sys
 
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.workflow_artifacts import SAFE_UNITTEST_TARGET
+from getzilla.workflow_artifacts import SAFE_UNITTEST_TARGET
 
 SEMVER = re.compile(r'^\d+\.\d+\.\d+$')
 DATE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -30,7 +30,7 @@ ADVISORY_ROOTS = ('_bmad/', '_bmad-output/', '.specify/', 'specs/', 'docs/superp
 
 
 def _config() -> dict:
-    toolchain = json.loads((ROOT / '.grok-stack/config/toolchain.json').read_text(encoding='utf-8'))
+    toolchain = json.loads((ROOT / '.getzilla/config/toolchain.json').read_text(encoding='utf-8'))
     block = toolchain.get('workflow_sources')
     assert isinstance(block, dict), 'workflow_sources block is missing from toolchain.json'
     return block
@@ -111,7 +111,7 @@ class WorkflowSourceContractTests(unittest.TestCase):
                 self.assertGreater(suite.countTestCases(), 0, f'{component_id}: {name} is empty')
 
     def test_workflow_source_roles_match_the_closed_adapter_role_maps(self) -> None:
-        from adaptive_grok import workflow_artifacts
+        from getzilla import workflow_artifacts
         for component_id, component in _components().items():
             declared = set(component['roles'])
             accepted = set(workflow_artifacts.ROLE_MAP.get(component_id, {}))

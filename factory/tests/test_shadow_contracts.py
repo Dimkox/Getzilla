@@ -5,8 +5,8 @@ from pathlib import Path
 import unittest
 from urllib.parse import urldefrag
 
-from adaptive_factory.contracts import ContractError, canonical_digest
-from adaptive_factory.shadow_contracts import (
+from getzilla_factory.contracts import ContractError, canonical_digest
+from getzilla_factory.shadow_contracts import (
     MANUAL_HANDOFF_INSTRUCTIONS,
     M4ControlPlaneBridgeV1,
     M5ExecutionBridgeV1,

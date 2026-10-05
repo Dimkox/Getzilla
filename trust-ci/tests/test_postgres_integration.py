@@ -35,7 +35,7 @@ class PostgresIntegrationTests(unittest.TestCase):
 
     def request(self, *, head='b') -> JobRequest:
         return JobRequest(
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=701,
             base_sha=sha('a'),
             head_sha=sha(head),
@@ -138,7 +138,7 @@ class PostgresIntegrationTests(unittest.TestCase):
         payload = ApprovalPayload.new(
             actor='dmitry',
             key_id=signer.key_id,
-            repository='Dimkox/adaptive-grok-build-pro',
+            repository='Dimkox/Getzilla',
             pr_number=701,
             base_sha=sha('a'),
             head_sha=sha('b'),

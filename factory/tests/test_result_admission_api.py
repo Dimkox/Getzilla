@@ -7,15 +7,15 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.contracts import ContractError, canonical_digest
-from adaptive_factory.models import Actor, LeaseGrant, RunRole
-from adaptive_factory.result_contracts import ResultEnvelopeV2
-from adaptive_factory.result_broker import ResultBroker
-from adaptive_factory.service import (
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.contracts import ContractError, canonical_digest
+from getzilla_factory.models import Actor, LeaseGrant, RunRole
+from getzilla_factory.result_contracts import ResultEnvelopeV2
+from getzilla_factory.result_broker import ResultBroker
+from getzilla_factory.service import (
     AuthorizationError, FactoryService,
 )
-from adaptive_factory.store import ResultAdmission
+from getzilla_factory.store import ResultAdmission
 
 
 TASK = "11111111-1111-4111-8111-111111111111"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://adaptive-grok.invalid/factory/task-packet.v1.json",
-  "title": "Adaptive Factory TaskPacketV1",
+  "title": "Getzilla Factory TaskPacketV1",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract_version", "protocol_version", "task_id", "run_id", "owner", "fence", "role", "repository_id", "legacy_intent_digest", "authority", "provider", "capability_policy", "plan", "workspace_handle", "acceptance_ids", "limits"],

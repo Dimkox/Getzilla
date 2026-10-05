@@ -27,7 +27,7 @@ def pull_request_payload(action='opened', *, draft=False, head=None) -> bytes:
     return json.dumps(
         {
             'action': action,
-            'repository': {'full_name': 'Dimkox/adaptive-grok-build-pro'},
+            'repository': {'full_name': 'Dimkox/Getzilla'},
             'pull_request': {
                 'number': 12,
                 'draft': draft,
@@ -93,7 +93,7 @@ class GitHubTests(unittest.TestCase):
         client = GitHubClient(token_provider=provider, transport=transport, api_url='https://example.test')
         started = datetime(2026, 8, 23, tzinfo=timezone.utc)
         check_id = client.ensure_check_run(
-            'Dimkox/adaptive-grok-build-pro',
+            'Dimkox/Getzilla',
             sha('b'),
             name='adaptive-trust-ci/verified@abc123',
             external_id='job-1',
@@ -120,7 +120,7 @@ class GitHubTests(unittest.TestCase):
         )
         client = GitHubClient(token='token', transport=transport, api_url='https://example.test')
         check_id = client.ensure_check_run(
-            'Dimkox/adaptive-grok-build-pro',
+            'Dimkox/Getzilla',
             sha('b'),
             name='adaptive-trust-ci/verified@abc123',
             external_id='job-1',
@@ -138,7 +138,7 @@ class GitHubTests(unittest.TestCase):
         transport = FakeTransport([(200, {'id': 55})])
         client = GitHubClient(token='token', transport=transport, api_url='https://example.test')
         client.complete_check_run(
-            'Dimkox/adaptive-grok-build-pro',
+            'Dimkox/Getzilla',
             55,
             conclusion='success',
             title='passed',
@@ -166,7 +166,7 @@ class GitHubTests(unittest.TestCase):
         )
         with self.assertRaises(GitHubError):
             client.complete_check_run(
-                'Dimkox/adaptive-grok-build-pro',
+                'Dimkox/Getzilla',
                 55,
                 conclusion='failure',
                 title='failed',
@@ -196,7 +196,7 @@ class GitHubTests(unittest.TestCase):
         client = GitHubClient(token='admin-token', transport=transport, api_url='https://example.test')
         check_name = 'adaptive-trust-ci/verified@abc123def456'
         client.configure_branch_protection(
-            'Dimkox/adaptive-grok-build-pro',
+            'Dimkox/Getzilla',
             'release/2.1',
             check_name=check_name,
             app_id=12345,
@@ -211,7 +211,7 @@ class GitHubTests(unittest.TestCase):
         client = GitHubClient(token='admin-token', transport=transport, api_url='https://example.test')
         with self.assertRaisesRegex(GitHubError, 'does not bind'):
             client.configure_branch_protection(
-                'Dimkox/adaptive-grok-build-pro', 'main',
+                'Dimkox/Getzilla', 'main',
                 check_name='adaptive-trust-ci/verified@abc123', app_id=12345,
             )
 

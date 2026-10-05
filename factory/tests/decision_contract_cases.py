@@ -3,10 +3,10 @@ import json
 import unittest
 from pathlib import Path
 
-from adaptive_factory.contracts import ContractError
-from adaptive_factory.decision_contracts import DecisionRecordV1, summarize_cost, summarize_timing
-from adaptive_factory.migrations import discover_migrations
-from adaptive_factory.store import PostgresFactoryStore
+from getzilla_factory.contracts import ContractError
+from getzilla_factory.decision_contracts import DecisionRecordV1, summarize_cost, summarize_timing
+from getzilla_factory.migrations import discover_migrations
+from getzilla_factory.store import PostgresFactoryStore
 from factory.tests.decision_fixtures import decision_facts
 from tests.json_schema_subset import SubsetValidator
 
@@ -304,7 +304,7 @@ class DecisionContractTests(unittest.TestCase):
         versions = {migration.version for migration in discover_migrations()}
         self.assertIn(23, versions)
         self.assertTrue(hasattr(PostgresFactoryStore, "append_decision"))
-        sql = Path("factory/src/adaptive_factory/resources/023_factory_v15_decisions.sql").read_text()
+        sql = Path("factory/src/getzilla_factory/resources/023_factory_v15_decisions.sql").read_text()
         for required in ("SECURITY DEFINER", "factory.persist_phase_decision_v1",
                          "REVOKE INSERT ON factory.decision_records_v1"):
             self.assertIn(required, sql)

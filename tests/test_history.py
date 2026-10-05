@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".grok-stack"))
+sys.path.insert(0, str(ROOT / ".getzilla"))
 
-from adaptive_grok.history import HistoryError, load_history, summarize_history
+from getzilla.history import HistoryError, load_history, summarize_history
 
 
 def snapshot() -> dict:
@@ -471,7 +471,7 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "snapshot.json"
             path.write_text(json.dumps(snapshot()))
-            command = [sys.executable, str(ROOT / "scripts/grok_history.py"), str(path)]
+            command = [sys.executable, str(ROOT / "scripts/getzilla_history.py"), str(path)]
             result = subprocess.run(command, cwd=tmp, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), summarize_history(snapshot()))

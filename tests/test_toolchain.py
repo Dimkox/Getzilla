@@ -7,10 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.doctor import run_doctor
-from adaptive_grok.toolchain import (
+from getzilla.doctor import run_doctor
+from getzilla.toolchain import (
     ToolCheck,
     check_tool,
     install_command,
@@ -46,7 +46,7 @@ class ToolchainTests(unittest.TestCase):
         self.assertFalse(version_meets('3.9.18', '3.10'))
 
     def test_missing_required_tool_fails_with_install_offer(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=False):
+        with patch('getzilla.toolchain.command_exists', return_value=False):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'fail')
         self.assertIn('fallback', result.message.lower())
@@ -56,8 +56,8 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn('python3', offers[0])
 
     def test_old_required_tool_fails_and_offers_fallback(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=True), patch(
-            'adaptive_grok.toolchain.run',
+        with patch('getzilla.toolchain.command_exists', return_value=True), patch(
+            'getzilla.toolchain.run',
             return_value=SimpleNamespace(stdout='Python 3.9.2', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
@@ -67,8 +67,8 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn('3.12', result.offer or '')
 
     def test_built_or_newer_passes(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=True), patch(
-            'adaptive_grok.toolchain.run',
+        with patch('getzilla.toolchain.command_exists', return_value=True), patch(
+            'getzilla.toolchain.run',
             return_value=SimpleNamespace(stdout='Python 3.12.3', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
@@ -76,16 +76,16 @@ class ToolchainTests(unittest.TestCase):
         self.assertIsNone(result.offer)
 
     def test_newer_than_built_passes(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=True), patch(
-            'adaptive_grok.toolchain.run',
+        with patch('getzilla.toolchain.command_exists', return_value=True), patch(
+            'getzilla.toolchain.run',
             return_value=SimpleNamespace(stdout='Python 3.13.1', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'pass')
 
     def test_minimum_but_older_than_built_passes_with_note(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=True), patch(
-            'adaptive_grok.toolchain.run',
+        with patch('getzilla.toolchain.command_exists', return_value=True), patch(
+            'getzilla.toolchain.run',
             return_value=SimpleNamespace(stdout='Python 3.10.12', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
@@ -101,7 +101,7 @@ class ToolchainTests(unittest.TestCase):
             'profile': 'php',
             'fallback': '8.2',
         }
-        with patch('adaptive_grok.toolchain.command_exists', return_value=False):
+        with patch('getzilla.toolchain.command_exists', return_value=False):
             result = check_tool(spec, host='linux')
         self.assertEqual(result.status, 'info')
         self.assertIn('fallback', (result.offer or '').lower())
@@ -124,8 +124,8 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn('python.org', install_command(PYTHON_SPEC, 'unknown-os'))
 
     def test_unparseable_version_is_present_pass(self) -> None:
-        with patch('adaptive_grok.toolchain.command_exists', return_value=True), patch(
-            'adaptive_grok.toolchain.run',
+        with patch('getzilla.toolchain.command_exists', return_value=True), patch(
+            'getzilla.toolchain.run',
             return_value=SimpleNamespace(stdout='no version here', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
@@ -168,7 +168,7 @@ class ToolchainTests(unittest.TestCase):
             install='HTTP://example.com/legacy',
         )
         calls: list[str] = []
-        with patch('adaptive_grok.toolchain.check_toolchain', return_value=[missing, uppercase]):
+        with patch('getzilla.toolchain.check_toolchain', return_value=[missing, uppercase]):
             results = pull_dependencies(
                 ROOT,
                 apply=True,
@@ -190,7 +190,7 @@ class ToolchainTests(unittest.TestCase):
             install='sudo apt-get install -y python3',
         )
         calls: list[str] = []
-        with patch('adaptive_grok.toolchain.check_toolchain', return_value=[missing]):
+        with patch('getzilla.toolchain.check_toolchain', return_value=[missing]):
             results = pull_dependencies(
                 ROOT,
                 apply=True,

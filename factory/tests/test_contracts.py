@@ -2,7 +2,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from adaptive_factory.contracts import ContractError, TaskIntakeV1, canonical_digest
+from getzilla_factory.contracts import ContractError, TaskIntakeV1, canonical_digest
 
 
 NOW = datetime(2026, 8, 31, 20, 0, tzinfo=timezone.utc)

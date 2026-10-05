@@ -16,10 +16,10 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok import manifest as MANIFEST
-from adaptive_grok.manifest import generate_manifest, included_files, verify_manifest
+from getzilla import manifest as MANIFEST
+from getzilla.manifest import generate_manifest, included_files, verify_manifest
 
 SPEC = importlib.util.spec_from_file_location('package_stack', ROOT / 'scripts/package_stack.py')
 PACKAGE = importlib.util.module_from_spec(SPEC)
@@ -100,7 +100,7 @@ def _head_release_sources(root: Path) -> dict[str, tuple[bytes, int]]:
             continue
         if path.name.endswith(('.pem', '.key', '.p12', '.pfx')):
             continue
-        if relative.startswith('.grok-stack/runtime/') and relative != '.grok-stack/runtime/.gitkeep':
+        if relative.startswith('.getzilla/runtime/') and relative != '.getzilla/runtime/.gitkeep':
             continue
         if '20260817-' in relative or path.name.endswith('-pin.env'):
             continue
@@ -162,7 +162,7 @@ class ManifestTests(unittest.TestCase):
         module_name = 'manifest_without_posix_open_flags'
         spec = importlib.util.spec_from_file_location(
             module_name,
-            ROOT / '.grok-stack/adaptive_grok/manifest.py',
+            ROOT / '.getzilla/getzilla/manifest.py',
         )
         module = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
@@ -251,27 +251,27 @@ class ManifestTests(unittest.TestCase):
     def test_runtime_state_is_not_packaged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'project'
-            runtime = root / '.grok-stack/runtime'
+            runtime = root / '.getzilla/runtime'
             runtime.mkdir(parents=True)
             (runtime / '.gitkeep').write_text('', encoding='utf-8')
             (runtime / 'active-route.json').write_text('{}', encoding='utf-8')
             (root / 'README.md').write_text('project', encoding='utf-8')
             manifest = generate_manifest(root).read_text(encoding='utf-8')
-            self.assertIn('.grok-stack/runtime/.gitkeep', manifest)
+            self.assertIn('.getzilla/runtime/.gitkeep', manifest)
             self.assertNotIn('active-route.json', manifest)
 
     def test_architecture_tooling_schemas_and_templates_are_packaged(self) -> None:
         rels = {path.relative_to(ROOT).as_posix() for path in included_files(ROOT)}
         required = {
-            '.grok-stack/adaptive_grok/architecture.py',
-            '.grok-stack/adaptive_grok/architecture_diagrams.py',
-            '.grok-stack/adaptive_grok/architecture_diff.py',
-            '.grok-stack/adaptive_grok/architecture_fitness.py',
-            '.grok-stack/templates/architecture/system.example.yaml',
-            '.grok-stack/templates/architecture/rules.example.yaml',
+            '.getzilla/getzilla/architecture.py',
+            '.getzilla/getzilla/architecture_diagrams.py',
+            '.getzilla/getzilla/architecture_diff.py',
+            '.getzilla/getzilla/architecture_fitness.py',
+            '.getzilla/templates/architecture/system.example.yaml',
+            '.getzilla/templates/architecture/rules.example.yaml',
             'schemas/architecture-system.schema.json',
             'schemas/architecture-rules.schema.json',
-            'scripts/grok_architecture.py',
+            'scripts/getzilla_architecture.py',
         }
         self.assertEqual(required - rels, set())
 
@@ -403,7 +403,7 @@ module.main()
                 self.assertFalse(output.with_suffix('.zip.sha256').exists())
             else:
                 with zipfile.ZipFile(output) as archive:
-                    packaged = archive.read('adaptive-grok-build-pro/README.md')
+                    packaged = archive.read('getzilla/README.md')
                 self.assertEqual(packaged, b'raw-one\n')
                 self.assertNotEqual(packaged, b'replacement-two\n')
 
@@ -444,7 +444,7 @@ module.main()
             self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
             with zipfile.ZipFile(output) as archive:
                 self.assertEqual(
-                    archive.read('adaptive-grok-build-pro/README.md'),
+                    archive.read('getzilla/README.md'),
                     b'tracked\n',
                 )
 
@@ -547,7 +547,7 @@ module.main()
             self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
             with zipfile.ZipFile(output) as archive:
                 self.assertEqual(
-                    archive.read('adaptive-grok-build-pro/README.md'),
+                    archive.read('getzilla/README.md'),
                     b'tracked\n',
                 )
 
@@ -766,10 +766,10 @@ module.main()
                 self.assertEqual(
                     archive.namelist(),
                     [
-                        'adaptive-grok-build-pro/.gitignore',
-                        'adaptive-grok-build-pro/MANIFEST.sha256',
-                        'adaptive-grok-build-pro/README.md',
-                        'adaptive-grok-build-pro/VERSION',
+                        'getzilla/.gitignore',
+                        'getzilla/MANIFEST.sha256',
+                        'getzilla/README.md',
+                        'getzilla/VERSION',
                     ],
                 )
 
@@ -835,7 +835,7 @@ module.main()
             )
             self.assertEqual(first.read_bytes(), second.read_bytes())
             with zipfile.ZipFile(first) as archive:
-                prefix = 'adaptive-grok-build-pro/'
+                prefix = 'getzilla/'
                 self.assertEqual(
                     archive.getinfo(f'{prefix}README.md').external_attr >> 16,
                     0o100644,
@@ -1186,7 +1186,7 @@ module.main()
                 finally:
                     os.umask(previous_umask)
 
-                self.assertEqual(output, root / 'dist/adaptive-grok-build-pro-v9.9.9.zip')
+                self.assertEqual(output, root / 'dist/getzilla-v9.9.9.zip')
                 self.assertEqual(stat.S_IMODE(output.parent.stat().st_mode), 0o700)
                 self.assertTrue(output.is_file())
 
@@ -1322,7 +1322,7 @@ module.main()
             extracted = Path(tmp) / "extracted"
             with zipfile.ZipFile(archive_path) as archive:
                 archive.extractall(extracted)
-            source = extracted / "adaptive-grok-build-pro"
+            source = extracted / "getzilla"
             install_spec = importlib.util.spec_from_file_location(
                 "packaged_install_into", source / "scripts/install_into.py"
             )
@@ -1333,7 +1333,7 @@ module.main()
             target = Path(tmp) / "installed"
             plan = installer.materialize_new(source, target)
             self.assertEqual(plan["target_state"], "absent")
-            self.assertTrue((target / "scripts/grok_verify.py").is_file())
+            self.assertTrue((target / "scripts/getzilla_verify.py").is_file())
             self.assertFalse((target / "architecture/system.yaml").exists())
             self.assertFalse((target / "architecture/rules.yaml").exists())
             self.assertFalse((target / "architecture/adoption.json").exists())
@@ -1341,7 +1341,7 @@ module.main()
     def test_default_output_follows_version_file(self) -> None:
         self.assertEqual(
             PACKAGE._default_output(ROOT),
-            f"dist/adaptive-grok-build-pro-v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()}.zip",
+            f"dist/getzilla-v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()}.zip",
         )
 
     def test_archive_is_deterministic_and_self_verifying(self) -> None:
@@ -1364,9 +1364,9 @@ module.main()
             with zipfile.ZipFile(first) as archive:
                 self.assertIsNone(archive.testzip())
                 names = set(archive.namelist())
-                self.assertIn('adaptive-grok-build-pro/MANIFEST.sha256', names)
-                self.assertIn('adaptive-grok-build-pro/scripts/run.sh', names)
-                mode = archive.getinfo('adaptive-grok-build-pro/scripts/run.sh').external_attr >> 16
+                self.assertIn('getzilla/MANIFEST.sha256', names)
+                self.assertIn('getzilla/scripts/run.sh', names)
+                mode = archive.getinfo('getzilla/scripts/run.sh').external_attr >> 16
                 self.assertTrue(mode & 0o100)
 
     def test_archive_excludes_dotenv_and_keys(self) -> None:
@@ -1381,7 +1381,7 @@ module.main()
             PACKAGE.write_archive(root, archive_path)
             with zipfile.ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
-            self.assertIn('adaptive-grok-build-pro/keep.txt', names)
+            self.assertIn('getzilla/keep.txt', names)
             self.assertFalse(any(name.endswith('.env') or name.endswith('.env.local') or name.endswith('.pem') for name in names))
 
     def test_archive_excludes_err_log(self) -> None:
@@ -1394,7 +1394,7 @@ module.main()
             PACKAGE.write_archive(root, archive_path)
             with zipfile.ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
-            self.assertIn('adaptive-grok-build-pro/keep.txt', names)
+            self.assertIn('getzilla/keep.txt', names)
             self.assertFalse(any(name.endswith('err.log') for name in names))
 
 
@@ -1447,7 +1447,7 @@ module.main()
         artifact = published['artifact']
         self.assertEqual(artifact['binding'], 'immutable_release_tag')
         self.assertEqual(artifact['storage'], 'github_release_asset')
-        expected_relative = f'packages/adaptive-grok-build-pro-v{published_version}.zip'
+        expected_relative = 'packages/adaptive-grok-build-pro-v2.1.1.zip'  # predecessor's published artifact
         self.assertEqual(artifact['path'], expected_relative)
         expected_digest = 'f5116c5e1303232ae883ed7a3aa804b71f0b5654d2c385924653b5ffd2d631c1'
         self.assertEqual(artifact['sha256'], expected_digest)
@@ -1479,7 +1479,7 @@ module.main()
             PACKAGE.write_archive(root, archive_path)
             self.assertEqual(source_manifest.read_bytes(), original)
             with zipfile.ZipFile(archive_path) as archive:
-                member = 'adaptive-grok-build-pro/MANIFEST.sha256'
+                member = 'getzilla/MANIFEST.sha256'
                 self.assertIn(member, archive.namelist())
                 readme_digest = hashlib.sha256(b'hello\n').hexdigest()
                 expected = f'{readme_digest}  README.md\n'.encode('ascii')
@@ -1500,7 +1500,7 @@ module.main()
 
             with zipfile.ZipFile(archive_path) as archive:
                 names = archive.namelist()
-                self.assertNotIn('adaptive-grok-build-pro/innocent.txt', names)
+                self.assertNotIn('getzilla/innocent.txt', names)
                 self.assertNotIn(sentinel, [archive.read(name) for name in names])
 
     def test_archive_fails_closed_when_file_is_replaced_after_manifest_render(self) -> None:
@@ -1651,8 +1651,8 @@ module.main()
             PACKAGE.write_archive(root, archive_path)
             with zipfile.ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
-            self.assertIn('adaptive-grok-build-pro/keep.txt', names)
-            self.assertNotIn('adaptive-grok-build-pro/ignored.zip', names)
+            self.assertIn('getzilla/keep.txt', names)
+            self.assertNotIn('getzilla/ignored.zip', names)
             self.assertFalse(any('__pycache__' in name for name in names))
 
 

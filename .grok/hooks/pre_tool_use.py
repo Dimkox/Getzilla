@@ -12,7 +12,7 @@ from typing import Any
 # Make stack importable even when cwd is project root
 _ROOT_CANDIDATES = [
     Path.cwd(),
-    Path.cwd() / ".grok-stack",
+    Path.cwd() / ".getzilla",
 ]
 for _p in _ROOT_CANDIDATES:
     s = str(_p)
@@ -41,14 +41,14 @@ _OBJECTIVE_CIRCUIT_BREAKER_GUIDANCE = (
 _CONTROL_PLANE_BATCH_GUIDANCE = (
     'Create one exact protected-path grant covering every target, then use Edit/Write/apply_patch. '
     'For an atomic multi-file batch, put the manifest outside the repository '
-    'and run `python3 scripts/grok_protected_write.py --manifest <path>`.'
+    'and run `python3 scripts/getzilla_protected_write.py --manifest <path>`.'
 )
 
 
 def _actionable_reason(reason: str) -> str:
     if 'control-plane shell mutation' not in reason:
         return reason
-    if 'grok_protected_write.py' in reason:
+    if 'getzilla_protected_write.py' in reason:
         return reason
     return f'{reason} {_CONTROL_PLANE_BATCH_GUIDANCE}'
 
@@ -162,8 +162,8 @@ def _record_denial(
     context: RootContext,
     action: str,
 ) -> tuple[int, int]:
-    from adaptive_grok.state import runtime_lock
-    from adaptive_grok.util import dump_json, load_json, runtime_dir
+    from getzilla.state import runtime_lock
+    from getzilla.util import dump_json, load_json, runtime_dir
 
     now = time.time()
     exact_fingerprint, objective_fingerprint = _denial_fingerprints(
@@ -220,7 +220,7 @@ def _record_denial(
 
 def _warn_observer_failure() -> None:
     try:
-        sys.stderr.write('Adaptive Grok: lifecycle observation unavailable; authorization continues.\n')
+        sys.stderr.write('Getzilla: lifecycle observation unavailable; authorization continues.\n')
     except Exception:
         # A broken diagnostics sink cannot bypass mandatory authorization either.
         return
@@ -233,7 +233,7 @@ def main() -> None:
         current_input = tool_input(payload)
         context = root_context(payload, current_input, current_tool)
         try:
-            from adaptive_grok.policy import evaluate_pre_tool, sensitive_action
+            from getzilla.policy import evaluate_pre_tool, sensitive_action
         except Exception:
             # Soft: policy stack not importable → allow everything
             emit({
@@ -255,7 +255,7 @@ def main() -> None:
         root = context.effective_root or context.session_root
         if root is not None:
             try:
-                from adaptive_grok.agent_lifecycle import observe_tool
+                from getzilla.agent_lifecycle import observe_tool
                 observe_tool(root, agent_id(payload), agent_generation(payload))
             except Exception:
                 # Observation is advisory; failure must never skip authorization.
@@ -286,7 +286,7 @@ def main() -> None:
             })
             return
 
-        message = _actionable_reason(reason or 'Blocked by Adaptive Grok policy')
+        message = _actionable_reason(reason or 'Blocked by Getzilla policy')
         try:
             ledger_root = context.ledger_root
             if ledger_root is None:

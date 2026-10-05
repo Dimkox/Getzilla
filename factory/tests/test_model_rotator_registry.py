@@ -11,7 +11,7 @@ import tempfile
 
 import unittest
 
-from adaptive_factory.model_rotator_registry import (
+from getzilla_factory.model_rotator_registry import (
     DEFAULT_MODEL_ROTATOR_REGISTRY,
     ModelRotatorRegistry,
 )
@@ -257,7 +257,7 @@ class GuardedEnvironment(dict):
     def update(self, *args, **kwargs): deny()
 
 os.environ = GuardedEnvironment(os.environ)
-from adaptive_factory.model_rotator_registry import DEFAULT_MODEL_ROTATOR_REGISTRY
+from getzilla_factory.model_rotator_registry import DEFAULT_MODEL_ROTATOR_REGISTRY
 assert DEFAULT_MODEL_ROTATOR_REGISTRY.enabled is False
 """
     )

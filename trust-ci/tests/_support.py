@@ -29,7 +29,7 @@ def policy_data(
 ) -> dict:
     return {
         'schema_version': 1,
-        'allowed_repositories': ['Dimkox/adaptive-grok-build-pro'],
+        'allowed_repositories': ['Dimkox/Getzilla'],
         'status_context': 'adaptive-trust-ci/verified',
         'pipeline': 'pull_request',
         'checkout_depth': 100,
@@ -78,7 +78,7 @@ def policy_data(
                 'scope': 'governance',
                 'globs': [
                     'trust-ci/**',
-                    '.grok-stack/**',
+                    '.getzilla/**',
                     '.grok/**',
                     '.github/**',
                     '.coveragerc',

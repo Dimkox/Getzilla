@@ -12,23 +12,23 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.grok-stack'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from adaptive_grok.change import start_change, transition
-from adaptive_grok.receipts import validate_evidence, write_receipt
-from adaptive_grok.router import build_route
-from adaptive_grok.spec import SpecError, _parse_canonical_json
-from adaptive_grok.state import get_active_change, get_active_route, set_active_change, set_active_route
+from getzilla.change import start_change, transition
+from getzilla.receipts import validate_evidence, write_receipt
+from getzilla.router import build_route
+from getzilla.spec import SpecError, _parse_canonical_json
+from getzilla.state import get_active_change, get_active_route, set_active_change, set_active_route
 from tests._support import project_copy, run_hook
 
 
 class PackageStatusTests(unittest.TestCase):
     def module(self):
         self.assertIsNotNone(
-            importlib.util.find_spec('adaptive_grok.package_status'),
+            importlib.util.find_spec('getzilla.package_status'),
             'bounded package diagnostics are missing',
         )
-        return importlib.import_module('adaptive_grok.package_status')
+        return importlib.import_module('getzilla.package_status')
 
     def prepare_route(self, root: Path):
         (root / 'schemas').mkdir(exist_ok=True)
@@ -80,7 +80,7 @@ class PackageStatusTests(unittest.TestCase):
     @staticmethod
     def install_cli(root: Path):
         (root / 'scripts').mkdir(exist_ok=True)
-        for name in ('grok_status.py', 'grok_review.py', 'grok_change.py'):
+        for name in ('getzilla_status.py', 'getzilla_review.py', 'getzilla_change.py'):
             shutil.copy2(ROOT / 'scripts' / name, root / 'scripts' / name)
         (root / 'schemas').mkdir(exist_ok=True)
         shutil.copy2(ROOT / 'schemas/change-spec.schema.json', root / 'schemas/change-spec.schema.json')
@@ -96,7 +96,7 @@ class PackageStatusTests(unittest.TestCase):
             )
         return result
 
-    def cli(self, root: Path, script='grok_status.py', *args):
+    def cli(self, root: Path, script='getzilla_status.py', *args):
         env = os.environ.copy()
         env.pop('PYTHONDONTWRITEBYTECODE', None)
         return subprocess.run(
@@ -107,7 +107,7 @@ class PackageStatusTests(unittest.TestCase):
     def test_fresh_status_never_creates_runtime_bytecode_or_changes_index(self):
         with project_copy(git=True) as root:
             self.install_cli(root)
-            shutil.rmtree(root / '.grok-stack/runtime')
+            shutil.rmtree(root / '.getzilla/runtime')
             before = self.inventory(root)
             for _ in range(2):
                 proc = self.cli(root)
@@ -369,7 +369,7 @@ class PackageStatusTests(unittest.TestCase):
             _, _, state, package = self.prepare(root)
             for target in ('scoped', 'approved'):
                 transition(root, state['change_id'], target, 'scope ready')
-            change = importlib.import_module('adaptive_grok.change')
+            change = importlib.import_module('getzilla.change')
             self.assertTrue(hasattr(change, 'atomic_write_text'), 'checkpoint mirror writer is missing')
             with patch.object(change, 'atomic_write_text', side_effect=OSError('mirror unavailable')):
                 with self.assertRaisesRegex(OSError, 'mirror unavailable'):
@@ -417,7 +417,7 @@ class PackageStatusTests(unittest.TestCase):
             )
             for name in names:
                 self.byte_file(root, name)
-            started = self.cli(root, 'grok_change.py', 'start')
+            started = self.cli(root, 'getzilla_change.py', 'start')
             self.assertEqual(started.returncode, 0, started.stderr)
             state = json.loads(started.stdout)
             active = get_active_change(root)
@@ -459,7 +459,7 @@ class PackageStatusTests(unittest.TestCase):
             approved_history = state['history']
             for name in (b'wip-\xff.py', b'wip-\xfe.py', br'wip-\xff.py', 'wip-\ufffd.py'.encode('utf-8')):
                 self.byte_file(root, name)
-            moved = self.cli(root, 'grok_change.py', 'transition', state['change_id'], 'implementing', '--reason', 'begin work')
+            moved = self.cli(root, 'getzilla_change.py', 'transition', state['change_id'], 'implementing', '--reason', 'begin work')
             self.assertEqual(moved.returncode, 0, moved.stderr)
             state = json.loads(moved.stdout)
             self.assertEqual(self.canonical_checkpoint_state(package), state)
@@ -474,7 +474,7 @@ class PackageStatusTests(unittest.TestCase):
                 state = transition(root, state['change_id'], target, 'resume')
             self.assertEqual(state['checkpoints'], [initial, implementation])
             self.assertEqual(self.canonical_checkpoint_state(package), state)
-            repeated = self.cli(root, 'grok_change.py', 'start')
+            repeated = self.cli(root, 'getzilla_change.py', 'start')
             self.assertEqual(repeated.returncode, 0, repeated.stderr)
             self.assertEqual(json.loads(repeated.stdout), state)
             status = self.cli(root)
@@ -498,7 +498,7 @@ class PackageStatusTests(unittest.TestCase):
             for number in range(100):
                 descriptor = os.open(directory + b'/raw-\xff-' + str(number).encode('ascii'), os.O_CREAT | os.O_WRONLY, 0o600)
                 os.close(descriptor)
-            started = self.cli(root, 'grok_change.py', 'start')
+            started = self.cli(root, 'getzilla_change.py', 'start')
             self.assertEqual(started.returncode, 0, started.stderr)
             state = json.loads(started.stdout)
             package = root / get_active_change(root)['path']
@@ -665,16 +665,16 @@ class PackageStatusTests(unittest.TestCase):
             report = package / 'evidence/review.md'
             report.write_text('Concrete review findings.\n', encoding='utf-8')
             args = ('code_review', '--report', report.relative_to(root).as_posix())
-            passed = self.cli(root, 'grok_review.py', *args, '--status', 'pass')
+            passed = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
             self.assertEqual(passed.returncode, 0, passed.stderr)
-            receipt = root / '.grok-stack/runtime/receipts' / route['route_id'] / 'code_review.json'
+            receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'
             before = receipt.read_bytes()
             (package / 'requirements.md').write_text('- [ ] Given ..., when ..., then ...\n', encoding='utf-8')
-            refused = self.cli(root, 'grok_review.py', *args, '--status', 'pass')
+            refused = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn('template_unexpanded', refused.stderr)
             self.assertEqual(receipt.read_bytes(), before)
-            failed = self.cli(root, 'grok_review.py', *args, '--status', 'fail')
+            failed = self.cli(root, 'getzilla_review.py', *args, '--status', 'fail')
             self.assertEqual(failed.returncode, 0, failed.stderr)
             self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
 

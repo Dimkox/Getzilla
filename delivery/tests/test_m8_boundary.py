@@ -10,9 +10,9 @@ from delivery.tests.synthetic_fixtures import (
     synthetic_promotion,
 )
 
-from adaptive_delivery.contracts import ContractError
-from adaptive_delivery.evaluator import evaluate_delivery
-from adaptive_delivery.m8_boundary import (
+from getzilla_delivery.contracts import ContractError
+from getzilla_delivery.evaluator import evaluate_delivery
+from getzilla_delivery.m8_boundary import (
     M8AutonomyProfileV1,
     M8AutonomyTupleV1,
     M8BoundaryError,
@@ -20,7 +20,7 @@ from adaptive_delivery.m8_boundary import (
     M8DeliveryHandoffV1,
     M8PromotionRecommendationV1,
 )
-from adaptive_factory.autonomy import (
+from getzilla_factory.autonomy import (
     AutonomyProfileV1,
     AutonomyTupleV1,
     CohortEvidenceV1,

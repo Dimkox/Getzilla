@@ -12,20 +12,20 @@ import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
-from adaptive_factory.landing_observation import FALLBACK_CATEGORIES, LandingProviderObservation
-from adaptive_factory.landing_contracts import LandingInputV1, LandingProviderEvidenceV2
-from adaptive_factory.landing_failover_contracts import validate_receipt
-from adaptive_factory.landing_service import LandingJobRecord
-from adaptive_factory.landing_sqlite_store import SQLiteLandingJobStore
+from getzilla_factory.landing_observation import FALLBACK_CATEGORIES, LandingProviderObservation
+from getzilla_factory.landing_contracts import LandingInputV1, LandingProviderEvidenceV2
+from getzilla_factory.landing_failover_contracts import validate_receipt
+from getzilla_factory.landing_service import LandingJobRecord
+from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
 from factory.tests.test_landing_contracts import provider_facts
 from factory.tests.test_landing_sqlite_store import source
-from adaptive_factory.api import Authenticator, create_app
-from adaptive_factory.landing_http import HttpLandingProfile, HttpLandingNormalizer, HttpLandingExecutionResult
-from adaptive_factory.landing_provider import HttpProviderFailure
-from adaptive_factory.landing_intake import PrivateLandingBlobStore
-from adaptive_factory.landing_service import InMemoryLandingJobStore, LandingApplicationService
-from adaptive_factory.models import Actor
-from adaptive_factory.landing_renderer import TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE
+from getzilla_factory.api import Authenticator, create_app
+from getzilla_factory.landing_http import HttpLandingProfile, HttpLandingNormalizer, HttpLandingExecutionResult
+from getzilla_factory.landing_provider import HttpProviderFailure
+from getzilla_factory.landing_intake import PrivateLandingBlobStore
+from getzilla_factory.landing_service import InMemoryLandingJobStore, LandingApplicationService
+from getzilla_factory.models import Actor
+from getzilla_factory.landing_renderer import TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE
 from factory.tests.test_landing_normalizer import draft
 
 
@@ -92,7 +92,7 @@ class BackendObservationTests(unittest.TestCase):
             self.assertEqual("authentication", retained.observation.category)
 
     def test_v1_store_migrates_without_fabricating_historical_observations(self):
-        from adaptive_factory import landing_sqlite_store as module
+        from getzilla_factory import landing_sqlite_store as module
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "state"
             store = SQLiteLandingJobStore(root, repository_root=Path(__file__).parents[2])
@@ -171,7 +171,7 @@ class DraftReceiptPersistenceTests(unittest.TestCase):
                         "X-Expected-Actor-ID": self.actor.actor_id,
                         "X-Expected-Profile-Digest": self.profile.profile_digest,
                     }
-                    decoder = (patch("adaptive_factory.landing_http.decode_landing_draft", side_effect=error)
+                    decoder = (patch("getzilla_factory.landing_http.decode_landing_draft", side_effect=error)
                                if error is not None else nullcontext())
                     with decoder:
                         submitted = client.post("/v1/landing-inputs", headers=submit_headers,

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from _lib import agent_generation, agent_id, agent_type, emit, read_payload, root_from
-from adaptive_grok.policy import WRITE_ROLES
-from adaptive_grok.state import get_active_route, record_agent_start
+from getzilla.policy import WRITE_ROLES
+from getzilla.state import get_active_route, record_agent_start
 
 
 def main() -> None:
@@ -29,7 +29,7 @@ def main() -> None:
                 f'Allowed agents: {", ".join(route.get("allowed_agents") or [])}.'
                 f' Local instance: agent_id={child}, generation={record.get("generation", "legacy")}, '
                 f'route_id={record.get("route_id")}, task_id={record.get("task_id")}. '
-                'Report heartbeat and explicit useful checkpoints via scripts/grok_agent.py; '
+                'Report heartbeat and explicit useful checkpoints via scripts/getzilla_agent.py; '
                 'tool activity alone is not progress.'
             ),
         }

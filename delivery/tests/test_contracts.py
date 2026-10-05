@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError, asdict, fields
 
 from delivery.tests.synthetic_fixtures import synthetic_m8_evidence
 
-from adaptive_delivery.contracts import (
+from getzilla_delivery.contracts import (
     ContractError,
     DeliveryDecisionV1,
     DeliveryEvidenceV1,
