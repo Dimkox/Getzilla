@@ -413,7 +413,7 @@ class StructureTests(unittest.TestCase):
 
     def test_version_identity_matches_readme(self) -> None:
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
         self.assertEqual(version, "2.2.0")
@@ -909,7 +909,7 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(result.status, "compatible", result.reasons)
 
     def test_architecture_authority_and_manual_adoption_are_documented(self) -> None:
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         quickstart = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
         for relative in (
             "architecture/system.yaml",
@@ -919,7 +919,7 @@ class StructureTests(unittest.TestCase):
             "schemas/architecture-rules.schema.json",
             "scripts/getzilla_architecture.py",
         ):
-            self.assertIn(f"]({relative})", readme, relative)
+            self.assertIn(f"](../{relative})", readme, relative)
         self.assertIn("architecture/adoption.json", quickstart)
         self.assertIn('"architecture_id": "ARCH-REPLACE-ME"', quickstart)
         self.assertIn('"schema_version": 1', quickstart)
@@ -927,7 +927,7 @@ class StructureTests(unittest.TestCase):
         self.assertIn("marker last", quickstart.lower())
 
     def test_installer_safety_pivot_is_documented(self) -> None:
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         quickstart = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
         package = ROOT / "engineering/changes/20260826-m2-executable-architecture-015603"

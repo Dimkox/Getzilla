@@ -11,6 +11,8 @@ Getzilla was renamed from `Dimkox/adaptive-grok-build-pro`. While work still lan
 3. Cherry-pick **B** onto a Getzilla branch. Git merges three ways with **A** as the base, so only the predecessor's new changes arrive, already renamed, and Getzilla's own changes (installer migration, guard, Trust CI owner profiles, docs) stay.
 4. Keep Getzilla's `LICENSE`; run the identity guard and the usual suites; open a pull request; update **Last synced** above in the same pull request.
 
+The root `README.md` belongs to Getzilla: it is a short plain-language introduction. The rename script moves the predecessor's detailed README to `docs/REFERENCE.md` in both **A** and **B**, so predecessor README changes arrive there and the short README is left alone. A new predecessor test that reads `ROOT / "README.md"` is pointed at `docs/REFERENCE.md` automatically.
+
 ## Commands
 
 ```bash
