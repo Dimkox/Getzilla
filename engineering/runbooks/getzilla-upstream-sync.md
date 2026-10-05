@@ -2,7 +2,7 @@
 
 Getzilla was renamed from `Dimkox/adaptive-grok-build-pro`. While work still lands there, bring it here as renamed pull requests instead of re-importing.
 
-**Last synced predecessor commit:** `326908bf6367b05b65b83818ee84a093c1e45872` (its `main` after PR #244).
+**Last synced predecessor commit:** `326908bf6367b05b65b83818ee84a093c1e45872` (its `main` after PR #245).
 
 ## How it works
 
