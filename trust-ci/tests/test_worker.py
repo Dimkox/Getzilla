@@ -60,7 +60,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_dispatches_each_job_to_its_bound_profile(self) -> None:
         calls = []
-        factory = lambda policy: RecordingRunner(policy, calls)
+        factory = lambda policy, repository: RecordingRunner(policy, calls)
         store = MemoryStore()
         for index, repository in enumerate(('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform')):
             request = JobRequest(repository, 15, sha('a'), sha(str(index + 2)), 'feat/x', 'main')
@@ -79,7 +79,7 @@ class WorkerTests(unittest.TestCase):
         changed['max_attempts'] = 4
         changed_catalog = PolicyCatalog.from_policy(__import__('adaptive_trust_ci.policy', fromlist=['Policy']).Policy.from_dict(changed))
         calls = []
-        worker = Worker(self.settings, store, changed_catalog, lambda policy: RecordingRunner(policy, calls), threading.Event())
+        worker = Worker(self.settings, store, changed_catalog, lambda policy, repository: RecordingRunner(policy, calls), threading.Event())
         worker.run(once=True)
         result = store.get_job(job.job_id)
         self.assertEqual(calls, [])
@@ -89,7 +89,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_runner_factory_receives_profile_host_path(self) -> None:
         paths = []
-        def factory(policy):
+        def factory(policy, repository):
             paths.append(policy.holdout.host_path)
             return RecordingRunner(policy, [])
         store, _ = self._job('Dimkox/ii-tonya-platform', self.catalog.resolve_repository('Dimkox/ii-tonya-platform').digest)

@@ -145,7 +145,7 @@ Contents: Read-only
 Pull requests: Read-only
 ```
 
-Store its RSA private key at the worker-only path configured by `TRUST_CI_GITHUB_APP_PRIVATE_KEY_PATH`. Configure `TRUST_CI_GITHUB_APP_ID` and `TRUST_CI_GITHUB_INSTALLATION_ID`. The API service must not receive these values or the private key.
+Store its RSA private key at the worker-only path configured by `TRUST_CI_GITHUB_APP_PRIVATE_KEY_PATH`. Configure `TRUST_CI_GITHUB_APP_ID` and `TRUST_CI_GITHUB_INSTALLATION_ID`. A numeric installation ID pins the App to one account. For a public App installed on several accounts set `TRUST_CI_GITHUB_INSTALLATION_ID=auto`: the worker looks up each repository's installation with the App JWT and requests a token restricted to that one repository. Which repositories are verified is still decided only by the policy catalog (exact and owner profiles). The API service must not receive these values or the private key.
 
 ### Generate a human approval key
 

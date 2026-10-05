@@ -20,7 +20,7 @@ class Worker:
     settings: WorkerSettings
     store: Store
     catalog: PolicyCatalog
-    runner_factory: Callable[[Policy], JobRunner]
+    runner_factory: Callable[[Policy, str], JobRunner]
     stop_event: threading.Event
 
     @classmethod
@@ -40,14 +40,18 @@ class Worker:
             installation_id=settings.github_installation_id,
             private_key_path=settings.github_app_private_key_path,
         )
-        github = GitHubClient(token_provider=github_auth.installation_token)
-        def runner_factory(policy: Policy) -> JobRunner:
+        def runner_factory(policy: Policy, repository: str) -> JobRunner:
+            # Every job gets a token for its own repository's installation, so a
+            # public App installed on many accounts publishes to the right one.
+            def token() -> str:
+                return github_auth.token_for(repository)
+
             return JobRunner(
                 store=store,
                 policy=policy,
-                github=github,
+                github=GitHubClient(token_provider=token),
                 signer=signer,
-                github_token_provider=github_auth.installation_token,
+                github_token_provider=token,
                 public_base_url=settings.common.public_base_url,
                 workspace_root=settings.workspace_root,
                 workspace_host_root=settings.workspace_host_root,
@@ -119,7 +123,7 @@ class Worker:
                 if once:
                     return 0
                 continue
-            runner = self.runner_factory(selected)
+            runner = self.runner_factory(selected, job.repository)
             try:
                 runner.process(job, self.settings.worker_id)
             except BaseException as exc:

@@ -109,7 +109,8 @@ class WorkerSettings:
     common: CommonSettings
     ci_signing_key_path: Path
     github_app_id: int
-    github_installation_id: int
+    # None: public App, resolve each repository's installation (TRUST_CI_GITHUB_INSTALLATION_ID=auto)
+    github_installation_id: int | None
     github_app_private_key_path: Path
     runner_image: str
     workspace_root: Path
@@ -134,7 +135,10 @@ class WorkerSettings:
             common=CommonSettings.load(),
             ci_signing_key_path=Path(_required('TRUST_CI_SIGNING_KEY_PATH')).resolve(),
             github_app_id=_int('TRUST_CI_GITHUB_APP_ID'),
-            github_installation_id=_int('TRUST_CI_GITHUB_INSTALLATION_ID'),
+            github_installation_id=(
+                None if os.environ.get('TRUST_CI_GITHUB_INSTALLATION_ID', '').strip().lower() == 'auto'
+                else _int('TRUST_CI_GITHUB_INSTALLATION_ID')
+            ),
             github_app_private_key_path=Path(_required('TRUST_CI_GITHUB_APP_PRIVATE_KEY_PATH')).resolve(),
             runner_image=_immutable_image('TRUST_CI_RUNNER_IMAGE'),
             workspace_root=workspace_root,

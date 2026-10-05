@@ -110,7 +110,13 @@ Protecting a repository before a green App-owned check exists for its current ep
 
 ## 6. Make the GitHub App public
 
-GitHub → **Settings → Developer settings → GitHub Apps → adaptive-trust-ci → Advanced → Make public**. Strangers can then install it, but the service only enqueues repositories covered by an exact or owner profile.
+1. Deploy the worker from this repository (step 4) and set `TRUST_CI_GITHUB_INSTALLATION_ID=auto` in `env/worker.env`, then restart the worker. A numeric ID would keep the worker publishing only to your own account's installation.
+2. GitHub → **Settings → Developer settings → GitHub Apps → adaptive-trust-ci → Advanced → Danger zone → Make public**.
+3. Optional: fill in the App's description and homepage (`https://github.com/Dimkox/Getzilla`) so its public install page explains what it does.
+
+Making it public is effectively one-way: GitHub does not let a public App become private again while it is installed on other accounts.
+
+Strangers can install it, but the service only enqueues repositories covered by an exact or owner profile; everything else is rejected before any code runs on the CI host. To serve another account, add an owner profile for it (or an exact profile per repository) with the planner, review it and install it like any policy change.
 
 ## Why Getzilla started from a direct import
 

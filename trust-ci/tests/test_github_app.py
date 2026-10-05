@@ -103,6 +103,69 @@ class GitHubAppTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '403'):
                 auth.installation_token()
 
+    def _auto(self, directory: str, transport: FakeTransport, clock: dict) -> GitHubAppAuth:
+        key_path = Path(directory) / 'app.pem'
+        key_path.write_bytes(self.private_pem)
+        return GitHubAppAuth(
+            app_id=12345,
+            installation_id=None,
+            private_key_path=key_path,
+            transport=transport,
+            api_url='https://example.test',
+            now_fn=lambda: clock['value'],
+        )
+
+    def test_public_app_resolves_each_repository_installation_and_scopes_the_token(self) -> None:
+        expiry = (now() + timedelta(hours=1)).isoformat()
+        transport = FakeTransport(
+            [
+                (200, {'id': 111}),
+                (201, {'token': 'dimkox-token', 'expires_at': expiry}),
+                (200, {'id': 222}),
+                (201, {'token': 'other-token', 'expires_at': expiry}),
+            ]
+        )
+        clock = {'value': now()}
+        with tempfile.TemporaryDirectory() as directory:
+            auth = self._auto(directory, transport, clock)
+            self.assertEqual(auth.token_for('Dimkox/Getzilla'), 'dimkox-token')
+            self.assertEqual(auth.token_for('Dimkox/Getzilla'), 'dimkox-token')
+            self.assertEqual(auth.token_for('someone/project'), 'other-token')
+        self.assertEqual(len(transport.calls), 4)
+        lookup, issue = transport.calls[0], transport.calls[1]
+        self.assertEqual((lookup[0], lookup[1]), ('GET', 'https://example.test/repos/Dimkox/Getzilla/installation'))
+        self.assertTrue(lookup[2]['Authorization'].startswith('Bearer ey'))
+        self.assertEqual(issue[1], 'https://example.test/app/installations/111/access_tokens')
+        self.assertEqual(
+            issue[3],
+            {'repositories': ['Getzilla'],
+             'permissions': {'checks': 'write', 'contents': 'read', 'pull_requests': 'read'}},
+        )
+        self.assertTrue(transport.calls[3][1].endswith('/app/installations/222/access_tokens'))
+
+    def test_public_app_refuses_uninstalled_or_invalid_repositories(self) -> None:
+        clock = {'value': now()}
+        with tempfile.TemporaryDirectory() as directory:
+            auth = self._auto(directory, FakeTransport([(404, {'message': 'Not Found'})]), clock)
+            with self.assertRaisesRegex(RuntimeError, 'not installed'):
+                auth.token_for('stranger/project')
+            for repository in ('bad', 'a/b/c', '../x'):
+                with self.assertRaisesRegex(RuntimeError, 'invalid repository'):
+                    auth.token_for(repository)
+            with self.assertRaisesRegex(RuntimeError, 'no fixed installation'):
+                auth.installation_token()
+
+    def test_fixed_installation_keeps_single_account_behaviour_for_any_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / 'app.pem'
+            key_path.write_bytes(self.private_pem)
+            transport = FakeTransport([(201, {'token': 'fixed', 'expires_at': (now() + timedelta(hours=1)).isoformat()})])
+            auth = GitHubAppAuth(app_id=1, installation_id=2, private_key_path=key_path,
+                                 transport=transport, now_fn=now)
+            self.assertEqual(auth.token_for('Dimkox/Getzilla'), 'fixed')
+            self.assertEqual(len(transport.calls), 1)
+            self.assertTrue(transport.calls[0][1].endswith('/app/installations/2/access_tokens'))
+
 
 if __name__ == '__main__':
     unittest.main()
