@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Getzilla — vibe-code it, then clean it up</title>
+<meta name="description" content="AI agents build fast and leave a mess. Getzilla cleans up after vibe-coding: it turns what the agent built into tested, reviewed, documented changes and keeps broken code out of your main branch.">
+<meta name="theme-color" content="#0E0F0F">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Getzilla — vibe-code it, then clean it up">
+<meta property="og:description" content="AI agents build fast and leave a mess. Getzilla tidies up after them and keeps broken code out of main.">
+<meta property="og:url" content="https://getzilla.app/">
+<link rel="canonical" href="https://getzilla.app/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318946F'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11.5' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+/* Layout: dark centred hero, product window overlapping into white, then alternating white / sand bands */
+:root {
+  --night: #0E0F0F;
+  --night-2: #1A1C1B;
+  --night-line: #2A2D2B;
+  --paper: #FFFFFF;
+  --sand: #F4EEE8;
+  --ink: #0E0F0F;
+  --soft: #5B605D;
+  --mist: #A3A9A6;
+  --line: #E5E7E6;
+  --green: #18946F;
+  --green-hi: #1FB386;
+  --green-tint: #E2F4EC;
+  --red: #D9473A;
+  --red-tint: #FCEBE8;
+  --amber: #B7791F;
+  --amber-tint: #FBF0DC;
+  --font: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --r-sm: 6px;
+  --r: 16px;
+  --r-lg: 24px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 17px/1.6 var(--font); -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.1; font-weight: 700; text-wrap: balance; }
+p { margin: 0; }
+a { color: inherit; }
+img, svg { max-width: 100%; }
+:focus-visible { outline: 3px solid var(--green-hi); outline-offset: 2px; border-radius: 4px; }
+.wrap { width: 100%; max-width: 1200px; margin: 0 auto; padding-inline: 24px; }
+
+/* ---------- Header ---------- */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: rgba(14,15,15,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; }
+.top .wrap { height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; font-size: 22px; letter-spacing: -0.03em; }
+.brand svg { width: 34px; height: 34px; flex: none; }
+.nav { display: flex; align-items: center; gap: 32px; font-size: 15.5px; font-weight: 500; }
+.nav a { color: #C9CECB; text-decoration: none; }
+.nav a:hover { color: #fff; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 24px; border-radius: var(--r-sm); font: 600 16px/1 var(--font); text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+.nav a.btn, .btn-green { background: var(--green); color: #fff; }
+.btn-green:hover, .nav a.btn:hover { background: #127A5B; color: #fff; }
+.btn-line { border-color: #3A3E3C; color: #fff; background: transparent; }
+.btn-line:hover { border-color: #6B716E; }
+.btn-dark { background: var(--night); color: #fff; }
+.btn-dark:hover { background: #2A2D2B; }
+.btn-sm { min-height: 40px; padding: 0 18px; font-size: 15px; }
+
+/* ---------- Hero ---------- */
+.hero { background: var(--night); color: #fff; text-align: center; padding: 88px 0 200px; position: relative; overflow: hidden; }
+.hero::before { content: ""; position: absolute; left: 50%; top: -260px; width: 900px; height: 600px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(31,179,134,.18), transparent); pointer-events: none; }
+.hero .wrap { position: relative; }
+.pill { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border: 1px solid var(--night-line); border-radius: 999px; font-size: 14px; color: #C9CECB; margin-bottom: 28px; }
+.pill b { background: var(--green); color: #fff; font-weight: 600; font-size: 12.5px; padding: 3px 10px; border-radius: 999px; }
+.hero h1 { font-size: clamp(42px, 7vw, 84px); font-weight: 800; letter-spacing: -0.045em; line-height: 1.02; max-width: 14ch; margin: 0 auto; }
+.nw { white-space: nowrap; }
+.hero h1 em { font-style: normal; color: var(--green-hi); }
+.hero .lede { font-size: clamp(17px, 1.6vw, 20px); color: #B5BBB8; max-width: 38rem; margin: 26px auto 0; }
+.hero .cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
+.facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 28px; margin: 36px 0 0; font-size: 15px; color: #8E9592; list-style: none; padding: 0; }
+.facts li { display: inline-flex; align-items: center; gap: 8px; }
+.facts svg { width: 18px; height: 18px; color: var(--green-hi); }
+
+/* ---------- Product window ---------- */
+.demo { margin-top: -150px; position: relative; z-index: 2; }
+.window { background: var(--paper); border-radius: var(--r-lg); box-shadow: 0 30px 80px rgba(14,15,15,.22), 0 2px 6px rgba(14,15,15,.08); border: 1px solid var(--line); overflow: hidden; }
+.win-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: #FAFAF9; flex-wrap: wrap; }
+.dots { display: flex; gap: 7px; }
+.dots i { width: 11px; height: 11px; border-radius: 50%; background: #DEE1DF; }
+.switch { display: inline-flex; background: var(--sand); border-radius: 10px; padding: 4px; gap: 4px; }
+.switch button { border: 0; background: transparent; font: 600 14px/1 var(--font); color: var(--soft); padding: 10px 16px; border-radius: 7px; cursor: pointer; }
+.switch button[aria-selected="true"] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 3px rgba(14,15,15,.12); }
+.win-body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.pr { padding: 28px 32px 32px; min-width: 0; }
+.pr-meta { font-size: 14px; color: var(--soft); display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.branch { font-family: var(--mono); font-size: 13px; background: var(--sand); padding: 3px 8px; border-radius: 5px; color: var(--ink); }
+.pr h3 { font-size: 24px; letter-spacing: -0.02em; margin: 10px 0 22px; }
+.checks { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.checks li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--line); }
+.checks li:first-child { border-top: 0; }
+.checks svg { width: 24px; height: 24px; }
+.checks b { display: block; font-weight: 600; font-size: 15.5px; }
+.checks span { display: block; font-size: 14px; color: var(--soft); }
+.tag { font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.checks span.tag { color: inherit; }
+.tag-ok { background: var(--green-tint); color: #0F6E51 !important; }
+.tag-bad { background: var(--red-tint); color: #B4321F !important; }
+.tag-warn { background: var(--amber-tint); color: #87590F !important; }
+.merge { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+.merge p { font-size: 15px; color: var(--soft); }
+.merge .btn[disabled] { background: #E7E9E8; color: #8D9390; cursor: not-allowed; }
+.side { background: var(--night); color: #fff; padding: 28px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.side h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--mist); font-weight: 600; }
+.record { font-family: var(--mono); font-size: 13px; line-height: 1.7; color: #D6DBD8; background: var(--night-2); border: 1px solid var(--night-line); border-radius: 12px; padding: 16px; margin: 0; overflow-x: auto; }
+.record .k { color: var(--green-hi); }
+.record .c { color: #7D8481; }
+.record .x { color: #F08A7E; }
+.side .score { display: flex; align-items: baseline; gap: 10px; margin-top: auto; }
+.side .score strong { font-size: 44px; letter-spacing: -0.04em; font-weight: 800; }
+.side .score span { color: var(--mist); font-size: 14px; }
+[data-state="before"] .after-only, [data-state="after"] .before-only { display: none !important; }
+
+/* ---------- Sections ---------- */
+section { padding: 112px 0; }
+.sand { background: var(--sand); }
+.dark { background: var(--night); color: #fff; }
+.head { text-align: center; max-width: 46rem; margin: 0 auto 56px; }
+.eyebrow { display: inline-block; font-size: 14px; font-weight: 600; color: var(--green); margin-bottom: 14px; letter-spacing: .02em; }
+.dark .eyebrow { color: var(--green-hi); }
+h2 { font-size: clamp(32px, 4.4vw, 52px); letter-spacing: -0.04em; font-weight: 800; }
+.head p { font-size: 18px; color: var(--soft); margin-top: 18px; }
+
+/* Who */
+.who { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.who article { background: var(--sand); border-radius: var(--r); padding: 12px 12px 30px; display: flex; flex-direction: column; gap: 12px; }
+.ph { position: relative; border-radius: 12px; overflow: hidden; background: #1A1C1B; }
+.ph img { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; object-fit: cover; }
+.who h3 { font-size: 22px; letter-spacing: -0.02em; margin-top: 10px; padding-inline: 18px; }
+.who p { color: var(--soft); font-size: 16px; padding-inline: 18px; }
+
+/* Problems */
+.probs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.prob { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 12px 28px; display: flex; flex-direction: column; gap: 22px; }
+.prob > div:last-child { padding-inline: 18px; }
+.prob h3 { font-size: 21px; letter-spacing: -0.02em; margin-bottom: 8px; }
+.prob p { color: var(--soft); font-size: 16px; }
+.chip { position: absolute; left: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 28px); background: rgba(255,255,255,.96); color: var(--ink); border-radius: 10px; padding: 8px 12px 8px 8px; font-size: 14px; font-weight: 600; line-height: 1.25; box-shadow: 0 8px 24px rgba(14,15,15,.25); }
+.chip svg { width: 22px; height: 22px; flex: none; }
+.chip-t { bottom: auto; top: 14px; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 64px; align-items: center; }
+.ph.big { border-radius: var(--r-lg); }
+.ph.big img { aspect-ratio: 4 / 3; }
+.float { position: absolute; right: 22px; bottom: 22px; width: 230px; background: var(--paper); border-radius: 14px; padding: 16px; box-shadow: 0 16px 40px rgba(0,0,0,.35); }
+.float-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--soft); }
+.float-n { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+.float-n strong { font-size: 36px; font-weight: 800; letter-spacing: -0.04em; }
+.float-n span { font-size: 14px; color: var(--soft); }
+.bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-top: 10px; }
+.bars i { height: 8px; border-radius: 4px; background: var(--green-hi); }
+.row2 .intro { color: var(--soft); font-size: 18px; margin-top: 20px; }
+.gets { list-style: none; padding: 0; margin: 24px 0 0; display: grid; gap: 12px; }
+.gets li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; font-size: 16.5px; }
+.gets svg { width: 22px; height: 22px; color: var(--green); margin-top: 2px; }
+.more { display: inline-block; margin-top: 26px; color: var(--green); font-weight: 600; text-decoration: none; }
+.more:hover { text-decoration: underline; }
+.loan { margin-top: 24px; border-radius: var(--r); background: var(--night); color: #fff; padding: 32px 36px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 24px 40px; align-items: center; }
+.loan h3 { font-size: 26px; letter-spacing: -0.03em; }
+.loan p { color: #B5BBB8; font-size: 17px; }
+.loan p b { color: #fff; font-weight: 600; }
+
+/* How: tabs */
+.tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); background: var(--paper); border-radius: 14px; padding: 6px; gap: 4px; }
+.tabs button { border: 0; background: transparent; border-radius: 10px; padding: 14px 10px 16px; font: 600 15px/1.2 var(--font); color: var(--soft); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; }
+.tabs button small { font: 600 11.5px/1 var(--font); letter-spacing: .08em; text-transform: uppercase; color: var(--mist); }
+.tabs button[aria-selected="true"] { color: var(--ink); background: var(--sand); }
+.tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 25%; right: 25%; bottom: 5px; height: 3px; border-radius: 3px; background: var(--green); }
+.tabs .first small { color: var(--amber); }
+.panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; margin-top: 48px; }
+.panel[hidden] { display: none; }
+.panel h3 { font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.035em; }
+.panel p { color: var(--soft); font-size: 17.5px; margin-top: 16px; }
+.panel ul { list-style: none; padding: 0; margin: 22px 0 0; display: grid; gap: 10px; }
+.panel li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; font-size: 16px; }
+.panel li svg { width: 22px; height: 22px; color: var(--green); margin-top: 2px; }
+.card { background: var(--paper); border-radius: var(--r-lg); padding: 28px; box-shadow: 0 14px 40px rgba(14,15,15,.08); min-width: 0; }
+.card h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--mist); font-weight: 600; margin-bottom: 16px; }
+.rows { display: grid; gap: 10px; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: #F8F6F3; font-size: 15px; }
+.row code { font-family: var(--mono); font-size: 13.5px; }
+.card .record { background: var(--night); }
+
+/* Homework */
+.hw { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 64px; align-items: center; }
+.hw .intro { color: #A9AFAC; font-size: 18px; margin-top: 20px; }
+.rules { border: 1px solid var(--night-line); border-radius: var(--r); overflow: hidden; background: var(--night-2); }
+.rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 20px 24px; border-top: 1px solid var(--night-line); font-size: 16px; color: #DADFDC; }
+.rule:first-child { border-top: 0; }
+.v { font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+.v-in { background: rgba(31,179,134,.16); color: #5FE0B4; }
+.v-out { background: rgba(217,71,58,.16); color: #FF9C8F; }
+
+/* Install */
+.inst { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.3fr); gap: 64px; align-items: start; }
+.inst .intro { color: var(--soft); font-size: 18px; margin-top: 20px; }
+.inst .cta { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 12px; }
+.cmds { list-style: none; padding: 0; margin: 0; display: grid; gap: 22px; grid-template-columns: minmax(0, 1fr); }
+.cmds li { min-width: 0; }
+.cmd-l { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 16px; margin-bottom: 10px; }
+.cmd-l i { font-style: normal; width: 28px; height: 28px; border-radius: 8px; background: var(--green); color: #fff; display: grid; place-items: center; font-size: 14px; flex: none; }
+pre { margin: 0; background: var(--night); color: #E3E8E5; border-radius: 12px; padding: 18px 20px; overflow-x: auto; font: 14px/1.7 var(--mono); }
+pre code { font: inherit; white-space: pre; }
+.note { margin-top: 22px; font-size: 15px; color: var(--soft); }
+.note code { font-family: var(--mono); font-size: .9em; background: var(--green-tint); color: #0F6E51; padding: 2px 6px; border-radius: 5px; }
+
+/* CTA band */
+.band { padding: 0 0 112px; }
+.band .box { background: var(--green); color: #fff; border-radius: var(--r-lg); padding: 64px 48px; text-align: center; position: relative; overflow: hidden; }
+.band .box::after { content: ""; position: absolute; right: -80px; top: -80px; width: 280px; height: 280px; border-radius: 50%; border: 40px solid rgba(255,255,255,.08); }
+.band h2 { color: #fff; max-width: 18ch; margin: 0 auto; position: relative; z-index: 1; }
+.band p { color: #D5F2E7; font-size: 18px; margin: 18px auto 0; max-width: 34rem; }
+.band .cta { margin-top: 32px; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; position: relative; z-index: 1; }
+.btn-white { background: #fff; color: var(--ink); }
+.btn-white:hover { background: #EDF7F2; }
+
+/* Footer */
+footer { background: var(--night); color: #8E9592; padding: 48px 0; font-size: 15px; }
+footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; }
+footer .brand { color: #fff; font-size: 19px; }
+footer .brand svg { width: 28px; height: 28px; }
+footer a { color: #C9CECB; }
+
+@media (max-width: 980px) {
+  .win-body, .panel, .hw, .inst, .loan, .row2 { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .who { grid-template-columns: minmax(0, 1fr); }
+  .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  section { padding: 88px 0; }
+}
+@media (max-width: 680px) {
+  body { font-size: 16px; }
+  .wrap { padding-inline: 16px; }
+  .nav a.link { display: none; }
+  .hero { padding: 56px 0 150px; }
+  .demo { margin-top: -110px; }
+  .hero .cta .btn, .inst .cta .btn, .band .cta .btn { width: 100%; }
+  .probs { grid-template-columns: minmax(0, 1fr); }
+  .prob > div:last-child, .who h3, .who p { padding-inline: 8px; }
+  .float { right: 12px; bottom: 12px; width: 200px; padding: 12px; }
+  .chip { font-size: 13px; }
+  .pr { padding: 22px 18px 24px; }
+  .side { padding: 22px 18px; }
+  .win-bar { padding: 12px 14px; }
+  .dots { display: none; }
+  .switch { width: 100%; }
+  .switch button { flex: 1; padding: 10px 8px; }
+  .checks li { grid-template-columns: 24px minmax(0, 1fr); }
+  .checks li .tag { grid-column: 2; justify-self: start; }
+  .tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rule { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .rule .v { justify-self: start; }
+  .band .box { padding: 48px 22px; }
+  .loan { padding: 26px; }
+  section { padding: 72px 0; }
+  .band { padding-bottom: 72px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#E2F4EC"/><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#18946F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="bad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#FCEBE8"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" fill="none" stroke="#D9473A" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="warn" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#FBF0DC"/><path d="M12 6.8v7" stroke="#B7791F" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.3" fill="#B7791F"/></symbol>
+  <symbol id="tick" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#18946F"/><path d="M9 16.5l4.5 4.5L23 11.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><svg aria-hidden="true"><use href="#logo"/></svg>getzilla</a>
+    <nav class="nav" aria-label="Main">
+      <a class="link" href="#who">Who it’s for</a>
+      <a class="link" href="#how">How it works</a>
+      <a class="link" href="https://github.com/Dimkox/Getzilla">GitHub</a>
+      <a class="btn btn-sm" href="#install">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <div class="pill"><b>Open source</b> Cleanup for AI-written code</div>
+      <h1><span class="nw">Vibe-code it.</span> <em>Getzilla</em> cleans it&nbsp;up.</h1>
+      <p class="lede">AI agents build fast and leave a mess behind. Getzilla tidies up after them, checks every change for real, and keeps anything broken out of your main code.</p>
+      <div class="cta">
+        <a class="btn btn-green" href="#install">Try it on your project</a>
+        <a class="btn btn-line" href="#how">See how it works</a>
+      </div>
+      <ul class="facts">
+        <li><svg aria-hidden="true"><use href="#tick"/></svg>Free, MIT license</li>
+        <li><svg aria-hidden="true"><use href="#tick"/></svg>Installs into any git repository</li>
+        <li><svg aria-hidden="true"><use href="#tick"/></svg>Shows a plan before it changes anything</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div class="wrap">
+      <div class="window" id="demo" data-state="after">
+        <div class="win-bar">
+          <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="switch" role="tablist" aria-label="Compare">
+            <button type="button" role="tab" aria-selected="false" data-state="before">Before Getzilla</button>
+            <button type="button" role="tab" aria-selected="true" data-state="after">After Getzilla</button>
+          </div>
+        </div>
+        <div class="win-body">
+          <div class="pr">
+            <div class="pr-meta"><span>Pull request #12</span><span class="branch">feature/checkout → main</span></div>
+            <h3>Add new checkout flow</h3>
+            <ul class="checks before-only">
+              <li><svg aria-hidden="true"><use href="#warn"/></svg><div><b>Agent: “Done, all tests pass”</b><span>No test run on record</span></div><span class="tag tag-warn">Unproven</span></li>
+              <li><svg aria-hidden="true"><use href="#bad"/></svg><div><b>Tests for checkout</b><span>None written</span></div><span class="tag tag-bad">Missing</span></li>
+              <li><svg aria-hidden="true"><use href="#bad"/></svg><div><b>Old login</b><span>Broke for existing accounts, nobody noticed</span></div><span class="tag tag-bad">Broken</span></li>
+              <li><svg aria-hidden="true"><use href="#bad"/></svg><div><b>Review</b><span>Only the agent that wrote it looked at it</span></div><span class="tag tag-bad">None</span></li>
+              <li><svg aria-hidden="true"><use href="#bad"/></svg><div><b>Why it is built this way</b><span>Not written down anywhere</span></div><span class="tag tag-bad">Unknown</span></li>
+            </ul>
+            <ul class="checks after-only">
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Change record</b><span>What it does, why, how to verify it</span></div><span class="tag tag-ok">Written</span></li>
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Tests for checkout</b><span>Added and run on this exact version</span></div><span class="tag tag-ok">Passing</span></li>
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Old login</b><span>Re-checked, still works</span></div><span class="tag tag-ok">Passing</span></li>
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Review</b><span>Done by someone other than the author</span></div><span class="tag tag-ok">Approved</span></li>
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Final check outside the agent</b><span>Hidden tests the agent cannot edit</span></div><span class="tag tag-ok">Verified</span></li>
+            </ul>
+            <div class="merge">
+              <p class="before-only">Getzilla keeps this out of main until it is fixed.</p>
+              <p class="after-only">Every check passed. Safe to merge.</p>
+              <button class="btn btn-sm before-only" type="button" disabled>Merge blocked</button>
+              <span class="btn btn-green btn-sm after-only" aria-hidden="true">Merge into main</span>
+            </div>
+          </div>
+          <aside class="side">
+            <h4>Change record</h4>
+<pre class="record after-only"><code><span class="k">what</span>   new checkout with saved cards
+<span class="k">why</span>    old flow lost 1 in 5 orders
+<span class="k">risk</span>   payments → full check
+<span class="k">proof</span>  checkout + login tests,
+       run on this exact commit
+<span class="k">review</span> second agent, approved</code></pre>
+<pre class="record before-only"><code><span class="c"># nothing written down</span>
+<span class="x">what</span>   ?
+<span class="x">why</span>    ?
+<span class="x">risk</span>   ?
+<span class="x">proof</span>  “trust me”</code></pre>
+            <div class="score after-only"><strong>5/5</strong><span>checks passed</span></div>
+            <div class="score before-only"><strong>0/5</strong><span>checks passed</span></div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section id="who">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">Who it’s for</span>
+        <h2>For anyone whose code is written by AI faster than people can check it</h2>
+      </div>
+      <div class="who">
+        <article>
+          <div class="ph"><img src="https://images.unsplash.com/photo-1685716851721-7e1419f2db18?w=900&h=600&fit=crop&q=75&auto=format" alt="A founder working alone on a laptop late at night" loading="lazy" width="900" height="600"></div>
+          <h3>Founders and solo builders</h3>
+          <p>You build your product with AI agents and ship every day. Getzilla makes sure fast does not turn into fragile.</p>
+        </article>
+        <article>
+          <div class="ph"><img src="https://images.unsplash.com/photo-1521737711867-e3b97375f902?w=900&h=600&fit=crop&q=75&auto=format" alt="A small team working on laptops around one table" loading="lazy" width="900" height="600"></div>
+          <h3>Small teams</h3>
+          <p>Several people and several agents in one codebase. Everyone gets the same simple rule for what is allowed into the main code.</p>
+        </article>
+        <article>
+          <div class="ph"><img src="https://images.unsplash.com/photo-1773091258432-da61c63abe41?w=900&h=600&fit=crop&q=75&auto=format" alt="A developer with hands over face in front of a laptop" loading="lazy" width="900" height="600"></div>
+          <h3>Whoever maintains it next</h3>
+          <p>Months from now someone has to change this code. Getzilla leaves them tests, notes and reasons instead of guesses.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="problem" style="padding-top:0">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">The problem</span>
+        <h2>What goes wrong after vibe&#8209;coding</h2>
+        <p>Vibe-coding is great for getting something working. The trouble starts the day after, when you have to change it.</p>
+      </div>
+      <div class="probs">
+        <div class="prob">
+          <div class="ph"><img src="https://images.unsplash.com/photo-1726649339367-c2577a28881b?w=900&h=600&fit=crop&q=75&auto=format" alt="A developer grabbing his head in front of a laptop" loading="lazy" width="900" height="600"><span class="chip chip-b"><svg aria-hidden="true"><use href="#bad"/></svg>Login broken after yesterday’s update</span></div>
+          <div><h3>“It worked yesterday”</h3><p>A new feature quietly breaks an old one. You find out from your users, not from your tests.</p></div>
+        </div>
+        <div class="prob">
+          <div class="ph"><img src="https://images.unsplash.com/photo-1717667745852-a5bd6876c1de?w=900&h=600&fit=crop&q=75&auto=format" alt="A tangled pile of wires" loading="lazy" width="900" height="600"><span class="chip chip-b"><svg aria-hidden="true"><use href="#warn"/></svg>Why is it built like this? No notes.</span></div>
+          <div><h3>Nobody knows why it is built this way</h3><p>The agent made hundreds of decisions and wrote none of them down. Changing anything feels like defusing a bomb.</p></div>
+        </div>
+        <div class="prob">
+          <div class="ph"><img src="https://images.unsplash.com/photo-1542831371-29b0f74f9713?w=900&h=600&fit=crop&q=75&auto=format" alt="Code on a dark screen" loading="lazy" width="900" height="600"><span class="chip chip-t"><svg aria-hidden="true"><use href="#ok"/></svg>Agent: all tests pass</span><span class="chip chip-b"><svg aria-hidden="true"><use href="#bad"/></svg>0 tests actually run</span></div>
+          <div><h3>“Done, all tests pass”</h3><p>The agent says so. Nobody checked. Sometimes there are no tests, sometimes the agent edited them until they passed.</p></div>
+        </div>
+        <div class="prob">
+          <div class="ph"><img src="https://images.unsplash.com/photo-1641355527446-232d7f1f2c10?w=900&h=600&fit=crop&q=75&auto=format" alt="A wall covered in sticky notes" loading="lazy" width="900" height="600"><span class="chip chip-b"><svg aria-hidden="true"><use href="#warn"/></svg>TODO: fix later</span></div>
+          <div><h3>Debt nobody wrote down</h3><p>Shortcuts pile up until every change is scary and slow. That is technical debt, and it grows quietly.</p></div>
+        </div>
+      </div>
+      <div class="loan">
+        <h3>Technical debt, in plain words</h3>
+        <p>Every shortcut taken today is a loan. You pay it back later with interest: bugs, slow changes and code nobody dares to touch. <b>Getzilla makes the agent pay as it goes.</b></p>
+      </div>
+    </div>
+  </section>
+
+
+  <section id="result" style="padding-top:0">
+    <div class="wrap row2">
+      <div class="ph big">
+        <img src="https://images.unsplash.com/photo-1562813733-b31f71025d54?w=1200&h=900&fit=crop&q=75&auto=format" alt="A developer working at night in a dark room lit by a monitor" loading="lazy" width="1200" height="900">
+        <div class="float">
+          <div class="float-h"><span>Pull request #12</span><span class="tag tag-ok">Safe to merge</span></div>
+          <div class="float-n"><strong>5/5</strong><span>checks passed</span></div>
+          <div class="bars"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+      <div>
+        <span class="eyebrow">What you get</span>
+        <h2>Sleep at night. Main still works in the morning.</h2>
+        <p class="intro">Getzilla sorts out what the agent left behind. Every change gets tests that really ran, a short note on what and why, and a second pair of eyes. Anything not ready waits outside main with a clear to-do list.</p>
+        <ul class="gets">
+          <li><svg aria-hidden="true"><use href="#tick"/></svg>Tests that actually ran, on the exact version you ship</li>
+          <li><svg aria-hidden="true"><use href="#tick"/></svg>Notes on what changed and why</li>
+          <li><svg aria-hidden="true"><use href="#tick"/></svg>A main branch you can deploy at any moment</li>
+        </ul>
+        <a class="more" href="#how">See how it works →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="sand" id="how">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">How it works</span>
+        <h2>Build first. Clean up second.</h2>
+        <p>Getzilla does not slow down the fun part. Vibe-code the feature or the whole project first. Then Getzilla takes what was built and turns it into something you can trust.</p>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Steps">
+        <button type="button" role="tab" class="first" id="t-build" aria-controls="p-build" aria-selected="true"><small>Step 1</small>Build</button>
+        <button type="button" role="tab" id="t-sort" aria-controls="p-sort" aria-selected="false"><small>Step 2</small>Sort</button>
+        <button type="button" role="tab" id="t-write" aria-controls="p-write" aria-selected="false"><small>Step 3</small>Write down</button>
+        <button type="button" role="tab" id="t-check" aria-controls="p-check" aria-selected="false"><small>Step 4</small>Check</button>
+        <button type="button" role="tab" id="t-review" aria-controls="p-review" aria-selected="false"><small>Step 5</small>Review</button>
+        <button type="button" role="tab" id="t-merge" aria-controls="p-merge" aria-selected="false"><small>Step 6</small>Let it in</button>
+      </div>
+
+      <div class="panel" id="p-build" role="tabpanel" aria-labelledby="t-build">
+        <div>
+          <h3>Get it working, fast</h3>
+          <p>Use your AI agent the way you like. Try ideas, throw them away, keep what works. Getzilla stays out of your way while you build.</p>
+          <ul>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>No paperwork yet</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>No rules in your way</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Just a working result</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>Your evening</h4>
+<pre class="record"><code><span class="c">you:</span>      add a checkout with saved cards
+<span class="c">agent:</span>    done ✓
+<span class="c">you:</span>      make the button green
+<span class="c">agent:</span>    done ✓
+<span class="c">you:</span>      ship it?
+<span class="k">getzilla:</span> let me clean this up first</code></pre>
+        </div>
+      </div>
+
+      <div class="panel" id="p-sort" role="tabpanel" aria-labelledby="t-sort" hidden>
+        <div>
+          <h3>Decide how careful to be</h3>
+          <p>Getzilla looks at what changed and picks the right amount of checking. A typo gets a light touch. Payments and logins get the full treatment.</p>
+        </div>
+        <div class="card">
+          <h4>What changed → how hard to check</h4>
+          <div class="rows">
+            <div class="row"><span>Typo on the pricing page</span><span class="tag tag-ok">Light</span></div>
+            <div class="row"><span>New settings screen</span><span class="tag tag-warn">Standard</span></div>
+            <div class="row"><span>Checkout and payments</span><span class="tag tag-bad">Full</span></div>
+            <div class="row"><span>Login and accounts</span><span class="tag tag-bad">Full</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="p-write" role="tabpanel" aria-labelledby="t-write" hidden>
+        <div>
+          <h3>Write it down</h3>
+          <p>Each change gets a short record: what it does, why it was needed, and how to tell that it works. The next person, or the next agent, starts from facts instead of guesses.</p>
+        </div>
+        <div class="card">
+          <h4>Change record</h4>
+<pre class="record"><code><span class="k">what</span>   new checkout with saved cards
+<span class="k">why</span>    old flow lost 1 in 5 orders
+<span class="k">verify</span> pay with a saved card,
+       pay as a new customer,
+       old accounts can still log in</code></pre>
+        </div>
+      </div>
+
+      <div class="panel" id="p-check" role="tabpanel" aria-labelledby="t-check" hidden>
+        <div>
+          <h3>Check it for real</h3>
+          <p>Missing tests are added. Everything runs on the exact version that is about to be merged, not on an older copy and not on the agent’s word.</p>
+        </div>
+        <div class="card">
+          <h4>Checks</h4>
+          <div class="rows">
+            <div class="row"><span>New checkout tests</span><span class="tag tag-ok">Added</span></div>
+            <div class="row"><span>Old login still works</span><span class="tag tag-ok">Passing</span></div>
+            <div class="row"><span>Run on the exact version to merge</span><span class="tag tag-ok">Yes</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="p-review" role="tabpanel" aria-labelledby="t-review" hidden>
+        <div>
+          <h3>Someone else reviews it</h3>
+          <p>A second agent or a person reads the change against its record. The author never approves its own work.</p>
+        </div>
+        <div class="card">
+          <h4>Review</h4>
+          <div class="rows">
+            <div class="row"><span>Written by</span><code>agent A</code></div>
+            <div class="row"><span>Reviewed by</span><code>agent B</code></div>
+            <div class="row"><span>Self-approval</span><span class="tag tag-bad">Not allowed</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="p-merge" role="tabpanel" aria-labelledby="t-merge" hidden>
+        <div>
+          <h3>Let it in, or not</h3>
+          <p>Only changes that passed every step reach your main code. The rest wait with a clear list of what to fix, so your main branch is always something you can ship.</p>
+        </div>
+        <div class="card">
+          <h4>Main branch</h4>
+          <div class="rows">
+            <div class="row"><span>Checkout, all checks passed</span><span class="tag tag-ok">Merged</span></div>
+            <div class="row"><span>Search, tests missing</span><span class="tag tag-bad">Waiting</span></div>
+            <div class="row"><span>Profile page, not reviewed</span><span class="tag tag-bad">Waiting</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark" id="trust">
+    <div class="wrap hw">
+      <div>
+        <span class="eyebrow">Why you can trust it</span>
+        <h2>The agent cannot grade its own homework</h2>
+        <p class="intro">The final check runs outside the agent’s reach: on a separate server, with tests the agent cannot see or edit. If a change is not proven, it does not get in, however confident the agent sounds.</p>
+      </div>
+      <div class="rules" role="table" aria-label="What gets into the main code">
+        <div class="rule" role="row"><span role="cell">Tests pass on the exact version being merged</span><span class="v v-in" role="cell">Gets in</span></div>
+        <div class="rule" role="row"><span role="cell">“Trust me, it works” without proof</span><span class="v v-out" role="cell">Stays out</span></div>
+        <div class="rule" role="row"><span role="cell">Tests changed to pass instead of fixing the code</span><span class="v v-out" role="cell">Stays out</span></div>
+        <div class="rule" role="row"><span role="cell">Nobody but the author has looked at it</span><span class="v v-out" role="cell">Stays out</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap inst">
+      <div>
+        <span class="eyebrow">Get started</span>
+        <h2>Try it on your project</h2>
+        <p class="intro">Getzilla installs into an ordinary git repository. It shows you the plan first and changes nothing until you say so.</p>
+        <div class="cta">
+          <a class="btn btn-dark" href="https://github.com/Dimkox/Getzilla">Open on GitHub</a>
+        </div>
+      </div>
+      <div>
+        <ol class="cmds">
+          <li>
+            <div class="cmd-l"><i>1</i>Get Getzilla and check your machine</div>
+<pre><code>git clone https://github.com/Dimkox/Getzilla.git
+cd Getzilla
+python3 scripts/getzilla_doctor.py --offer-install</code></pre>
+          </li>
+          <li>
+            <div class="cmd-l"><i>2</i>See what it would add to your project (read only)</div>
+<pre><code>python3 scripts/install_into.py --plan /path/to/your/repo</code></pre>
+          </li>
+          <li>
+            <div class="cmd-l"><i>3</i>Or start a brand-new project with it</div>
+<pre><code>python3 scripts/install_into.py --materialize-new /path/to/new-repo</code></pre>
+          </li>
+        </ol>
+        <p class="note">Used adaptive-grok-build-pro before? Run the same <code>--plan</code> on your project. It keeps your own settings and lists every old file next to its Getzilla replacement.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="band">
+    <div class="wrap">
+      <div class="box">
+        <h2>Vibe-code tonight. Ship something you can maintain tomorrow.</h2>
+        <p>Free and open source. Install it into your repository in a few minutes.</p>
+        <div class="cta">
+          <a class="btn btn-white" href="#install">Try it on your project</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="#"><svg aria-hidden="true"><use href="#logo"/></svg>getzilla</a>
+    <span>Free and open source (MIT) · <a href="https://github.com/Dimkox/Getzilla">github.com/Dimkox/Getzilla</a> · Photos: <a href="https://unsplash.com/">Unsplash</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var demo = document.getElementById('demo');
+  var sw = demo.querySelectorAll('.switch button');
+  sw.forEach(function (b) {
+    b.addEventListener('click', function () {
+      demo.setAttribute('data-state', b.dataset.state);
+      sw.forEach(function (o) { o.setAttribute('aria-selected', String(o === b)); });
+    });
+  });
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tabs [role="tab"]'));
+  function show(t) {
+    tabs.forEach(function (o) {
+      var on = o === t;
+      o.setAttribute('aria-selected', String(on));
+      o.tabIndex = on ? 0 : -1;
+      document.getElementById(o.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.tabIndex = i === 0 ? 0 : -1;
+    t.addEventListener('click', function () { show(t); });
+    t.addEventListener('keydown', function (e) {
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!d) return;
+      var n = tabs[(i + d + tabs.length) % tabs.length];
+      n.focus(); show(n);
+    });
+  });
+})();
+</script>
+</body>
+</html>
