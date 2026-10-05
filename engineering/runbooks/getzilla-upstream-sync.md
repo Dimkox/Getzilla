@@ -21,14 +21,22 @@ WORK=$(mktemp -d)
 git clone -q https://github.com/Dimkox/adaptive-grok-build-pro.git "$WORK/up"
 sed -n '/^```python$/,/^```$/p' engineering/runbooks/getzilla-rename-rules.md | sed '1d;$d' > "$WORK/rename.py"
 
-renamed_tree() {   # $1 = predecessor commit, prints the renamed tree's commit on top of $2 (optional parent)
+renamed_tree() {   # $1 = predecessor commit; prints a commit holding its renamed tree
   local dir="$WORK/t-$1"
   git worktree add -q --detach "$dir" HEAD
-  ( cd "$dir" && git rm -rq . && git -C "$WORK/up" archive "$1" | tar -x \
-    && git add -A && git -c user.name=sync -c user.email=sync@localhost commit -qm "verbatim $1" \
-    && python3 "$WORK/rename.py" . >/dev/null \
-    && find .grok-stack factory/src delivery/src scripts .agents .grok -depth -type d -empty -delete 2>/dev/null || true
-    git add -A && git -c user.name=sync -c user.email=sync@localhost commit -qm "renamed $1" && git rev-parse HEAD )
+  (
+    set -euo pipefail
+    cd "$dir"
+    git rm -rq .
+    git -C "$WORK/up" archive "$1" | tar -x
+    git add -A
+    git -c user.name=sync -c user.email=sync@localhost commit -qm "verbatim $1"
+    python3 "$WORK/rename.py" . >/dev/null
+    find .grok-stack factory/src delivery/src scripts .agents .grok -depth -type d -empty -delete 2>/dev/null || true
+    git add -A
+    git -c user.name=sync -c user.email=sync@localhost commit -qm "renamed $1"
+    git rev-parse HEAD
+  )
 }
 A=$(renamed_tree "$LAST")
 B=$(renamed_tree "$NEW")
