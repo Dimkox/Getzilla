@@ -65,7 +65,7 @@ async function launchChrome() {
     "about:blank",
   ], { stdio: "ignore" });
   const cdpUrl = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 450; attempt += 1) {
     try {
       const response = await fetch(`${cdpUrl}/json/version`);
       if (response.ok) return cdpUrl;

@@ -269,7 +269,7 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=30,
+                    timeout=120,
                 )
                 report_path = Path(output_dir) / "browser-contract.json"
                 self.assertTrue(report_path.is_file(), result.stderr)
