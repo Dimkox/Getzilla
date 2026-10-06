@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   getzilla-verify:
     runs-on: ubuntu-latest
@@ -37,5 +40,6 @@ jobs:
           if [ -f .getzilla/config/python-test-requirements.txt ]; then
             python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           fi
+          python -m pip install --disable-pip-version-check ruff==0.16.2 bandit==1.9.4
       - name: Getzilla verification
         run: python scripts/getzilla_verify.py --mode pr
