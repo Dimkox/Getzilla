@@ -2,6 +2,20 @@
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
+**One-command install.** These installers add whatever is missing (Git, Python 3.10+, the Grok Build CLI), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project.
+
+```powershell
+# Windows: winget when available, otherwise official per-user installers (no admin rights needed)
+irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
+```
+
+```bash
+# Linux (apt, dnf, yum, pacman, zypper, apk) and macOS (Homebrew or Command Line Tools)
+curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
+```
+
+With the installer done, continue at step 2 (sign in to Grok). The manual steps below are the same path by hand.
+
 0. Check tools (minimum or newer; doctor offers a fallback install if something is missing):
    ```bash
    python3 scripts/getzilla_doctor.py --offer-install

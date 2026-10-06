@@ -35,14 +35,27 @@ You do not give up vibe coding. The rule is **vibe first, check second**: build 
 
 ## Try it
 
-You need Python 3.10 or newer and Git. The AI agent itself runs in the Grok Build CLI.
+One command installs everything that is missing (Git, Python, the Grok Build CLI), downloads Getzilla to `~/Getzilla` and checks the machine.
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
+```
+
+Linux or macOS:
 
 ```bash
-git clone https://github.com/Dimkox/Getzilla.git
-cd Getzilla
-python3 scripts/getzilla_doctor.py --offer-install   # checks which tools you have
-python3 scripts/getzilla_demo.py --open              # read-only tour in your browser
+curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
 ```
+
+Then, from the Getzilla folder, take the read-only tour in your browser:
+
+```bash
+python3 scripts/getzilla_demo.py --open
+```
+
+On Windows, use `py -3` instead of `python3`.
 
 To add Getzilla to your own project, start by asking for a plan. This only reads your project and changes nothing:
 
