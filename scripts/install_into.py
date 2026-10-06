@@ -1480,8 +1480,10 @@ def install(
     del dry_run, runner
     if with_ci:
         raise SystemExit(
-            "GitHub Actions is forbidden. Use local `make verify` / "
-            "`python3 scripts/getzilla_verify.py --mode pr`."
+            "--with-ci is not part of installation. After the repository has a "
+            "GitHub remote, run `python3 scripts/getzilla_ci.py --write --target <repo>` "
+            "from the Getzilla checkout: public repositories get GitHub Actions, "
+            "private repositories get Trust CI."
         )
     if force:
         raise SystemExit(
@@ -1523,7 +1525,7 @@ def main() -> None:
     parser.add_argument(
         "--with-ci",
         action="store_true",
-        help="Forbidden. Never GitHub Actions; use local verification.",
+        help="Not supported here; use scripts/getzilla_ci.py --write after the repository has a GitHub remote.",
     )
     dependencies = parser.add_mutually_exclusive_group()
     dependencies.add_argument(
@@ -1538,7 +1540,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.with_ci:
-        parser.error("GitHub Actions is forbidden")
+        parser.error("--with-ci is not part of installation; use scripts/getzilla_ci.py --write --target <repo>")
     if args.force:
         parser.error(
             "--force is no longer supported; existing repositories are read-only"

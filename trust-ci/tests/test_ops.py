@@ -190,9 +190,14 @@ class OperationsTests(unittest.TestCase):
         self.assertIn('postgres_restart_probe seed', script)
         self.assertIn('postgres_restart_probe verify', script)
 
-    def test_repository_contains_no_github_actions_workflow(self) -> None:
+    def test_repository_workflows_are_hardened(self) -> None:
         workflows = ROOT / '.github' / 'workflows'
-        self.assertFalse(workflows.exists(), 'GitHub Actions are forbidden for this project')
+        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ['getzilla.yml'])
+        source = (workflows / 'getzilla.yml').read_text(encoding='utf-8')
+        self.assertIn('permissions:\n  contents: read', source)
+        self.assertNotIn('secrets.', source)
+        self.assertNotIn('pull_request_target', source)
+        self.assertNotIn('workflow_dispatch', source)
 
 
 if __name__ == '__main__':

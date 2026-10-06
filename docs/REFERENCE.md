@@ -59,7 +59,7 @@ This gives you a candidate and evidence. It does not merge, deploy, publish, or 
 ## What this is not
 
 - It is not a hosted SaaS.
-- It is not a GitHub Actions workflow.
+- It is not a CI service. `python3 scripts/getzilla_ci.py --plan|--write --target <repo>` selects the gate by repository visibility: public → a pinned, read-only GitHub Actions workflow; private → Trust CI (no workflow).
 - It is not an automatic merge bot.
 - It does not make the agent a production operator by default.
 - It does not turn local receipts into merge authority.

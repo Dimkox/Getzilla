@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_ENTRIES = frozenset(
     {
-        ".agents", ".coveragerc", ".gitattributes", ".gitignore", ".getzilla", ".grok", ".specify", ".superpowers",
+        ".agents", ".coveragerc", ".gitattributes", ".github", ".gitignore", ".getzilla", ".grok", ".specify", ".superpowers",
         "AGENTS.md", "CHANGELOG.md", "DARK_FACTORY_ROADMAP.md", "GROK_BUILD_HANDOFF.md",
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
         "FACTORY_UNIFIED_UPGRADE_TZ_v1.5_FINAL.md",
@@ -1021,12 +1021,27 @@ class StructureTests(unittest.TestCase):
         self.assertIn("M2-B", package_text)
         self.assertIn("App-owned", package_text)
 
-    def test_no_github_actions_workflow_exists(self) -> None:
-        self.assertFalse((ROOT / ".github/workflows").exists())
-        for path in ROOT.rglob("*.yml"):
-            self.assertFalse(path.as_posix().startswith((ROOT / ".github/workflows").as_posix()))
-        for path in ROOT.rglob("*.yaml"):
-            self.assertFalse(path.as_posix().startswith((ROOT / ".github/workflows").as_posix()))
+    def test_github_actions_workflows_are_pinned_and_read_only(self) -> None:
+        import re
+
+        sources = {
+            ".github/workflows/getzilla.yml": (ROOT / ".github/workflows/getzilla.yml").read_text(encoding="utf-8"),
+            ".getzilla/templates/ci/github-actions-verify.yml": (
+                ROOT / ".getzilla/templates/ci/github-actions-verify.yml"
+            ).read_text(encoding="utf-8"),
+        }
+        self.assertEqual(sorted(path.name for path in (ROOT / ".github/workflows").iterdir()), ["getzilla.yml"])
+        self.assertFalse((ROOT / ".github/dependabot.yml").exists())
+        for rel, source in sources.items():
+            with self.subTest(workflow=rel):
+                self.assertIn("permissions:\n  contents: read\n", source)
+                self.assertIn("persist-credentials: false", source)
+                for forbidden in ("pull_request_target", "workflow_dispatch", "secrets.", ": write"):
+                    self.assertNotIn(forbidden, source)
+                references = re.findall(r"uses:\s*(\S+)", source)
+                self.assertTrue(references)
+                for reference in references:
+                    self.assertRegex(reference, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 
     def test_trust_ci_control_plane_is_complete(self) -> None:
         required = (

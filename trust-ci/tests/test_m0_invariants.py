@@ -297,8 +297,9 @@ class M0InvariantTests(unittest.TestCase):
         text = MISTAKES.read_text(encoding="utf-8")
         self.assertNotIn("nginx for the existing app", text)
 
-    def test_no_github_actions_workflows_tree(self) -> None:
-        self.assertFalse((ROOT / ".github" / "workflows").exists())
+    def test_github_actions_workflows_tree_holds_only_the_public_gate(self) -> None:
+        workflows = ROOT / ".github" / "workflows"
+        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ["getzilla.yml"])
 
     def test_api_cannot_hold_github_app_or_client(self) -> None:
         text = API.read_text(encoding="utf-8")
@@ -322,9 +323,12 @@ class M0InvariantTests(unittest.TestCase):
         self.operator_document_bindings()
         self.assertNotIn("laptop", spec)
 
-    def test_holdout_example_forbids_github_actions(self) -> None:
+    def test_holdout_example_hardens_github_actions(self) -> None:
         holdout = (ROOT / "trust-ci/holdout.example/validate.py").read_text(encoding="utf-8")
-        self.assertIn("GitHub Actions workflows are forbidden", holdout)
+        self.assertIn("must pin", holdout)
+        self.assertIn("pull_request_target", holdout)
+        consumer = (ROOT / "trust-ci/holdout.consumer.example/validate.py").read_text(encoding="utf-8")
+        self.assertIn("GitHub Actions workflows are forbidden in a Trust CI-gated private repository", consumer)
         self.assertIn("webhook API must not hold the GitHub App key", holdout)
 
     def test_m0_3_main_is_app_bound(self) -> None:

@@ -1,6 +1,6 @@
 # Adaptive Trust CI
 
-Self-hosted, independent merge-trust boundary for Getzilla. It does **not** use GitHub Actions.
+Self-hosted, independent merge-trust boundary. It does **not** use GitHub Actions. It is the CI gate for private repositories; public repositories are gated by GitHub Actions instead (`scripts/getzilla_ci.py`).
 
 The service consumes HMAC-verified GitHub pull-request webhooks, stores jobs and leases in PostgreSQL, checks out the exact webhook SHA on a trusted worker, verifies an external holdout bundle, executes mandatory checks in a separate no-network container, rejects source mutation, signs the result with Ed25519, and publishes a GitHub App-owned Check Run:
 

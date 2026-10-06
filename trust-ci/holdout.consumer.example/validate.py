@@ -3,7 +3,9 @@
 
 Used by a Trust CI owner profile, so it checks only what every Getzilla
 consumer installation carries: the change-spec contract, the local approval
-disclaimer, delegated-grant binding and the GitHub Actions ban. Repository
+disclaimer, delegated-grant binding and the absence of GitHub Actions: a
+Trust CI profile gates a private repository, and a private repository never
+carries a workflow (a public one is gated by GitHub Actions instead). Repository
 specific holdouts (for example Getzilla's own) belong in exact profiles.
 """
 from __future__ import annotations
@@ -35,7 +37,7 @@ def main() -> int:
     require((root / '.getzilla/getzilla').is_dir(), 'Getzilla is not installed in this repository')
     validate_change_specs(root)
 
-    require(not (root / '.github' / 'workflows').exists(), 'GitHub Actions workflows are forbidden')
+    require(not (root / '.github' / 'workflows').exists(), 'GitHub Actions workflows are forbidden in a Trust CI-gated private repository')
 
     approve = text(root, 'scripts/getzilla_approve.py')
     require('external_trust_ci_authority' in approve, 'local approval CLI must disclaim Trust CI authority')

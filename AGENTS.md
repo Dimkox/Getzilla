@@ -47,7 +47,7 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 
 - Prompt files, hooks, `.getzilla/runtime`, local delegated grants, local receipts, change packages, local tests and agent reviews are workflow evidence only. They are not merge authority.
 - The authoritative merge gate is the GitHub App-owned policy-epoch Check Run `adaptive-trust-ci/verified@<policy-sha12>` for the exact pull-request head SHA. Branch protection binds that exact check name to the configured GitHub App ID.
-- Never use GitHub Actions for this repository. Trust CI is operated from `trust-ci/` with PostgreSQL durable state, isolated exact-SHA runners, external holdout validation, source-mutation detection, signed attestations and human-signed scoped approvals.
+- The CI gate follows repository visibility (owner decision 2026-10-06): a public repository is gated by GitHub Actions, a private repository by Trust CI. `python3 scripts/getzilla_ci.py --plan` reports the selection and `--write` renders the pinned public-repository workflow; it never writes a workflow for a private repository. Getzilla is public, so `.github/workflows/getzilla.yml` runs its tests on every pull request; workflow actions are pinned to full commit SHAs, use read-only `contents` permission and never receive repository secrets. Agents never dispatch workflows. Trust CI is operated from `trust-ci/` with PostgreSQL durable state, isolated exact-SHA runners, external holdout validation, source-mutation detection, signed attestations and human-signed scoped approvals.
 - An agent must never generate, read, request, submit or simulate a human approval private key. Human security approvals are signed outside the agent environment and verified by the Trust CI API against its server-mounted public-key store.
 - Repository changes cannot modify deployed Trust CI policy, deployed holdout bundle, deployed images, PostgreSQL state, CI signing keys, GitHub App key, human trust stores or branch protection. Those live outside the pull-request trust domain.
 
@@ -220,4 +220,4 @@ For each report, list the claims probed, exact commands and concise observed out
 - Reading `.env`, private keys, credential stores, production dumps, CI signing keys, GitHub App keys or approval keys.
 - Broad cleanup, force push, destructive Git commands, unbounded SQL, or infrastructure apply/destroy.
 - Editing Bitrix core instead of implementing an extension under `local/`.
-- Adding `.github/workflows/` or any GitHub Actions dependency.
+- Adding a GitHub Actions workflow to a private repository, adding Dependabot or another CI vendor, referencing an action by tag or branch instead of a full commit SHA, granting a workflow write permissions or secrets, or dispatching a workflow.

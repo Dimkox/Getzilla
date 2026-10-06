@@ -1,0 +1,76 @@
+# Getzilla's own CI/merge gate.
+#
+# The gate follows repository visibility (owner decision 2026-10-06): a public
+# repository is gated by GitHub Actions, a private repository by the
+# self-hosted Trust CI GitHub App (adaptive-trust-ci, code in trust-ci/).
+# Getzilla is public, so this workflow is its gate. Consumer repositories get
+# their own workflow from `python3 scripts/getzilla_ci.py --write`. A Windows
+# job joins once the native Windows port lands.
+name: getzilla
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact commit with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install test requirements
+        shell: bash
+        run: |
+          if [ -f .getzilla/config/python-test-requirements.txt ]; then
+            python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
+          fi
+          cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
+          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
+      - name: Core tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+      - name: Trust CI tests
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s trust-ci/tests 2>&1 | tee "$RUNNER_TEMP/trust-ci-tests.log"
+      - name: Annotate failing tests
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+
+          for log in ("core-tests.log", "trust-ci-tests.log"):
+              path = pathlib.Path(os.environ["RUNNER_TEMP"]) / log
+              if not path.is_file():
+                  continue
+              blocks = re.split(r"^={50,}$", path.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE)
+              for block in blocks[1:41]:
+                  lines = [line for line in block.strip().splitlines() if line.strip()]
+                  if not lines:
+                      continue
+                  title = lines[0][:200]
+                  detail = " | ".join(line.strip() for line in lines[-25:])[:6000]
+                  print(f"::error title={log}::{title} -- {detail}".replace("\n", " "))

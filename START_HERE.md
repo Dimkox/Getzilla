@@ -58,7 +58,7 @@ The earlier [dated backlog](engineering/changes/20260921-research-open-backlog-m
 3. Continue from `PROJECT_STATE.json.current_continuation` after fetching remote state, then inspect its dated source/runtime/release observations, the open-work inventory and [runtime runbook](engineering/runbooks/l5-production-runtime.md). Historical milestone branches and release-preparation records are evidence, not current continuation instructions.
 4. If starting a different software-development task, create/resolve the local route first. `.getzilla/runtime/active-route.json` is runtime state and may legitimately be absent in a fresh clone; do not fabricate it.
 5. Follow `AGENTS.md`: measured parallel-first scheduling, one write owner per isolated task/route/branch/worktree, route-selected agents, local verification as evidence, and PR-only merge through external Trust CI and required approvals. Explicitly delegated pre-verification branch transport remains labelled UNVERIFIED.
-6. Never add GitHub Actions.
+6. CI follows repository visibility: public → GitHub Actions (`scripts/getzilla_ci.py --write`), private → Trust CI. Never dispatch workflows.
 7. Never bypass the exact-SHA App-owned Trust CI check.
 
 ## What is intentionally not in Git
