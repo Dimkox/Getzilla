@@ -106,9 +106,30 @@ def open_dir_at(parent: DirHandle, name: str, *, flags: int = 0) -> DirHandle:
 
 
 def lstat_at(parent: DirHandle, name: str) -> os.stat_result:
-    if isinstance(parent, WindowsDirectory):
-        return os.lstat(_child_path(parent, name))
-    return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    """``lstat`` of ``name`` in ``parent``.
+
+    On Windows a path lookup serves NTFS's lazily refreshed directory-entry
+    copy of the timestamps, so a just-renamed file reports an older change
+    time than an open handle does. For a regular file the handle's ``fstat``
+    is returned instead, after checking it is the same file the lookup named.
+    """
+    if not isinstance(parent, WindowsDirectory):
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    path = _child_path(parent, name)
+    named = os.lstat(path)
+    if is_link(named) or not stat.S_ISREG(named.st_mode):
+        return named
+    try:
+        descriptor = os.open(path, os.O_RDONLY | O_BINARY | O_NOINHERIT)
+    except PermissionError:
+        return named
+    try:
+        opened = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        raise OSError(errno.ESTALE, 'file replaced during lookup', path)
+    return opened
 
 
 def fstat_dir(handle: DirHandle) -> os.stat_result:
