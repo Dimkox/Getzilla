@@ -84,8 +84,8 @@ class VibeVMStoreTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, code)
 
     def test_provenance_is_exact_and_data_only(self):
-        self.assertEqual(UPSTREAM_ADAPTER_COMMIT, "0b63caa86e80ff670dc2a62ff529079b91d08e4d")
-        self.assertEqual(UPSTREAM_ADAPTER_TREE, "1ff4963aeea1f3f0a925485437b8dcf7130bf17d")
+        self.assertEqual(UPSTREAM_ADAPTER_COMMIT, "29f399c9b20040ffb2e94298cd1e5e1c70e87b96")
+        self.assertEqual(UPSTREAM_ADAPTER_TREE, "e2c1e6f7394965c0fde8a22da93bde1d910f5b1a")
         self.assertEqual(self.store.capability, "factory_package_store_v1")
         self.assertFalse(hasattr(self.store, "execute_adapter"))
 

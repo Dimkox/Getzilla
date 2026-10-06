@@ -18,8 +18,8 @@ import xml.parsers.expat
 import zipfile
 
 
-UPSTREAM_ADAPTER_COMMIT = "0b63caa86e80ff670dc2a62ff529079b91d08e4d"
-UPSTREAM_ADAPTER_TREE = "1ff4963aeea1f3f0a925485437b8dcf7130bf17d"
+UPSTREAM_ADAPTER_COMMIT = "29f399c9b20040ffb2e94298cd1e5e1c70e87b96"
+UPSTREAM_ADAPTER_TREE = "e2c1e6f7394965c0fde8a22da93bde1d910f5b1a"
 
 
 class VibeVMStoreError(ValueError):
