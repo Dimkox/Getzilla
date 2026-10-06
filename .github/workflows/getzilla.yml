@@ -45,7 +45,14 @@ jobs:
           fi
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
+      - name: Static checks as the verifier runs them
+        shell: bash
+        run: |
+          paths=$(python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import QUALITY_PY_PATHS; print(' '.join(p for p in QUALITY_PY_PATHS if Path(p).exists()))")
+          ruff check --output-format github $paths
+          bandit -c bandit.yaml -q -r $(printf '%s\n' $paths | grep -v '^tests') -f custom --msg-template '::error file={relpath},line={line}::{test_id} {msg}'
       - name: Core tests
+        if: success() || failure()
         shell: bash
         run: |
           set -o pipefail
