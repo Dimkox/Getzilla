@@ -72,5 +72,5 @@ jobs:
                   if not lines:
                       continue
                   title = lines[0][:200]
-                  detail = " | ".join(line.strip() for line in lines[-4:])[:900]
+                  detail = " | ".join(line.strip() for line in lines[-25:])[:6000]
                   print(f"::error title={log}::{title} -- {detail}".replace("\n", " "))
