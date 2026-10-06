@@ -322,9 +322,12 @@ class M0InvariantTests(unittest.TestCase):
         self.operator_document_bindings()
         self.assertNotIn("laptop", spec)
 
-    def test_holdout_example_forbids_github_actions(self) -> None:
+    def test_holdout_example_hardens_github_actions(self) -> None:
         holdout = (ROOT / "trust-ci/holdout.example/validate.py").read_text(encoding="utf-8")
-        self.assertIn("GitHub Actions workflows are forbidden", holdout)
+        self.assertIn("must pin", holdout)
+        self.assertIn("pull_request_target", holdout)
+        consumer = (ROOT / "trust-ci/holdout.consumer.example/validate.py").read_text(encoding="utf-8")
+        self.assertIn("GitHub Actions workflows are forbidden in a Trust CI-gated private repository", consumer)
         self.assertIn("webhook API must not hold the GitHub App key", holdout)
 
     def test_m0_3_main_is_app_bound(self) -> None:

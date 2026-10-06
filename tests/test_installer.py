@@ -1341,7 +1341,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(command.returncode, 0, command.stderr)
             self.assertEqual(json.loads(command.stdout)["agents"], [])
 
-    def test_with_ci_remains_forbidden_without_mutation(self) -> None:
+    def test_with_ci_redirects_to_the_ci_gate_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target"
             target.mkdir()
@@ -1354,7 +1354,7 @@ class InstallerTests(unittest.TestCase):
                     dry_run=False,
                     with_ci=True,
                 )
-            self.assertIn("forbidden", str(raised.exception).lower())
+            self.assertIn("scripts/getzilla_ci.py --write", str(raised.exception))
             self.assertEqual(_snapshot(target), before)
 
 

@@ -100,6 +100,6 @@
     "Standing or explicit user consent may be materialized only as an exact action-scoped delegated grant bound to repository, route/change, Git HEAD and tree fingerprint.",
     "A delegated local grant cannot create adaptive-trust-ci/verified, sign a human approval or modify deployed Trust CI authority.",
     "The authoritative exact-SHA gate is adaptive-trust-ci/verified from the self-hosted GitHub App publisher.",
-    "GitHub Actions and workflow dispatch are forbidden."
+    "The CI gate follows repository visibility: public repositories use the pinned GitHub Actions workflow from scripts/getzilla_ci.py, private repositories use Trust CI. Workflow dispatch is forbidden."
   ]
 }

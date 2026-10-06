@@ -78,7 +78,7 @@ Then follow [QUICKSTART.md](QUICKSTART.md).
 ## What it is not
 
 - Not a hosted service. It runs on your machine, inside your repository.
-- Not a GitHub Actions workflow.
+- Not a CI service. CI follows repository visibility: public repositories run the pinned GitHub Actions workflow from `scripts/getzilla_ci.py`, private ones use Trust CI.
 - Not a bot that merges or deploys on its own.
 
 ## Learn more

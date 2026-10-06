@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-06 — CI gate follows repository visibility
+
+Supersedes "Never GitHub Actions" (2026-08-16). A public repository is gated by GitHub Actions, a private repository by Trust CI (`adaptive-trust-ci`). `scripts/getzilla_ci.py` detects visibility and renders `.getzilla/templates/ci/github-actions-verify.yml` only for public repositories; it never overwrites and never touches branch protection. Getzilla is public, so `.github/workflows/getzilla.yml` runs its suite on Linux and Windows. Workflows pin actions to full commit SHAs, grant only `contents: read`, never use secrets or `pull_request_target`, and are never dispatched by an agent. Dependabot and other CI vendors stay out. Local `getzilla_verify.py --mode pr` stays the pre-push gate.
+
 ## 2026-10-05 — Bind the real consumer and version changed wire semantics
 
 Use actual bounded Git-visible bytes and normalized authoritative route semantics, then exercise the CLI rather than relying on synthetic caller-supplied digests. Give the one-case cohort a distinct V2 version/domain/schema while preserving legacy V1 floor30 and the exact-V1 M9 boundary; historical schema comparison is literal again and excludes only the two named successor schemas. Bootstrap root binding tests from their own repository source path so isolated Trust CI discovery has the same inputs without collection side effects.
@@ -245,7 +249,7 @@ The caption already promised every core piece is linked to every other. Once `AG
 
 Hardcoded version asserts go red first so a skipped identity file cannot hide. Pack only after `VERSION` is `2.0.8` so the zip name and in-zip `VERSION` cannot still say `2.0.7`. The 2.0.8 ship used that sequence and the in-zip `VERSION` matched.
 
-## 2026-08-16 — Never GitHub Actions
+## 2026-08-16 — Never GitHub Actions (superseded 2026-10-06)
 
 Local `make verify` / `python3 scripts/grok_verify.py --mode pr` is the only quality gate. Do not add `.github/workflows/`, Dependabot, `--with-ci` copies, or another CI SaaS. `install_into --with-ci` is `SystemExit` / forbidden.
 
