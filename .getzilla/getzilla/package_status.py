@@ -61,6 +61,10 @@ def _identity(info: os.stat_result) -> tuple[int, ...]:
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
+def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return fsx.directory_identity(info, _identity(info))
+
+
 def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) -> bytes:
     """Open every component without following links; never block on a FIFO."""
     parts = _relative(relative)
@@ -78,7 +82,7 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
         for component in parts[:-1]:
             child = fsx.open_dir_at(directory, component, flags=fsx.O_CLOEXEC)
             handles.append(child)
-            directories.append((directory, component, _identity(fsx.fstat_dir(child))))
+            directories.append((directory, component, _directory_identity(fsx.fstat_dir(child))))
             directory = child
         descriptor = fsx.open_at(
             directory, parts[-1], os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK
@@ -104,7 +108,7 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
             or _identity(before) != _identity(fsx.lstat_at(directory, parts[-1]))
             or total != before.st_size
             or any(
-                identity != _identity(fsx.lstat_at(parent, name))
+                identity != _directory_identity(fsx.lstat_at(parent, name))
                 for parent, name, identity in directories
             )
         ):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -63,10 +64,8 @@ def run_hook(main: Callable[[], None], fallback: dict[str, Any]) -> None:
     try:
         main()
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             traceback.print_exc()
-        except Exception:
-            pass
         emit(fallback)
 
 TOOL_ALIASES = {

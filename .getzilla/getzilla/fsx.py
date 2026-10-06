@@ -45,6 +45,18 @@ class WindowsDirectory:
 DirHandle = Union[int, WindowsDirectory]
 
 
+def directory_identity(info: os.stat_result, posix_identity: tuple[int, ...]) -> tuple[int, ...]:
+    """Identity used to detect a swapped directory.
+
+    POSIX keeps the caller's tuple. NTFS updates a directory's timestamps lazily
+    after a child is written or closed, so on Windows only device, file index
+    and type identify the directory; a swap or relink still changes them.
+    """
+    if WINDOWS:
+        return (info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode))
+    return posix_identity
+
+
 def is_link(info: os.stat_result) -> bool:
     """True for symlinks and, on Windows, for any reparse point (junctions included)."""
     if stat.S_ISLNK(info.st_mode):

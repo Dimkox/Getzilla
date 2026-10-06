@@ -659,8 +659,8 @@ def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _directory_identity(info: os.stat_result) -> tuple[int, int, int, int]:
-    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return fsx.directory_identity(info, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns))
 
 
 def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopology:

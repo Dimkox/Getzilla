@@ -198,7 +198,7 @@ class _Inventory:
                         continue
                     child = fsx.open_dir_at(descriptor, name)
                     try:
-                        if _identity(fsx.fstat_dir(child)) != _identity(info):
+                        if _directory_identity(fsx.fstat_dir(child)) != _directory_identity(info):
                             raise OSError('directory changed before open')
                         self.walk(child, path, depth + 1)
                     finally:
@@ -214,6 +214,10 @@ class _Inventory:
 
 def _identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return fsx.directory_identity(info, _identity(info))
 
 
 def _scan(root: Path) -> _Inventory:
