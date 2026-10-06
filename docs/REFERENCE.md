@@ -424,11 +424,11 @@ Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_so
 
 | Component | Pinned | Upstream | Observed latest | Observed |
 | --- | --- | --- | --- | --- |
-| Superpowers | 6.3.0 | obra/superpowers | 6.3.0 | 2026-09-15 |
-| BMAD Method | 6.12.0 | bmad-code-org/BMAD-METHOD | 6.12.0 | 2026-09-15 |
-| GitHub Spec Kit | 1.0.7 | github/spec-kit | 1.0.7 | 2026-09-15 |
+| Superpowers | 6.4.2 | obra/superpowers | 6.4.2 | 2026-10-06 |
+| BMAD Method | 6.12.1 | bmad-code-org/BMAD-METHOD | 6.12.1 | 2026-10-06 |
+| GitHub Spec Kit | 1.1.0 | github/spec-kit | 1.1.0 | 2026-10-06 |
 
-These rows are dated currency observations for the workflow artifact adapters, not install targets; `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the [upstream format amendment](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md).
+These rows are dated currency observations for the workflow artifact adapters, not install targets; `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
 
 ## Install into a project
 

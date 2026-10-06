@@ -739,6 +739,90 @@ class CurrentUpstreamFormatTests(unittest.TestCase):
             tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
             self.assertEqual([task["key"] for task in tasks], ["story-1-1-1-001", "story-1-1-2-001"])
 
+    def test_bmad_v6121_epics_front_matter_status_does_not_advance_imported_work(self) -> None:
+        """BMAD v6.12.1 epics front matter (2026-10-06, exact tag).
+
+        The front-matter lines are byte-verbatim from bmad-code-org/BMAD-METHOD
+        v6.12.1 src/bmm-skills/plan/bmad-create-epics-and-stories/templates/
+        epics-template.md:1-5. Since v6.12.1 the epics document is written with
+        ``status: draft`` and switches to ``status: final`` once planning
+        validation passes; both describe the plan, not delivered work, so
+        neither may advance imported tasks. ``done`` is the control.
+        """
+        body = (
+            "stepsCompleted: []\n"
+            "inputDocuments: []\n"
+            "---\n\n"
+            "# Auth System - Epic Breakdown\n\n"
+            "## Epic 1: Foundation\n\n"
+            "### Story 1.1: Loader bootstraps\n"
+            "- [ ] Implement AC-001 in src/loader.py\n"
+        )
+        expected = {"draft": set(), "final": set(), "done": {"story-1-1-001"}}
+        for status, hints in expected.items():
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                epics = f"---\nstatus: {status}\n" + body
+                manifest = self._docs(root, [("bmad", "epics", "_bmad-output/epics.md", epics)], "6.12.1")
+                bundle = self.artifacts.load_source_manifest(root, manifest)
+                tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+                self.assertEqual([task["key"] for task in tasks], ["story-1-1-001"])
+                self.assertEqual(self.artifacts._advanced_status_hints(bundle), hints)
+
+    def test_spec_kit_v110_tasks_template_rows_parse_unchanged(self) -> None:
+        """Spec Kit v1.1.0 task grammar (2026-10-06, exact tag).
+
+        Lines are byte-verbatim from github/spec-kit v1.1.0
+        templates/tasks-template.md:48-54; the template is unchanged since
+        v1.0.7 (only templates/commands/converge.md changed).
+        """
+        content = (
+            "## Phase 1: Setup (Shared Infrastructure)\n"
+            "\n"
+            "**Purpose**: Project initialization and basic structure\n"
+            "\n"
+            "- [ ] T001 Create project structure per implementation plan\n"
+            "- [ ] T002 Initialize [language] project with [framework] dependencies\n"
+            "- [ ] T003 [P] Configure linting and formatting tools\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(root, [("spec-kit", "tasks", "specs/001-feature/tasks.md", content)], "1.1.0")
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+            self.assertEqual([task["key"] for task in tasks], ["t001", "t002", "t003"])
+            self.assertEqual(tasks[1]["depends_on"], ["t001"])
+
+    def test_superpowers_v64_collision_workspace_evidence_stays_under_sdd_prefix(self) -> None:
+        """Superpowers v6.4.x workspaces (2026-10-06, exact tag v6.4.2).
+
+        Since v6.4.1 two plans with the same basename get separate
+        ``.superpowers/sdd/<dir>/`` workspaces and each records its owning
+        plan in a ``plan-path`` file, so the directory name no longer has to
+        equal the plan basename. Evidence anywhere under the prefix loads;
+        evidence outside it still fails closed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(
+                root,
+                [
+                    ("superpowers", "plan", "docs/superpowers/plans/plan.md", "# Plan\n1. Write tests\n"),
+                    ("superpowers", "sdd-evidence", ".superpowers/sdd/plan-2/plan-path", "docs/beta/plan.md\n"),
+                    ("superpowers", "sdd-evidence", ".superpowers/sdd/plan-2/progress.md", "ledger\n"),
+                ],
+                "6.4.2",
+            )
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            self.assertEqual(len(bundle.sources), 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(
+                root, [("superpowers", "sdd-evidence", ".superpowers/plan-2/progress.md", "ledger\n")], "6.4.2"
+            )
+            with self.assertRaises(self.artifacts.WorkflowArtifactError):
+                self.artifacts.load_source_manifest(root, manifest)
+
     def test_sprint_status_advances_only_from_nested_key_values(self) -> None:
         story = """# Story 9.9: Solo
 
