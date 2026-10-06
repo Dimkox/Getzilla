@@ -424,13 +424,13 @@ class ChangeSpecTests(unittest.TestCase):
             self.assertEqual(loaded["risk"]["tier"], "green")
             self.assertIn("AC-001", mapped)
 
-    def test_factory_is_nested_without_root_packaging_or_github_actions(self) -> None:
+    def test_factory_is_nested_without_root_packaging_or_dependabot(self) -> None:
         self.assertTrue((ROOT / "factory" / "pyproject.toml").is_file())
         self.assertTrue((ROOT / "factory" / "src" / "getzilla_factory").is_dir())
         self.assertFalse((ROOT / "pyproject.toml").exists())
         self.assertFalse((ROOT / "requirements.txt").exists())
         self.assertFalse((ROOT / "setup.py").exists())
-        self.assertFalse((ROOT / ".github" / "workflows").exists())
+        self.assertFalse((ROOT / ".github" / "dependabot.yml").exists())
 
     def test_schema_id_and_additional_properties(self) -> None:
         schema = json.loads((ROOT / "schemas" / "change-spec.schema.json").read_text(encoding="utf-8"))

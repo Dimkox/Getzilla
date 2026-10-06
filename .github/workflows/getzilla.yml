@@ -37,6 +37,7 @@ jobs:
           if [ -f .getzilla/config/python-test-requirements.txt ]; then
             python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           fi
+          python -m pip install --disable-pip-version-check "./trust-ci[test]"
       - name: Core tests
         run: python -m unittest discover -s tests
       - name: Trust CI tests

@@ -297,8 +297,9 @@ class M0InvariantTests(unittest.TestCase):
         text = MISTAKES.read_text(encoding="utf-8")
         self.assertNotIn("nginx for the existing app", text)
 
-    def test_no_github_actions_workflows_tree(self) -> None:
-        self.assertFalse((ROOT / ".github" / "workflows").exists())
+    def test_github_actions_workflows_tree_holds_only_the_public_gate(self) -> None:
+        workflows = ROOT / ".github" / "workflows"
+        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ["getzilla.yml"])
 
     def test_api_cannot_hold_github_app_or_client(self) -> None:
         text = API.read_text(encoding="utf-8")
