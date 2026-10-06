@@ -10,6 +10,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from . import fsx
+
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "change-spec.schema.json"
 LEGACY_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "change-spec-v1.schema.json"
 UNKNOWN_TOKEN = "UNKNOWN"  # nosec B105
@@ -461,7 +463,7 @@ def _read_regular_bytes(path: Path, limit: int = MAX_SPEC_BYTES) -> bytes:
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode) or path.is_symlink():
             raise SpecError(f"{path}: spec must be a regular non-symlink file", code="io")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
         fd = os.open(path, flags)
         try:
             opened = os.fstat(fd)
@@ -648,17 +650,14 @@ def _contract_digest(root: Path, raw: str) -> str | None:
     ):
         raise SpecError(f"unsafe contract path: {raw!r}", code="path")
     descriptors: list[int] = []
+    handles: list[fsx.DirHandle] = []
     try:
-        current = os.open(root.resolve(strict=True), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        descriptors.append(current)
+        current = fsx.open_dir(root.resolve(strict=True))
+        handles.append(current)
         for part in rel.parts[:-1]:
-            current = os.open(
-                part,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=current,
-            )
-            descriptors.append(current)
-        fd = os.open(rel.parts[-1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=current)
+            current = fsx.open_dir_at(current, part)
+            handles.append(current)
+        fd = fsx.open_at(current, rel.parts[-1], os.O_RDONLY | fsx.O_NOFOLLOW)
         descriptors.append(fd)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_SPEC_BYTES:
@@ -688,6 +687,8 @@ def _contract_digest(root: Path, raw: str) -> str | None:
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
 
 
 def spec_fingerprint(
@@ -704,7 +705,7 @@ def spec_fingerprint(
                 contracts.append({"path": str(raw), "digest": contract_digest})
     head = None
     try:
-        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, timeout=10, check=False)
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8", capture_output=True, timeout=10, check=False)
         head = proc.stdout.strip() if proc.returncode == 0 else None
     except OSError:
         pass

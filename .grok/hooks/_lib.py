@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 HOOK_DIR = Path(__file__).resolve().parent
 REPO_CANDIDATE = HOOK_DIR.parents[1]
@@ -15,11 +15,59 @@ STACK = REPO_CANDIDATE / '.getzilla'
 if str(STACK) not in sys.path:
     sys.path.insert(0, str(STACK))
 
+from getzilla import fsx
 from getzilla._policy_legacy import (
+    _executable_name,
+    _split_words,
     _unwrap_execution_wrappers,
+    _windows_sequence_split,
     analyze_command_authority,
 )
 from getzilla.util import find_root
+
+_POSIX_SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+# Native Windows command interpreters and cmdlet spellings (compared lower-cased).
+_WINDOWS_SHELLS = {'cmd', 'powershell', 'pwsh'}
+_WINDOWS_DIRECTORY_COMMANDS = {'cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location'}
+_WINDOWS_DYNAMIC_COMMANDS = {'invoke-expression', 'iex'}
+
+
+def _shells() -> set[str]:
+    return _POSIX_SHELLS | _WINDOWS_SHELLS if fsx.WINDOWS else _POSIX_SHELLS
+
+
+def _is_directory_command(word: str) -> bool:
+    if fsx.WINDOWS:
+        return word.lower() in _WINDOWS_DIRECTORY_COMMANDS
+    return word in {'cd', 'pushd'}
+
+
+def _is_git(word: str) -> bool:
+    if fsx.WINDOWS:
+        return _executable_name(word) == 'git'
+    return Path(word).name == 'git'
+
+
+def run_hook(main: Callable[[], None], fallback: dict[str, Any]) -> None:
+    """Run a hook entry point.
+
+    POSIX ``command`` lines in hooks.json end in ``|| python3 <alias> || python3
+    -c "print('{}')"``, so a failure there is absorbed by the shell exactly as
+    before. ``commandWindows`` lines have no fallback chain: on Windows a
+    failing hook reports the traceback on stderr and emits the same fail-open
+    fallback itself instead of crashing.
+    """
+    if not fsx.WINDOWS:
+        main()
+        return
+    try:
+        main()
+    except Exception:
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+        emit(fallback)
 
 TOOL_ALIASES = {
     'run_terminal_command': 'Bash',
@@ -134,20 +182,20 @@ def _literal_git_subcommand(words: list[str]) -> str | None:
 
 
 def _contains_nested_command_shell(words: list[str]) -> bool:
-    shells = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
-    return any(Path(token).name.lower() in shells for token in words)
+    shells = _shells()
+    return any(_executable_name(token) in shells for token in words)
 
 
 def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     if not words:
         return False
-    shells = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+    shells = _shells()
     sensitive = {'git', 'gh', 'docker', 'npm', 'curl', 'wget'}
-    outer = Path(words[0]).name.lower()
+    outer = _executable_name(words[0])
     if outer == 'xargs':
         dispatched = _literal_xargs_command(words)
         if dispatched is None:
-            return any(Path(token).name.lower() in sensitive | shells for token in words[1:])
+            return any(_executable_name(token) in sensitive | shells for token in words[1:])
         if not dispatched:
             return False
         dispatched, ambiguous_wrapper = _unwrap_execution_wrappers(dispatched)
@@ -155,7 +203,7 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
             return True
         if not dispatched:
             return False
-        executable = Path(dispatched[0]).name.lower()
+        executable = _executable_name(dispatched[0])
         if executable in shells:
             return True
         if executable == 'git':
@@ -165,7 +213,7 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
         if executable in {'echo', 'printf'}:
             return False
         if executable in {'env', 'sudo', 'doas', 'chroot', 'xargs'}:
-            if any(Path(token).name.lower() in sensitive for token in dispatched[1:]):
+            if any(_executable_name(token) in sensitive for token in dispatched[1:]):
                 return True
         return _contains_nested_command_shell(dispatched[1:])
     if outer in sensitive | shells | {'cd', 'pushd', 'echo', 'printf'}:
@@ -173,10 +221,15 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     return _contains_nested_command_shell(words[1:])
 
 
+def _windows_control_flow(command: str) -> bool:
+    # A lone '&' sequences commands in cmd.exe and PowerShell, like ';' in sh.
+    return fsx.WINDOWS and len(_windows_sequence_split(command)) > 1
+
+
 def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
-        words = shlex.split(command)
+        words = _split_words(command)
     except ValueError:
         return {'shell': '<ambiguous>'}
     expects_command = True
@@ -191,11 +244,11 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         if word.startswith(('$', '`')) or '$(' in word or '${' in word:
             return {'command.dynamic-position': '<ambiguous>'}
         expects_command = False
-    if any(word in {'cd', 'pushd'} for word in words) and os.environ.get('CDPATH'):
+    if any(_is_directory_command(word) for word in words) and os.environ.get('CDPATH'):
         return {'command.cdpath-environment': '<ambiguous>'}
     if any(word.startswith('CDPATH=') and word != 'CDPATH=' for word in words):
         return {'command.cdpath-assignment': '<ambiguous>'}
-    if re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command):
+    if re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command) or _windows_control_flow(command):
         return {'command.control-flow': '<ambiguous>'}
     assignment_index = 0
     while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
@@ -204,10 +257,10 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
             aliases[f'command.env.{name}[{assignment_index}]'] = value
             assignment_index += 1
         words = words[1:]
-    if words and Path(words[0]).name.lower() == 'env':
+    if words and _executable_name(words[0]) == 'env':
         aliases['command.env-wrapper'] = '<ambiguous>'
         return aliases
-    if words and Path(words[0]).name.lower() in {'sudo', 'doas'}:
+    if words and _executable_name(words[0]) in {'sudo', 'doas'}:
         if len(words) < 2 or words[1].startswith('-'):
             aliases['command.wrapper-options'] = '<ambiguous>'
             return aliases
@@ -223,15 +276,17 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
     if _has_unsafe_dispatcher_composition(words):
         aliases['command.dispatcher-composition'] = '<ambiguous>'
         return aliases
-    if any(word in {'eval', 'source', '.'} for word in words):
+    if any(word in {'eval', 'source', '.'} for word in words) or (
+        fsx.WINDOWS and any(word.lower() in _WINDOWS_DYNAMIC_COMMANDS for word in words)
+    ):
         aliases['command.dynamic-shell'] = '<ambiguous>'
         return aliases
     if words and words[0] == 'exec':
         aliases['command.exec-shell'] = '<ambiguous>'
         return aliases
     if words:
-        executable = Path(words[0]).name.lower()
-        if executable in {'bash', 'sh', 'zsh', 'dash', 'ksh'}:
+        executable = _executable_name(words[0])
+        if executable in _POSIX_SHELLS:
             if depth > 0:
                 aliases['command.nested-shell-depth'] = '<ambiguous>'
                 return aliases
@@ -249,20 +304,24 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         if assignment:
             aliases[f'command.env.{assignment.group(1)}[{assignment_index}]'] = assignment.group(2)
             assignment_index += 1
-        if word in {'cd', 'pushd'}:
+        if _is_directory_command(word):
+            # Windows spellings share the cd/pushd alias keys that root resolution reads.
+            kind = word if not fsx.WINDOWS else ('pushd' if word.lower() in {'pushd', 'push-location'} else 'cd')
             cursor = index + 1
+            if fsx.WINDOWS and cursor < len(words) and words[cursor].lower() == '/d':
+                cursor += 1  # cmd.exe `cd /d D:\path` also switches drive
             if cursor < len(words) and words[cursor] == '--':
                 cursor += 1
             elif cursor < len(words) and words[cursor].startswith('-'):
-                aliases[f'command.{word}[{directory_index}]'] = '<ambiguous>'
+                aliases[f'command.{kind}[{directory_index}]'] = '<ambiguous>'
                 directory_index += 1
                 continue
             if cursor >= len(words) or words[cursor] in {'&&', '||', ';', '|'}:
-                aliases[f'command.{word}[{directory_index}]'] = '<ambiguous>'
+                aliases[f'command.{kind}[{directory_index}]'] = '<ambiguous>'
             else:
-                aliases[f'command.{word}[{directory_index}]'] = words[cursor]
+                aliases[f'command.{kind}[{directory_index}]'] = words[cursor]
             directory_index += 1
-        if Path(word).name == 'git':
+        if _is_git(word):
             git_invocations += 1
             cursor = index + 1
             while cursor < len(words):

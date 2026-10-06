@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import fsx
 from .policy import DEFAULT_CONTROL_PLANE, DEFAULT_SECRET_READ, _configured_patterns, _matches_any
 from .state import has_valid_approval
 from .util import file_sha256, load_json, safe_relative_path
@@ -229,7 +230,8 @@ def _stage(target: Path, content: bytes, mode: int) -> Path:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f'.{target.name}.grok-write-', dir=target.parent)
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, mode)
+        # Windows keeps only the read-only bit (Python 3.13+) or nothing (older): no POSIX mode bits.
+        fsx.fchmod(descriptor, mode)
         with os.fdopen(descriptor, 'wb') as handle:
             handle.write(content)
             handle.flush()
@@ -245,6 +247,8 @@ def _stage(target: Path, content: bytes, mode: int) -> Path:
 
 
 def _fsync_directory(path: Path) -> None:
+    if fsx.WINDOWS:  # Windows cannot open or fsync a directory; the rename is the durability point.
+        return
     try:
         descriptor = os.open(path, os.O_RDONLY)
     except OSError:

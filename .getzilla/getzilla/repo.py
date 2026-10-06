@@ -7,6 +7,7 @@ import stat
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from . import fsx
 from .util import unique_ordered
 
 
@@ -98,7 +99,7 @@ class _Inventory:
             return None
         descriptor = None
         try:
-            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            descriptor = fsx.open_at(parent, name, os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK)
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or _identity(before) != _identity(info):
                 raise OSError('file changed before open')
@@ -164,7 +165,7 @@ class _Inventory:
         limit = min(remaining, SOURCE_SCAN_MAX_ENTRIES_PER_DIR)
         names: list[str] = []
         try:
-            with os.scandir(descriptor) as iterator:
+            with fsx.scandir(descriptor) as iterator:
                 for entry in iterator:
                     if len(names) >= limit:
                         reason = (f'entries:{SOURCE_SCAN_MAX_ENTRIES}' if remaining <= SOURCE_SCAN_MAX_ENTRIES_PER_DIR else f'entries-per-directory:{SOURCE_SCAN_MAX_ENTRIES_PER_DIR}')
@@ -181,8 +182,8 @@ class _Inventory:
                 continue
             path = f'{relative}/{name}' if relative else name
             try:
-                info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
+                info = fsx.lstat_at(descriptor, name)
+                if fsx.is_link(info):
                     self.symlinks.add(path)
                 elif stat.S_ISDIR(info.st_mode):
                     if name.casefold() in SCAN_SKIP_DIRS:
@@ -195,13 +196,13 @@ class _Inventory:
                     if self.directories >= SOURCE_SCAN_MAX_DIRS:
                         self.reasons.add(f'directories:{SOURCE_SCAN_MAX_DIRS}')
                         continue
-                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                    child = fsx.open_dir_at(descriptor, name)
                     try:
-                        if _identity(os.fstat(child)) != _identity(info):
+                        if _identity(fsx.fstat_dir(child)) != _identity(info):
                             raise OSError('directory changed before open')
                         self.walk(child, path, depth + 1)
                     finally:
-                        os.close(child)
+                        fsx.close_dir(child)
                 elif stat.S_ISREG(info.st_mode):
                     if not self.file(descriptor, name, path, info):
                         return
@@ -219,12 +220,12 @@ def _scan(root: Path) -> _Inventory:
     inventory = _Inventory()
     descriptor = None
     try:
-        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptor = fsx.open_dir(root)
         # Fixed root probes survive oversized listings but consume shared file
         # and read budgets. Listing and probes deduplicate each observed path.
         for name in MANIFEST_LANGUAGES:
             try:
-                info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                info = fsx.lstat_at(descriptor, name)
             except FileNotFoundError:
                 continue
             except OSError:
@@ -232,7 +233,7 @@ def _scan(root: Path) -> _Inventory:
                 continue
             if stat.S_ISREG(info.st_mode):
                 inventory.file(descriptor, name, name, info)
-            elif stat.S_ISLNK(info.st_mode):
+            elif fsx.is_link(info):
                 inventory.symlinks.add(name)
             else:
                 inventory.non_regular.add(name)
@@ -240,8 +241,7 @@ def _scan(root: Path) -> _Inventory:
     except OSError:
         inventory.unreadable.add('.')
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        fsx.close_dir(descriptor)
     return inventory
 
 

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 from . import _policy_legacy as _legacy
+from . import fsx
 from ._policy_legacy import *  # noqa: F401,F403
 from ._policy_legacy import (
     DEFAULT_CONTROL_PLANE as _LEGACY_CONTROL_PLANE,
     DESTRUCTIVE_COMMANDS as _LEGACY_DESTRUCTIVE_COMMANDS,
     SIDE_EFFECT_TOOL as _LEGACY_SIDE_EFFECT_TOOL,
     _configured_patterns as _legacy_configured_patterns,
+    _destructive_pattern as _legacy_destructive_pattern,
     _http_write_resource as _legacy_http_write_resource,
     evaluate_pre_tool as _legacy_evaluate_pre_tool,
     load_json as _legacy_load_json,
@@ -45,9 +46,23 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
         'destructive_command_patterns',
         _LEGACY_DESTRUCTIVE_COMMANDS,
     )
-    if any(re.search(pattern, command, flags=re.IGNORECASE) for pattern in patterns):
+    if _legacy_destructive_pattern(command, patterns) is not None:
         return 'destructive-command'
     return None
+
+
+def _shell_mutation(root: Path, command: str, control_plane: list[str]) -> tuple[list[str], bool]:
+    protected_targets, opaque = control_plane_shell_mutation(root, command, control_plane)
+    if fsx.WINDOWS and '\\' in command:
+        # POSIX shlex drops unquoted backslashes, so `rm C:\repo\.grok\x` names no
+        # target. Windows also accepts '/' as the separator: the union of both
+        # readings is enforced, never the more permissive one.
+        folded_targets, folded_opaque = control_plane_shell_mutation(
+            root, command.replace('\\', '/'), control_plane,
+        )
+        protected_targets = list(dict.fromkeys([*protected_targets, *folded_targets]))
+        opaque = opaque or folded_opaque
+    return protected_targets, opaque
 
 
 def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | None]:
@@ -65,7 +80,7 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
         _LEGACY_CONTROL_PLANE,
     )
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
-    protected_targets, opaque = control_plane_shell_mutation(root, command, control_plane)
+    protected_targets, opaque = _shell_mutation(root, command, control_plane)
     if protected_targets:
         targets = ', '.join(protected_targets)
         return False, (

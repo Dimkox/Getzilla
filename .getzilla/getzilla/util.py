@@ -31,6 +31,7 @@ def find_root(start: str | Path | None = None) -> Path:
             ['git', 'rev-parse', '--show-toplevel'],
             cwd=current,
             text=True,
+            encoding='utf-8',
             capture_output=True,
             check=False,
         )
@@ -89,6 +90,9 @@ def run(
         merged.update(env)
     try:
         options: dict[str, str] = {}
+        if encoding is None and os.name == 'nt':
+            encoding = 'utf-8'
+            merged.setdefault('PYTHONUTF8', '1')
         if encoding is not None:
             options['encoding'] = encoding
         if errors != 'strict':

@@ -299,9 +299,16 @@ def _nonfinite_number(value: str) -> None:
 def load_history(path: str | Path) -> dict:
     """Read only the selected regular file, once; never resolve evidence references."""
     try:
-        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
-        if not hasattr(os, "O_NOFOLLOW") and stat.S_ISLNK(os.lstat(path).st_mode):
-            _error("input", "snapshot must be a regular file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
+        if not hasattr(os, "O_NOFOLLOW"):
+            linked = os.lstat(path)
+            if stat.S_ISLNK(linked.st_mode) or getattr(linked, "st_file_attributes", 0) & 0x400:
+                _error("input", "snapshot must be a regular file")
         descriptor = os.open(path, flags)
         try:
             metadata = os.fstat(descriptor)

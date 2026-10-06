@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import fsx
 from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
 from .receipts import RECEIPT_KINDS
 from .spec import MAX_SPEC_BYTES, SpecError, _bounded_walk, _parse_canonical_json, parse_yaml_subset, validate_spec
@@ -63,22 +64,25 @@ def _identity(info: os.stat_result) -> tuple[int, ...]:
 def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) -> bytes:
     """Open every component without following links; never block on a FIFO."""
     parts = _relative(relative)
-    if any(not hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'O_CLOEXEC')):
+    if not fsx.WINDOWS and (
+        any(not hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'O_CLOEXEC'))
+        or os.open not in os.supports_dir_fd
+    ):
         raise InspectionError('file_unavailable', 'safe descriptor reads are unavailable on this platform')
-    if os.open not in os.supports_dir_fd:
-        raise InspectionError('file_unavailable', 'descriptor-relative reads are unavailable')
     descriptors: list[int] = []
-    directories: list[tuple[int, str, tuple[int, ...]]] = []
+    handles: list[fsx.DirHandle] = []
+    directories: list[tuple[fsx.DirHandle, str, tuple[int, ...]]] = []
     try:
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
-        directory = os.open(root, flags | os.O_DIRECTORY)
-        descriptors.append(directory)
+        directory = fsx.open_dir(root, flags=fsx.O_CLOEXEC)
+        handles.append(directory)
         for component in parts[:-1]:
-            child = os.open(component, flags | os.O_DIRECTORY, dir_fd=directory)
-            descriptors.append(child)
-            directories.append((directory, component, _identity(os.fstat(child))))
+            child = fsx.open_dir_at(directory, component, flags=fsx.O_CLOEXEC)
+            handles.append(child)
+            directories.append((directory, component, _identity(fsx.fstat_dir(child))))
             directory = child
-        descriptor = os.open(parts[-1], flags | os.O_NONBLOCK, dir_fd=directory)
+        descriptor = fsx.open_at(
+            directory, parts[-1], os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK
+        )
         descriptors.append(descriptor)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
@@ -97,10 +101,10 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
                 raise InspectionError('file_too_large', 'selected input exceeds its byte limit')
         if (
             _identity(before) != _identity(os.fstat(descriptor))
-            or _identity(before) != _identity(os.stat(parts[-1], dir_fd=directory, follow_symlinks=False))
+            or _identity(before) != _identity(fsx.lstat_at(directory, parts[-1]))
             or total != before.st_size
             or any(
-                identity != _identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
+                identity != _identity(fsx.lstat_at(parent, name))
                 for parent, name, identity in directories
             )
         ):
@@ -119,6 +123,8 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
 
 
 def _finding(code: str, path: str, message: str, severity: str = 'error', **context: Any) -> dict[str, Any]:
