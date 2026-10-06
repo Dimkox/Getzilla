@@ -39,6 +39,33 @@ jobs:
           fi
           python -m pip install --disable-pip-version-check "./trust-ci[test]"
       - name: Core tests
-        run: python -m unittest discover -s tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
       - name: Trust CI tests
-        run: python -m unittest discover -s trust-ci/tests
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s trust-ci/tests 2>&1 | tee "$RUNNER_TEMP/trust-ci-tests.log"
+      - name: Annotate failing tests
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+
+          for log in ("core-tests.log", "trust-ci-tests.log"):
+              path = pathlib.Path(os.environ["RUNNER_TEMP"]) / log
+              if not path.is_file():
+                  continue
+              blocks = re.split(r"^={50,}$", path.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE)
+              for block in blocks[1:41]:
+                  lines = [line for line in block.strip().splitlines() if line.strip()]
+                  if not lines:
+                      continue
+                  title = lines[0][:200]
+                  detail = " | ".join(line.strip() for line in lines[-4:])[:900]
+                  print(f"::error title={log}::{title} -- {detail}".replace("\n", " "))
