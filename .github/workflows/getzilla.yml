@@ -108,6 +108,40 @@ jobs:
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
         run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate
+      - name: Package read identity probe
+        shell: python
+        run: |
+          import os
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, ".getzilla")
+          from getzilla import fsx
+          from getzilla.util import atomic_write_text
+
+          root = Path(tempfile.mkdtemp())
+          target = root / "engineering" / "changes" / "x" / "evidence" / "README.md"
+          atomic_write_text(target, "hello\n")
+          rows = []
+          handles = [fsx.open_dir(root)]
+          for part in ("engineering", "changes", "x", "evidence"):
+              child = fsx.open_dir_at(handles[-1], part)
+              rows.append(("dir-open", part, tuple(fsx.fstat_dir(child))[:10]))
+              handles.append(child)
+          fd = fsx.open_at(handles[-1], "README.md", os.O_RDONLY)
+          before = os.fstat(fd)
+          data = os.read(fd, 1000)
+          after = os.fstat(fd)
+          named = fsx.lstat_at(handles[-1], "README.md")
+          os.close(fd)
+          fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+          for name in fields:
+              rows.append((name, getattr(before, name), getattr(after, name), getattr(named, name)))
+          for parent, part in zip(handles, ("engineering", "changes", "x", "evidence")):
+              rows.append(("dir-now", part, tuple(fsx.lstat_at(parent, part))[:10]))
+          rows.append(("bytes", len(data)))
+          print("::notice title=package-read-probe::" + " | ".join(str(row) for row in rows))
       - name: Hooks and CLI smoke
         run: |
           set -euo pipefail
