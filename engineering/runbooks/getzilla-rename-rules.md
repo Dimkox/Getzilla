@@ -2,6 +2,8 @@
 
 This is the exact script that produced the `rename:` commit of the Getzilla import from the predecessor at `c4e506f3d3a45e000f5b9f9121f698c1d16814e3` (final PR #242 head, tree-identical to its merged `f97966c`). It is kept as a record of what was renamed and what was deliberately kept; it is not part of the product and is not meant to be run again on this tree.
 
+Later syncs extended `SCRIPTS` with names of new predecessor scripts (`m8`: `scripts/grok_m8.py`, predecessor PR #245) so they are renamed like the original ones.
+
 Getzilla later replaced its root `README.md` with a short plain-language introduction. The script therefore ends by moving the predecessor's detailed README to `docs/REFERENCE.md` (relative links get a `../` prefix) and pointing the tests that read it there, so syncs bring predecessor README changes into the reference instead of the short README.
 
 Follow-up commits on the same branch restored a few files byte-for-byte (checksum-bound migration 021, frozen v1 contracts) and quoted frozen predecessor records verbatim in tests; the script below already encodes those exclusions.
@@ -57,7 +59,7 @@ FROZEN_FILES = {
 
 SCRIPTS = (
     'agent', 'approve', 'architecture', 'artifacts', 'change', 'demo', 'deploy',
-    'doctor', 'gate', 'governance', 'history', 'landing_publish', 'protected_write',
+    'doctor', 'gate', 'governance', 'history', 'landing_publish', 'm8', 'protected_write',
     'review', 'route', 'spec', 'status', 'verify',
 )
 SCRIPT_RE = r'\bgrok_(' + '|'.join(SCRIPTS) + r')\b'

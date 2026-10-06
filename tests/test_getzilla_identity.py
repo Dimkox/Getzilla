@@ -67,9 +67,9 @@ FORBIDDEN = re.compile(
     r"|Adaptive Grok"
     r"|adaptive_factory"
     r"|adaptive_delivery"
-    r"|scripts/grok_[a-z_*]+\.py"
+    r"|scripts/grok_[a-z0-9_*]+\.py"
 )
-FORBIDDEN_PATH = re.compile(r"(^|/)(\.grok-stack|adaptive_grok|adaptive_factory|adaptive_delivery)(/|$)|^scripts/grok_[a-z_]+\.py$")
+FORBIDDEN_PATH = re.compile(r"(^|/)(\.grok-stack|adaptive_grok|adaptive_factory|adaptive_delivery)(/|$)|^scripts/grok_[a-z0-9_]+\.py$")
 
 
 def _tracked_files() -> list[str]:

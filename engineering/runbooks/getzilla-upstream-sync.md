@@ -2,7 +2,7 @@
 
 Getzilla was renamed from `Dimkox/adaptive-grok-build-pro`. While work still lands there, bring it here as renamed pull requests instead of re-importing.
 
-**Last synced predecessor commit:** `2a8e3839a469b3e05da167e9d8a807bf18e6adbf` (its `main` after PR #244).
+**Last synced predecessor commit:** `326908bf6367b05b65b83818ee84a093c1e45872` (its `main` after PR #245).
 
 ## How it works
 
@@ -17,7 +17,7 @@ The root `README.md` belongs to Getzilla: it is a short plain-language introduct
 
 ```bash
 set -euo pipefail
-LAST=2a8e3839a469b3e05da167e9d8a807bf18e6adbf      # value of "Last synced" above
+LAST=326908bf6367b05b65b83818ee84a093c1e45872      # value of "Last synced" above
 NEW=$(git ls-remote https://github.com/Dimkox/adaptive-grok-build-pro.git refs/heads/main | cut -f1)
 WORK=$(mktemp -d)
 git clone -q https://github.com/Dimkox/adaptive-grok-build-pro.git "$WORK/up"
