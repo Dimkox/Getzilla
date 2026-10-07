@@ -236,7 +236,20 @@ pre code { font: inherit; white-space: pre; }
 .note code { font-family: var(--mono); font-size: .9em; background: var(--green-tint); color: #0F6E51; padding: 2px 6px; border-radius: 5px; }
 
 /* CTA band */
-.band { padding: 0 0 112px; }
+#pricing .intro { color: var(--soft); font-size: 18px; margin-top: 20px; max-width: 60ch; }
+.plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 40px; }
+.plan { background: var(--paper); border: 1px solid #E4E1D8; border-radius: var(--r-lg); padding: 32px; display: flex; flex-direction: column; min-width: 0; }
+.plan-pro { border-color: var(--green); box-shadow: 0 14px 40px rgba(14,15,15,.08); }
+.plan h3 { font-size: 22px; margin: 0 0 6px; }
+.plan .for { color: #6B716E; font-size: 15px; margin: 0 0 18px; }
+.plan .price { font-size: 32px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 20px; }
+.plan .price small { display: block; font-size: 15px; font-weight: 500; color: #6B716E; margin-top: 4px; }
+.plan ul { list-style: none; padding: 0; margin: 0 0 28px; display: grid; gap: 12px; }
+.plan li { display: flex; gap: 10px; align-items: flex-start; font-size: 16px; line-height: 1.45; }
+.plan li svg { width: 20px; height: 20px; color: var(--green); margin-top: 2px; flex: none; }
+.plan .cta { margin-top: auto; }
+@media (max-width: 760px) { .plans { grid-template-columns: 1fr; } .plan { padding: 24px; } }
+.band { padding: 112px 0; }
 .band .box { background: var(--green); color: #fff; border-radius: var(--r-lg); padding: 64px 48px; text-align: center; position: relative; overflow: hidden; }
 .band .box::after { content: ""; position: absolute; right: -80px; top: -80px; width: 280px; height: 280px; border-radius: 50%; border: 40px solid rgba(255,255,255,.08); }
 .band h2 { color: #fff; max-width: 18ch; margin: 0 auto; position: relative; z-index: 1; }
@@ -305,6 +318,7 @@ footer a { color: #C9CECB; }
     <nav class="nav" aria-label="Main">
       <a class="link" href="#who">Who it’s for</a>
       <a class="link" href="#how">How it works</a>
+      <a class="link" href="#pricing">Pricing</a>
       <a class="link" href="https://github.com/Dimkox/Getzilla">GitHub</a>
       <a class="btn btn-sm" href="#install">Get started</a>
     </nav>
@@ -628,6 +642,38 @@ python3 scripts/getzilla_doctor.py --offer-install</code></pre>
           </li>
         </ol>
         <p class="note">Used adaptive-grok-build-pro before? Run the same <code>--plan</code> on your project. It keeps your own settings and lists every old file next to its Getzilla replacement.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sand" id="pricing">
+    <div class="wrap">
+      <span class="eyebrow">Pricing</span>
+      <h2>Free for open source. Trust CI for private code.</h2>
+      <p class="intro">Getzilla itself is free. The final check before merge runs on GitHub Actions for public repositories, or on our own Trust CI servers for private ones.</p>
+      <div class="plans">
+        <div class="plan">
+          <h3>Public repositories</h3>
+          <p class="for">Open source and side projects</p>
+          <p class="price">Free</p>
+          <ul>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>The full Getzilla workflow, MIT license</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Final check on GitHub Actions, set up with one command</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Pinned, read-only workflow: no secrets, no write access</li>
+          </ul>
+          <div class="cta"><a class="btn btn-dark" href="#install">Get started</a></div>
+        </div>
+        <div class="plan plan-pro">
+          <h3>Private repositories</h3>
+          <p class="for">Teams and companies</p>
+          <p class="price">On request <small>per GitHub account</small></p>
+          <ul>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Trust CI on dedicated servers, outside GitHub and outside the agent’s reach</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Hidden tests the agent cannot see or edit, on the exact commit being merged</li>
+            <li><svg aria-hidden="true"><use href="#tick"/></svg>Signed result as a required check on your pull requests</li>
+          </ul>
+          <div class="cta"><a class="btn btn-green" href="https://github.com/Dimkox/Getzilla/issues/new?template=trust-ci-access.yml">Request access</a></div>
+        </div>
       </div>
     </div>
   </section>

@@ -8,7 +8,7 @@ The marketing page served at https://getzilla.app. One self-contained HTML file:
 | `template/index.template.html` | The same page with the counter IDs replaced by `__GA_MEASUREMENT_ID__` and `__YM_COUNTER_ID__`, for reuse on another domain. |
 | `analytics/google-analytics.html` | Google Analytics 4 tag (`G-V2LPCG0E3X`) as installed in `<head>`. |
 | `analytics/yandex-metrika.html` | Yandex.Metrika counter (`113486449`) with its `<noscript>` pixel, as installed. |
-| `screenshots/` | Desktop, mobile and "How it works" captures for review. |
+| `screenshots/` | Desktop, mobile, "How it works" and Pricing captures for review. |
 
 ## Analytics
 
