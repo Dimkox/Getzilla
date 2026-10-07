@@ -1,8 +1,8 @@
 # Decisions
 
-## 2026-10-07 — OpenGrep with our own rules in the paid tier, not CodeQL
+## 2026-10-07 — OpenGrep with our own rules in both gates, not CodeQL
 
-CodeQL's license forbids private-code and hosted use without GitHub Advanced Security, and the `semgrep-rules`/`opengrep-rules` sets forbid selling a service built on them. The Trust CI runner therefore ships the LGPL OpenGrep engine with Getzilla-authored, MIT-licensed taint rules tested by `opengrep --test`; anywhere without the binary the check skips explicitly.
+CodeQL's license forbids private-code and hosted use without GitHub Advanced Security, and the `semgrep-rules`/`opengrep-rules` sets forbid selling a service built on them. The free GitHub Actions template and the Trust CI runner therefore both install the same pinned LGPL OpenGrep release with Getzilla-authored, MIT-licensed taint rules tested by `opengrep --test` (the owner chose to keep the rules free); anywhere without the binary the check skips explicitly.
 
 ## 2026-10-06 — CI gate follows repository visibility
 

@@ -529,7 +529,7 @@ Declared route `human_gates` require a separate decision in the active change pa
 
 ## Taint analysis (OpenGrep, Trust CI)
 
-`getzilla_verify.py` runs an `opengrep` check whenever an `opengrep` binary is on `PATH`: Getzilla's own taint rules in `.getzilla/sast/rules` (Python, JavaScript/TypeScript, PHP including Bitrix, Go) follow untrusted request data across functions into SQL, shell, eval, file, URL, HTML and redirect sinks. The Trust CI runner image ships a pinned OpenGrep, so the check is part of the paid private-repository gate; without the binary it is skipped with an explicit QG-01 allowance. CodeQL is not used: its license forbids running it on private code without GitHub Advanced Security or offering it as a hosted service. See `.getzilla/sast/README.md` for the rules, their tests and `nosemgrep` suppressions.
+`getzilla_verify.py` runs an `opengrep` check whenever an `opengrep` binary is on `PATH`: Getzilla's own taint rules in `.getzilla/sast/rules` (Python, JavaScript/TypeScript, PHP including Bitrix, Go) follow untrusted request data across functions into SQL, shell, eval, file, URL, HTML and redirect sinks. The free GitHub Actions workflow from `getzilla_ci.py --write` and the Trust CI runner image both install the same pinned OpenGrep release, so public and private repositories get the check; without the binary it is skipped with an explicit QG-01 allowance. CodeQL is not used: its license forbids running it on private code without GitHub Advanced Security or offering it as a hosted service. See `.getzilla/sast/README.md` for the rules, their tests and `nosemgrep` suppressions.
 
 ## Local browser demo
 

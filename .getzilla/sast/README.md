@@ -1,6 +1,6 @@
 # Getzilla OpenGrep rules
 
-Taint rules for [OpenGrep](https://github.com/opengrep/opengrep) (LGPL-2.1), the open fork of the Semgrep engine. `getzilla_verify` runs them as the `opengrep` check wherever an `opengrep` binary is installed; the Trust CI runner image ships a pinned one, so private repositories on Trust CI get the check on every pull request.
+Taint rules for [OpenGrep](https://github.com/opengrep/opengrep) (LGPL-2.1), the open fork of the Semgrep engine. `getzilla_verify` runs them as the `opengrep` check wherever an `opengrep` binary is installed. Both gates install the same pinned, checksum-verified release: the free GitHub Actions workflow rendered by `scripts/getzilla_ci.py --write` for public repositories, and the Trust CI runner image for private ones.
 
 Every rule here is written for Getzilla and distributed under the repository's MIT license. Nothing is copied from `semgrep-rules` or `opengrep-rules`: those carry the Semgrep Rules License or a Commons Clause that forbids selling a service built on them.
 

@@ -41,5 +41,16 @@ jobs:
             python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           fi
           python -m pip install --disable-pip-version-check ruff==0.16.2 bandit==1.9.4
+      - name: Install OpenGrep for taint analysis
+        shell: bash
+        env:
+          OPENGREP_VERSION: "1.30.1"
+          OPENGREP_SHA256: "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4"
+        run: |
+          mkdir -p "$RUNNER_TEMP/opengrep"
+          curl -fsSL -o "$RUNNER_TEMP/opengrep/opengrep" "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          echo "${OPENGREP_SHA256}  $RUNNER_TEMP/opengrep/opengrep" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/opengrep/opengrep"
+          echo "$RUNNER_TEMP/opengrep" >> "$GITHUB_PATH"
       - name: Getzilla verification
         run: python scripts/getzilla_verify.py --mode pr

@@ -84,6 +84,19 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertTrue(required_check_refused(result('opengrep timed out'), mode='pr'))
 
 
+class OpengrepPinTests(unittest.TestCase):
+    def test_free_actions_template_and_trust_ci_runner_pin_the_same_release(self) -> None:
+        import re
+
+        runner = (ROOT / 'trust-ci/runner.Dockerfile').read_text(encoding='utf-8')
+        template = (ROOT / '.getzilla/templates/ci/github-actions-verify.yml').read_text(encoding='utf-8')
+        version = re.search(r'ARG OPENGREP_VERSION=(\S+)', runner).group(1)
+        digest = re.search(r'ARG OPENGREP_SHA256=([0-9a-f]{64})', runner).group(1)
+        self.assertIn(f'OPENGREP_VERSION: "{version}"', template)
+        self.assertIn(f'OPENGREP_SHA256: "{digest}"', template)
+        self.assertIn('sha256sum -c -', template)
+
+
 @unittest.skipUnless(shutil.which('opengrep'), 'opengrep is not installed (Trust CI and Getzilla CI install it)')
 class OpengrepRuleTests(unittest.TestCase):
     def test_every_rule_matches_its_annotated_examples(self) -> None:
