@@ -1,0 +1,126 @@
+{
+  "method": "Lighthouse13.4.1 mobile default simulated throttling, Chromium153, local static server without cache headers; one base run and median of three candidate runs; retained analytics live network through configured proxy with managed CA trusted and TLS validation enabled",
+  "before": {
+    "scores": {
+      "performance": 76,
+      "accessibility": 95,
+      "best-practices": 77,
+      "seo": 100
+    },
+    "lcp_ms": 3311.8150000000014,
+    "cls": 0.09288905539437052,
+    "tbt_ms": 121.5
+  },
+  "after_median": {
+    "scores": {
+      "performance": 99,
+      "accessibility": 100,
+      "best-practices": 77,
+      "seo": 100
+    },
+    "lcp_ms": 1654.393,
+    "cls": 0,
+    "tbt_ms": 89
+  },
+  "after_runs": [
+    {
+      "scores": {
+        "performance": 99,
+        "accessibility": 100,
+        "best-practices": 77,
+        "seo": 100
+      },
+      "lcp": 1654.868,
+      "cls": 0,
+      "tbt": 86,
+      "failedAudits": [
+        {
+          "id": "third-party-cookies",
+          "title": "Uses third-party cookies",
+          "detail": "16 cookies found"
+        },
+        {
+          "id": "inspector-issues",
+          "title": "Issues were logged in the `Issues` panel in Chrome Devtools"
+        },
+        {
+          "id": "cache-insight",
+          "title": "Use efficient cache lifetimes",
+          "detail": "Est savings of 177\u00a0KiB"
+        },
+        {
+          "id": "network-dependency-tree-insight",
+          "title": "Network dependency tree"
+        }
+      ]
+    },
+    {
+      "scores": {
+        "performance": 99,
+        "accessibility": 100,
+        "best-practices": 77,
+        "seo": 100
+      },
+      "lcp": 1654.393,
+      "cls": 0,
+      "tbt": 89,
+      "failedAudits": [
+        {
+          "id": "third-party-cookies",
+          "title": "Uses third-party cookies",
+          "detail": "16 cookies found"
+        },
+        {
+          "id": "inspector-issues",
+          "title": "Issues were logged in the `Issues` panel in Chrome Devtools"
+        },
+        {
+          "id": "cache-insight",
+          "title": "Use efficient cache lifetimes",
+          "detail": "Est savings of 177\u00a0KiB"
+        },
+        {
+          "id": "network-dependency-tree-insight",
+          "title": "Network dependency tree"
+        }
+      ]
+    },
+    {
+      "scores": {
+        "performance": 99,
+        "accessibility": 100,
+        "best-practices": 77,
+        "seo": 100
+      },
+      "lcp": 1579.189,
+      "cls": 0,
+      "tbt": 105,
+      "failedAudits": [
+        {
+          "id": "third-party-cookies",
+          "title": "Uses third-party cookies",
+          "detail": "17 cookies found"
+        },
+        {
+          "id": "inspector-issues",
+          "title": "Issues were logged in the `Issues` panel in Chrome Devtools"
+        },
+        {
+          "id": "cache-insight",
+          "title": "Use efficient cache lifetimes",
+          "detail": "Est savings of 177\u00a0KiB"
+        },
+        {
+          "id": "network-dependency-tree-insight",
+          "title": "Network dependency tree"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Laboratory comparison, not field Core Web Vitals or a ranking guarantee.",
+    "Third-party cookie/Chrome Issues findings remain due to preserved analytics.",
+    "Local server cache headers do not establish production hosting cache behavior.",
+    "Source/font/photo changes improve page performance; external vendor/network timing remains variable."
+  ]
+}

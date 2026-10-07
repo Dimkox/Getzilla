@@ -1,0 +1,151 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Preserve analytics source bytes, initialization order and first-body tracking pixel.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Provide consistent canonical/social metadata, structured data, real social/favicon assets and canonical robots/sitemap.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Self-host the current Onest typography and responsive variants of the eight current photographs with asset provenance.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Repair existing keyboard, semantics, heading, focus, contrast and no-JavaScript accessibility defects.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Retain merged page copy/Pricing and exact production/template parity.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-006",
+      "statement": "Document the complete public static inventory, deployment order, rollback and measured verification.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261007-task-b1693e",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "Dropping, delaying, replacing, duplicating, reformatting or blocking existing analytics.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        }
+      ]
+    },
+    {
+      "id": "FORBID-002",
+      "statement": "Claiming successful live deployment, vendor collection or field metrics from local evidence alone.",
+      "evidence": [
+        {
+          "receipt": "test_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "GA4 G-V2LPCG0E3X and Metrika 113486449 code and load behavior remain unchanged.",
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        }
+      ]
+    },
+    {
+      "id": "INV-002",
+      "statement": "No factory, runtime, API/event, governance, hosting activation, product-offer or workflow changes.",
+      "evidence": [
+        {
+          "receipt": "code_review"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "SEO Landing для Getzilla.app: сверить последние правки aleksandr-alhoff/seo-landing с опубликованным https://getzilla.app/ и существующим side-projects/getzilla-landing, доработать техническое SEO, доступность и производительность без смены дизайна или оффера; сохранить коды GA4 и Яндекс.Метрики побайтно, порядок и поведение загрузки. Изолированная ветка и PR, без изменений фабрики и без автоматического изменения хостинга.",
+    "success_metric": "Frozen analytics, complete crawl/social/media assets, valid accessible HTML and verified controls",
+    "target": "All focused regressions pass; zero Nu HTML errors; measured lab results disclosed; current copy/Pricing retained"
+  },
+  "observability": [
+    {
+      "id": "SIG-001",
+      "metric": "Static validation, browser checks and analytics-preservation hashes",
+      "proves": [
+        "OBJ-001"
+      ]
+    }
+  ],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "strategy": "restore",
+    "maximum_steps": 3
+  },
+  "schema_version": 2
+}

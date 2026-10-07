@@ -1,0 +1,14 @@
+{
+  "page_sha256": "92e2aa7999065e75b21f76809db46db0095029114e7a553e83093f95fe288604",
+  "browser": "153.0.8010.0",
+  "text": "Upgrading an existing installation? Run the same --plan on your project. It keeps your own settings and lists every old file next to its Getzilla replacement.",
+  "left": 16,
+  "right": 304,
+  "width": 288,
+  "height": 96,
+  "documentWidth": 320,
+  "viewport": 320,
+  "font": "Onest, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif",
+  "fontsStatus": "loaded",
+  "pageErrors": []
+}

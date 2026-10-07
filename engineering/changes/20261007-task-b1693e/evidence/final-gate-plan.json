@@ -1,0 +1,22 @@
+{
+  "command": "python3 scripts/getzilla_verify.py --mode pr --json",
+  "python": "/workspace/scratch/d8e33c67341b/getzilla-test-venv/bin/python",
+  "environment": {
+    "GETZILLA_TEST_WORKERS": "4",
+    "GETZILLA_VERIFY_CAPABILITY": "repository-sandbox"
+  },
+  "effective_cpu_capacity": 8,
+  "parallel_browser_or_media_work": false,
+  "comparison_base": "b7aa0a55f3236c578d4365f3f0e58ce5962cf319",
+  "scope": "unchanged fail-closed selector; landing/test product inventory requires full PR suite",
+  "capability_observations": {
+    "docker": null,
+    "podman": null,
+    "psql": null,
+    "pg_ctl": null,
+    "docker_socket_exists": false
+  },
+  "disclosure": "Disposable PostgreSQL exit is unavailable on this host; the supported capability reports skip, not pass. All other selected checks retain their normal behavior.",
+  "external_gate": "Existing public repository GitHub Actions triggered naturally by pull_request; no manual workflow dispatch",
+  "production_deployment": "pending separately authorized hosting operation"
+}
