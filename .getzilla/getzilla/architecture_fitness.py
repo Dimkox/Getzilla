@@ -170,7 +170,7 @@ def _matches(path: str, prefixes: Iterable[str]) -> bool:
 
 
 def _is_governance_or_test_path(path: str) -> bool:
-    return _matches(path, _GOVERNANCE_PATHS) or "tests" in Path(path).parts[:-1]
+    return _matches(path, _GOVERNANCE_PATHS) or "tests" in PurePosixPath(path).parts[:-1]
 
 
 @dataclass(frozen=True)
@@ -619,7 +619,7 @@ def _python_paths(diff: ArchitectureDiff) -> tuple[str, ...]:
     paths = tuple(
         artifact.path
         for artifact in diff.artifacts
-        if Path(artifact.path).suffix in _PYTHON_SUFFIXES and artifact.status != "deleted"
+        if PurePosixPath(artifact.path).suffix in _PYTHON_SUFFIXES and artifact.status != "deleted"
     )
     if len(paths) > MAX_ANALYZED_PYTHON_FILES:
         raise ArchitectureError("Python analysis file limit exceeded", code="limit")
@@ -683,7 +683,7 @@ def _boundary_imports(python: _PythonInventory, path: str) -> tuple[tuple[str, t
             module = node.module or ""
             if node.level:
                 if package is None:
-                    directories = Path(path).parent.parts
+                    directories = PurePosixPath(path).parent.parts
                     if len(directories) > 64:
                         raise ArchitectureError("Python package ancestry limit exceeded", code="limit")
                     # A conventional src root takes precedence over package
@@ -1196,9 +1196,9 @@ def _repository_paths(root: Path, diff: ArchitectureDiff, prefixes: tuple[str, .
 
 
 def _migration_phase(path: str) -> tuple[str, str] | None:
-    match = _MIGRATION_PHASE.fullmatch(Path(path).stem.lower()) or _MIGRATION_CANONICAL.fullmatch(Path(path).stem.lower())
+    match = _MIGRATION_PHASE.fullmatch(PurePosixPath(path).stem.lower()) or _MIGRATION_CANONICAL.fullmatch(PurePosixPath(path).stem.lower())
     if match is None and path.startswith("factory/src/getzilla_factory/resources/"):
-        match = re.fullmatch(r"(?P<group>[0-9]{3}_[a-z0-9_]+)", Path(path).stem.lower())
+        match = re.fullmatch(r"(?P<group>[0-9]{3}_[a-z0-9_]+)", PurePosixPath(path).stem.lower())
     return None if match is None else (match.group("group"), match.groupdict().get("phase") or "legacy")
 
 
@@ -1207,7 +1207,7 @@ def _migration_roots(snapshot: ArchitectureSnapshot, prefixes: tuple[str, ...]) 
     return tuple(sorted(primary | {
         path for node in snapshot.system["nodes"] if primary & set(node["repository_paths"])
         for path in node["repository_paths"]
-        if Path(path).name.lower() in {"resources", "migrations"}
+        if PurePosixPath(path).name.lower() in {"resources", "migrations"}
     }))
 
 
@@ -1370,7 +1370,7 @@ def _migration_safety(root: Path, snapshot: ArchitectureSnapshot, diff: Architec
             seeds.append((rule, roots, mirrors))
             for migration_root in roots:
                 analysis.root_plans.setdefault(migration_root, []).append(len(seeds) - 1)
-        sql = tuple(item for item in diff.artifacts if Path(item.path).suffix.lower() == ".sql")
+        sql = tuple(item for item in diff.artifacts if PurePosixPath(item.path).suffix.lower() == ".sql")
         analysis.bound(len(sql) * max(1, root_memberships := sum(len(v) for v in analysis.root_plans.values())))
         matches = {item.path: {index for prefix, indices in analysis.root_plans.items()
                                if _matches(item.path, (prefix,)) for index in indices}
@@ -1473,13 +1473,13 @@ def _project_import_roots(
     paths = _repository_paths(root, diff, prefixes) if prefixes else ()
     roots = set(_GOVERNANCE_IMPORTS)
     for prefix in prefixes:
-        parts = Path(prefix).parts
+        parts = PurePosixPath(prefix).parts
         if "src" in parts:
             index = parts.index("src") + 1
             if index < len(parts) and not parts[index].endswith(tuple(_PYTHON_SUFFIXES)):
                 roots.add(parts[index])
     for path in paths:
-        if Path(path).suffix not in _PYTHON_SUFFIXES:
+        if PurePosixPath(path).suffix not in _PYTHON_SUFFIXES:
             continue
         matching = [prefix for prefix in prefixes if _matches(path, (prefix,))]
         if not matching:
@@ -1487,12 +1487,12 @@ def _project_import_roots(
         prefix = max(matching, key=len)
         relative = path[len(prefix) :].lstrip("/")
         if not relative:
-            roots.add(Path(prefix).stem)
+            roots.add(PurePosixPath(prefix).stem)
             continue
         if relative == "__init__.py":
-            roots.add(Path(prefix).name)
+            roots.add(PurePosixPath(prefix).name)
         first = relative.split("/", 1)[0]
-        roots.add(Path(first).stem if first.endswith(tuple(_PYTHON_SUFFIXES)) else first)
+        roots.add(PurePosixPath(first).stem if first.endswith(tuple(_PYTHON_SUFFIXES)) else first)
     return roots
 
 
@@ -1814,7 +1814,7 @@ def _code_budget(
         )
         complexity = 0
         for item in artifacts:
-            if Path(item.path).suffix not in _PYTHON_SUFFIXES:
+            if PurePosixPath(item.path).suffix not in _PYTHON_SUFFIXES:
                 continue
             try:
                 tree = python.tree(item.path) if item.status != "deleted" else ast.parse(
@@ -1993,7 +1993,7 @@ def _queue_source_roots(snapshot: ArchitectureSnapshot) -> tuple[str, ...]:
     for node in snapshot.system["nodes"]:
         for prefix in node["repository_paths"]:
             name = prefix.rsplit("/", 1)[-1]
-            if Path(prefix).suffix.lower() in file_suffixes:
+            if PurePosixPath(prefix).suffix.lower() in file_suffixes:
                 continue
             roots.add(prefix)
             if "/" in prefix and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
@@ -2542,7 +2542,7 @@ def _risk_triggers(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff) -> tu
             if nodes[edge["from"]]["trust_domain"] != nodes[edge["to"]]["trust_domain"]:
                 triggers.add("new_trust_crossing")
     for artifact in diff.artifacts:
-        name = Path(artifact.path).name.lower()
+        name = PurePosixPath(artifact.path).name.lower()
         if artifact.status == "added" and name in {
             "package.json",
             "pyproject.toml",

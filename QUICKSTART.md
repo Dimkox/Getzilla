@@ -2,7 +2,7 @@
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
-**One-command install.** These installers add whatever is missing (Git, Python 3.10+, the Grok Build CLI), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project.
+**One-command install.** These installers add whatever is missing (Git, Python 3.10+, the Grok Build CLI), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
 
 ```powershell
 # Windows: winget when available, otherwise official per-user installers (no admin rights needed)

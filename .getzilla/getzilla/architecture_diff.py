@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import re
 import selectors
 import shutil
@@ -11,11 +12,13 @@ import stat
 # Git is resolved once and invoked only with an argument vector and shell=False.
 import subprocess  # nosec B404
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import fsx
 from .architecture import (
     RULE_COLLECTIONS,
     ArchitectureError,
@@ -93,11 +96,129 @@ def _path_text(value: bytes) -> str:
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
+    if fsx.WINDOWS:
+        # taskkill /T ends the child's whole tree; terminate the direct child
+        # too in case taskkill raced its exit or is unavailable.
+        fsx.kill_process_tree(process.pid)
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     process.wait()
+
+
+class _ThreadedPipes:
+    """Windows stand-in for a selector over child pipes, which ``select`` cannot watch there.
+
+    One daemon thread per pipe performs blocking reads into a small bounded queue, so the
+    caller keeps the same deadline, output-limit and early-termination decisions.
+    """
+
+    def __init__(self, streams: tuple[Any, ...], chunk_bytes: int) -> None:
+        self._events: queue.Queue[tuple[Any, bytes | OSError]] = queue.Queue(maxsize=2 * len(streams))
+        self._stopped = threading.Event()
+        self._threads = [
+            threading.Thread(target=self._pump, args=(stream, chunk_bytes), daemon=True)
+            for stream in streams
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _pump(self, stream: Any, chunk_bytes: int) -> None:
+        while not self._stopped.is_set():
+            chunk: bytes | OSError
+            try:
+                chunk = os.read(stream.fileno(), chunk_bytes)
+            except OSError as exc:
+                chunk = exc
+            while not self._stopped.is_set():
+                try:
+                    self._events.put((stream, chunk), timeout=0.05)
+                    break
+                except queue.Full:
+                    continue
+            if isinstance(chunk, OSError) or not chunk:
+                return
+
+    def next(self, timeout: float) -> tuple[Any, bytes | OSError] | None:
+        try:
+            return self._events.get(timeout=max(0.0, timeout))
+        except queue.Empty:
+            return None
+
+    def close(self) -> None:
+        # Callers stop the child first, so blocked reads see end-of-file promptly.
+        self._stopped.set()
+        for thread in self._threads:
+            thread.join(timeout=5.0)
+
+
+def _collect_threaded(
+    process: subprocess.Popen[bytes],
+    *,
+    stdout_limit: int,
+    stderr_limit: int,
+    timeout: float,
+) -> tuple[int, bytes, bytes]:
+    """The Windows half of `_run_capped`: same limits and deadline, thread-fed reads."""
+    pipes: _ThreadedPipes | None = None
+    try:
+        if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
+            raise ArchitectureError("bounded process pipes are unavailable", code="io")
+        streams = {
+            process.stdout: (bytearray(), stdout_limit),
+            process.stderr: (bytearray(), stderr_limit),
+        }
+        try:
+            pipes = _ThreadedPipes(tuple(streams), 65_536)
+        except Exception as exc:
+            raise ArchitectureError(
+                f"bounded process setup failed: {exc}", code="io"
+            ) from exc
+        pending = set(streams)
+        deadline = time.monotonic() + timeout
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_process(process)
+                raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+            event = pipes.next(remaining)
+            if event is None:
+                continue
+            stream, chunk = event
+            if isinstance(chunk, OSError):
+                raise chunk
+            buffer, limit = streams[stream]
+            if not chunk:
+                pending.discard(stream)
+                stream.close()
+                continue
+            buffer.extend(chunk)
+            if len(buffer) > limit:
+                _stop_process(process)
+                raise ArchitectureError("bounded process output limit exceeded", code="limit")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop_process(process)
+            raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            _stop_process(process)
+            raise ArchitectureError("bounded process timeout exceeded", code="timeout") from exc
+        return returncode, bytes(streams[process.stdout][0]), bytes(streams[process.stderr][0])
+    finally:
+        if process.poll() is None:
+            _stop_process(process)
+        if pipes is not None:
+            pipes.close()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
 
 
 def _run_capped(
@@ -119,8 +240,16 @@ def _run_capped(
         command, cwd=cwd, env=env,
         stdin=input_stream if input_stream is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
-        start_new_session=True,
+        **fsx.process_group_kwargs(),
     )
+    if fsx.WINDOWS:
+        try:
+            return _collect_threaded(
+                process, stdout_limit=stdout_limit, stderr_limit=stderr_limit, timeout=timeout
+            )
+        finally:
+            if input_stream is not None:
+                input_stream.close()
     selector: selectors.BaseSelector | None = None
     streams: dict[Any, tuple[bytearray, int]] = {}
     try:
@@ -188,7 +317,7 @@ def _run_capped(
 def _git_environment() -> dict[str, str]:
     if _GIT_EXECUTABLE is None:
         raise ArchitectureError("Git executable is unavailable", code="git")
-    return {
+    environment = {
         "PATH": str(Path(_GIT_EXECUTABLE).parent),
         "LANG": "C",
         "LC_ALL": "C",
@@ -198,6 +327,10 @@ def _git_environment() -> dict[str, str]:
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
     }
+    if fsx.WINDOWS and os.environ.get("SYSTEMROOT"):
+        # Windows processes need SystemRoot to load system libraries; it names no config.
+        environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    return environment
 
 
 def _git_command(
@@ -251,7 +384,15 @@ def _git_path_identity(path: Path) -> tuple[int, int, int, int, int, int]:
 
 def _git_pointer(path: Path) -> bytes:
     """Read Git's small registration files without following a substituted name."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    if fsx.WINDOWS:
+        # No O_NOFOLLOW there: refuse a link or reparse point by lstat; the
+        # identity comparison below catches a name swapped before the open.
+        if fsx.is_link(path.lstat()):
+            raise ArchitectureError("Git registration is not a bounded regular file", code="git")
+        flags = os.O_RDONLY | fsx.O_BINARY | fsx.O_NOINHERIT
+    else:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    descriptor = os.open(path, flags)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_size > 4_096:
@@ -288,6 +429,21 @@ class _GitBinding:
                 raise ArchitectureError("Git common-directory registration changed", code="git")
         except OSError as exc:
             raise ArchitectureError("Git worktree binding is unavailable", code="git") from exc
+
+
+def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Path) -> bool:
+    expected = [os.fsencode(git_directory), os.fsencode(repository), b"false"]
+    if not fsx.WINDOWS:
+        return output.splitlines() == expected
+    # Git for Windows reports forward slashes; compare the way Windows compares paths.
+    lines = output.splitlines()
+    if len(lines) != 3 or lines[2] != b"false":
+        return False
+    try:
+        reported = [os.path.normcase(os.fsdecode(line)) for line in lines[:2]]
+    except UnicodeDecodeError:
+        return False
+    return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
 
 
 def _git_binding(root: Path) -> _GitBinding:
@@ -337,7 +493,7 @@ def _git_binding(root: Path) -> _GitBinding:
             cwd=repository, env=_git_environment(), stdout_limit=16_384,
             stderr_limit=65_536, timeout=_GIT_TIMEOUT_SECONDS,
         )
-        if returncode or output.splitlines() != [os.fsencode(git_directory), os.fsencode(repository), b"false"]:
+        if returncode or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
         binding.verify()
         return binding
@@ -516,10 +672,12 @@ def select_architecture_comparison_base(
     )
 
 
-def _worktree_blob(root: Path, path: str) -> bytes | None:
-    parts = path.split("/")
-    if not parts or any(part in {"", ".", ".."} for part in parts):
-        raise ArchitectureError(f"invalid worktree path: {path}", code="path")
+def _worktree_open_flags() -> tuple[int, int, int]:
+    """Descriptor-relative no-follow flags, or a refusal before any path is touched."""
+    if fsx.WINDOWS:
+        # Windows has no such flags or dir_fd: fsx lstat-checks every component
+        # and refuses links and reparse points instead (the flags are 0 there).
+        return fsx.O_NOFOLLOW, fsx.O_DIRECTORY, fsx.O_NONBLOCK
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_flag = getattr(os, "O_DIRECTORY", None)
     nonblock = getattr(os, "O_NONBLOCK", None)
@@ -532,7 +690,15 @@ def _worktree_blob(root: Path, path: str) -> bytes | None:
         or os.open not in getattr(os, "supports_dir_fd", set())
     ):
         raise ArchitectureError("worktree analysis requires O_NOFOLLOW", code="io")
-    directory = -1
+    return no_follow, directory_flag, nonblock
+
+
+def _worktree_blob(root: Path, path: str) -> bytes | None:
+    parts = path.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ArchitectureError(f"invalid worktree path: {path}", code="path")
+    no_follow, directory_flag, nonblock = _worktree_open_flags()
+    directory: fsx.DirHandle | None = None
     descriptor = -1
     try:
         directory, descriptor = _open_worktree_file(
@@ -560,8 +726,7 @@ def _worktree_blob(root: Path, path: str) -> bytes | None:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if directory >= 0:
-            os.close(directory)
+        fsx.close_dir(directory)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
         after.st_dev,
         after.st_ino,
@@ -581,28 +746,23 @@ def _open_worktree_file(
     directory_flag: int,
     no_follow: int,
     nonblock: int,
-) -> tuple[int, int]:
-    """Walk `parts` from `root` with O_NOFOLLOW on every step; return open (dir, file) fds."""
+) -> tuple[fsx.DirHandle, int]:
+    """Walk `parts` from `root` with O_NOFOLLOW on every step; return open (dir, file) fds.
 
-    directory = -1
+    On Windows the directory is an fsx handle and every step refuses links and
+    reparse points instead.
+    """
+
+    directory: fsx.DirHandle | None = None
     try:
-        directory = os.open(root, os.O_RDONLY | directory_flag | no_follow)
+        directory = fsx.open_dir(root, flags=directory_flag | no_follow)
         for component in parts[:-1]:
-            child = os.open(
-                component,
-                os.O_RDONLY | directory_flag | no_follow,
-                dir_fd=directory,
-            )
-            os.close(directory)
+            child = fsx.open_dir_at(directory, component, flags=directory_flag | no_follow)
+            fsx.close_dir(directory)
             directory = child
-        descriptor = os.open(
-            parts[-1],
-            os.O_RDONLY | nonblock | no_follow,
-            dir_fd=directory,
-        )
+        descriptor = fsx.open_at(directory, parts[-1], os.O_RDONLY | nonblock | no_follow)
     except OSError:
-        if directory >= 0:
-            os.close(directory)
+        fsx.close_dir(directory)
         raise
     return directory, descriptor
 
@@ -622,18 +782,7 @@ def _profile_worktree_blob(root: Path, path: str) -> _BlobProfile | None:
     parts = path.split("/")
     if not parts or any(part in {"", ".", ".."} for part in parts):
         raise ArchitectureError(f"invalid worktree path: {path}", code="path")
-    no_follow = getattr(os, "O_NOFOLLOW", None)
-    directory_flag = getattr(os, "O_DIRECTORY", None)
-    nonblock = getattr(os, "O_NONBLOCK", None)
-    if (
-        not isinstance(no_follow, int)
-        or no_follow == 0
-        or not isinstance(directory_flag, int)
-        or directory_flag == 0
-        or not isinstance(nonblock, int)
-        or os.open not in getattr(os, "supports_dir_fd", set())
-    ):
-        raise ArchitectureError("worktree analysis requires O_NOFOLLOW", code="io")
+    no_follow, directory_flag, nonblock = _worktree_open_flags()
     try:
         directory, descriptor = _open_worktree_file(
             root, parts, directory_flag=directory_flag, no_follow=no_follow, nonblock=nonblock
@@ -668,7 +817,7 @@ def _profile_worktree_blob(root: Path, path: str) -> _BlobProfile | None:
         try:
             os.close(descriptor)
         finally:
-            os.close(directory)
+            fsx.close_dir(directory)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
         after.st_dev,
         after.st_ino,
@@ -703,8 +852,33 @@ def _stream_git_blob(root: Path, object_id: str, expected_size: int, path: str) 
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=False,
-        start_new_session=True,
+        **fsx.process_group_kwargs(),
     )
+    if fsx.WINDOWS:
+        returncode, digest, total, binary, stderr = _drain_blob_threaded(
+            process, expected_size=expected_size, path=path
+        )
+    else:
+        returncode, digest, total, binary, stderr = _drain_blob_selector(
+            process, expected_size=expected_size, path=path
+        )
+    if returncode:
+        detail = bytes(stderr).decode("utf-8", "replace").strip()
+        raise ArchitectureError(
+            f"Git blob stream failed for {path}: {detail or f'exit {returncode}'}", code="git"
+        )
+    if total != expected_size:
+        raise ArchitectureError(
+            f"Git blob stream was truncated for {path}: {total} of {expected_size} bytes",
+            code="io",
+        )
+    binding.verify()
+    return digest.hexdigest(), binary
+
+
+def _drain_blob_selector(
+    process: subprocess.Popen[bytes], *, expected_size: int, path: str
+) -> tuple[int, Any, int, bool, bytearray]:
     selector: selectors.BaseSelector | None = None
     digest = hashlib.sha256()
     total = 0
@@ -760,18 +934,71 @@ def _stream_git_blob(root: Path, object_id: str, expected_size: int, path: str) 
                 stream.close()
         if process.poll() is None:
             _stop_process(process)
-    if returncode:
-        detail = bytes(stderr).decode("utf-8", "replace").strip()
-        raise ArchitectureError(
-            f"Git blob stream failed for {path}: {detail or f'exit {returncode}'}", code="git"
-        )
-    if total != expected_size:
-        raise ArchitectureError(
-            f"Git blob stream was truncated for {path}: {total} of {expected_size} bytes",
-            code="io",
-        )
-    binding.verify()
-    return digest.hexdigest(), binary
+    return returncode, digest, total, binary, stderr
+
+
+def _drain_blob_threaded(
+    process: subprocess.Popen[bytes], *, expected_size: int, path: str
+) -> tuple[int, Any, int, bool, bytearray]:
+    """The Windows half of the streamed blob read: same caps and deadline, thread-fed."""
+    pipes: _ThreadedPipes | None = None
+    digest = hashlib.sha256()
+    total = 0
+    binary = False
+    stderr = bytearray()
+    try:
+        if process.stdout is None or process.stderr is None:
+            raise ArchitectureError("streamed blob pipes are unavailable", code="io")
+        try:
+            pipes = _ThreadedPipes((process.stdout, process.stderr), BLOB_STREAM_CHUNK_BYTES)
+        except Exception as exc:
+            raise ArchitectureError(
+                f"streamed blob setup failed: {path}: {exc}", code="io"
+            ) from exc
+        pending = {process.stdout, process.stderr}
+        deadline = time.monotonic() + _GIT_TIMEOUT_SECONDS
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ArchitectureError(f"Git blob stream timed out: {path}", code="timeout")
+            event = pipes.next(remaining)
+            if event is None:
+                continue
+            stream, chunk = event
+            if isinstance(chunk, OSError):
+                raise chunk
+            if not chunk:
+                pending.discard(stream)
+                stream.close()
+                continue
+            if stream is process.stderr:
+                stderr.extend(chunk[: max(0, 65_536 - len(stderr))])
+                continue
+            total += len(chunk)
+            if total > expected_size:
+                raise ArchitectureError(f"Git blob stream exceeded its size: {path}", code="limit")
+            digest.update(chunk)
+            if not binary and b"\0" in chunk:
+                binary = True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ArchitectureError(f"Git blob stream timed out: {path}", code="timeout")
+        returncode = process.wait(timeout=remaining)
+    except ArchitectureError:
+        _stop_process(process)
+        raise
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _stop_process(process)
+        raise ArchitectureError(f"Git blob stream failed: {path}: {exc}", code="io") from exc
+    finally:
+        if process.poll() is None:
+            _stop_process(process)
+        if pipes is not None:
+            pipes.close()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+    return returncode, digest, total, binary, stderr
 
 
 def _git_blob_entry(root: Path, sha: str, path: str) -> tuple[str, int] | None:

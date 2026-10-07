@@ -10,9 +10,10 @@ import stat
 import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 from typing import TYPE_CHECKING, Any, Container, Iterable, Mapping
 
+from . import fsx
 from .spec import SpecError, _schema_preflight, validate_schema
 from .util import run
 
@@ -250,12 +251,25 @@ def _validate_declared_paths(model: dict[str, Any], *, document: str, text: str)
             raise _located_model_error(exc, document, text, model, location) from None
 
 
+def _absolute_shape_unsafe(raw: str) -> bool:
+    if fsx.WINDOWS:
+        # Judge the part after the drive or UNC share, with either separator.
+        raw = os.path.splitdrive(raw)[1].replace("\\", "/")
+    return "//" in raw or raw.endswith("/") or any(part in {".", ".."} for part in raw.split("/"))
+
+
 def _document_relative(root: Path, path: Path | str, *, label: str) -> str:
     root_real = root.resolve(strict=True)
-    raw = os.fspath(path)
+    # A path object names its parts with the platform separator; the repository
+    # form is always POSIX. Backslashes in caller-supplied strings stay refused.
+    raw = path.as_posix() if isinstance(path, PurePath) else os.fspath(path)
     if not os.path.isabs(raw):
         _safe_relative_path(raw, label=label)
-    elif "//" in raw or raw.endswith("/") or any(part in {".", ".."} for part in raw.split("/")):
+        if fsx.WINDOWS and os.path.splitdrive(raw)[0]:
+            raise ArchitectureError(
+                f"{label}: unsafe repository-relative path {raw!r} (names a drive)", code="path"
+            )
+    elif _absolute_shape_unsafe(raw):
         raise ArchitectureError(f"{label}: unsafe absolute document path {raw!r}", code="path")
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -272,6 +286,10 @@ def _document_relative(root: Path, path: Path | str, *, label: str) -> str:
 
 def _secure_open_flags(*, label: str) -> tuple[int, int, int]:
     """Return required descriptor-relative flags, or fail before touching a path."""
+    if fsx.WINDOWS:
+        # Windows has no such flags or dir_fd: fsx lstat-checks every component
+        # and refuses links and reparse points instead (the flags are 0 there).
+        return fsx.O_NOFOLLOW, fsx.O_DIRECTORY, fsx.O_NONBLOCK
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     nonblock = getattr(os, "O_NONBLOCK", None)
@@ -296,26 +314,16 @@ def _read_regular_bytes(
     identities: dict[tuple[int, int], str] | None = None,
 ) -> bytes:
     parts = PurePosixPath(relative).parts
+    directories: list[fsx.DirHandle] = []
     descriptors: list[int] = []
     try:
-        no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
-        current = os.open(
-            root.resolve(strict=True),
-            os.O_RDONLY | directory_flag | no_follow,
-        )
-        descriptors.append(current)
+        no_follow, _directory_flag, nonblock = _secure_open_flags(label=label)
+        current = fsx.open_dir(root.resolve(strict=True))
+        directories.append(current)
         for part in parts[:-1]:
-            current = os.open(
-                part,
-                os.O_RDONLY | directory_flag | no_follow,
-                dir_fd=current,
-            )
-            descriptors.append(current)
-        descriptor = os.open(
-            parts[-1],
-            os.O_RDONLY | no_follow | nonblock,
-            dir_fd=current,
-        )
+            current = fsx.open_dir_at(current, part)
+            directories.append(current)
+        descriptor = fsx.open_at(current, parts[-1], os.O_RDONLY | no_follow | nonblock)
         descriptors.append(descriptor)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
@@ -365,6 +373,8 @@ def _read_regular_bytes(
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for directory in reversed(directories):
+            fsx.close_dir(directory)
 
 
 def _duplicate_rejecting_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -546,7 +556,7 @@ def _validate_system_semantics(system: dict[str, Any]) -> None:
 
     for contract in system["contracts"]:
         path = _safe_relative_path(contract["path"], label=f"contract {contract['id']}")
-        if Path(path).name == ".gitkeep" or "examples" in PurePosixPath(path).parts:
+        if PurePosixPath(path).name == ".gitkeep" or "examples" in PurePosixPath(path).parts:
             raise ArchitectureError(
                 f"contract {contract['id']}: examples and .gitkeep are non-authoritative",
                 code="contract",
@@ -777,33 +787,41 @@ def load_architecture(
 
 def _inspect_repository_path(root: Path, relative: str, *, regular: bool) -> str | None:
     try:
-        no_follow, directory_flag, nonblock = _secure_open_flags(
+        no_follow, _directory_flag, nonblock = _secure_open_flags(
             label="repository path inspection"
         )
     except ArchitectureError:
         return "unsafe"
+    directories: list[fsx.DirHandle] = []
     descriptors: list[int] = []
     parts = PurePosixPath(relative).parts
     try:
-        current = os.open(
-            root.resolve(strict=True),
-            os.O_RDONLY | directory_flag | no_follow,
-        )
-        descriptors.append(current)
+        current = fsx.open_dir(root.resolve(strict=True))
+        directories.append(current)
         for part in parts[:-1]:
-            current = os.open(
-                part,
-                os.O_RDONLY | directory_flag | no_follow,
+            current = fsx.open_dir_at(current, part)
+            directories.append(current)
+        if fsx.WINDOWS:
+            # A directory cannot be opened as a file there; lstat names its type
+            # and refuses links and reparse points before any open.
+            info = fsx.lstat_at(current, parts[-1])
+            if fsx.is_link(info):
+                return "unsafe"
+            if stat.S_ISREG(info.st_mode):
+                final = fsx.open_at(current, parts[-1], os.O_RDONLY | no_follow | nonblock)
+                descriptors.append(final)
+                opened = os.fstat(final)
+                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                    return "unsafe"
+                info = opened
+        else:
+            final = os.open(
+                parts[-1],
+                os.O_RDONLY | no_follow | nonblock,
                 dir_fd=current,
             )
-            descriptors.append(current)
-        final = os.open(
-            parts[-1],
-            os.O_RDONLY | no_follow | nonblock,
-            dir_fd=current,
-        )
-        descriptors.append(final)
-        info = os.fstat(final)
+            descriptors.append(final)
+            info = os.fstat(final)
         if regular and not stat.S_ISREG(info.st_mode):
             return "unsafe"
         if not regular and not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
@@ -816,6 +834,8 @@ def _inspect_repository_path(root: Path, relative: str, *, regular: bool) -> str
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for directory in reversed(directories):
+            fsx.close_dir(directory)
 
 
 def validate_architecture(
@@ -845,9 +865,18 @@ def validate_architecture(
     return tuple(sorted(findings, key=lambda item: (item.code, item.path, item.message)))
 
 
+def _is_link_path(path: Path) -> bool:
+    if not fsx.WINDOWS:
+        return path.is_symlink()
+    try:
+        return fsx.is_link(path.lstat())
+    except (OSError, ValueError):
+        return False
+
+
 def architecture_inputs_present(root: Path) -> bool:
     """Absence is compatible; dangling symlinks and unreadable inputs are present."""
-    if (root / "architecture").is_symlink():
+    if _is_link_path(root / "architecture"):
         return True
     for relative in (SYSTEM_PATH, RULES_PATH, Path("architecture/adoption.json")):
         try:
@@ -1044,13 +1073,13 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
     entry_count = 0
     file_count = 0
     byte_count = 0
-    no_follow, directory_flag, nonblock = _secure_open_flags(
+    no_follow, _directory_flag, nonblock = _secure_open_flags(
         label="repository drift"
     )
     tracked_dot_venv_paths = _tracked_dot_venv_paths(root)
 
     def record_file(
-        directory_fd: int,
+        directory_fd: fsx.DirHandle,
         name: str,
         relative_text: str,
         observed: os.stat_result,
@@ -1058,11 +1087,7 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
         nonlocal byte_count, file_count
         descriptor = -1
         try:
-            descriptor = os.open(
-                name,
-                os.O_RDONLY | no_follow | nonblock,
-                dir_fd=directory_fd,
-            )
+            descriptor = fsx.open_at(directory_fd, name, os.O_RDONLY | no_follow | nonblock)
             actual = os.fstat(descriptor)
         except OSError as exc:
             raise ArchitectureError(
@@ -1093,12 +1118,12 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
             )
         artifacts.append(_RepositoryArtifact(relative_text, "file", size))
 
-    def walk(directory_fd: int, relative_parent: PurePosixPath, depth: int) -> None:
+    def walk(directory_fd: fsx.DirHandle, relative_parent: PurePosixPath, depth: int) -> None:
         nonlocal byte_count, entry_count, file_count
         if depth > MAX_DEPTH:
             raise ArchitectureError("repository drift directory depth limit exceeded", code="limit")
         children: list[tuple[str, PurePosixPath, tuple[int, int, int]]] = []
-        with os.scandir(directory_fd) as iterator:
+        with fsx.scandir(directory_fd) as iterator:
             for entry in iterator:
                 entry_count += 1
                 if entry_count > MAX_DRIFT_ENTRIES:
@@ -1107,6 +1132,22 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                     )
                 relative = relative_parent / entry.name
                 relative_text = relative.as_posix()
+                if fsx.WINDOWS:
+                    # Scandir entries there carry no inode identity and report
+                    # junctions as directories: classify from a real lstat.
+                    observed = fsx.lstat_at(directory_fd, entry.name)
+                    if fsx.is_link(observed):
+                        artifacts.append(_RepositoryArtifact(relative_text, "symlink", 0))
+                    elif stat.S_ISDIR(observed.st_mode):
+                        if not _ignore_inventory_directory(relative):
+                            children.append(
+                                (entry.name, relative, _inventory_identity(observed))
+                            )
+                    elif stat.S_ISREG(observed.st_mode):
+                        record_file(directory_fd, entry.name, relative_text, observed)
+                    else:
+                        artifacts.append(_RepositoryArtifact(relative_text, "special", 0))
+                    continue
                 if entry.is_symlink():
                     artifacts.append(_RepositoryArtifact(relative_text, "symlink", 0))
                 elif entry.is_dir(follow_symlinks=False):
@@ -1120,17 +1161,21 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                     record_file(directory_fd, entry.name, relative_text, observed)
                 else:
                     artifacts.append(_RepositoryArtifact(relative_text, "special", 0))
+        if isinstance(directory_fd, fsx.WindowsDirectory) and _inventory_identity(
+            fsx.fstat_dir(directory_fd)
+        ) != _inventory_identity(directory_fd.info):
+            # The listing was path based there; refuse a directory swapped meanwhile.
+            raise ArchitectureError(
+                f"repository directory changed during no-follow inventory: {relative_parent}",
+                code="io",
+            )
         for name, relative, observed_identity in sorted(
             children, key=lambda item: item[1].as_posix()
         ):
-            descriptor = -1
+            descriptor: fsx.DirHandle | None = None
             try:
-                descriptor = os.open(
-                    name,
-                    os.O_RDONLY | directory_flag | no_follow,
-                    dir_fd=directory_fd,
-                )
-                actual = os.fstat(descriptor)
+                descriptor = fsx.open_dir_at(directory_fd, name)
+                actual = fsx.fstat_dir(descriptor)
                 if (
                     _inventory_identity(actual) != observed_identity
                     or not stat.S_ISDIR(actual.st_mode)
@@ -1148,34 +1193,30 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                     code="io",
                 ) from exc
             finally:
-                if descriptor >= 0:
-                    os.close(descriptor)
+                fsx.close_dir(descriptor)
 
     def inventory_tracked_dot_venv_path(
-        root_fd: int, relative: PurePosixPath
+        root_fd: fsx.DirHandle, relative: PurePosixPath
     ) -> None:
         nonlocal entry_count
-        directory_fd = os.dup(root_fd)
+        # A Windows handle is an immutable path record, so it needs no duplicate.
+        directory_fd = root_fd if isinstance(root_fd, fsx.WindowsDirectory) else os.dup(root_fd)
         try:
             for component in relative.parts[:-1]:
-                child_fd = os.open(
-                    component,
-                    os.O_RDONLY | directory_flag | no_follow,
-                    dir_fd=directory_fd,
-                )
-                observed = os.fstat(child_fd)
+                child_fd = fsx.open_dir_at(directory_fd, component)
+                observed = fsx.fstat_dir(child_fd)
                 if not stat.S_ISDIR(observed.st_mode):
-                    os.close(child_fd)
+                    fsx.close_dir(child_fd)
                     raise ArchitectureError(
                         f"tracked repository path has a non-directory ancestor: {relative}",
                         code="io",
                     )
-                os.close(directory_fd)
+                fsx.close_dir(directory_fd)
                 directory_fd = child_fd
 
             name = relative.name
             try:
-                observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                observed = fsx.lstat_at(directory_fd, name)
             except FileNotFoundError:
                 return
             entry_count += 1
@@ -1184,7 +1225,7 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                     "repository drift entry limit exceeded", code="limit"
                 )
             relative_text = relative.as_posix()
-            if stat.S_ISLNK(observed.st_mode):
+            if fsx.is_link(observed):
                 artifacts.append(_RepositoryArtifact(relative_text, "symlink", 0))
             elif stat.S_ISREG(observed.st_mode):
                 record_file(directory_fd, name, relative_text, observed)
@@ -1200,14 +1241,11 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                 code="io",
             ) from exc
         finally:
-            os.close(directory_fd)
+            fsx.close_dir(directory_fd)
 
-    root_descriptor = -1
+    root_descriptor: fsx.DirHandle | None = None
     try:
-        root_descriptor = os.open(
-            root,
-            os.O_RDONLY | directory_flag | no_follow,
-        )
+        root_descriptor = fsx.open_dir(root)
         walk(root_descriptor, PurePosixPath(), 0)
         for relative in tracked_dot_venv_paths:
             inventory_tracked_dot_venv_path(root_descriptor, relative)
@@ -1218,8 +1256,7 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
             f"repository drift inventory failed closed: {exc}", code="io"
         ) from exc
     finally:
-        if root_descriptor >= 0:
-            os.close(root_descriptor)
+        fsx.close_dir(root_descriptor)
     return tuple(sorted(artifacts, key=lambda item: item.path))
 
 

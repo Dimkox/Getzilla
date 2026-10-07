@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import fsx
 from .util import (
     dump_json,
     git_head,
@@ -36,9 +37,39 @@ SCOPE_ACTIONS = {
 }
 
 
+def _windows_process_alive(pid: int) -> bool:
+    """``OpenProcess`` probe: Windows ``os.kill(pid, 0)`` would send CTRL_C_EVENT."""
+    import ctypes
+    from ctypes import wintypes
+
+    if pid > 0xFFFFFFFF:
+        return False
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        # ERROR_ACCESS_DENIED: the process exists but belongs to someone else
+        # (the PermissionError case below); anything else means it is gone.
+        return ctypes.get_last_error() == 5
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _process_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if fsx.WINDOWS:
+        return _windows_process_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -48,6 +79,23 @@ def _process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _release_lock_file(lock: Path) -> None:
+    """Remove a released lock file; Windows retries a reader's brief share lock."""
+    attempts = 20 if fsx.WINDOWS else 1
+    for attempt in range(attempts):
+        try:
+            lock.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            # A concurrent _stale_lock reader holds the file open without
+            # FILE_SHARE_DELETE; POSIX unlink never fails this way.
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(0.05)
 
 
 def _stale_lock(lock: Path) -> bool:
@@ -66,7 +114,7 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
     fd: int | None = None
     while fd is None:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
         except FileExistsError:
             if _stale_lock(lock):
                 try:
@@ -79,15 +127,20 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'could not acquire runtime lock: {lock}')
             time.sleep(0.05)
+        except PermissionError:
+            # Windows refuses to create a name whose previous file is still
+            # delete-pending; that is contention, not a missing permission.
+            if not fsx.WINDOWS:
+                raise
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'could not acquire runtime lock: {lock}')
+            time.sleep(0.05)
     try:
         os.write(fd, f'{os.getpid()}\n'.encode())
         yield
     finally:
         os.close(fd)
-        try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+        _release_lock_file(lock)
 
 
 def active_route_path(root: Path) -> Path:

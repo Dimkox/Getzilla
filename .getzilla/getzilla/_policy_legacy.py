@@ -4,9 +4,10 @@ import fnmatch
 import re
 import shlex
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
 from .util import load_json, safe_relative_path
 
@@ -78,6 +79,133 @@ SIDE_EFFECT_TOOL = re.compile(
     re.IGNORECASE,
 )
 
+# Native Windows only (``fsx.WINDOWS``); POSIX parsing below is unchanged.
+_WINDOWS_LAUNCHER_SUFFIXES = ('.exe', '.cmd', '.bat', '.com')
+_WINDOWS_LAUNCHER = re.compile(r'(?<=\w)\.(?:exe|cmd|bat|com)(?=$|[\s;&|)])', re.IGNORECASE)
+_WINDOWS_SHELL_EXECUTABLES = {'cmd', 'powershell', 'pwsh'}
+_WINDOWS_PATH_CHARACTERS = frozenset('._-~@+')
+
+
+def _executable_name(token: str) -> str:
+    """Lower-cased command name of ``token``.
+
+    POSIX keeps ``Path(token).name``. Windows also treats ``\\`` and a drive as
+    directory syntax and drops a launcher suffix, so ``C:\\Git\\cmd\\git.exe`` and
+    ``git.EXE`` are both ``git`` rather than an unknown, unclassified program.
+    """
+    if not fsx.WINDOWS:
+        return Path(token).name.lower()
+    name = PureWindowsPath(token).name.lower()
+    for suffix in _WINDOWS_LAUNCHER_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
+def _windows_literal_backslashes(text: str) -> str:
+    """Double the backslashes that are Windows directory separators.
+
+    POSIX ``shlex`` drops an unquoted backslash, so ``C:\\Git\\git.exe`` would
+    become ``C:Gitgit.exe``. A backslash followed by a path character outside
+    single quotes is doubled; every other escape (``\\"``, ``\\'``, ``\\\\``, an
+    escaped space, ``\\;``) and single-quoted text keep their POSIX meaning.
+    """
+    result: list[str] = []
+    quote = ''
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            if char == "'":
+                quote = ''
+            result.append(char)
+        elif char == '\\':
+            following = text[index + 1:index + 2]
+            if following and (following.isalnum() or following in _WINDOWS_PATH_CHARACTERS):
+                result.append('\\\\')
+            else:
+                result.append(char + following)
+                index += 1
+        else:
+            if char == '"':
+                quote = '' if quote == '"' else '"'
+            elif char == "'" and not quote:
+                quote = "'"
+            result.append(char)
+        index += 1
+    return ''.join(result)
+
+
+def _split_words(text: str) -> list[str]:
+    """``shlex.split``; on Windows a path backslash survives as a separator."""
+    if fsx.WINDOWS:
+        text = _windows_literal_backslashes(text)
+    return shlex.split(text)
+
+
+def _windows_sequence_split(chunk: str) -> list[str]:
+    """Split a chunk at a lone ``&`` outside quotes (cmd.exe/PowerShell sequencing).
+
+    ``&&`` is already a chunk separator; ``2>&1``, ``&>file``, ``\\&`` and ``^&``
+    are redirections or escapes, not sequencing.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    quote = ''
+    for index, char in enumerate(chunk):
+        if quote:
+            if char == quote:
+                quote = ''
+        elif char in {'"', "'"}:
+            quote = char
+        elif (
+            char == '&'
+            and chunk[index - 1:index] not in {'>', '<', '\\', '^'}
+            and chunk[index + 1:index + 2] != '>'
+        ):
+            parts.append(''.join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append(''.join(current))
+    return parts
+
+
+def _windows_command_variant(command: str) -> str:
+    """Fold a Windows spelling onto the POSIX one the substring patterns describe.
+
+    ``"C:\\Program Files\\Git\\cmd\\git.exe" push --force`` becomes
+    ``C:/Program Files/Git/cmd/git push --force``: separators, quotes and the
+    launcher suffix are not allowed to hide a destructive or external command.
+    """
+    folded = command.replace('\\', '/').replace('"', '').replace("'", '')
+    return _WINDOWS_LAUNCHER.sub('', folded)
+
+
+def _windows_path_key(path: str) -> str:
+    """NTFS spelling of one file: case, trailing dots/spaces and ``:stream`` are folded."""
+    parts: list[str] = []
+    for part in path.split('/'):
+        name = part.split(':', 1)[0].rstrip(' .')
+        parts.append(name or part)
+    return '/'.join(parts).casefold()
+
+
+def _destructive_pattern(command: str, patterns: list[str]) -> str | None:
+    """First configured destructive pattern found in ``command``.
+
+    Windows also checks the folded spelling from ``_windows_command_variant``.
+    """
+    candidates = [command]
+    if fsx.WINDOWS:
+        variant = _windows_command_variant(command)
+        if variant != command:
+            candidates.append(variant)
+    for pattern in patterns:
+        if any(re.search(pattern, candidate, flags=re.IGNORECASE) for candidate in candidates):
+            return pattern
+    return None
+
 
 def write_roles(root: Path) -> set[str]:
     data = load_json(root / '.getzilla/config/routing.json', None)
@@ -102,6 +230,9 @@ def _configured_patterns(config: dict[str, Any], key: str, defaults: list[str]) 
 def _glob_match(path: str, pattern: str) -> bool:
     normalized = path.replace('\\', '/').lstrip('./')
     candidate = pattern.replace('\\', '/').lstrip('./')
+    if fsx.WINDOWS:
+        # NTFS opens AGENTS.md for agents.MD, "AGENTS.md." and "AGENTS.md::$DATA".
+        return fnmatch.fnmatchcase(_windows_path_key(normalized), candidate.casefold())
     return fnmatch.fnmatchcase(normalized, candidate)
 
 
@@ -166,7 +297,11 @@ def _extract_patch_paths(command: str) -> list[str]:
 
 
 def _command_chunks(command: str) -> list[str]:
-    return [part for part in _COMMAND_SPLIT.split(command) if part.strip()]
+    chunks = [part for part in _COMMAND_SPLIT.split(command) if part.strip()]
+    if fsx.WINDOWS:
+        # cmd.exe and PowerShell also sequence commands with a single '&'.
+        chunks = [piece for chunk in chunks for piece in _windows_sequence_split(chunk) if piece.strip()]
+    return chunks
 
 
 def _unwrap_execution_wrappers(tokens: list[str]) -> tuple[list[str], bool]:
@@ -175,7 +310,7 @@ def _unwrap_execution_wrappers(tokens: list[str]) -> tuple[list[str], bool]:
     for _depth in range(8):
         if not remaining:
             return [], True
-        wrapper = Path(remaining[0]).name.lower()
+        wrapper = _executable_name(remaining[0])
         if wrapper not in _EXECUTION_WRAPPERS:
             return remaining, False
         index = 1
@@ -221,15 +356,15 @@ def _unwrap_execution_wrappers(tokens: list[str]) -> tuple[list[str], bool]:
 def _leading_argv(chunk: str) -> list[str]:
     stripped = chunk.split('#', 1)[0].strip()
     try:
-        tokens = shlex.split(stripped)
+        tokens = _split_words(stripped)
     except ValueError:
         tokens = stripped.split()
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
-    if tokens and Path(tokens[0]).name.lower() in {'sudo', 'doas', 'env'}:
+    if tokens and _executable_name(tokens[0]) in {'sudo', 'doas', 'env'}:
         commands = {'git', 'gh', 'docker', 'npm', 'bash', 'sh', 'zsh', 'dash', 'ksh'}
         command_index = next(
-            (index for index, token in enumerate(tokens[1:], 1) if Path(token).name.lower() in commands),
+            (index for index, token in enumerate(tokens[1:], 1) if _executable_name(token) in commands),
             None,
         )
         if command_index is not None:
@@ -238,18 +373,18 @@ def _leading_argv(chunk: str) -> list[str]:
     if ambiguous_wrapper:
         return []
     if tokens:
-        tokens[0] = Path(tokens[0]).name
+        tokens[0] = _executable_name(tokens[0])
     return [token.lower() for token in tokens]
 
 
 def _unwrap_shell(chunk: str) -> str:
     try:
-        tokens = shlex.split(chunk)
+        tokens = _split_words(chunk)
     except ValueError:
         tokens = []
     shells = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
     for index, token in enumerate(tokens):
-        if Path(token).name.lower() not in shells:
+        if _executable_name(token) not in shells:
             continue
         for option_index in range(index + 1, len(tokens) - 1):
             if re.fullmatch(r'-[A-Za-z]*c[A-Za-z]*', tokens[option_index]):
@@ -352,7 +487,7 @@ def _git_selector_index(argv: list[str]) -> int:
 def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
     if not argv:
         return None, False
-    executable = Path(argv[0]).name.lower()
+    executable = _executable_name(argv[0])
     normalized = [executable, *[token.lower() for token in argv[1:]]]
     action = _production_action(normalized)
     if executable == 'git':
@@ -383,7 +518,7 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
 
 def _command_tokens(chunk: str) -> list[str] | None:
     try:
-        tokens = shlex.split(chunk)
+        tokens = _split_words(chunk)
     except ValueError:
         return None
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
@@ -393,21 +528,21 @@ def _command_tokens(chunk: str) -> list[str] | None:
 
 def _bounded_command(tokens: list[str]) -> tuple[list[str], bool]:
     remaining = list(tokens)
-    if remaining and Path(remaining[0]).name.lower() == 'sudo':
+    if remaining and _executable_name(remaining[0]) == 'sudo':
         index = 1
         if index < len(remaining) and remaining[index] == '-E':
             index += 1
         if index >= len(remaining) or remaining[index].startswith('-'):
             return remaining, False
         remaining = remaining[index:]
-    elif remaining and Path(remaining[0]).name.lower() == 'doas':
+    elif remaining and _executable_name(remaining[0]) == 'doas':
         index = 1
         if index + 1 < len(remaining) and remaining[index] == '-u':
             index += 2
         if index >= len(remaining) or remaining[index].startswith('-'):
             return remaining, False
         remaining = remaining[index:]
-    elif remaining and Path(remaining[0]).name.lower() == 'env':
+    elif remaining and _executable_name(remaining[0]) == 'env':
         index = 1
         while index < len(remaining) and re.match(
             r'^[A-Za-z_][A-Za-z0-9_]*=', remaining[index]
@@ -421,7 +556,7 @@ def _bounded_command(tokens: list[str]) -> tuple[list[str], bool]:
 
 
 def _literal_shell_payload(tokens: list[str]) -> str | None:
-    if not tokens or Path(tokens[0]).name.lower() not in _SHELL_EXECUTABLES:
+    if not tokens or _executable_name(tokens[0]) not in _SHELL_EXECUTABLES:
         return None
     if len(tokens) == 3 and tokens[1] in {'-c', '-lc'}:
         return tokens[2]
@@ -469,24 +604,24 @@ def _analyze_authority_pieces(
         tokens, bounded = _bounded_command(raw_tokens)
         if not tokens:
             continue
-        outer = Path(tokens[0]).name.lower()
+        outer = _executable_name(tokens[0])
         if outer in _INERT_EXECUTABLES:
             continue
         if outer == 'xargs':
             target = _literal_xargs_target(tokens)
             if target is None:
-                if any(Path(token).name.lower() in _AUTHORITY_EXECUTABLES for token in tokens[1:]):
+                if any(_executable_name(token) in _AUTHORITY_EXECUTABLES for token in tokens[1:]):
                     ambiguous = True
                     context_proven = False
                 continue
             target, target_bounded = _bounded_command(target)
-            if not target or Path(target[0]).name.lower() in _INERT_EXECUTABLES:
+            if not target or _executable_name(target[0]) in _INERT_EXECUTABLES:
                 continue
-            if Path(target[0]).name.lower() in _AUTHORITY_EXECUTABLES:
+            if _executable_name(target[0]) in _AUTHORITY_EXECUTABLES:
                 record(target, proven=False)
-            elif any(Path(token).name.lower() in _AUTHORITY_EXECUTABLES for token in target):
+            elif any(_executable_name(token) in _AUTHORITY_EXECUTABLES for token in target):
                 for index, token in enumerate(target):
-                    if Path(token).name.lower() in _AUTHORITY_EXECUTABLES:
+                    if _executable_name(token) in _AUTHORITY_EXECUTABLES:
                         record(target[index:], proven=False)
             if not target_bounded:
                 context_proven = False
@@ -503,11 +638,27 @@ def _analyze_authority_pieces(
             if (inner.actions or inner.ambiguous) and (not bounded or not inner.context_proven):
                 context_proven = False
             continue
+        if fsx.WINDOWS and outer in _WINDOWS_SHELL_EXECUTABLES:
+            # cmd /c, powershell -Command and their options are not modelled: the
+            # authority they carry is reported but never proven.
+            if shell_depth > 1:
+                if re.search(r'\b(?:git|gh|docker|npm)\b', chunk, re.IGNORECASE):
+                    ambiguous = True
+                    context_proven = False
+                continue
+            inner = _analyze_authority_pieces(' '.join(tokens[1:]), shell_depth=shell_depth + 1)
+            for action in inner.actions:
+                if action not in actions:
+                    actions.append(action)
+            ambiguous = ambiguous or inner.ambiguous
+            if inner.actions or inner.ambiguous:
+                context_proven = False
+            continue
         if outer in _AUTHORITY_EXECUTABLES:
             record(tokens, proven=bounded)
             continue
         for index, token in enumerate(tokens[1:], 1):
-            if Path(token).name.lower() in _AUTHORITY_EXECUTABLES:
+            if _executable_name(token) in _AUTHORITY_EXECUTABLES:
                 record(tokens[index:], proven=False)
 
     return AuthorityAnalysis(tuple(actions), ambiguous, context_proven)
@@ -533,6 +684,15 @@ def is_production_invocation(command: str) -> bool:
 
 
 def _http_write_resource(command: str) -> str | None:
+    resource = _http_write_resource_text(command)
+    if resource is None and fsx.WINDOWS:
+        variant = _windows_command_variant(command)
+        if variant != command:
+            resource = _http_write_resource_text(variant)
+    return resource
+
+
+def _http_write_resource_text(command: str) -> str | None:
     lowered = command.lower()
     mutation = False
     if re.search(r'\bcurl\b', lowered):
@@ -582,9 +742,12 @@ def evaluate_pre_tool(
             and _is_control_plane_shell_mutation(command, control_plane)
         ):
             return False, 'Blocked control-plane shell mutation; use a structured write with an exact protected-path grant.'
-        for pattern in _configured_patterns(config, 'destructive_command_patterns', DESTRUCTIVE_COMMANDS):
-            if re.search(pattern, command, flags=re.IGNORECASE):
-                return False, f'Blocked destructive command by repository policy: {pattern}'
+        pattern = _destructive_pattern(
+            command,
+            _configured_patterns(config, 'destructive_command_patterns', DESTRUCTIVE_COMMANDS),
+        )
+        if pattern is not None:
+            return False, f'Blocked destructive command by repository policy: {pattern}'
         action = production_action(command)
         if action:
             if action == 'workflow-dispatch':

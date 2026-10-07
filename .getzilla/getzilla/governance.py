@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal
 
+from . import fsx
 from .architecture import (
     ArchitectureError,
     contract_inventory,
@@ -310,15 +311,15 @@ class GovernanceSnapshot:
 @dataclass(frozen=True)
 class _RepositoryHandle:
     path: Path
-    descriptor: int
+    descriptor: fsx.DirHandle
     identity: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
 class _PinnedDirectory:
     path: Path
-    descriptor: int
-    parent_descriptor: int
+    descriptor: fsx.DirHandle
+    parent_descriptor: fsx.DirHandle
     name: str
     identity: tuple[int, int, int, int]
 
@@ -327,7 +328,7 @@ class _PinnedDirectory:
 class _PinnedAuthorityFile:
     path: Path
     descriptor: int
-    parent_descriptor: int
+    parent_descriptor: fsx.DirHandle
     name: str
     identity: tuple[int, int, int, int, int]
 
@@ -441,7 +442,7 @@ class ProjectionSnapshot:
         self._closed = True
         for item in reversed(self._files):
             os.close(item.descriptor)
-        os.close(self._repository.descriptor)
+        fsx.close_dir(self._repository.descriptor)
 
     def __enter__(self) -> ProjectionSnapshot:
         return self
@@ -458,7 +459,7 @@ def open_projection_snapshot(root: Path | str, *,
     try:
         no_follow, _directory, nonblock = _secure_open_flags(label="projection inputs")
         for name in ("decisions.md", "mistakes.md"):
-            descriptor = os.open(name, os.O_RDONLY | no_follow | nonblock, dir_fd=repository.descriptor)
+            descriptor = fsx.open_at(repository.descriptor, name, os.O_RDONLY | no_follow | nonblock)
             try:
                 info = os.fstat(descriptor)
                 if not stat.S_ISREG(info.st_mode):
@@ -474,7 +475,7 @@ def open_projection_snapshot(root: Path | str, *,
     except BaseException as exc:
         for item in reversed(files):
             os.close(item.descriptor)
-        os.close(repository.descriptor)
+        fsx.close_dir(repository.descriptor)
         if isinstance(exc, OSError):
             raise GovernanceError("projection input must be a regular non-symlink file", code="io") from exc
         raise
@@ -487,7 +488,7 @@ def _unsafe_text(value: str) -> bool:
     )
 
 
-def _safe_relative_path(root_descriptor: int, value: str, *, label: str) -> str:
+def _safe_relative_path(root_descriptor: fsx.DirHandle, value: str, *, label: str) -> str:
     if not isinstance(value, str):
         raise GovernanceError(f"{label}: path must be a string", code="path")
     raw_parts = value.split("/")
@@ -506,19 +507,35 @@ def _safe_relative_path(root_descriptor: int, value: str, *, label: str) -> str:
         )
     no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
     descriptors: list[int] = []
+    directories: list[fsx.DirHandle] = []
     current = root_descriptor
     try:
         for index, part in enumerate(raw_parts):
             final = index == len(raw_parts) - 1
-            flags = os.O_RDONLY | no_follow | nonblock
-            if not final:
-                flags |= directory_flag
-            try:
-                current = os.open(part, flags, dir_fd=current)
-            except FileNotFoundError:
-                return pure.as_posix()
-            descriptors.append(current)
-            info = os.fstat(current)
+            if isinstance(current, fsx.WindowsDirectory):
+                # A directory cannot be opened as a file there: the final name is
+                # typed by lstat, ancestors are walked by fsx, links are refused.
+                try:
+                    if final:
+                        info = fsx.lstat_at(current, part)
+                        if fsx.is_link(info):
+                            raise OSError(errno.ELOOP, "refusing to follow a link or reparse point", part)
+                    else:
+                        current = fsx.open_dir_at(current, part)
+                        directories.append(current)
+                        info = current.info
+                except FileNotFoundError:
+                    return pure.as_posix()
+            else:
+                flags = os.O_RDONLY | no_follow | nonblock
+                if not final:
+                    flags |= directory_flag
+                try:
+                    current = os.open(part, flags, dir_fd=current)
+                except FileNotFoundError:
+                    return pure.as_posix()
+                descriptors.append(current)
+                info = os.fstat(current)
             if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                 raise GovernanceError(
                     f"{label}: path resolves to an unsafe file type", code="path"
@@ -536,9 +553,15 @@ def _safe_relative_path(root_descriptor: int, value: str, *, label: str) -> str:
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for directory in reversed(directories):
+            fsx.close_dir(directory)
 
 
 def _secure_open_flags(*, label: str) -> tuple[int, int, int]:
+    if fsx.WINDOWS:
+        # Windows has no such flags or dir_fd: fsx lstat-checks every component
+        # and refuses links and reparse points instead (the flags are 0 there).
+        return fsx.O_NOFOLLOW, fsx.O_DIRECTORY, fsx.O_NONBLOCK
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     nonblock = getattr(os, "O_NONBLOCK", None)
@@ -564,16 +587,13 @@ def _open_repository(root: Path | str) -> _RepositoryHandle:
     repository = Path(os.path.abspath(Path(root)))
     try:
         named = os.lstat(repository)
-        if stat.S_ISLNK(named.st_mode) or not stat.S_ISDIR(named.st_mode):
+        if fsx.is_link(named) or not stat.S_ISDIR(named.st_mode):
             raise GovernanceError(
                 "repository root must be a regular non-symlink directory", code="io"
             )
-        descriptor = os.open(
-            repository,
-            os.O_RDONLY | directory_flag | no_follow | nonblock,
-        )
+        descriptor = fsx.open_dir(repository, flags=directory_flag | no_follow | nonblock)
         try:
-            opened = os.fstat(descriptor)
+            opened = fsx.fstat_dir(descriptor)
             identity = (
                 opened.st_dev,
                 opened.st_ino,
@@ -592,7 +612,7 @@ def _open_repository(root: Path | str) -> _RepositoryHandle:
             ):
                 raise GovernanceError("repository root changed while opening", code="io")
         except BaseException:
-            os.close(descriptor)
+            fsx.close_dir(descriptor)
             raise
     except GovernanceError:
         raise
@@ -603,13 +623,13 @@ def _open_repository(root: Path | str) -> _RepositoryHandle:
 
 def _verify_repository(handle: _RepositoryHandle) -> None:
     try:
-        opened = os.fstat(handle.descriptor)
+        opened = fsx.fstat_dir(handle.descriptor)
         named = os.lstat(handle.path)
     except OSError as exc:
         raise GovernanceError("repository root changed while loading", code="io") from exc
     if (
         not stat.S_ISDIR(opened.st_mode)
-        or stat.S_ISLNK(named.st_mode)
+        or fsx.is_link(named)
         or not stat.S_ISDIR(named.st_mode)
         or (
             opened.st_dev,
@@ -639,8 +659,8 @@ def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _directory_identity(info: os.stat_result) -> tuple[int, int, int, int]:
-    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return fsx.directory_identity(info, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns))
 
 
 def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopology:
@@ -655,14 +675,14 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
     files: dict[Path, _PinnedAuthorityFile] = {}
     try:
         for path, parent_descriptor, name in directory_specs:
-            descriptor = os.open(
+            descriptor = fsx.open_dir_at(
+                parent_descriptor,
                 name,
-                os.O_RDONLY | directory_flag | no_follow | nonblock,
-                dir_fd=parent_descriptor,
+                flags=directory_flag | no_follow | nonblock,
             )
-            info = os.fstat(descriptor)
+            info = fsx.fstat_dir(descriptor)
             if not stat.S_ISDIR(info.st_mode):
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
                 raise GovernanceError(
                     f"{path.as_posix()}: authority directory is invalid", code="io"
                 )
@@ -678,14 +698,14 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
         governance_descriptor = directories[1].descriptor
         for name in ("rules", "debt", "canonical-examples"):
             path = Path("governance") / name
-            descriptor = os.open(
+            descriptor = fsx.open_dir_at(
+                governance_descriptor,
                 name,
-                os.O_RDONLY | directory_flag | no_follow | nonblock,
-                dir_fd=governance_descriptor,
+                flags=directory_flag | no_follow | nonblock,
             )
-            info = os.fstat(descriptor)
+            info = fsx.fstat_dir(descriptor)
             if not stat.S_ISDIR(info.st_mode):
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
                 raise GovernanceError(
                     f"{path.as_posix()}: authority directory is invalid", code="io"
                 )
@@ -710,10 +730,10 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
         ):
             parent = directory_by_path[path.parent]
             try:
-                descriptor = os.open(
+                descriptor = fsx.open_at(
+                    parent.descriptor,
                     path.name,
                     os.O_RDONLY | no_follow | nonblock,
-                    dir_fd=parent.descriptor,
                 )
             except OSError as exc:
                 if exc.errno in {errno.ELOOP, errno.EMLINK}:
@@ -740,13 +760,13 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
         for item in files.values():
             os.close(item.descriptor)
         for item in reversed(directories):
-            os.close(item.descriptor)
+            fsx.close_dir(item.descriptor)
         raise
     except OSError as exc:
         for item in files.values():
             os.close(item.descriptor)
         for item in reversed(directories):
-            os.close(item.descriptor)
+            fsx.close_dir(item.descriptor)
         raise GovernanceError(
             f"governance authority topology is unavailable: {exc}", code="io"
         ) from exc
@@ -756,11 +776,11 @@ def _close_authority_topology(topology: _AuthorityTopology) -> None:
     for item in topology.files.values():
         os.close(item.descriptor)
     for item in reversed(topology.directories):
-        os.close(item.descriptor)
+        fsx.close_dir(item.descriptor)
 
 
 def _reopen_identity(
-    parent_descriptor: int,
+    parent_descriptor: fsx.DirHandle,
     name: str,
     *,
     directory: bool,
@@ -770,8 +790,12 @@ def _reopen_identity(
     )
     flags = os.O_RDONLY | no_follow | nonblock
     if directory:
-        flags |= directory_flag
-    descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+        handle = fsx.open_dir_at(parent_descriptor, name, flags=flags | directory_flag)
+        try:
+            return fsx.fstat_dir(handle)
+        finally:
+            fsx.close_dir(handle)
+    descriptor = fsx.open_at(parent_descriptor, name, flags)
     try:
         return os.fstat(descriptor)
     finally:
@@ -781,7 +805,7 @@ def _reopen_identity(
 def _verify_authority_topology(topology: _AuthorityTopology) -> None:
     try:
         for item in topology.directories:
-            opened = os.fstat(item.descriptor)
+            opened = fsx.fstat_dir(item.descriptor)
             named = _reopen_identity(
                 item.parent_descriptor, item.name, directory=True
             )
@@ -851,23 +875,24 @@ def _read_pinned_authority_bytes(item: _PinnedAuthorityFile) -> bytes:
     return b"".join(chunks)
 
 
-def _read_regular_bytes(root_descriptor: int, relative: str, *, label: str) -> bytes:
+def _read_regular_bytes(root_descriptor: fsx.DirHandle, relative: str, *, label: str) -> bytes:
     no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
     parts = PurePosixPath(relative).parts
+    directories: list[fsx.DirHandle] = []
     descriptors: list[int] = []
     try:
         current = root_descriptor
         for part in parts[:-1]:
-            current = os.open(
+            current = fsx.open_dir_at(
+                current,
                 part,
-                os.O_RDONLY | directory_flag | no_follow | nonblock,
-                dir_fd=current,
+                flags=directory_flag | no_follow | nonblock,
             )
-            descriptors.append(current)
-        descriptor = os.open(
+            directories.append(current)
+        descriptor = fsx.open_at(
+            current,
             parts[-1],
             os.O_RDONLY | no_follow | nonblock,
-            dir_fd=current,
         )
         descriptors.append(descriptor)
         before = os.fstat(descriptor)
@@ -920,6 +945,8 @@ def _read_regular_bytes(root_descriptor: int, relative: str, *, label: str) -> b
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+        for directory in reversed(directories):
+            fsx.close_dir(directory)
 
 
 def _duplicate_rejecting_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1127,7 +1154,7 @@ def _record_paths(snapshot: GovernanceSnapshot) -> list[tuple[str, str]]:
 
 
 def _validate_structural_semantics(
-    snapshot: GovernanceSnapshot, root_descriptor: int
+    snapshot: GovernanceSnapshot, root_descriptor: fsx.DirHandle
 ) -> None:
     rules = snapshot.rules["rules"]
     debt = snapshot.debt["entries"]
@@ -1343,7 +1370,7 @@ def _load_governance_snapshot(
     finally:
         if topology is not None:
             _close_authority_topology(topology)
-        os.close(repository.descriptor)
+        fsx.close_dir(repository.descriptor)
 
 
 _RULE_TRANSITIONS: dict[RuleStatus, frozenset[RuleStatus]] = {
@@ -1975,7 +2002,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         except GovernanceError:
             return None
         finally:
-            os.close(repository.descriptor)
+            fsx.close_dir(repository.descriptor)
 
     def snapshot_authority_source_digests(
         snapshot: GovernanceSnapshot,
@@ -2045,7 +2072,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         except GovernanceError:
             return False
         finally:
-            os.close(repository.descriptor)
+            fsx.close_dir(repository.descriptor)
 
     def load(root: Path | str) -> GovernanceSnapshot:
         (
@@ -2148,7 +2175,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         except GovernanceError:
             return ()
         finally:
-            os.close(repository.descriptor)
+            fsx.close_dir(repository.descriptor)
 
     def open_debt_records(
         snapshot: GovernanceSnapshot,
@@ -2186,7 +2213,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         except GovernanceError:
             return ()
         finally:
-            os.close(repository.descriptor)
+            fsx.close_dir(repository.descriptor)
 
     def validate_deviation(
         snapshot: GovernanceSnapshot,
@@ -2214,7 +2241,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
                         _read_regular_bytes(repository.descriptor, relative, label="example deviation evidence")
                     _verify_repository(repository)
                 finally:
-                    os.close(repository.descriptor)
+                    fsx.close_dir(repository.descriptor)
             except GovernanceError:
                 valid = False
         if valid:
@@ -2464,7 +2491,7 @@ def validate_governance(
             )
         )
     finally:
-        os.close(repository.descriptor)
+        fsx.close_dir(repository.descriptor)
 
 
 def _sha256(value: Any) -> str:
@@ -2565,7 +2592,7 @@ def load_architecture_evidence(path: Path | str) -> dict[str, Any]:
         _verify_repository(repository)
         return document
     finally:
-        os.close(repository.descriptor)
+        fsx.close_dir(repository.descriptor)
 
 
 def _validate_architecture_evidence(
@@ -2976,7 +3003,7 @@ def build_governance_handoff(
     try:
         recorder.verify(repository)
     finally:
-        os.close(repository.descriptor)
+        fsx.close_dir(repository.descriptor)
     handoff = GovernanceHandoffV1(
         governance_contract_version=1,
         governance_digest=evaluation["digests"]["governance_digest"],

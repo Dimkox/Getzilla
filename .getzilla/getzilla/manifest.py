@@ -16,8 +16,44 @@ SECRET_SUFFIXES = ('.pem', '.key', '.p12', '.pfx')
 READ_CHUNK_BYTES = 1024 * 1024
 
 
+WINDOWS = os.name == 'nt'
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
 class ManifestError(RuntimeError):
     pass
+
+
+def _is_link(metadata: os.stat_result) -> bool:
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    return bool(getattr(metadata, 'st_file_attributes', 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _windows_open_regular(root: str, parts: tuple[str, ...], relative_path: str) -> int:
+    current = root
+    try:
+        for component in parts[:-1]:
+            current = os.path.join(current, component)
+            metadata = os.lstat(current)
+            if _is_link(metadata) or not stat.S_ISDIR(metadata.st_mode):
+                raise ManifestError(f'cannot open package source safely: {relative_path}')
+        target = os.path.join(current, parts[-1])
+        before = os.lstat(target)
+        if _is_link(before):
+            raise ManifestError(f'cannot open package source safely: {relative_path}')
+        descriptor = os.open(target, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOINHERIT', 0))
+    except OSError as exc:
+        raise ManifestError(f'cannot open package source safely: {relative_path}') from exc
+    try:
+        opened = os.fstat(descriptor)
+    except OSError as exc:
+        os.close(descriptor)
+        raise ManifestError(f'cannot inspect package source safely: {relative_path}') from exc
+    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        os.close(descriptor)
+        raise ManifestError(f'package source is not a regular file: {relative_path}')
+    return descriptor
 
 
 def _descriptor_flags() -> tuple[int, int]:
@@ -108,8 +144,16 @@ def _identity(metadata: os.stat_result) -> FileIdentity:
     )
 
 
-def _open_root(root: Path) -> tuple[Path, int]:
+def _open_root(root: Path) -> tuple[Path, int | str]:
     canonical_root = root.resolve(strict=True)
+    if WINDOWS:
+        try:
+            metadata = os.lstat(canonical_root)
+        except OSError as exc:
+            raise ManifestError('cannot inspect package source root safely') from exc
+        if _is_link(metadata) or not stat.S_ISDIR(metadata.st_mode):
+            raise ManifestError('package source root is not a directory')
+        return canonical_root, os.fspath(canonical_root)
     directory_flags, _file_flags = _descriptor_flags()
     try:
         descriptor = os.open(canonical_root, directory_flags)
@@ -136,7 +180,9 @@ def _relative_parts(root: Path, path: Path) -> tuple[str, tuple[str, ...]]:
     return relative.as_posix(), relative.parts
 
 
-def _open_regular_at(root_descriptor: int, parts: tuple[str, ...], relative_path: str) -> int:
+def _open_regular_at(root_descriptor: int | str, parts: tuple[str, ...], relative_path: str) -> int:
+    if isinstance(root_descriptor, str):
+        return _windows_open_regular(root_descriptor, parts, relative_path)
     directory_flags, file_flags = _descriptor_flags()
     directory_descriptor = os.dup(root_descriptor)
     try:
@@ -189,7 +235,8 @@ def snapshot_files(root: Path, files: list[Path] | None = None) -> list[Manifest
                 os.close(descriptor)
             entries.append(ManifestEntry(relative_path, identity, digest))
     finally:
-        os.close(root_descriptor)
+        if isinstance(root_descriptor, int):
+            os.close(root_descriptor)
     return sorted(entries, key=lambda entry: entry.relative_path)
 
 
@@ -230,7 +277,8 @@ def stream_entry(root: Path, entry: ManifestEntry, destination: BinaryIO) -> Non
         finally:
             os.close(descriptor)
     finally:
-        os.close(root_descriptor)
+        if isinstance(root_descriptor, int):
+            os.close(root_descriptor)
     if after != before or digest.hexdigest() != entry.digest:
         raise ManifestError(f'package source changed while archiving: {entry.relative_path}')
 

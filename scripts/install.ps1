@@ -12,6 +12,7 @@
 #   $env:GETZILLA_REF = 'main'                  branch or tag to install
 #   $env:GETZILLA_REPO = 'https://...'          Git URL to install from
 #   $env:GETZILLA_PROJECT = 'C:\code\my-app'    existing project: print the read-only install plan
+#   $env:GETZILLA_NEW_PROJECT = 'C:\code\new'   create a new project there (the folder must not exist)
 #   $env:GETZILLA_SKIP_GROK = '1'               do not install the Grok Build CLI
 #
 # Everything runs inside Install-Getzilla, so a partially downloaded script does nothing,
@@ -60,7 +61,12 @@ function Install-Getzilla {
     Push-Location $GetzillaHome
     try {
         Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
-        if ($env:GETZILLA_PROJECT) {
+        $DoctorExit = $LASTEXITCODE
+        if ($env:GETZILLA_NEW_PROJECT) {
+            Write-Step ("Creating a new project at " + $env:GETZILLA_NEW_PROJECT + " ...")
+            Invoke-Python $Python @('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT)
+            if ($LASTEXITCODE -ne 0) { throw 'Creating the new project failed; see the message above.' }
+        } elseif ($env:GETZILLA_PROJECT) {
             Write-Step ("Install plan for " + $env:GETZILLA_PROJECT + " (read-only, nothing is written):")
             Invoke-Python $Python @('scripts/install_into.py', '--plan', $env:GETZILLA_PROJECT)
         }
@@ -70,11 +76,15 @@ function Install-Getzilla {
 
     $PythonText = $Python -join ' '
     Write-Host ''
-    Write-Host "Getzilla is ready in $GetzillaHome" -ForegroundColor Green
+    if ($DoctorExit -eq 0) {
+        Write-Host "Getzilla is ready in $GetzillaHome" -ForegroundColor Green
+    } else {
+        Write-Host "Getzilla is installed in $GetzillaHome, but the health check reported problems (FAIL lines above)." -ForegroundColor Yellow
+    }
     Write-Host ''
     Write-Host 'Next:'
-    Write-Host "  1. Plan for your project:  cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --plan C:\path\to\your\project"
-    Write-Host '     (creating a brand-new project with --materialize-new needs Linux or WSL for now)'
+    Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"
+    Write-Host "     Existing project: cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --plan C:\path\to\your\project"
     Write-Host '  2. In your project run: grok   (first time: sign in, then type /hooks-trust)'
     Write-Host "  3. Vibe-code the feature, then run /getzilla-delivery and $PythonText scripts/getzilla_verify.py --mode pr"
 }
@@ -195,7 +205,10 @@ function Install-Grok {
     Write-Step 'Installing the Grok Build CLI...'
     # Run the vendor installer in its own process so it cannot end this session.
     $shell = (Get-Process -Id $PID).Path
-    & $shell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://x.ai/cli/install.ps1 | iex' | Out-Host
+    & $shell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://x.ai/cli/install.ps1 | iex' |
+        ForEach-Object { "$_" -split "`r" } |
+        Where-Object { $_.Trim() -and $_ -notmatch '^\s*[#=>\-\s]*\d{1,3}(\.\d+)?\s*%' } |
+        Out-Host
     Update-SessionPath
     if (Get-Command grok -ErrorAction SilentlyContinue) {
         Write-Step 'Grok Build CLI installed.'

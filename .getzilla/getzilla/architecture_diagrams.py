@@ -5,8 +5,9 @@ import html
 import os
 import stat
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Union
 
+from . import fsx
 from .architecture import ArchitectureError, ArchitectureSnapshot, _secure_open_flags
 
 DIAGRAM_NAMES = ("context", "container", "deployment", "data-flow", "trust-boundary")
@@ -121,62 +122,90 @@ def artifact_digests(rendered: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _directory_identity(descriptor: int) -> tuple[int, int, int]:
-    info = os.fstat(descriptor)
+# Descriptor calls go through this module's ``os`` (not ``fsx``) on POSIX so a
+# caller-level guard on ``os`` still sees every open; Windows takes ``fsx`` paths.
+_Handle = Union[int, fsx.WindowsDirectory]
+
+
+def _open_root_directory(root: Path, flags: int) -> _Handle:
+    if fsx.WINDOWS:
+        return fsx.open_dir(root.resolve(strict=True))
+    return os.open(root.resolve(strict=True), os.O_RDONLY | flags)
+
+
+def _open_child_directory(parent: _Handle, name: str, flags: int) -> _Handle:
+    if isinstance(parent, fsx.WindowsDirectory):
+        return fsx.open_dir_at(parent, name)
+    return os.open(name, os.O_RDONLY | flags, dir_fd=parent)
+
+
+def _close_handle(handle: _Handle | None) -> None:
+    if handle is None or isinstance(handle, fsx.WindowsDirectory):
+        return
+    os.close(handle)
+
+
+def _directory_identity(descriptor: _Handle) -> tuple[int, int, int]:
+    if isinstance(descriptor, fsx.WindowsDirectory):
+        # The identity the directory had when this handle opened it, as a
+        # descriptor would keep it; a later reopen records its own.
+        info = descriptor.info
+    else:
+        info = os.fstat(descriptor)
     return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
 
 
-def _open_generated_directory(root: Path) -> tuple[int, int, int]:
+def _open_generated_directory(
+    root: Path,
+) -> tuple[_Handle, _Handle | None, _Handle | None]:
     no_follow, directory_flag, _nonblock = _secure_open_flags(
         label="generated architecture diagrams"
     )
-    root_fd = architecture_fd = generated_fd = -1
+    root_fd = architecture_fd = generated_fd = None
     try:
-        root_fd = os.open(root.resolve(strict=True), os.O_RDONLY | directory_flag | no_follow)
+        root_fd = _open_root_directory(root, directory_flag | no_follow)
         try:
-            architecture_fd = os.open(
-                "architecture", os.O_RDONLY | directory_flag | no_follow, dir_fd=root_fd
+            architecture_fd = _open_child_directory(
+                root_fd, "architecture", directory_flag | no_follow
             )
         except FileNotFoundError:
-            return root_fd, -1, -1
+            return root_fd, None, None
         try:
-            generated_fd = os.open(
-                "generated", os.O_RDONLY | directory_flag | no_follow, dir_fd=architecture_fd
+            generated_fd = _open_child_directory(
+                architecture_fd, "generated", directory_flag | no_follow
             )
         except FileNotFoundError:
-            return root_fd, architecture_fd, -1
+            return root_fd, architecture_fd, None
         return root_fd, architecture_fd, generated_fd
     except OSError as exc:
         for descriptor in (generated_fd, architecture_fd, root_fd):
-            if descriptor >= 0:
-                os.close(descriptor)
+            _close_handle(descriptor)
         raise ArchitectureError(
             f"generated architecture diagrams: unsafe directory: {exc}", code="io"
         ) from exc
     except BaseException:
         for descriptor in (generated_fd, architecture_fd, root_fd):
-            if descriptor >= 0:
-                os.close(descriptor)
+            _close_handle(descriptor)
         raise
 
 
 def _verify_contained_directory(
-    root_fd: int,
-    architecture_fd: int,
-    generated_fd: int,
+    root_fd: _Handle,
+    architecture_fd: _Handle,
+    generated_fd: _Handle,
 ) -> None:
     no_follow, directory_flag, _nonblock = _secure_open_flags(
         label="generated architecture diagrams"
     )
-    reopened_architecture = reopened_generated = -1
+    reopened_architecture = reopened_generated = None
     try:
-        reopened_architecture = os.open(
-            "architecture", os.O_RDONLY | directory_flag | no_follow, dir_fd=root_fd
+        reopened_architecture = _open_child_directory(
+            root_fd, "architecture", directory_flag | no_follow
         )
-        reopened_generated = os.open(
+        reopened_generated = _open_child_directory(
+            reopened_architecture,
             "generated",
-            os.O_RDONLY | directory_flag | no_follow,
-            dir_fd=reopened_architecture,
+            directory_flag | no_follow,
         )
         if _directory_identity(reopened_architecture) != _directory_identity(architecture_fd):
             raise ArchitectureError("architecture diagram directory changed", code="io")
@@ -189,10 +218,8 @@ def _verify_contained_directory(
             f"generated architecture diagram directory changed: {exc}", code="io"
         ) from exc
     finally:
-        if reopened_generated >= 0:
-            os.close(reopened_generated)
-        if reopened_architecture >= 0:
-            os.close(reopened_architecture)
+        _close_handle(reopened_generated)
+        _close_handle(reopened_architecture)
 
 
 def _rendered_bytes(rendered: Mapping[str, str], name: str) -> bytes:
@@ -205,13 +232,16 @@ def _rendered_bytes(rendered: Mapping[str, str], name: str) -> bytes:
     return value
 
 
-def _read_generated(generated_fd: int, filename: str, expected_limit: int) -> bytes | None:
+def _read_generated(generated_fd: _Handle, filename: str, expected_limit: int) -> bytes | None:
     no_follow, _directory_flag, nonblock = _secure_open_flags(
         label="generated architecture diagrams"
     )
     descriptor = -1
     try:
-        descriptor = os.open(filename, os.O_RDONLY | no_follow | nonblock, dir_fd=generated_fd)
+        if isinstance(generated_fd, fsx.WindowsDirectory):
+            descriptor = fsx.open_at(generated_fd, filename, os.O_RDONLY | no_follow | nonblock)
+        else:
+            descriptor = os.open(filename, os.O_RDONLY | no_follow | nonblock, dir_fd=generated_fd)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise ArchitectureError(
@@ -263,10 +293,10 @@ def _read_generated(generated_fd: int, filename: str, expected_limit: int) -> by
 
 def compare_generated(root: Path, rendered: Mapping[str, str]) -> tuple[str, ...]:
     mismatches: list[str] = []
-    root_fd = architecture_fd = generated_fd = -1
+    root_fd = architecture_fd = generated_fd = None
     try:
         root_fd, architecture_fd, generated_fd = _open_generated_directory(root)
-        if generated_fd < 0:
+        if generated_fd is None:
             return tuple(f"architecture/generated/{name}.mmd" for name in DIAGRAM_NAMES)
         for name in DIAGRAM_NAMES:
             expected = _rendered_bytes(rendered, name)
@@ -281,8 +311,7 @@ def compare_generated(root: Path, rendered: Mapping[str, str]) -> tuple[str, ...
         return tuple(mismatches)
     finally:
         for descriptor in (generated_fd, architecture_fd, root_fd):
-            if descriptor >= 0:
-                os.close(descriptor)
+            _close_handle(descriptor)
 
 
 __all__ = [
