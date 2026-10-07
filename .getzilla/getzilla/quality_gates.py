@@ -76,6 +76,8 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "0 specs checked; exempt=True"
     if name == "coverage":
         return summary == "pytest runner owns tests; measure unittest trees only"
+    if name == "opengrep":
+        return summary in {"opengrep not available", "no OpenGrep rules installed"}
     if name == "factory-postgres-exit":
         return summary == "repository-sandbox has no nested-container/database capability"
     if name in {"architecture", "governance", "workflow-artifacts"}:

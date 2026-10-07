@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-07 — OpenGrep with our own rules in the paid tier, not CodeQL
+
+CodeQL's license forbids private-code and hosted use without GitHub Advanced Security, and the `semgrep-rules`/`opengrep-rules` sets forbid selling a service built on them. The Trust CI runner therefore ships the LGPL OpenGrep engine with Getzilla-authored, MIT-licensed taint rules tested by `opengrep --test`; anywhere without the binary the check skips explicitly.
+
 ## 2026-10-06 — CI gate follows repository visibility
 
 Supersedes "Never GitHub Actions" (2026-08-16). A public repository is gated by GitHub Actions, a private repository by Trust CI (`adaptive-trust-ci`). `scripts/getzilla_ci.py` detects visibility and renders `.getzilla/templates/ci/github-actions-verify.yml` only for public repositories; it never overwrites and never touches branch protection. Getzilla is public, so `.github/workflows/getzilla.yml` runs its suite on Linux and Windows. Workflows pin actions to full commit SHAs, grant only `contents: read`, never use secrets or `pull_request_target`, and are never dispatched by an agent. Dependabot and other CI vendors stay out. Local `getzilla_verify.py --mode pr` stays the pre-push gate.
