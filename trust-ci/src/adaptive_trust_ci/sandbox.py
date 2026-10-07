@@ -86,8 +86,13 @@ class ContainerExecutor:
             if not host_holdout.is_absolute():
                 raise ValueError('holdout_host_path must be absolute on the Docker daemon host')
             argv.extend(('--volume', f'{host_holdout}:/holdout:ro'))
+        vulnerability_env: dict[str, str] = {}
+        if self.sandbox.vulnerability_db_host_path is not None:
+            argv.extend(('--volume', f'{self.sandbox.vulnerability_db_host_path}:/vulndb:ro'))
+            vulnerability_env['GETZILLA_OSV_DB'] = '/vulndb'
         container_env = {
             **env,
+            **vulnerability_env,
             'PYTHONPATH': '/workspace',
             'TMPDIR': '/run/trust-ci-tmp',
             'PYTHONPYCACHEPREFIX': '/run/trust-ci-tmp/pycache',

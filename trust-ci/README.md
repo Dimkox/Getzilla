@@ -12,6 +12,20 @@ The checked-in `config/policy.example.json` is configuration shape documentation
 
 The suffix is a policy epoch. A green check produced under an older policy or holdout digest cannot satisfy the current protected-branch requirement.
 
+## Known-vulnerability mirror
+
+The runner has no network, so Getzilla's `known-vulnerabilities` check reads an offline OSV mirror. Refresh it on the CI host (which has network) and point the sandbox at it:
+
+```bash
+python3 scripts/getzilla_vulns.py --download-db /var/lib/adaptive-trust-ci/osv   # from a reviewed Getzilla checkout; daily is enough
+```
+
+```json
+"sandbox": {"...": "...", "vulnerability_db_host_path": "/var/lib/adaptive-trust-ci/osv"}
+```
+
+The directory is mounted read-only at `/vulndb` and `GETZILLA_OSV_DB=/vulndb` is set in the container. The field is part of the policy digest, so enabling it rotates every profile's check name once; refreshing the mirror's contents does not. Without the field the check reports `skip`.
+
 ## Repository-scoped policy profiles
 
 Schema version 1 supports two mutually exclusive policy shapes. Legacy mode uses `allowed_repositories`, root `commands`, and root `holdout`; it preserves the existing policy digest and Check Run name, omits `holdout.host_path`, and uses `TRUST_CI_HOLDOUT_HOST_PATH`. Catalog mode uses `repository_profiles`, whose objects contain exactly `repository`, `commands`, and `holdout`; each holdout has a mandatory absolute, profile-scoped `host_path` for the Docker daemon. At worker startup, catalog local and daemon paths must be strict descendants of the independently configured `TRUST_CI_HOLDOUT_PATH` and `TRUST_CI_HOLDOUT_HOST_PATH`, with identical relative suffixes; roots, traversal, outside-root paths, and mismatches fail closed before dependencies are built. Status, pipeline, retry/lease limits, sandbox, environment, and approval rules remain common. The complete effective profile, including canonical local/host paths and holdout digest, is hashed, so its digest remains the durable job binding and produces its own `adaptive-trust-ci/verified@<policy-sha12>` Check Run.

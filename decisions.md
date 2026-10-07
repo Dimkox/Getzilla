@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-07 — Known vulnerabilities from OSV, opt-in network
+
+Semgrep, Bandit and Trivy check code and configuration; pinned dependencies are now checked against OSV (GHSA, PyPA, RustSec, Go, npm, NVD). The check never reaches the network implicitly: GitHub Actions opts in online, Trust CI reads a read-only host mirror because its runner has no network, and anything else skips visibly. Time-boxed acceptance by id or alias keeps exceptions reviewable.
+
 ## 2026-10-06 — CI gate follows repository visibility
 
 Supersedes "Never GitHub Actions" (2026-08-16). A public repository is gated by GitHub Actions, a private repository by Trust CI (`adaptive-trust-ci`). `scripts/getzilla_ci.py` detects visibility and renders `.getzilla/templates/ci/github-actions-verify.yml` only for public repositories; it never overwrites and never touches branch protection. Getzilla is public, so `.github/workflows/getzilla.yml` runs its suite on Linux and Windows. Workflows pin actions to full commit SHAs, grant only `contents: read`, never use secrets or `pull_request_target`, and are never dispatched by an agent. Dependabot and other CI vendors stay out. Local `getzilla_verify.py --mode pr` stays the pre-push gate.
