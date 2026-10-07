@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, scan  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
+from getzilla.known_vulns import _version_key as upgrade_key  # noqa: E402
 
 parser = argparse.ArgumentParser(
     description='Check pinned dependencies against known vulnerabilities (OSV: GitHub Advisory, PyPA, RustSec, Go, npm, NVD).',
@@ -49,9 +50,14 @@ else:
         severity = f" [{item['severity']}]" if item['severity'] else ''
         print(f"  {item['ecosystem']} {item['package']} {item['version']}: {item['id']}{aliases}{severity}{fixed} — {item['manifest']}")
     if os.environ.get('GITHUB_ACTIONS') == 'true':
+        grouped: dict[tuple[str, str, str, str], list[dict]] = {}
         for item in report['findings']:
-            message = f"{item['ecosystem']} {item['package']} {item['version']}: {item['id']} {item['severity']} fixed in {', '.join(item['fixed']) or 'n/a'}"
-            print(f"::error file={item['manifest']},title=Known vulnerability {item['id']}::{message}")
+            grouped.setdefault((item['manifest'], item['ecosystem'], item['package'], item['version']), []).append(item)
+        for (manifest, ecosystem, package, version), items in sorted(grouped.items()):
+            fixes = sorted({fix for item in items for fix in item['fixed']}, key=upgrade_key)
+            target = f'upgrade to >= {fixes[-1]}' if fixes else 'no fixed version published'
+            ids = ', '.join(item['id'] for item in items)
+            print(f"::error file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{target}. {ids}")
     for item in report['accepted']:
         print(f"  accepted until {item['accepted_until']}: {item['package']} {item['version']} {item['id']}")
 raise SystemExit({'pass': 0, 'skip': 0, 'fail': 1}.get(report['status'], 2))
