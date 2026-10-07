@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,8 +29,6 @@ try:
         for path in download_database(Path(args.download_db), args.ecosystem or ECOSYSTEMS):
             print(f'updated {path}')
         raise SystemExit(0)
-    import os
-
     environ = dict(os.environ)
     if args.online:
         environ['GETZILLA_OSV_ONLINE'] = '1'
@@ -49,6 +48,10 @@ else:
         aliases = f" ({', '.join(item['aliases'][:3])})" if item['aliases'] else ''
         severity = f" [{item['severity']}]" if item['severity'] else ''
         print(f"  {item['ecosystem']} {item['package']} {item['version']}: {item['id']}{aliases}{severity}{fixed} — {item['manifest']}")
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        for item in report['findings']:
+            message = f"{item['ecosystem']} {item['package']} {item['version']}: {item['id']} {item['severity']} fixed in {', '.join(item['fixed']) or 'n/a'}"
+            print(f"::error file={item['manifest']},title=Known vulnerability {item['id']}::{message}")
     for item in report['accepted']:
         print(f"  accepted until {item['accepted_until']}: {item['package']} {item['version']} {item['id']}")
 raise SystemExit({'pass': 0, 'skip': 0, 'fail': 1}.get(report['status'], 2))
