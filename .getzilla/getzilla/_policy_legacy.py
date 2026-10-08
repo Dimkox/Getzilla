@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import fnmatch
+import glob
+import itertools
 import re
 import shlex
 from dataclasses import dataclass
@@ -205,7 +207,84 @@ def _destructive_pattern(command: str, patterns: list[str]) -> str | None:
     for pattern in patterns:
         if any(re.search(pattern, candidate, flags=re.IGNORECASE) for candidate in candidates):
             return pattern
+    if any(_recursive_remove_of_root(candidate) for candidate in candidates):
+        return RECURSIVE_REMOVE_POLICY
     return None
+
+
+RECURSIVE_REMOVE_POLICY = 'rm -r of /, an absolute path, ~, $HOME, . or *'
+_RM_GLOB_ONLY = re.compile(r'^[*?./]+$')
+
+
+def _shell_pieces(command: str, depth: int = 0) -> list[list[str] | None]:
+    """Token lists of every simple command, unwrapping nested ``sh -c`` payloads.
+
+    ``None`` marks a piece that ``shlex`` cannot tokenize.
+    """
+    pieces: list[list[str] | None] = []
+    for chunk in _command_chunks(command):
+        try:
+            tokens = _split_words(chunk)
+        except ValueError:
+            pieces.append(None)
+            continue
+        while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+            tokens = tokens[1:]
+        if not tokens:
+            continue
+        payload = None
+        for index, token in enumerate(tokens):
+            if _executable_name(token) in _SHELL_EXECUTABLES:
+                for option_index in range(index + 1, len(tokens) - 1):
+                    if re.fullmatch(r'-[A-Za-z]*c[A-Za-z]*', tokens[option_index]):
+                        payload = tokens[option_index + 1]
+                        break
+                break
+        if payload is not None and depth < 4:
+            pieces.extend(_shell_pieces(payload, depth + 1))
+            continue
+        pieces.append(tokens)
+    return pieces
+
+
+def _dangerous_remove_target(operand: str) -> bool:
+    lowered = operand.lower()
+    if lowered.startswith(('/', '~', '$home', '${home')):
+        return True
+    return _RM_GLOB_ONLY.fullmatch(operand) is not None and operand.strip('/') in {
+        '', '.', '..', '*', '.*', './*', '**',
+    }
+
+
+def _recursive_remove_of_root(command: str) -> bool:
+    """``rm`` with -r/-R/--recursive (any flag order) or --no-preserve-root on a root-like target."""
+    for tokens in _shell_pieces(command):
+        if tokens is None:
+            if re.search(r'\brm\b[^\n]*\s-[A-Za-z-]*[rR]', command) and re.search(
+                r'\brm\b[^\n]*\s["\']?(?:/|~|\$\{?HOME|\.\s|\.$|\*)', command,
+            ):
+                return True
+            continue
+        if _executable_name(tokens[0]) in _INERT_EXECUTABLES:
+            continue
+        index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'rm'), None)
+        if index is None:
+            continue
+        recursive = no_preserve = options_done = False
+        operands: list[str] = []
+        for word in tokens[index + 1:]:
+            if not options_done and word == '--':
+                options_done = True
+            elif not options_done and word.startswith('--'):
+                recursive = recursive or word == '--recursive'
+                no_preserve = no_preserve or word == '--no-preserve-root'
+            elif not options_done and word.startswith('-') and len(word) > 1:
+                recursive = recursive or 'r' in word[1:].lower()
+            else:
+                operands.append(word)
+        if (recursive or no_preserve) and any(_dangerous_remove_target(operand) for operand in operands):
+            return True
+    return False
 
 
 def write_roles(root: Path) -> set[str]:
@@ -228,13 +307,30 @@ def _configured_patterns(config: dict[str, Any], key: str, defaults: list[str]) 
     return list(defaults)
 
 
+def _strip_leading_dot_slash(value: str) -> str:
+    """Drop leading './' and '/' segments only; '.env' must not collapse to 'env'."""
+    normalized = value.replace('\\', '/')
+    while True:
+        stripped = normalized.lstrip('/')
+        if stripped.startswith('./'):
+            normalized = stripped[2:]
+            continue
+        return stripped
+
+
 def _glob_match(path: str, pattern: str) -> bool:
-    normalized = path.replace('\\', '/').lstrip('./')
-    candidate = pattern.replace('\\', '/').lstrip('./')
+    normalized = _strip_leading_dot_slash(path)
+    candidate = _strip_leading_dot_slash(pattern)
+    candidates = [candidate]
+    if candidate.startswith('**/'):
+        # fnmatch has no globstar: '**/x' needs a parent directory, so a root-level
+        # 'server.key' or 'secrets/x' escaped '**/*.key' and '**/secrets/**'.
+        candidates.append(candidate[3:])
     if fsx.WINDOWS:
         # NTFS opens AGENTS.md for agents.MD, "AGENTS.md." and "AGENTS.md::$DATA".
-        return fnmatch.fnmatchcase(_windows_path_key(normalized), candidate.casefold())
-    return fnmatch.fnmatchcase(normalized, candidate)
+        key = _windows_path_key(normalized)
+        return any(fnmatch.fnmatchcase(key, item.casefold()) for item in candidates)
+    return any(fnmatch.fnmatchcase(normalized, item) for item in candidates)
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
@@ -405,35 +501,114 @@ def _unwrap_shell(chunk: str) -> str:
     return rest
 
 
-def _production_action(argv: list[str]) -> str | None:
-    if argv and argv[0] == 'git':
-        index = 1
-        while index < len(argv):
-            if index + 1 < len(argv) and argv[index] in {'-c', '--git-dir', '--work-tree'}:
-                index += 2
-                continue
-            if argv[index].startswith(('--git-dir=', '--work-tree=')):
+# Global options that consume the next token, per executable (argv is lower-cased,
+# so git -C/-c and gh -R share one spelling). Every other leading '-' token is a
+# flag; '--opt=value' and attached short values are single tokens.
+_GIT_VALUE_OPTIONS = frozenset({'-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env'})
+_GH_VALUE_OPTIONS = frozenset({'-r', '--repo', '--hostname'})
+_DOCKER_VALUE_OPTIONS = frozenset({
+    '-h', '--host', '-c', '--context', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
+})
+_NPM_VALUE_OPTIONS = frozenset({
+    '--registry', '--userconfig', '--globalconfig', '--prefix', '-w', '--workspace', '--tag', '--otp',
+    '--access', '--cache', '--loglevel', '--scope',
+})
+_GIT_PUSH_SUBCOMMANDS = frozenset({'push', 'send-pack'})
+
+
+def _positionals(
+    argv: list[str], value_options: frozenset[str], limit: int,
+) -> tuple[list[str], list[int]]:
+    """First ``limit`` operands of ``argv[1:]`` with their indexes, skipping options."""
+    positionals: list[str] = []
+    indexes: list[int] = []
+    index = 1
+    while index < len(argv) and len(positionals) < limit:
+        token = argv[index]
+        if token == '--':  # nosec B105
+            index += 1
+            while index < len(argv) and len(positionals) < limit:
+                positionals.append(argv[index])
+                indexes.append(index)
                 index += 1
-                continue
             break
-        argv = ['git', *argv[index:]]
-    if argv[:2] == ['git', 'push']:
-        if '--tags' in argv or any(item.startswith('refs/tags/') for item in argv[2:]):
-            return 'git-push-tag'
-        candidates = [item for item in argv[2:] if not item.startswith('-')]
-        if any(re.fullmatch(r'v?\d+\.\d+\.\d+(?:[-+].+)?', item) for item in candidates):
-            return 'git-push-tag'
-        return 'git-push-branch'
-    if argv[:3] == ['gh', 'pr', 'merge']:
-        return 'pull-request-merge'
-    if argv[:3] == ['gh', 'workflow', 'run']:
-        return 'workflow-dispatch'
-    if argv[:2] == ['docker', 'push']:
-        return 'docker-push'
-    if argv[:2] == ['npm', 'publish']:
-        return 'npm-publish'
-    if argv[:3] == ['gh', 'release', 'create']:
-        return 'github-release'
+        if token in value_options:
+            index += 2
+            continue
+        if token.startswith('-') and len(token) > 1:
+            index += 1
+            continue
+        positionals.append(token)
+        indexes.append(index)
+        index += 1
+    return positionals, indexes
+
+
+def _git_subcommand(argv: list[str]) -> tuple[str | None, int]:
+    """Git subcommand and its index after global options (``-c`` aliases stay ambiguous upstream)."""
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token in _GIT_VALUE_OPTIONS:
+            index += 2
+            continue
+        if token.startswith('-'):
+            index += 1
+            continue
+        break
+    if index >= len(argv):
+        return None, index
+    return argv[index], index
+
+
+def _git_push_action(arguments: list[str]) -> str:
+    if '--tags' in arguments or any(item.startswith('refs/tags/') for item in arguments):
+        return 'git-push-tag'
+    candidates = [item for item in arguments if not item.startswith('-')]
+    if any(re.fullmatch(r'v?\d+\.\d+\.\d+(?:[-+].+)?', item) for item in candidates):
+        return 'git-push-tag'
+    return 'git-push-branch'
+
+
+def _gh_command(argv: list[str]) -> tuple[str, ...]:
+    """``(group, command)`` of a gh invocation, ignoring -R/--repo/--hostname anywhere before them."""
+    positionals, _ = _positionals(argv, _GH_VALUE_OPTIONS, 2)
+    return tuple(positionals)
+
+
+def _production_action(argv: list[str]) -> str | None:
+    if not argv:
+        return None
+    executable = argv[0]
+    if executable == 'git':
+        subcommand, index = _git_subcommand(argv)
+        if subcommand in _GIT_PUSH_SUBCOMMANDS:
+            return _git_push_action(argv[index + 1:])
+        return None
+    if executable == 'gh':
+        command = _gh_command(argv)
+        if command == ('pr', 'merge'):
+            return 'pull-request-merge'
+        if command == ('workflow', 'run'):
+            return 'workflow-dispatch'
+        if len(command) == 2 and command[0] == 'release' and command[1] in {'create', 'upload', 'edit'}:
+            return 'github-release'
+        return None
+    if executable == 'docker':
+        positionals, _ = _positionals(argv, _DOCKER_VALUE_OPTIONS, 2)
+        if positionals[:1] == ['push'] or positionals in (['image', 'push'], ['manifest', 'push'], ['compose', 'push']):
+            return 'docker-push'
+        if (positionals[:1] == ['build'] or positionals[:1] == ['buildx']) and '--push' in argv:
+            return 'docker-push'
+        return None
+    if executable == 'npm':
+        positionals, indexes = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
+        if positionals[:1] == ['publish']:
+            return 'npm-publish'
+        # An unknown option may take the next word as its value: 'npm --opt value publish'.
+        if positionals[1:2] == ['publish'] and argv[indexes[0] - 1].startswith('-'):
+            return 'npm-publish'
+        return None
     return None
 
 
@@ -478,12 +653,12 @@ def _git_selector_index(argv: list[str]) -> int:
     index = 1
     while index < len(argv):
         token = argv[index]
-        if token in {'-C', '-c', '--git-dir', '--work-tree'}:
+        if token in {'-C', *_GIT_VALUE_OPTIONS}:
             if index + 1 >= len(argv):
                 return len(argv)
             index += 2
             continue
-        if token.startswith(('--git-dir=', '--work-tree=')):
+        if token.startswith('-'):
             index += 1
             continue
         break
@@ -502,7 +677,7 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
             return action, False
         if _authority_token_is_dynamic(argv[selector_index]):
             return action, True
-        if argv[selector_index].lower() == 'push' and any(
+        if argv[selector_index].lower() in _GIT_PUSH_SUBCOMMANDS and any(
             _authority_token_is_dynamic(token) for token in argv[selector_index + 1:]
         ):
             return action, True
@@ -698,21 +873,141 @@ def _http_write_resource(command: str) -> str | None:
     return resource
 
 
+_GH_API_FIELD_OPTIONS = frozenset({'-f', '-F', '--field', '--raw-field', '--input'})
+_GH_API_READ_METHODS = frozenset({'GET', 'HEAD'})
+_GH_PULL_REQUEST_REVIEW = 'github-pull-request-review'
+
+
+def _gh_api_mutation(arguments: list[str]) -> bool:
+    """Whether ``gh api <arguments>`` writes: any non-GET method, or request fields/body."""
+    method: str | None = None
+    fields = False
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        value: str | None = None
+        if token in {'-X', '--method'}:
+            value = arguments[index + 1] if index + 1 < len(arguments) else ''
+            index += 1
+        elif token.startswith('--method='):
+            value = token.split('=', 1)[1]
+        elif token.startswith('-X') and len(token) > 2:
+            value = token[2:].lstrip('=')
+        elif token in _GH_API_FIELD_OPTIONS or token.startswith(('--field=', '--raw-field=', '--input=')):
+            fields = True
+        elif re.match(r'^-[fF]\S', token):
+            fields = True
+        if value is not None:
+            method = value.strip().upper()
+        index += 1
+    if method is not None and method not in _GH_API_READ_METHODS:
+        return True
+    return fields
+
+
+def _gh_external_write(command: str) -> str | None:
+    """Resource of a gh API mutation or PR review, after normalizing global options and quoting."""
+    for tokens in _shell_pieces(command):
+        if tokens is None:
+            continue
+        index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'gh'), None)
+        if index is None:
+            continue
+        argv = ['gh', *tokens[index + 1:]]
+        lowered = ['gh', *[token.lower() for token in argv[1:]]]
+        positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
+        if positionals[:1] == ['api'] and _gh_api_mutation(argv[indexes[0] + 1:]):
+            return 'github-api'
+        if positionals == ['pr', 'review']:
+            return _GH_PULL_REQUEST_REVIEW
+    return None
+
+
 def _http_write_resource_text(command: str) -> str | None:
     lowered = command.lower()
     mutation = False
+    gh_resource = _gh_external_write(command)
+    if gh_resource:
+        return gh_resource
     if re.search(r'\bcurl\b', lowered):
         mutation = bool(re.search(r'(?:-x|--request)\s*(?:post|put|patch|delete)\b|(?:-d|--data(?:-raw|-binary)?)(?:\s|=)', lowered))
     elif re.search(r'\bwget\b', lowered):
         mutation = bool(re.search(r'--method(?:\s|=)(?:post|put|patch|delete)\b|--post-data(?:\s|=)', lowered))
-    elif re.search(r'\bgh\s+api\b', lowered):
-        mutation = bool(re.search(r'(?:-x|--method)\s*(?:post|put|patch|delete)\b|(?:-f|--field|--raw-field)(?:\s|=)', lowered))
+    elif re.search(r'\bgh\b[^\n]*\bapi\b', lowered):
+        # Fallback for text shlex cannot tokenize: any explicit non-GET verb or a field.
+        verbs = re.findall(r'(?:^|\s)(?:-x|--method)(?:\s*=\s*|\s*)["\']?([a-z]+)', lowered)
+        mutation = any(verb not in {'get', 'head'} for verb in verbs) or bool(
+            re.search(r'(?:^|\s)(?:-f|--field|--raw-field|--input)(?:\s|=)', lowered)
+        )
         if mutation:
             return 'github-api'
+    elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
+        return _GH_PULL_REQUEST_REVIEW
     if not mutation:
         return None
     match = _HTTP_URL.search(command)
     return match.group(0) if match else 'direct-http-write'
+
+
+_SECRET_PIECE_SPLIT = re.compile(r"""[\s'"`=:@,;()<>|&{}]+""")
+_SECRET_GLOB_LIMIT = 512
+
+
+def _secret_path_match(path: str, patterns: list[str]) -> bool:
+    normalized = path.replace('\\', '/')
+    if not normalized.strip('./'):
+        return False
+    candidates = {normalized, normalized.lstrip('/')}
+    for prefix in ('~/', '$home/', '${home}/'):
+        if normalized.lower().startswith(prefix):
+            candidates.add(normalized[len(prefix):])
+    # Case-insensitive file systems (macOS, Windows) open '.env' for '.ENV': fold case.
+    folded = [pattern.casefold() for pattern in patterns]
+    for candidate in candidates:
+        # 'secrets/' or 'trust-ci/runtime' names the whole protected directory.
+        for spelling in (candidate, candidate.rstrip('/') + '/'):
+            if _matches_any(spelling, patterns) or _matches_any(spelling.casefold(), folded):
+                return True
+    return False
+
+
+def _secret_reference(root: Path, raw: str, patterns: list[str], *, expand: bool = True) -> bool:
+    """Whether ``raw`` names secret material, inside the repository or outside it."""
+    if not raw or '\x00' in raw:
+        return False
+    rel = safe_relative_path(root, raw)
+    if rel is not None and _secret_path_match(rel, patterns):
+        return True
+    if _secret_path_match(raw, patterns):
+        return True
+    if expand and _GLOB_META.search(raw):
+        base = raw if Path(raw).is_absolute() else str(root / raw)
+        for match in itertools.islice(glob.iglob(base), _SECRET_GLOB_LIMIT):
+            if _secret_reference(root, match, patterns, expand=False):
+                return True
+    return False
+
+
+def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
+    """First secret path a shell command names, under any quoting, nesting or option form.
+
+    The command is not evaluated: every word fragment (split at quotes, ``=``, ``:``,
+    ``@``, parentheses and shell operators, with URLs removed) is checked against the
+    secret patterns, so ``cat``, ``cp``, ``git show HEAD:``, ``curl -d @``, interpreter
+    one-liners and unparseable text are all covered. Glob words are expanded against
+    the filesystem; variables are not.
+    """
+    unquoted = command.replace('"', '').replace("'", '')
+    variants = [command, unquoted, unquoted.replace('\\', '')]
+    seen: set[str] = set()
+    for variant in variants:
+        for piece in _SECRET_PIECE_SPLIT.split(_HTTP_URL.sub(' ', variant)):
+            if not piece or piece in seen:
+                continue
+            seen.add(piece)
+            if _secret_reference(root, piece, patterns):
+                return piece
+    return None
 
 
 def _agent_type(tool_input: Any) -> str | None:
@@ -748,6 +1043,9 @@ def evaluate_pre_tool(
             and _is_control_plane_shell_mutation(command, control_plane)
         ):
             return False, 'Blocked control-plane shell mutation; use a structured write with an exact protected-path grant.'
+        secret = shell_secret_reference(root, command, secret_read)
+        if secret is not None:
+            return False, f'Reading secret material is blocked: the shell command references {secret}'
         pattern = _destructive_pattern(
             command,
             _configured_patterns(config, 'destructive_command_patterns', DESTRUCTIVE_COMMANDS),
@@ -793,9 +1091,10 @@ def evaluate_pre_tool(
         normalized.append(rel)
 
     if is_read:
-        for rel in normalized:
-            if _matches_any(rel, secret_read):
-                return False, f'Reading secret material is blocked: {rel}'
+        for raw in candidate_paths:
+            if _secret_reference(root, raw, secret_read):
+                rel = safe_relative_path(root, raw)
+                return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
 
     if is_write:
         for rel in normalized:

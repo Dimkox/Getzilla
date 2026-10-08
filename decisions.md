@@ -1113,3 +1113,7 @@ Prepare every disposable fixture head before evaluating exact-base/head diffs, b
 ## 2026-10-08 — Validate grant resources exactly at both creation and use
 
 `add_approval` refuses any resource with glob characters (and protected-path resources that are absolute or contain `..`), and `has_valid_approval` compares resources by exact equality. Checking at use time as well keeps a hand-edited or legacy `approvals.json` pattern inert, so the "wildcard scope is forbidden" rule no longer depends on one validation site (#38).
+
+## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
+
+Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).

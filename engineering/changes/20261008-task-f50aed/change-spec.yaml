@@ -1,0 +1,123 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Secret paths are denied for Read and Bash: root-level, nested, any case, outside the repository, quoted, nested in sh -c, rev:path, @path, --opt=path and matching globs.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "gh -R/--repo/--hostname, git global flags, git send-pack, docker image/manifest/compose push, buildx --push and npm global options classify as the same production action as the plain spelling.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "gh api with any non-GET method spelling or request fields, and gh pr review, require an exact external-write grant.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "rm with any recursive flag spelling or --no-preserve-root on /, an absolute path, ~, $HOME, . or * is denied as destructive.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Full PR verification, independent reviews and the exact-head external check precede merge.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "security"
+    ]
+  },
+  "change_id": "20261008-task-f50aed",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "Any reviewed bypass probe is allowed without a grant, or the policy reads secret file contents to decide.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Ordinary reads, builds, tests and gh/git read commands stay allowed; an exact grant still authorizes the normalized action.",
+      "evidence": [
+        {
+          "test": "tests/test_policy_bypasses.py"
+        },
+        {
+          "test": "tests/test_policy.py"
+        },
+        {
+          "test": "tests/test_hooks.py"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close the hook policy bypasses from the a8f9338 review: shell and root-level secret reads, gh/git/docker/npm spellings of merge/push/publish, gh api --method=VERB, gh pr review and rm -rf / variants.",
+    "success_metric": "every_review_probe_denied_without_grant_and_benign_commands_allowed",
+    "target": ".getzilla/getzilla/_policy_legacy.py and policy.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "infra",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
