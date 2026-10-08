@@ -1851,3 +1851,7 @@ Root cause: two fake local-dispatch controls inherited `GROK_VERIFY_CAPABILITY=r
 ## 2026-10-04 — Inventory membership was mistaken for source-file existence
 
 Root cause: an analysis inferred alias source-file existence from managed inventory membership without reading the inventory producer and alias rendering branch. `_SourceTree.inventory()` inserts virtual managed names and `build_payload()` skips their source reads, so the warning was corrected before runtime edits; inspect both sides of this seam before changing the installer.
+
+## 2026-10-08 — Hook guards matched literal spellings, not the operation
+
+Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).
