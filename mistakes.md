@@ -1855,3 +1855,7 @@ Root cause: an analysis inferred alias source-file existence from managed invent
 ## 2026-10-08 — The updater trusted `latest` for an executable the CI pins
 
 Root cause: the tool updater was written as "follow upstream latest" for every component, including the OpenGrep binary that the verifier executes, while CI already pinned and checksummed the same binary; integrity was treated as a CI concern instead of a property of every download path that produces an executable. Any code path that writes an executable must pin and verify it (#39).
+
+## 2026-10-08 — Hook guards matched literal spellings, not the operation
+
+Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).

@@ -8,6 +8,7 @@ from . import fsx
 from ._policy_legacy import *  # noqa: F401,F403
 from ._policy_legacy import (
     DEFAULT_CONTROL_PLANE as _LEGACY_CONTROL_PLANE,
+    DEFAULT_SECRET_READ as _LEGACY_SECRET_READ,
     DESTRUCTIVE_COMMANDS as _LEGACY_DESTRUCTIVE_COMMANDS,
     SIDE_EFFECT_TOOL as _LEGACY_SIDE_EFFECT_TOOL,
     _configured_patterns as _legacy_configured_patterns,
@@ -16,6 +17,7 @@ from ._policy_legacy import (
     evaluate_pre_tool as _legacy_evaluate_pre_tool,
     load_json as _legacy_load_json,
     production_action as _legacy_production_action,
+    shell_secret_reference as _legacy_shell_secret_reference,
 )
 from .shell_targets import control_plane_shell_mutation
 
@@ -48,6 +50,13 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
     )
     if _legacy_destructive_pattern(command, patterns) is not None:
         return 'destructive-command'
+    secret_read = _legacy_configured_patterns(
+        config if isinstance(config, dict) else {},
+        'secret_read_paths',
+        _LEGACY_SECRET_READ,
+    )
+    if _legacy_shell_secret_reference(root, command, secret_read) is not None:
+        return 'secret-read'
     return None
 
 

@@ -1,0 +1,78 @@
+{
+  "change_id": "20261008-task-f50aed",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/hook-policy-bypasses",
+      "change_id": "20261008-task-f50aed",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "a8f9338a298c4717953a0acd9c23339b8f85c637",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-08T14:55:51+00:00",
+      "route_id": "f50aedb53cd3"
+    }
+  ],
+  "created_at": "2026-10-08T14:55:51+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-08T14:55:51+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval"
+  ],
+  "human_gates_digest": "bda96454944f65642a22a32f7efa52cdc1f8b6158c3abc50a7bd2a8d95aac54e",
+  "route_id": "f50aedb53cd3",
+  "schema_version": 1,
+  "status": "draft",
+  "title": "Close hook policy bypasses (secret reads, merge/push/publish spellings, rm -rf /)",
+  "updated_at": "2026-10-08T14:55:51+00:00"
+}

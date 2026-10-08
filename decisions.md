@@ -1113,3 +1113,7 @@ Prepare every disposable fixture head before evaluating exact-base/head diffs, b
 ## 2026-10-08 — Pin executables the verifier runs, keep the pin in lockstep with CI
 
 The updater now installs OpenGrep only from a pinned release after a SHA-256 match, using Python constants because consumer installs do not ship `trust-ci/`, and a test keeps the version and linux digest equal to `trust-ci/runner.Dockerfile`. One pin, checked in two places, gives local machines the same integrity guarantee as CI without a second source of truth drifting (#39).
+
+## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
+
+Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).
