@@ -289,6 +289,52 @@ def _ansi_c(match: re.Match[str]) -> str:
         return shlex.quote(match.group(1))
 
 
+def _env_assignments(words: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Split a simple command's leading ``VAR=value`` assignments from its argv."""
+    env: dict[str, str] = {}
+    index = 0
+    while index < len(words) and _ASSIGNMENT.match(words[index]):
+        name, _, value = words[index].partition('=')
+        env[name] = value
+        index += 1
+    return env, words[index:]
+
+
+def _command_env(command: str) -> dict[str, str]:
+    """Env bindings a command establishes before it runs: ``export``/``env`` and bare assignments.
+
+    A grant binds to the target ``gh`` will actually reach, so a ``GH_REPO``/``GH_HOST`` set by
+    any of these spellings (not only a leading assignment) rebinds the resource (review S53-1).
+    """
+    env: dict[str, str] = {}
+    try:
+        words = _words(command)
+    except ValueError:
+        return env
+    current: list[str] = []
+    for word in [*words, ';']:
+        if word and set(word) <= _PUNCTUATION:
+            assignments, argv = _env_assignments(current)
+            env.update(assignments)
+            name = _executable_name(argv[0]) if argv else ''
+            if name == 'export':
+                for token in argv[1:]:
+                    if _ASSIGNMENT.match(token):
+                        key, _, value = token.partition('=')
+                        env[key] = value
+            elif name == 'env':
+                for token in argv[1:]:
+                    if _ASSIGNMENT.match(token):
+                        key, _, value = token.partition('=')
+                        env[key] = value
+                    elif not token.startswith('-'):
+                        break
+            current = []
+            continue
+        current.append(word)
+    return env
+
+
 def _words(text: str) -> list[str]:
     """Shell words and operator tokens (``;``, ``&&``, ``|``, ``(``, ``>``, newline), quotes removed."""
     if fsx.WINDOWS:
@@ -1231,10 +1277,11 @@ def _gh_external_write(command: str, root: Path | None = None) -> str | None:
     a review whose PR cannot be named statically yields ``github-pr-review:<owner>/<repo>#``,
     which no grant can match.
     """
+    outer = _command_env(command)
     for piece in _shell_commands(command):
         if piece is None:
             continue
-        env, tokens = piece
+        env, tokens = {**outer, **piece[0]}, piece[1]
         index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'gh'), None)
         if index is None:
             continue
@@ -1316,10 +1363,11 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
     """
     targets: list[tuple[str, str | None]] = []
     payload = _exact_outer_shell_payload(command)
+    outer = {**_command_env(command), **(_command_env(payload) if payload is not None else {})}
     for piece in _shell_commands(command if payload is None else payload):
         if piece is None:
             continue
-        env, tokens = piece
+        env, tokens = {**outer, **piece[0]}, piece[1]
         index = next((i for i, token in enumerate(tokens) if _executable_name(token) in _AUTHORITY_EXECUTABLES), None)
         if index is None:
             continue
@@ -1399,8 +1447,12 @@ def _http_tool_write(argv: list[str]) -> str | None:
     return (url or 'direct-http-write') if write else None
 
 
-def _gh_write_resource(argv: list[str]) -> str | None:
-    """Exact resource of a gh subcommand outside the read-only allowlist, e.g. ``gh:a/b pr close 1``."""
+def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> str | None:
+    """Exact resource of a gh subcommand outside the read-only allowlist, e.g. ``gh:a/b pr close 1``.
+
+    The repository is ``-R``/``--repo``, else ``GH_REPO``, else ``.`` (the current repository);
+    a non-default ``GH_HOST`` qualifies it, so an env override never matches a default grant.
+    """
     if any('$' in word or '`' in word for word in argv):
         return None  # a dynamic selector is ambiguous authority, not a grantable exact target
     lowered = [word.lower() for word in argv]
@@ -1412,7 +1464,12 @@ def _gh_write_resource(argv: list[str]) -> str | None:
     if _production_action(['gh', *lowered[1:]]) or tuple(positionals) == ('pr', 'review'):
         return None
     operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS, 8)
-    repository = next((lowered[i + 1] for i, word in enumerate(lowered[:-1]) if word in {'-r', '--repo'}), '.')
+    repository = next((lowered[i + 1] for i, word in enumerate(lowered[:-1]) if word in {'-r', '--repo'}), None)
+    if repository is None:
+        repository = (env or {}).get('GH_REPO', '').lower() or '.'
+    host = (env or {}).get('GH_HOST', '').lower()
+    if host and host != 'github.com':
+        repository = f'{host}/{repository}'
     return f'gh:{repository} ' + ' '.join([*positionals, *operands])
 
 
@@ -1422,13 +1479,16 @@ def _http_write_resource_text(command: str, root: Path | None = None) -> str | N
     gh_resource = _gh_external_write(command, root)
     if gh_resource:
         return gh_resource
+    gh_env = _command_env(command)
     for argv in _simple_commands(command):
         if argv is None:
             continue
         if argv[0] in {'curl', 'wget'} and _http_tool_write(argv):
             return _http_tool_write(argv)
-        if argv[0] == 'gh' and _gh_write_resource(argv):
-            return _gh_write_resource(argv)
+        if argv[0] == 'gh':
+            gh_resource = _gh_write_resource(argv, gh_env)
+            if gh_resource:
+                return gh_resource
     if re.search(r'\bcurl\b', lowered):
         mutation = bool(re.search(r'(?:-x|--request)\s*(?:post|put|patch|delete)\b|(?:-d|--data(?:-raw|-binary)?)(?:\s|=)', lowered))
     elif re.search(r'\bwget\b', lowered):
