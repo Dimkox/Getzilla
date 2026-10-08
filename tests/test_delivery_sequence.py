@@ -64,6 +64,17 @@ class DeliverySequenceTests(unittest.TestCase):
                 self.assertLess(gate, final.index('scripts/getzilla_review.py code_review'))
                 self.assertLess(gate, RECEIPTS_AFTER_GATE.search(final).start())
 
+    def test_agents_md_keeps_all_reviews_and_invalidates_all_receipts(self) -> None:
+        text = ' '.join(read('AGENTS.md').split())
+        for sentence in (
+            'rerun the bounded committed-HEAD controls and all independent reviews on the repaired tree before final freeze.',
+            'A source change after freeze invalidates all receipts and requires the same writer\'s repair, '
+            'fresh controls and independent reviews, a new frozen candidate and fresh exact-head gates',
+            'the coordinator persists reports under the change evidence directory, commits/freezes that tree, '
+            'then runs the single final qualifying verification and records fresh fingerprint-bound receipts.',
+        ):
+            self.assertIn(sentence, text)
+
     def test_grok_keeps_its_tool_denial_circuit_breaker(self) -> None:
         grok = read(DELIVERY[1])
         self.assertIn('## Tool-denial circuit breaker', grok)

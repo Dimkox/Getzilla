@@ -149,6 +149,13 @@ class CursorRuleTests(unittest.TestCase):
                 # https://cursor.com/docs/context/rules: unquoted patterns separated by commas.
                 self.assertRegex(head['globs'], r'^[^\s,"\']+(,[^\s,"\']+)*$')
 
+    def test_rules_do_not_inline_agents_md(self) -> None:
+        # Cursor reads AGENTS.md itself; an `@AGENTS.md` include would load the whole contract a second time.
+        for rel, body in render(ROOT).items():
+            if rel.startswith(CURSOR_OUTPUT + '/'):
+                self.assertNotIn(b'@AGENTS.md', body, rel)
+        self.assertIn(b'AGENTS.md', render(ROOT)[f'{CURSOR_OUTPUT}/00-core.mdc'])
+
     def test_core_rule_forbids_what_agents_md_forbids(self) -> None:
         core = render(ROOT)[f'{CURSOR_OUTPUT}/00-core.mdc'].decode('utf-8')
         for required in ('`.env`', '`*.pem`', '`*.key`', 'push to `main`', 'force-push', 'merge',
@@ -182,6 +189,11 @@ class CursorRuleTests(unittest.TestCase):
             'unknown key': (CORE, {**SCOPED, 'alwaysApply': True}),
             'string flag': ({**CORE, 'always_apply': 'true'},),
             'newline inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py\nalwaysApply: true']}),
+            'bare newline inside a glob': (CORE, {**SCOPED, 'globs': ['src/*.py\nsecrets/**']}),
+            'glob starting with !': (CORE, {**SCOPED, 'globs': ['!**/*.py']}),
+            'non-string instructions': (CORE, {**SCOPED, 'instructions': 5}),
+            'list instructions': (CORE, {**SCOPED, 'instructions': ['- Test.']}),
+            'scoped rule over 500 lines': (CORE, {**SCOPED, 'instructions': '\n'.join(['x'] * 501)}),
             'blank instructions': (CORE, {**SCOPED, 'instructions': ' '}),
             'empty description': (CORE, {**SCOPED, 'description': ' '}),
             'core over budget': ({**CORE, 'instructions': 'x' * 4096}, SCOPED),
@@ -233,18 +245,102 @@ class CursorRuleTests(unittest.TestCase):
         self.assertEqual(list(outside.iterdir()), [])
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
-    def test_symlinked_output_is_drift_and_is_replaced_not_followed(self) -> None:
+    def test_symlink_in_the_rules_folder_is_the_users_and_never_read_through(self) -> None:
         root = self.fixture()
         write(root)
         outside = root.parent / 'outside.mdc'
+        outside.write_bytes(f'{CURSOR_MARKER}looks generated -->\n'.encode('utf-8'))  # a marker behind a link proves nothing
         core = root / CURSOR_OUTPUT / '00-rule.mdc'
-        outside.write_bytes(core.read_bytes())
         core.unlink()
         core.symlink_to(outside)
-        self.assertEqual(drift(root), [f'stale {CURSOR_OUTPUT}/00-rule.mdc'])
+        custom = root / CURSOR_OUTPUT / 'custom.mdc'
+        custom.symlink_to(outside)
+        self.assertEqual(drift(root), [f'conflict {CURSOR_OUTPUT}/00-rule.mdc'])
+        with self.assertRaisesRegex(ValueError, 'conflict'):
+            write(root)
+        self.assertTrue(core.is_symlink() and custom.is_symlink())
+        core.unlink()
+        self.assertEqual(write(root), [f'wrote {CURSOR_OUTPUT}/00-rule.mdc'])
+        self.assertTrue(custom.is_symlink())
+        self.assertEqual(outside.read_bytes(), f'{CURSOR_MARKER}looks generated -->\n'.encode('utf-8'))
+
+    @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
+    def test_symlinked_extra_in_another_generated_root_is_removed_not_followed(self) -> None:
+        root = self.fixture()
         write(root)
-        self.assertFalse(core.is_symlink())
-        self.assertEqual(outside.read_bytes(), core.read_bytes())
+        outside = root.parent / 'outside.json'
+        outside.write_bytes(b'{}\n')
+        extra = root / '.qwen/extra.json'
+        extra.symlink_to(outside)
+        self.assertEqual(drift(root), ['unexpected .qwen/extra.json'])
+        self.assertEqual(write(root), ['removed .qwen/extra.json'])
+        self.assertFalse(extra.is_symlink())
+        self.assertEqual(outside.read_bytes(), b'{}\n')
+
+    def test_edited_rule_is_stale_until_write_repairs_it(self) -> None:
+        root = self.fixture()
+        write(root)
+        core = root / CURSOR_OUTPUT / '00-rule.mdc'
+        expected = core.read_bytes()
+        core.write_bytes(expected + b'- Hand edit.\n')
+        self.assertEqual(drift(root), [f'stale {CURSOR_OUTPUT}/00-rule.mdc'])
+        self.assertEqual(core.read_bytes(), expected + b'- Hand edit.\n')
+        self.assertEqual(write(root), [f'wrote {CURSOR_OUTPUT}/00-rule.mdc'])
+        self.assertEqual(core.read_bytes(), expected)
+        self.assertEqual(drift(root), [])
+
+    def test_rule_with_a_long_frontmatter_stays_owned(self) -> None:
+        wide = {**SCOPED, 'globs': [f'area{index:03d}/**/*.py' for index in range(260)]}
+        root = self.fixture(CORE, wide)
+        rule = render(root)[f'{CURSOR_OUTPUT}/10-rule.mdc']
+        self.assertGreater(rule.index(CURSOR_MARKER.encode('utf-8')), 4096)
+        self.assertLessEqual(len(rule), 8192)
+        write(root)
+        self.assertEqual(drift(root), [])
+        self.assertEqual(write(root), [])
+
+    def test_a_file_where_a_parent_directory_goes_blocks_every_write(self) -> None:
+        root = self.fixture()
+        write(root)
+        shutil.rmtree(root / '.cursor')
+        (root / '.cursor').write_bytes(b'not a directory\n')
+        settings = root / '.claude/settings.json'
+        settings.write_bytes(b'{}\n')
+        self.assertIn(f'conflict {CURSOR_OUTPUT}/00-rule.mdc', drift(root))
+        with self.assertRaisesRegex(ValueError, 'nothing written'):
+            write(root)
+        self.assertEqual(settings.read_bytes(), b'{}\n')
+        self.assertEqual((root / '.cursor').read_bytes(), b'not a directory\n')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX file modes')
+    def test_writes_use_an_exclusive_unfollowed_temp_and_world_readable_directories(self) -> None:
+        root = self.fixture()
+        calls = []
+        real = harnesses.fsx.open_at
+        def spy(parent, name, flags, mode=0o777):
+            calls.append((name, flags, mode))
+            return real(parent, name, flags, mode)
+        old = os.umask(0o022)
+        try:
+            with mock.patch.object(harnesses.fsx, 'open_at', side_effect=spy):
+                write(root)
+        finally:
+            os.umask(old)
+        self.assertTrue(calls)
+        for name, flags, mode in calls:
+            self.assertRegex(name, r'^\..+\.[0-9a-f]{12}\.tmp$')
+            self.assertEqual(flags & (os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW), os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW)
+            self.assertEqual(mode, 0o644)
+        for rel in ('.cursor', '.cursor/rules', CURSOR_OUTPUT, '.qwen'):
+            self.assertEqual(stat.S_IMODE((root / rel).stat().st_mode), 0o755, rel)
+
+    def test_failed_replace_leaves_no_temp_file(self) -> None:
+        root = self.fixture()
+        with mock.patch.object(harnesses.fsx, 'replace_at', side_effect=OSError('disk full')), \
+                self.assertRaises(OSError):
+            write(root)
+        leftovers = [path for path in root.rglob('*.tmp')]
+        self.assertEqual(leftovers, [])
 
     def test_user_cursor_files_are_preserved(self) -> None:
         root = self.fixture()
