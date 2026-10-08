@@ -156,5 +156,74 @@ class SecretReadTests(_Case):
         self.assertTrue(allowed, reason)
 
 
+class ReviewFollowUpTests(_Case):
+    """PR #69 review: each probe below must be denied; the allow probes keep ordinary use working."""
+
+    def test_quote_concatenated_words_joined_by_ifs_are_executable(self) -> None:
+        self.assert_denied((
+            "'git'$IFS'push' origin main", "g'it'$IFS'pu'sh origin main", "'git'${IFS}'push' origin main",
+        ))
+        self.assert_allowed(("git commit -m 'note: $IFS splitting'", "grep -n '$IFS' scripts/install.sh"))
+
+    def test_every_encoded_command_spelling_is_denied(self) -> None:
+        self.assert_denied((
+            'pwsh -EncodedCommand ZwBpAHQA', 'powershell -en ZwBpAHQA', 'pwsh -e ZwBpAHQA', 'pwsh -ec ZwBpAHQA',
+            'pwsh -NoProfile -enco ZwBpAHQA', 'pwsh.exe -enc ZwBpAHQA', '/usr/bin/pwsh -EncodedCommand ZwBpAHQA',
+            'powershell -EncodedCommand:ZwBpAHQA', 'powershell /enc ZwBpAHQA',
+        ))
+        self.assert_allowed(("git commit -m 'document pwsh -en handling'", 'pwsh -NoProfile -File build.ps1'))
+
+    def test_non_literal_web_method_is_a_write(self) -> None:
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assert_denied((
+                'Invoke-WebRequest -Method $m https://example.com/api',
+                'irm -Method ($verb) https://example.com/api',
+                'Invoke-RestMethod @p https://example.com/api',
+                'iwr -Method:$m https://example.com/api',
+            ))
+            self.assert_allowed(('Invoke-RestMethod -Method Options https://example.com/api',))
+
+    def test_secret_directory_paths_are_normalized(self) -> None:
+        for path in ('trust-ci//runtime/.ssh/config', 'trust-ci/./runtime/known_hosts', 'src/../trust-ci/runtime/.ssh/config',
+                     str(self.root / 'trust-ci/runtime/known_hosts'), 'secrets//known_hosts'):
+            with self.subTest(path=path):
+                self.assertFalse(self.tool('Read', {'path': path})[0], path)
+        self.assert_denied(('cat trust-ci//runtime/.ssh/config', 'cat trust-ci/./runtime/known_hosts'), 'secret')
+        self.assertTrue(self.tool('Read', {'path': 'home//.ssh/known_hosts'})[0])
+
+    def test_select_string_checks_every_path_like_argument(self) -> None:
+        self.assert_denied((
+            'Select-String -Path:deploy/tls/server.key -Pattern BEGIN',
+            'Select-String -Pattern:BEGIN deploy/tls/server.key',
+            'Select-String -Path deploy/tls/server.key BEGIN',
+            'sls -LiteralPath:deploy/tls/server.key BEGIN',
+        ), 'secret')
+        self.assert_allowed(('Select-String -Pattern:TODO -Path:src/app.py',))
+
+    def test_start_process_argument_expressions_are_scanned(self) -> None:
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assert_denied((
+                "Start-Process git -ArgumentList @('push', 'origin', 'main')",
+                "Start-Process git -ArgumentList ('push', 'origin', 'main')",
+                "Start-Process git -ArgumentList:@('push','origin','main')",
+                "Start-Process -FilePath gh -ArgumentList:'pr','merge','1'",
+            ))
+
+    def test_brace_expansion_over_the_cap_is_denied(self) -> None:
+        self.assertFalse(self.tool('Grep', {'pattern': 'x', 'glob': '{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}{o,p}{q,r}*.py'})[0])
+        self.assert_denied(('cat src/{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}{o,p}{q,r}.py',), 'secret')
+
+    def test_publish_verb_anywhere_after_a_publisher_is_denied(self) -> None:
+        self.assert_denied((
+            'cargo -Z a -Z b -Z c publish', 'npm --foo a --bar b publish', 'pnpm --filter a --reporter b publish',
+            'twine --verbose --disable-progress-bar check upload', 'gem --norc --backtrace -V push x.gem',
+        ))
+        self.assert_allowed(('cargo -Z a -Z b -Z c build', 'npm --foo a --bar b test'))
+
+    def test_robocopy_source_with_trailing_backslash(self) -> None:
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assert_denied((r'robocopy pub\ C:\out', r'robocopy "pub\\" C:\out', r"robocopy 'pub\' C:\out", r'xcopy pub\ C:\out'), 'secret')
+
+
 if __name__ == '__main__':
     unittest.main()
