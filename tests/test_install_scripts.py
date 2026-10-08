@@ -82,7 +82,8 @@ class InstallScriptContractTests(unittest.TestCase):
                          'GETZILLA_SKIP_AGENT', 'GETZILLA_NONINTERACTIVE', 'getzilla_setup_agent.py', '--key-stdin',
                          '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
                          '@google/gemini-cli@latest', '@github/copilot@latest', 'GEMINI_API_KEY',
-                         'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok'):
+                         'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok',
+                         'scripts/getzilla_update.py', '[y/N]'):
                 self.assertIn(name, text)
         self.assertIn('https://claude.ai/install.sh', shell)
         self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
@@ -195,6 +196,8 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
             self.assertIn('Getzilla is ready in', result.stdout)
             self.assertIn('Install plan for', result.stdout)
+            self.assertIn('Third-party tools were not updated. To update them:', result.stdout)
+            self.assertFalse((Path.home() / '.getzilla' / 'update.lock').exists())
             self.assertTrue((home / 'scripts/install_into.py').is_file())
             self.assertEqual(sorted(path.name for path in project.iterdir()), [])  # plan is read-only
 
