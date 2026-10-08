@@ -1,0 +1,78 @@
+{
+  "change_id": "20261008-task-22f19c",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/approve-wildcard-grants",
+      "change_id": "20261008-task-22f19c",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "a8f9338a298c4717953a0acd9c23339b8f85c637",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-08T14:55:57+00:00",
+      "route_id": "22f19c781423"
+    }
+  ],
+  "created_at": "2026-10-08T14:55:57+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-08T14:55:57+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval"
+  ],
+  "human_gates_digest": "f457a109b1f66a026ca20349c80f59a6919981ba753be4037dc0f19430feb732",
+  "route_id": "22f19c781423",
+  "schema_version": 1,
+  "status": "draft",
+  "title": "Reject wildcard resources in delegated grants",
+  "updated_at": "2026-10-08T14:55:57+00:00"
+}

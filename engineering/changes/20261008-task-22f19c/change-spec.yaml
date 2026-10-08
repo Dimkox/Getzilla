@@ -1,0 +1,125 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "add_approval refuses protected-path and external-write resources containing * ? [ or ], with or without a route gate.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Protected-path resources must be repository-relative file paths without .. or absolute prefixes.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "has_valid_approval matches resources by exact equality, so a stored pattern grant authorizes no control-plane write.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "getzilla_approve.py exits 2 with a usage message (no traceback, no grant written) for a wildcard resource.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Full PR verification, independent reviews and the exact-head external check precede merge.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "security"
+    ]
+  },
+  "change_id": "20261008-task-22f19c",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "Any single grant authorizes writes to more than the exact paths or resources it lists.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Exact protected-path, external-write and production grants keep authorizing exactly what they name.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "test": "tests/test_policy.py"
+        },
+        {
+          "test": "tests/test_protected_write.py"
+        },
+        {
+          "test": "tests/test_human_gates.py"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Delegated local grants name exact resources only; wildcard or pattern resources are refused and never matched.",
+    "success_metric": "wildcard_grant_refused_and_stored_patterns_inert",
+    "target": ".getzilla/getzilla/state.py and scripts/getzilla_approve.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

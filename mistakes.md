@@ -1847,3 +1847,7 @@ Root cause: two fake local-dispatch controls inherited `GROK_VERIFY_CAPABILITY=r
 ## 2026-10-04 — Inventory membership was mistaken for source-file existence
 
 Root cause: an analysis inferred alias source-file existence from managed inventory membership without reading the inventory producer and alias rendering branch. `_SourceTree.inventory()` inserts virtual managed names and `build_payload()` skips their source reads, so the warning was corrected before runtime edits; inspect both sides of this seam before changing the installer.
+
+## 2026-10-08 — Grant resources were documented as fnmatch patterns
+
+Root cause: the approve CLI advertised `--resource` as an "fnmatch pattern" and `has_valid_approval` matched with `fnmatch`, while pattern refusal existed only for external writes under one route gate; nothing tied the implementation to the AGENTS.md rule that the wildcard scope is forbidden. A governance rule needs an executable check at every site that enforces it, plus a regression test that tries the forbidden input (#38).

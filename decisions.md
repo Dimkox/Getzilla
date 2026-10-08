@@ -1105,3 +1105,7 @@ The user prefers one product PR, and the external refusal already invalidated qu
 ## 2026-10-05 — Freeze fixture commits before qualifying Git-bound matrices
 
 Prepare every disposable fixture head before evaluating exact-base/head diffs, because intervening commits change Git registration identity and invalidate the immutable baseline cache. Retain public-API snapshots per head and assert their architecture digest against the actual diff before calling the unchanged fitness predicate; all real model/contracts and negative cases remain. A private positive/owner-negative profile improved from7.574s to5.522s without a production/cache patch, but this is not proof of meeting the external serial timeout.
+
+## 2026-10-08 — Validate grant resources exactly at both creation and use
+
+`add_approval` refuses any resource with glob characters (and protected-path resources that are absolute or contain `..`), and `has_valid_approval` compares resources by exact equality. Checking at use time as well keeps a hand-edited or legacy `approvals.json` pattern inert, so the "wildcard scope is forbidden" rule no longer depends on one validation site (#38).
