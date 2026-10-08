@@ -1,0 +1,89 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "A known-vulnerabilities skip `N pinned dependencies not checked: \u2026` is refused in pr/release."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "`no pinned dependencies in lockfiles or requirements` stays admitted."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "fast mode is unchanged."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-63bea3",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Making the scanner contact the network without opt-in."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "Touching _policy_legacy.py, state.py, getzilla_approve.py, updater.py, the installer or hook copies."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "known_vulns.scan() is unchanged: with no source it still contacts nothing and reports skip."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #32 (review finding C1): the local OSV gate must not be a silent no-op for pr/release.",
+    "success_metric": "`verify --mode pr` with pinned dependencies and no OSV source returns FAIL (mandatory-check-skipped).",
+    "target": ".getzilla/getzilla/quality_gates.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

@@ -1,6 +1,7 @@
 from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import unittest
 
@@ -203,6 +204,9 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertTrue({"task_packet_digest", "run_manifest_digest", "workspace_result_digest"}.issubset(schema["required"]))
         self.assertNotIn("semantic_verdict", schema["properties"])
+
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
+    def test_workspace_result_schema_validates_records_with_jsonschema_cli(self):
         valid = WorkspaceResultV1.from_facts(valid_workspace_result()).to_dict()
         command = ["jsonschema", str(ROOT / "contracts" / "schemas" / "workspace-result.v1.json")]
         self.assertEqual(subprocess.run(command, input=json.dumps(valid), text=True, capture_output=True).returncode, 0)

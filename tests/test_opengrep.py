@@ -75,11 +75,22 @@ class OpengrepCheckTests(unittest.TestCase):
         warned = self._run({'results': [], 'errors': [{'level': 'warn', 'message': 'partial parse'}]})
         self.assertEqual(warned.status, 'pass')
 
-    def test_only_the_two_explicit_skips_are_admitted_by_the_quality_gate(self) -> None:
+    def test_missing_binary_is_refused_and_opengrep_is_mandatory_in_pr_and_release(self) -> None:
+        # A machine without OpenGrep must not pass a PR/release gate with SAST silently skipped (#40).
+        from getzilla.quality_gates import MANDATORY_PR_CHECKS
+
+        skipped = SimpleNamespace(name='opengrep', status='skip', summary='opengrep not available')
+        for mode in ('pr', 'release'):
+            with self.subTest(mode=mode):
+                self.assertTrue(required_check_refused(skipped, mode=mode))
+        self.assertFalse(required_check_refused(skipped, mode='fast'))
+        self.assertIn('opengrep', MANDATORY_PR_CHECKS)
+
+    def test_only_the_rules_absent_skip_is_admitted_by_the_quality_gate(self) -> None:
         def result(summary: str) -> SimpleNamespace:
             return SimpleNamespace(name='opengrep', status='skip', summary=summary)
 
-        self.assertFalse(required_check_refused(result('opengrep not available'), mode='pr'))
+        self.assertTrue(required_check_refused(result('opengrep not available'), mode='pr'))
         self.assertFalse(required_check_refused(result('no OpenGrep rules installed'), mode='pr'))
         self.assertTrue(required_check_refused(result('opengrep timed out'), mode='pr'))
 

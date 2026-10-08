@@ -32,6 +32,12 @@ def load(name):
 
 
 setup = load("setup_manager")
+# Real child processes need the only supported host profile (Ubuntu 24.04 x86_64 with
+# /usr/bin/python3.12); elsewhere the adapter correctly refuses with UNSUPPORTED_HOST.
+HOST_SUPPORTED = load("linux_process_adapter")._host_supported()
+real_process = unittest.skipUnless(
+    HOST_SUPPORTED, "requires the supported host profile: Ubuntu 24.04 x86_64 with /usr/bin/python3.12"
+)
 
 
 class LinuxProcessAdapterTests(unittest.TestCase):
@@ -70,6 +76,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.adapter = self.linux.LinuxProcessRuntimeAdapter(self.root, config)
         self.addCleanup(lambda: self.adapter.stop(self.release, timeout=2) if self.adapter.status(self.release, 2) else None)
 
+    @real_process
     def test_real_child_has_fixed_identity_health_logs_and_bounded_shutdown(self):
         self.assertTrue(self.adapter.preflight("factory-python", timeout=5))
         self.adapter.start(self.release, timeout=5)
@@ -85,6 +92,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.adapter.stop(self.release, timeout=2)
         self.assertFalse(self.adapter.status(self.release, timeout=2))
 
+    @real_process
     def test_pid_record_tamper_and_reuse_fail_closed_without_signalling(self):
         self.adapter.start(self.release, timeout=5)
         record_path = self.root / "state/process" / (self.release.name + ".json")
@@ -123,6 +131,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse((Path("/proc") / str(pid)).exists())
 
+    @real_process
     def test_startup_failure_kills_resistant_descendant_process_group(self):
         pid_file = self._write_process_tree_server(exit_leader=True)
         with self.assertRaises(setup.InstallerError):
@@ -130,6 +139,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         child_pid = int(pid_file.read_text())
         self._assert_process_gone(child_pid)
 
+    @real_process
     def test_stop_kills_resistant_descendant_and_never_signals_own_group(self):
         pid_file = self._write_process_tree_server(exit_leader=False)
         self.adapter.start(self.release, timeout=3)
@@ -148,6 +158,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "RUNTIME_IDENTITY_MISMATCH")
         record_path.unlink()
 
+    @real_process
     def test_stop_kills_child_forked_by_term_handler_before_deleting_state(self):
         pid_file = self.runtime_directory / "term-fork-child.pid"
         source = (
@@ -172,6 +183,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self._assert_process_gone(int(pid_file.read_text()))
         self.assertFalse(record_path.exists())
 
+    @real_process
     def test_leaderless_group_blocks_status_restart_and_signal_until_manual_recovery(self):
         pid_file = self.runtime_directory / "leaderless-child.pid"
         source = (
@@ -203,6 +215,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self._assert_process_gone(child_pid)
         record_path.unlink()
 
+    @real_process
     def test_stale_boot_record_never_signals_live_group(self):
         self.adapter.start(self.release, timeout=3)
         record_path = self.root / "state/process" / (self.release.name + ".json")
@@ -301,6 +314,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
                 "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                 "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}
 
+    @real_process
     def test_setup_manager_real_process_install_failed_update_reconcile_remove_and_purge(self):
         root = Path(self.temp.name) / "managed"
         config = Path(self.temp.name) / "managed-runtime.json"
@@ -342,6 +356,7 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         manager.remove(purge=True, token=token)
         self.assertFalse((root / "releases").exists())
 
+    @real_process
     def test_concurrent_managers_leave_one_child_and_coherent_journal(self):
         root = Path(self.temp.name) / "concurrent"
         config = Path(self.temp.name) / "concurrent-runtime.json"

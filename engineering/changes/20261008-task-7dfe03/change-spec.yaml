@@ -1,0 +1,71 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "Each known-vulnerabilities detail has path=manifest and message='package==version ID (aliases): summary; fixed in X'."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "All existing finding keys remain in the details for JSON output."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-7dfe03",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Changing finding detection or the check status."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "known_vulns.py scanning and policy are unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #35: make known-vulnerabilities failures actionable in the text report.",
+    "success_metric": "The verify text output lists package and advisory per finding.",
+    "target": ".getzilla/getzilla/verification.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
