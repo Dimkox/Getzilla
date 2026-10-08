@@ -459,15 +459,20 @@ class LandingApiTests(unittest.TestCase):
             path for path in Path("side-projects/seo-landing-showcase").rglob("*") if path.is_file()
         )
         self.assertEqual(
-            (18, "7f66b4b72f2ab8807e5ea3c1a924f588f1f5e09feb73a59c847d08ca19663c1c"),
+            # Re-anchored after the Getzilla rename (decisions.md 2026-10-08): the 18 files are
+            # byte-identical; only their package path changed (the old digest reproduces
+            # with factory/src/adaptive_factory/... names).
+            (18, "910d106f6f99ef09a154dc2cd7c9fd848faeadf0e53df535e6beb9997113b59f"),
             aggregate(migrations),
         )
         self.assertEqual(
-            (23, "98818e23ea78821c1c602774072c77bf7d891ef69fe2ba03f0ecbad9220134fc"),
+            # Rename 73d97c5 changed only the display "title" of 14 of these contracts.
+            (23, "d0c2604ae4e052724e8ba99ba203183926591d2fb719439e795a85d98b0e914a"),
             aggregate(predecessor_contracts),
         )
         self.assertEqual(
-            (6, "f7b4e8b3a53efa226cd198d7ca9449db882ddbc63792af7284457251c8e17c96"),
+            # Rename 73d97c5 (footer text) and e07cfbe (cold Chrome start retries).
+            (6, "b59b074fa907aeb63991a23ff072a04d4fbe3fd4bab14263447898e02994162c"),
             aggregate(showcase),
         )
         # Historic binary custody is external to the source tree. Bind its
