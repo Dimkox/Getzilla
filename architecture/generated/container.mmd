@@ -27,6 +27,7 @@ flowchart LR
   node_3703dbb382efdb0f["NODE-LOCAL-DEMO-TEST-CLIENT | local_component | repository engineering"]
   node_9f1df3a916fb955a["NODE-LOCAL-DEMO-UI | local_component | repository engineering"]
   node_770cf3a1783e8525["NODE-LOCAL-ROUTE-POLICY | local_component | repository engineering"]
+  node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_22df40caedcff532["NODE-PILOT-CODEX-SUPERVISOR | worker | single local pilot operator"]
   node_fd325b0205e2e68b["NODE-PILOT-CONTROL | local_component | single local pilot operator"]
@@ -71,7 +72,7 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
-  node_770cf3a1783e8525 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
+  node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532

@@ -21,15 +21,18 @@ GitHub release asset -> memory -> SHA-256 check -> `~/.getzilla/bin/opengrep`.
 ## Network boundary
 
 `updater.py` imports `urllib.request` to fetch pinned supply-chain artifacts (the
-OpenGrep release binary and the OSV database). Its owner node
-`NODE-LOCAL-ROUTE-POLICY` (`.getzilla/getzilla`) therefore declares an explicit
-https egress in `architecture/system.yaml`: a new external node
-`NODE-SUPPLY-CHAIN-REGISTRY` (external artifact registries, TD-EXTERNAL-PLATFORM)
-and an allowlisted-egress edge `EDGE-LOCAL-SUPPLY-CHAIN-FETCH`
-(`NODE-LOCAL-ROUTE-POLICY` -> `NODE-SUPPLY-CHAIN-REGISTRY`, protocol https,
-fail-closed, 300s timeout). This satisfies FIT-DECLARED-NETWORK-ONLY by declaring
-the real boundary rather than loosening the rule; the node's `runtime.network`
-moves from `none` to `declared_egress` and the generated diagrams are regenerated.
+OpenGrep release binary and the OSV database). A dedicated owner node `NODE-LOCAL-SUPPLY-CHAIN-UPDATER` (repository paths
+`.getzilla/getzilla/updater.py` and `scripts/getzilla_update.py`, TD-LOCAL-PREFLIGHT)
+therefore declares an explicit https egress in `architecture/system.yaml`: a new
+external node `NODE-SUPPLY-CHAIN-REGISTRY` (external artifact registries,
+TD-EXTERNAL-PLATFORM) and an allowlisted-egress edge `EDGE-LOCAL-SUPPLY-CHAIN-FETCH`
+(`NODE-LOCAL-SUPPLY-CHAIN-UPDATER` -> `NODE-SUPPLY-CHAIN-REGISTRY`, protocol https,
+fail-closed, 300s timeout). The updater node carries `runtime.network:
+declared_egress`; `NODE-LOCAL-ROUTE-POLICY` — which owns the hooks and the policy
+engine — keeps `runtime.network: none`, so a network client introduced in
+`pre_tool_use.py`, `_policy_legacy.py`, or `_lib.py` still trips the rule (review
+S52-1). This satisfies FIT-DECLARED-NETWORK-ONLY by declaring the real, scoped
+boundary rather than loosening the rule, and the generated diagrams are regenerated.
 
 ## API and event contracts
 
