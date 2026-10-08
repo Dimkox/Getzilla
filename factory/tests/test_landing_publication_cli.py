@@ -57,6 +57,13 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         self.coordinator = LandingPublicationCoordinator(self.store, self.adapter, lambda reference: self.bundle)
         self.reference = {"tenant_id": "test-tenant", "repository_id": "test-repository", "job_id": "test-job"}
 
+    def test_fixture_target_is_on_a_device_consistent_filesystem(self):
+        # The publisher requires st_dev(file) == target.device (the target root's st_dev).
+        probe = self.target_root / "device-probe"
+        probe.write_bytes(b"probe")
+        self.addCleanup(probe.unlink)
+        self.assertEqual(self.target.device, probe.stat().st_dev)
+
     def unfreeze(self):
         for directory, _names, files in os.walk(self.target_root):
             Path(directory).chmod(0o700)
