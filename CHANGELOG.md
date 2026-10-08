@@ -13,6 +13,7 @@
 - Queue provenance analysis widens list-append loops and no longer charges unchanged bindings, so modules importing `architecture_diff.py` stop failing FIT-BOUNDED-WORKER-JOBS as unsupported; all analysis limits are unchanged.
 - `--mode pr`/`release` refuse a missing `bandit` or `opengrep` binary instead of admitting the skip; `opengrep` is a mandatory PR check. Install both locally (CI and Trust CI already do).
 - Release assets require the exact merged tested source and separately authorized GitHub Release publication; v2.1.1 remains the latest published release in this pre-publication snapshot.
+- Getzilla's informational Windows full suite moves from the PR workflow to a nightly `windows-full-suite.yml` (schedule only; the holdout forbids `workflow_dispatch`); the required `linux`/`windows` PR checks keep their gating steps and finish in ~6 min instead of ~37.
 - Repairs the main CI after the 2026-10-08 merges (#19–#23): restores the OpenGrep verifier stage lost in a merge, registers `customers.py` in the architecture model, removes a duplicated landing note, pins fastapi 0.142.4, pypdf 6.19.0 and starlette 1.7.0 in factory (the trust-ci cryptography 50.0.2 and fastapi 0.142.4 pins ship separately under FIT-TRUST-CI-SEPARATION), and clears a bandit B105 false positive. VERSION is unchanged because 2.2.0 is still an unpublished candidate.
 
 ## 2.1.1 — 2026-10-03 (published)
