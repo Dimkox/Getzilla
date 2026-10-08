@@ -215,6 +215,33 @@ class PolicyTests(unittest.TestCase):
                 KV.load_config(root)
 
 
+class VerifierDetailTests(unittest.TestCase):
+    def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
+                  'findings': [finding.to_dict()], 'accepted': []}
+        with patch.object(verification, 'scan_known_vulnerabilities', return_value=report):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        [detail] = result.details
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
 class QualityGateTests(unittest.TestCase):
     def test_only_the_two_explicit_skip_reasons_are_admitted(self) -> None:
         from types import SimpleNamespace
