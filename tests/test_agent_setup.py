@@ -32,6 +32,19 @@ def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
+def _exported(home: Path) -> dict[str, str]:
+    """What a new login shell exports, read the way an agent process inherits it."""
+    key_file = home / '.getzilla/openrouter.env'
+    if key_file.exists():
+        assert _mode(key_file) == 0o600
+    script = '. "$HOME/.bashrc" >/dev/null 2>&1; env'
+    output = subprocess.run(['bash', '--norc', '-c', script], env={'HOME': str(home), 'PATH': os.environ['PATH']},
+                            capture_output=True, text=True, check=True).stdout
+    names = ('OPENROUTER_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+    return {line.split('=', 1)[0]: line.split('=', 1)[1] for line in output.splitlines()
+            if line.split('=', 1)[0] in names}
+
+
 @unittest.skipIf(os.name == 'nt', 'POSIX file modes and shell profiles')
 class AgentSetupTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -45,7 +58,6 @@ class AgentSetupTests(unittest.TestCase):
         settings = self.home / '.qwen/settings.json'
         settings.parent.mkdir()
         settings.write_text(json.dumps({'ui': {'theme': 'dark'}, 'modelProviders': {'openai': [{'id': 'mine'}]}}))
-        (self.home / '.qwen/.env').write_text('OTHER=1\nOPENROUTER_API_KEY=old\n')
         result = configure('qwen', 'openrouter', self.home, key=KEY)
         data = json.loads(settings.read_text())
         self.assertEqual(data['ui'], {'theme': 'dark'})
@@ -56,10 +68,9 @@ class AgentSetupTests(unittest.TestCase):
         self.assertEqual(first['baseUrl'], 'https://openrouter.ai/api/v1')
         self.assertEqual(mine, {'id': 'mine'})
         self.assertNotIn(KEY, settings.read_text())
-        env = (self.home / '.qwen/.env').read_text()
-        self.assertEqual(env, f'OTHER=1\nOPENROUTER_API_KEY={KEY}\n')
-        self.assertEqual(_mode(self.home / '.qwen/.env'), 0o600)
-        self.assertIn(str(self.home / '.qwen/.env'), result.written)
+        self.assertFalse((self.home / '.qwen/.env').exists())
+        self.assertEqual(_exported(self.home), {'OPENROUTER_API_KEY': KEY})
+        self.assertIn('open a new terminal so the agent sees OPENROUTER_API_KEY', result.next_steps)
 
     def test_running_twice_does_not_duplicate_the_provider(self) -> None:
         configure('qwen', 'openrouter', self.home, key=KEY)
@@ -77,10 +88,10 @@ class AgentSetupTests(unittest.TestCase):
         self.assertEqual(data['env'], {
             'KEEP': '1',
             'ANTHROPIC_BASE_URL': 'https://openrouter.ai/api',
-            'ANTHROPIC_AUTH_TOKEN': KEY,
             'ANTHROPIC_API_KEY': '',
         })
-        self.assertEqual(_mode(settings), 0o600)
+        self.assertNotIn(KEY, settings.read_text())
+        self.assertEqual(_exported(self.home), {'OPENROUTER_API_KEY': KEY, 'ANTHROPIC_AUTH_TOKEN': KEY})
 
     def test_codex_gets_a_valid_provider_and_a_private_key_file(self) -> None:
         (self.home / '.bashrc').write_text('alias ll="ls -l"\n')
@@ -102,6 +113,7 @@ class AgentSetupTests(unittest.TestCase):
             capture_output=True, text=True, check=True,
         ).stdout
         self.assertEqual(loaded, KEY)
+        self.assertEqual(_exported(self.home), {'OPENROUTER_API_KEY': KEY})
         configure('codex', 'openrouter', self.home, key=KEY)
         bashrc = (self.home / '.bashrc').read_text()
         self.assertEqual(bashrc.count(agent_setup.PROFILE_MARKER), 1)
@@ -159,7 +171,7 @@ class AgentSetupTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 configure('qwen', 'openrouter', self.home, key=KEY)
             self.assertEqual(settings.read_text(), content)
-            self.assertFalse((self.home / '.qwen/.env').exists())
+            self.assertFalse((self.home / '.getzilla').exists())
 
     def test_switching_to_native_sign_in_removes_the_openrouter_routing(self) -> None:
         for agent in ('qwen', 'claude', 'codex'):
@@ -175,9 +187,11 @@ class AgentSetupTests(unittest.TestCase):
         codex = tomllib.loads((self.home / '.codex/config.toml').read_text())
         self.assertNotIn('model_provider', codex)
         self.assertNotIn('model', codex)
+        self.assertEqual(_exported(self.home), {'OPENROUTER_API_KEY': KEY})
+        result = agent_setup.forget_key(self.home)
+        self.assertTrue(result.written)
         self.assertFalse((self.home / '.getzilla/openrouter.env').exists())
         self.assertNotIn('openrouter.env', (self.home / '.bashrc').read_text())
-        self.assertNotIn(KEY, (self.home / '.qwen/.env').read_text())
 
     def test_zsh_profiles_get_the_key_on_macos(self) -> None:
         with mock.patch.object(agent_setup.sys, 'platform', 'darwin'):
@@ -185,7 +199,7 @@ class AgentSetupTests(unittest.TestCase):
         for profile in ('.zshrc', '.bashrc'):
             self.assertIn(agent_setup.PROFILE_MARKER, (self.home / profile).read_text(), profile)
         self.assertFalse((self.home / '.bash_profile').exists())
-        self.assertIn('open a new terminal so Codex sees OPENROUTER_API_KEY', result.next_steps)
+        self.assertIn('open a new terminal so the agent sees OPENROUTER_API_KEY', result.next_steps)
 
     def test_symlinked_settings_are_written_through(self) -> None:
         real = self.home / 'dotfiles/claude.json'

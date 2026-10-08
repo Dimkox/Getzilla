@@ -52,6 +52,23 @@
       }
     },
     {
+      "id": "pwsh",
+      "name": "PowerShell",
+      "required": false,
+      "profile": "windows",
+      "commands": ["pwsh"],
+      "version_args": ["--version"],
+      "built": "7.4.6",
+      "minimum": "7.4",
+      "fallback": "7.4",
+      "install": {
+        "linux": "https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux",
+        "darwin": "brew install --cask powershell",
+        "windows": "winget install -e --id Microsoft.PowerShell",
+        "generic": "https://aka.ms/powershell-release?tag=lts"
+      }
+    },
+    {
       "id": "gh",
       "name": "GitHub CLI",
       "required": false,
@@ -76,7 +93,7 @@
       "commands": ["node"],
       "version_args": ["--version"],
       "built": "24.19.0",
-      "minimum": "18.0",
+      "minimum": "20.0",
       "fallback": "20",
       "install": {
         "linux": "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs",

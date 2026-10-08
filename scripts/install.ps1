@@ -7,6 +7,10 @@
 # official installers and installs them for the current user, without administrator
 # rights. Nothing is changed in your projects unless you ask for it below.
 #
+# Minimum versions: Windows PowerShell 5.1 can run this installer; Getzilla itself needs
+# PowerShell 7.4 or newer (pwsh), which this installer adds with winget when it is missing,
+# because agent hooks use the && and || operators that Windows PowerShell 5.1 lacks.
+#
 # Optional environment variables (set them before the command above):
 #   $env:GETZILLA_HOME = 'D:\Tools\Getzilla'   where Getzilla is kept (default: $HOME\Getzilla)
 #   $env:GETZILLA_REF = 'main'                  branch or tag to install
@@ -59,6 +63,8 @@ function Install-Getzilla {
         throw 'Python 3.10 or newer is still missing. Open a new PowerShell window and run this installer again.'
     }
     Write-Step ("Python: " + (Invoke-Python $Python @('--version')))
+
+    Install-PowerShell7
 
     $Agent = Select-Agent
     $Provider = Select-Provider $Agent
@@ -210,6 +216,36 @@ function Install-Python {
     Remove-Item -Force $installer
     if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode)." }
     Update-SessionPath
+}
+
+$MinimumPowerShell = [version]'7.4'
+
+function Get-Pwsh {
+    $command = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $command) { return $null }
+    try {
+        $text = (& $command.Source -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null | Select-Object -First 1)
+        $version = [version](("$text".Trim()) -replace '[^0-9.].*$', '')
+    } catch {
+        return $null
+    }
+    return [pscustomobject]@{ Path = $command.Source; Version = $version }
+}
+
+function Install-PowerShell7 {
+    $pwsh = Get-Pwsh
+    if ($pwsh -and $pwsh.Version -ge $MinimumPowerShell) {
+        Write-Step ("PowerShell: " + $pwsh.Version)
+        return
+    }
+    Write-Step "Installing PowerShell $MinimumPowerShell or newer (Getzilla's minimum)..."
+    if ((Test-Winget) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
+    $pwsh = Get-Pwsh
+    if ($pwsh -and $pwsh.Version -ge $MinimumPowerShell) {
+        Write-Step ("PowerShell: " + $pwsh.Version)
+    } else {
+        Write-Step "PowerShell $MinimumPowerShell or newer is still missing. Install it from https://aka.ms/powershell-release?tag=lts and open agents from a PowerShell 7 window."
+    }
 }
 
 function Test-CanAsk {

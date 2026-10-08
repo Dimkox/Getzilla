@@ -86,7 +86,28 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertIn('https://claude.ai/install.sh', shell)
         self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
         self.assertIn('-AsSecureString', powershell)
+        self.assertIn("$MinimumPowerShell = [version]'7.4'", powershell)
+        self.assertIn("Invoke-Winget 'Microsoft.PowerShell'", powershell)
+        toolchain = json.loads((ROOT / '.getzilla/config/toolchain.json').read_text(encoding='utf-8'))
+        pwsh = next(item for item in toolchain['tools'] if item['id'] == 'pwsh')
+        self.assertEqual(pwsh['minimum'], '7.4')
+        self.assertIn('Microsoft.PowerShell', pwsh['install']['windows'])
+        node = next(item for item in toolchain['tools'] if item['id'] == 'node')
+        self.assertEqual(node['minimum'], '20.0')
         self.assertIn('read -rs key </dev/tty', shell)
+
+    @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
+    def test_powershell_minimum_version_check_accepts_the_host_pwsh(self) -> None:
+        command = (
+            f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
+            '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
+            'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
+            "$MinimumPowerShell = [version]'7.4'; "
+            'function Test-Winget { $false }; Install-PowerShell7'
+        )
+        result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r'==> PowerShell: 7\.\d+')
 
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_installer_parses(self) -> None:
@@ -170,7 +191,9 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
             self.assertIn('Qwen Code: already installed.', result.stdout)
             self.assertNotIn(key, result.stdout + result.stderr)
-            self.assertIn(f'OPENROUTER_API_KEY={key}', (user_home / '.qwen/.env').read_text(encoding='utf-8'))
+            self.assertIn(f"export OPENROUTER_API_KEY='{key}'",
+                          (user_home / '.getzilla/openrouter.env').read_text(encoding='utf-8'))
+            self.assertIn('.getzilla/openrouter.env', (user_home / '.bashrc').read_text(encoding='utf-8'))
             self.assertIn('In your project run: qwen', result.stdout)
 
     def test_refuses_a_foreign_folder(self) -> None:

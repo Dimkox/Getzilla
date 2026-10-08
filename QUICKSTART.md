@@ -14,7 +14,7 @@ irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 |
 curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
 ```
 
-Without a terminal to ask in, the installers use `GETZILLA_AGENT` (`qwen` default, `codex`, `claude`, `grok`), `GETZILLA_PROVIDER` (`openrouter` default, `native`), `GETZILLA_MODEL` and `OPENROUTER_API_KEY`. The key is written only to your user settings (`~/.qwen/.env`, `~/.claude/settings.json`, or `~/.getzilla/openrouter.env` for Codex; a user environment variable on Windows), with owner-only permissions. Re-run the setup any time with `python3 scripts/getzilla_setup_agent.py --agent <agent>`.
+Without a terminal to ask in, the installers use `GETZILLA_AGENT` (`qwen` default, `codex`, `claude`, `grok`), `GETZILLA_PROVIDER` (`openrouter` default, `native`), `GETZILLA_MODEL` and `OPENROUTER_API_KEY`. The key becomes the user environment variable `OPENROUTER_API_KEY` (and `ANTHROPIC_AUTH_TOKEN` for Claude Code) that every agent reads: an owner-only `~/.getzilla/openrouter.env` sourced from your shell profiles on Linux/macOS, persistent user variables on Windows. Open a new terminal afterwards. `--forget-key` removes it. Minimum versions: Python 3.10, Node.js 20 (Qwen Code, Codex), PowerShell 7.4 on Windows (the installer adds it). Re-run the setup any time with `python3 scripts/getzilla_setup_agent.py --agent <agent>`.
 
 With the installer done, continue at step 3. The manual steps below are the same path by hand.
 

@@ -27,7 +27,10 @@ NATIVE_LOGIN = {
     'claude': "run 'claude' and sign in with your Anthropic account",
     'grok': "run 'grok' and sign in with your xAI account",
 }
-PROFILE_MARKER = '# Getzilla: OpenRouter key for Codex'
+PROFILE_MARKER = '# Getzilla: model keys for coding agents'
+ENV_FILE = '.getzilla/openrouter.env'
+CLAUDE_TOKEN_ENV = 'ANTHROPIC_AUTH_TOKEN'
+NEW_TERMINAL = 'open a new terminal so the agent sees OPENROUTER_API_KEY'
 _KEY_SHAPE = re.compile(r'^[A-Za-z0-9._\-]{16,512}$')
 
 
@@ -85,13 +88,6 @@ def _dump_json(data: dict) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + '\n'
 
 
-def _set_env_line(text: str, name: str, value: str | None) -> str:
-    lines = [line for line in text.splitlines() if not re.match(rf'^\s*(export\s+)?{name}\s*=', line)]
-    if value is not None:
-        lines.append(f'{name}={value}')
-    return '\n'.join(lines) + '\n' if lines else ''
-
-
 def _is_openrouter_entry(entry: object) -> bool:
     return isinstance(entry, dict) and entry.get('baseUrl') == OPENROUTER_BASE_URL
 
@@ -108,26 +104,12 @@ def _configure_qwen(home: Path, model: str, key: str) -> list[str]:
     providers['openai'] = openai
     _object_at(_object_at(settings, 'security', settings_path), 'auth', settings_path)['selectedType'] = 'openai'
     _object_at(settings, 'model', settings_path)['name'] = model
-    env_path = home / '.qwen/.env'
-    current = env_path.read_text(encoding='utf-8') if env_path.is_file() else ''
-    _write_private(env_path, _set_env_line(current, KEY_ENV, key))
+    written = _store_env(home, {KEY_ENV: key})
     _write_private(settings_path, _dump_json(settings))
-    return [str(env_path), str(settings_path)]
+    return [*written, str(settings_path)]
 
 
 def _unconfigure_qwen(home: Path) -> list[str]:
-    removed: list[str] = []
-    env_path = home / '.qwen/.env'
-    if env_path.is_file():
-        current = env_path.read_text(encoding='utf-8')
-        updated = _set_env_line(current, KEY_ENV, None)
-        if updated != current:
-            _write_private(env_path, updated)
-            removed.append(str(env_path))
-    return [*removed, *_unconfigure_qwen_settings(home)]
-
-
-def _unconfigure_qwen_settings(home: Path) -> list[str]:
     settings_path = home / '.qwen/settings.json'
     settings = _load_json_object(settings_path)
     providers = settings.get('modelProviders')
@@ -148,31 +130,31 @@ def _unconfigure_qwen_settings(home: Path) -> list[str]:
     return [str(settings_path)]
 
 
-_CLAUDE_OPENROUTER_ENV = ('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY')
+_CLAUDE_OPENROUTER_ENV = ('ANTHROPIC_BASE_URL', CLAUDE_TOKEN_ENV, 'ANTHROPIC_API_KEY')
 
 
 def _configure_claude(home: Path, key: str) -> list[str]:
     settings_path = home / '.claude/settings.json'
     settings = _load_json_object(settings_path)
-    _object_at(settings, 'env', settings_path).update({
-        'ANTHROPIC_BASE_URL': OPENROUTER_ANTHROPIC_URL,
-        'ANTHROPIC_AUTH_TOKEN': key,
-        'ANTHROPIC_API_KEY': '',
-    })
+    env = _object_at(settings, 'env', settings_path)
+    env.pop(CLAUDE_TOKEN_ENV, None)
+    env.update({'ANTHROPIC_BASE_URL': OPENROUTER_ANTHROPIC_URL, 'ANTHROPIC_API_KEY': ''})
+    written = _store_env(home, {KEY_ENV: key, CLAUDE_TOKEN_ENV: key})
     _write_private(settings_path, _dump_json(settings))
-    return [str(settings_path)]
+    return [*written, str(settings_path)]
 
 
 def _unconfigure_claude(home: Path) -> list[str]:
     settings_path = home / '.claude/settings.json'
     settings = _load_json_object(settings_path)
     env = settings.get('env')
+    removed = _store_env(home, {}, remove=(CLAUDE_TOKEN_ENV,))
     if not isinstance(env, dict) or env.get('ANTHROPIC_BASE_URL') != OPENROUTER_ANTHROPIC_URL:
-        return []
+        return removed
     for name in _CLAUDE_OPENROUTER_ENV:
         env.pop(name, None)
     _write_private(settings_path, _dump_json(settings))
-    return [str(settings_path)]
+    return [*removed, str(settings_path)]
 
 
 _TABLE_HEADER = re.compile(r'^\s*\[')
@@ -240,20 +222,7 @@ def _configure_codex(home: Path, model: str, key: str) -> tuple[list[str], list[
         written.append(str(backup))
     _write_private(config_path, text)
     written.append(str(config_path))
-    if os.name == 'nt':
-        _set_windows_user_env(KEY_ENV, key)
-        written.append(f'user environment variable {KEY_ENV}')
-    else:
-        env_path = home / '.getzilla/openrouter.env'
-        _write_private(env_path, f"export {KEY_ENV}='{key}'\n")
-        written.append(str(env_path))
-        for profile in _shell_profiles(home):
-            current_profile = profile.read_text(encoding='utf-8') if profile.exists() else ''
-            if PROFILE_MARKER not in current_profile:
-                with profile.open('a', encoding='utf-8') as handle:
-                    handle.write(f'\n{PROFILE_MARKER}\n[ -f "$HOME/.getzilla/openrouter.env" ] && . "$HOME/.getzilla/openrouter.env"\n')
-                written.append(str(profile))
-    steps.append('open a new terminal so Codex sees OPENROUTER_API_KEY')
+    written.extend(_store_env(home, {KEY_ENV: key}))
     return written, steps
 
 
@@ -282,22 +251,74 @@ def _shell_profiles(home: Path) -> list[Path]:
     profiles = [home / '.bashrc']
     if sys.platform == 'darwin' or shell.endswith('zsh') or (home / '.zshrc').exists():
         profiles.append(home / '.zshrc')
-    if (home / '.bash_profile').exists():
-        profiles.append(home / '.bash_profile')
+    for login in ('.bash_profile', '.profile'):
+        if (home / login).exists():
+            profiles.append(home / login)
     return profiles
 
 
-def _remove_codex_key(home: Path) -> list[str]:
-    removed: list[str] = []
+_ENV_LINE = re.compile(r"^export ([A-Z_][A-Z0-9_]*)='([^']*)'$")
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if path.is_file():
+        for line in path.read_text(encoding='utf-8').splitlines():
+            match = _ENV_LINE.match(line.strip())
+            if match:
+                values[match.group(1)] = match.group(2)
+    return values
+
+
+def _store_env(home: Path, values: dict[str, str], *, remove: tuple[str, ...] = ()) -> list[str]:
+    """Keep model keys as user environment variables every agent process inherits.
+
+    POSIX: `~/.getzilla/openrouter.env` (owner-only) exported from the shell
+    profiles. Windows: persistent user environment variables.
+    """
+    changed: list[str] = []
     if os.name == 'nt':
-        if _clear_windows_user_env(KEY_ENV):
-            removed.append(f'user environment variable {KEY_ENV}')
-        return removed
-    env_path = home / '.getzilla/openrouter.env'
-    if env_path.exists():
-        env_path.unlink()
-        removed.append(str(env_path))
-    for profile in (home / '.bashrc', home / '.zshrc', home / '.bash_profile'):
+        for name, value in values.items():
+            _set_windows_user_env(name, value)
+            changed.append(f'user environment variable {name}')
+        for name in remove:
+            if _clear_windows_user_env(name):
+                changed.append(f'removed user environment variable {name}')
+        return changed
+    env_path = home / ENV_FILE
+    current = _read_env_file(env_path)
+    merged = {**current, **values}
+    for name in remove:
+        merged.pop(name, None)
+    if merged == current and (merged or not env_path.exists()):
+        if merged:
+            changed.extend(_ensure_profiles(home))
+        return changed
+    if merged:
+        _write_private(env_path, ''.join(f"export {name}='{value}'\n" for name, value in sorted(merged.items())))
+        changed.append(str(env_path))
+        changed.extend(_ensure_profiles(home))
+    else:
+        env_path.unlink(missing_ok=True)
+        changed.append(f'removed {env_path}')
+        changed.extend(_remove_profiles(home))
+    return changed
+
+
+def _ensure_profiles(home: Path) -> list[str]:
+    changed = []
+    for profile in _shell_profiles(home):
+        current = profile.read_text(encoding='utf-8') if profile.exists() else ''
+        if PROFILE_MARKER not in current:
+            with profile.open('a', encoding='utf-8') as handle:
+                handle.write(f'\n{PROFILE_MARKER}\n[ -f "$HOME/{ENV_FILE}" ] && . "$HOME/{ENV_FILE}"\n')
+            changed.append(str(profile))
+    return changed
+
+
+def _remove_profiles(home: Path) -> list[str]:
+    changed = []
+    for profile in (home / '.bashrc', home / '.zshrc', home / '.bash_profile', home / '.profile'):
         if not profile.is_file():
             continue
         lines = profile.read_text(encoding='utf-8').splitlines(keepends=True)
@@ -309,19 +330,23 @@ def _remove_codex_key(home: Path) -> list[str]:
                 if kept and not kept[-1].strip():
                     kept.pop()
                 continue
-            if skip_next and '.getzilla/openrouter.env' in line:
+            if skip_next and ENV_FILE in line:
                 skip_next = False
                 continue
             skip_next = False
             kept.append(line)
         if kept != lines:
             _write_private(profile, ''.join(kept))
-            removed.append(str(profile))
-    return removed
+            changed.append(str(profile))
+    return changed
+
+
+def forget_key(home: Path) -> SetupResult:
+    return SetupResult(tuple(_store_env(home, {}, remove=(KEY_ENV, CLAUDE_TOKEN_ENV))), ())
 
 
 def _unconfigure_codex(home: Path) -> list[str]:
-    removed = _remove_codex_key(home)
+    removed: list[str] = []
     config_path = home / '.codex/config.toml'
     if not config_path.is_file():
         return removed
@@ -380,13 +405,13 @@ def configure(agent: str, provider: str, home: Path, *, key: str | None, model: 
     key = validate_key(key)
     chosen = model or DEFAULT_MODELS.get(agent)
     if agent == 'qwen':
-        return SetupResult(tuple(_configure_qwen(home, chosen, key)), ("run 'qwen' in your project",))
+        return SetupResult(tuple(_configure_qwen(home, chosen, key)), (NEW_TERMINAL, "run 'qwen' in your project"))
     if agent == 'claude':
         return SetupResult(tuple(_configure_claude(home, key)), (
-            "run 'claude' in your project; if you were signed in to Anthropic before, run /logout once",
+            NEW_TERMINAL, "run 'claude' in your project; if you were signed in to Anthropic before, run /logout once",
         ))
     written, steps = _configure_codex(home, chosen, key)
-    return SetupResult(tuple(written), (*steps, "run 'codex' in your project"))
+    return SetupResult(tuple(written), (*steps, NEW_TERMINAL, "run 'codex' in your project"))
 
 
 def read_key(stream=None) -> str | None:

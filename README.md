@@ -37,7 +37,7 @@ You do not give up vibe coding. The rule is **vibe first, check second**: build 
 
 One command installs everything that is missing (Git, Python and a coding agent of your choice), downloads Getzilla to `~/Getzilla` and checks the machine.
 
-**What you need.** Getzilla is free; the AI models are yours to pay for. The installer asks which coding agent to use (Qwen Code by default, or Codex, Claude Code, Grok Build) and where its models come from: [OpenRouter](https://openrouter.ai/keys) with your own key (the default), or the agent's own sign-in (ChatGPT for Codex, Anthropic for Claude Code; Grok Build always uses your xAI account). Your key stays in your user settings and never goes into a project. Getzilla never ships or shares its own keys.
+**What you need.** Getzilla is free; the AI models are yours to pay for. The installer asks which coding agent to use (Qwen Code by default, or Codex, Claude Code, Grok Build) and where its models come from: [OpenRouter](https://openrouter.ai/keys) with your own key (the default), or the agent's own sign-in (ChatGPT for Codex, Anthropic for Claude Code; Grok Build always uses your xAI account). Your key is kept as the user environment variable `OPENROUTER_API_KEY` (plus `ANTHROPIC_AUTH_TOKEN` for Claude Code), so every agent process sees it; it never goes into a project, and Getzilla never ships or shares its own keys. On Windows, Getzilla needs PowerShell 7.4 or newer; the installer adds it with winget (Windows PowerShell 5.1 is enough to start the installer).
 
 Windows (PowerShell):
 
