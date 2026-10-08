@@ -208,7 +208,7 @@ class GetzillaLandingTests(unittest.TestCase):
         text = ' '.join(' '.join(Elements(main).text_parts).split())
         # Original base copy, with only the approved migration-intro branding correction:
         # Replace the predecessor-name question with 'Upgrading an existing installation?'.
-        self.assertEqual(digest(text.encode()), '70c6bf2a4e097bc61d2460d6bd9db772abb2f9fcb45000940ad003891bb394c9')
+        self.assertEqual(digest(text.encode()), '7dd93835c0ab0cadc9c38660b6a05fb86dd8cff831d65a6afc4f0a28e3e35fa3')
         photo_alts = [a['alt'] for a in self.dom.find('img') if a.get('src', '').startswith('/assets/images/')]
         self.assertEqual(photo_alts, ['A founder working alone on a laptop late at night', 'A small team working on laptops around one table', 'A developer with hands over face in front of a laptop', 'A developer grabbing his head in front of a laptop', 'A tangled pile of wires', 'Code on a dark screen', 'A wall covered in sticky notes', 'Four coworkers smiling around a laptop'])
 

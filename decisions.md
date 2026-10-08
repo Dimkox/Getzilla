@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-08 — Queue analysis widens loops instead of raising its limits
+
+The FIT-BOUNDED-WORKER-JOBS false failure on `architecture_diff.py` is fixed in the analyser, not by raising its bounds. A list-append loop is an infinite ascending chain, so no finite `loop_limit` converges it. After two exact iterations, a sequence that gained indexes is widened to an unbounded sequence summarised by the join of its elements, and the loop state is compared after widening. With unknown length, negative indexes and unpacking stay conservative. The value budget now counts constructed values only: a binding identical on every merged path is not re-joined or charged. Those charges were 98.5% of the 39,495 spent on `architecture_diff.py`, and the comparison costs no more than the uncharged environment copy in `_fork`. `statement_limit`, `value_limit` and `loop_limit` keep their values (4096/4096/8). Stdlib `queue` stays a queue import.
+
 ## 2026-10-07 — Trust CI is paid for private repositories
 
 Public repositories keep the free GitHub Actions gate; Trust CI runs on owned hardware, so private repositories pay for it. Access is per GitHub account, invoiced by hand and granted as an explicit owner profile (`adaptive_trust_ci.customers`); there is no open "anyone who installed the App" profile, so unpaid accounts never run code on the CI host. Prices are on request for now.

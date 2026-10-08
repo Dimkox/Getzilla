@@ -1826,6 +1826,78 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(report.status, "pass")
         self.assertNotIn("new_queue", report.triggers)
 
+    def test_list_append_loops_converge_in_queue_importing_modules(self) -> None:
+        # Regression: every loop that appended to a list grew the abstract sequence by one
+        # index per iteration, so any module importing a queue library (including stdlib
+        # ``queue``) hit "queue loop analysis limit exceeded" and was reported unsupported.
+        ordinary = FIT.analyze_queue_tree(ast.parse(
+            "import queue\n"
+            "def read_all(fd):\n"
+            "    chunks = []\n"
+            "    while more(fd):\n"
+            "        chunks.append(read(fd))\n"
+            "    return b''.join(chunks)\n"
+            "read_all(0)\n"
+        ))
+        self.assertEqual(ordinary.signals, ("import:queue",))
+        self.assertFalse(ordinary.uncertain)
+
+        # Pre-loop entries re-enter through the zero-iteration path on every join, so the
+        # loop state must be compared after widening or it oscillates (spec.py pattern).
+        prefilled = FIT.analyze_queue_tree(ast.parse(
+            "import queue\nerrors = ['a', 'b']\nfor group in groups:\n"
+            "    for item in group:\n        if bad(item):\n"
+            "            errors.append(item)\n            continue\n"
+            "        errors.append(str(item))\n"
+        ))
+        self.assertEqual(prefilled.signals, ("import:queue",))
+        self.assertFalse(prefilled.uncertain)
+
+        for loop in ("while more():\n", "for row in rows:\n"):
+            with self.subTest(loop=loop):
+                inside = FIT.analyze_queue_tree(ast.parse(
+                    "from rq import Queue\nitems = []\n" + loop
+                    + "    items.append(Queue())\nitems[3].enqueue(job)\n"
+                ))
+                self.assertTrue(
+                    inside.uncertain or any(item.startswith("semantic-call:") and "enqueue" in item
+                                            for item in inside.signals),
+                    inside,
+                )
+
+        after = FIT.analyze_queue_tree(ast.parse(
+            "from rq import Queue\nitems = []\nwhile more():\n    items.append(make())\n"
+            "items.append(Queue())\nitems[5].enqueue(job)\n"
+        ))
+        self.assertTrue(
+            after.uncertain or any(item.startswith("semantic-call:") and "enqueue" in item
+                                   for item in after.signals),
+            after,
+        )
+
+    def test_unchanged_bindings_do_not_consume_queue_value_budget(self) -> None:
+        # Joining branches used to charge every unchanged local at every merge point, so the
+        # value budget scaled with locals x branches although no value was constructed.
+        locals_block = "".join(f"    local{index} = {index}\n" for index in range(60))
+        branches = "".join(
+            f"    if flag{index}:\n        changed = {index}\n" for index in range(30)
+        )
+        analysis = FIT.analyze_queue_tree(
+            ast.parse("import queue\ndef work():\n" + locals_block + branches),
+            value_limit=256,
+        )
+        self.assertEqual(analysis.signals, ("import:queue",))
+        self.assertFalse(analysis.uncertain)
+
+    def test_getzilla_architecture_diff_is_queue_analyzable_within_default_limits(self) -> None:
+        source = (ROOT / ".getzilla/getzilla/architecture_diff.py").read_text(encoding="utf-8")
+        analysis = FIT.analyze_queue_tree(ast.parse(source))
+        self.assertIn("import:queue", analysis.signals)
+        # Fitness also interprets modules that import a resolved local adapter; spec.py is
+        # reached that way from verification.py.
+        spec_source = (ROOT / ".getzilla/getzilla/spec.py").read_text(encoding="utf-8")
+        FIT.analyze_queue_tree(ast.parse(spec_source), {"fsx"})
+
     def test_queue_alias_work_is_bounded_before_branch_closure(self) -> None:
         alias_chain = "\n".join(f"alias{index} = values" for index in range(40))
         with self.assertRaisesRegex(FIT.QueueAnalysisLimit, "alias"):

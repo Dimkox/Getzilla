@@ -1,0 +1,90 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "A module importing a queue library that appends to a list inside a while/for loop is analysed without QueueAnalysisLimit and an ordinary list stays non-queue."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "Unchanged bindings at branch/loop merge points do not consume the queue value budget."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "architecture_diff.py is queue-analysable within the default statement, value and loop limits, so edits to modules importing it are no longer reported FIT-BOUNDED-WORKER-JOBS unsupported."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-d259e6",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Raising or removing statement_limit, value_limit or loop_limit to hide the failure."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "A queue value appended in or after a loop becoming invisible (neither a semantic-call signal nor uncertain)."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Existing queue provenance, alias and limit tests keep passing unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Remove the FIT-BOUNDED-WORKER-JOBS false failure caused by non-converging list-append loops and identity-join charging in queue provenance analysis.",
+    "success_metric": "Architecture fitness no longer reports QueueAnalysisLimit for modules importing architecture_diff.py; all architecture fitness tests pass.",
+    "target": ".getzilla/getzilla/queue_provenance.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "event"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
