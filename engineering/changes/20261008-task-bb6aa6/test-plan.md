@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | P0 | Committed Cursor rules match sources, documented frontmatter, core prohibitions | tests/test_harnesses.py |
 | P0 | Symlinked directory refused, 0644, stale extras removed | tests/test_harnesses.py |
+| P0 | Ownership: marker found in a long rule, symlinks and unmarked files are the user's, a file where a parent directory goes blocks every write | tests/test_harnesses.py |
 | P0 | One delivery order in five documents; weakenings rejected | tests/test_delivery_sequence.py |
 | P1 | `.cursor/**` protected | tests/test_harnesses.py, tests/test_harness_hook_payloads.py, tests/test_structure.py |
 
