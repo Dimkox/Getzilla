@@ -127,7 +127,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_exact_action_grant_allows_only_that_action(self) -> None:
         with github_project() as root:
-            add_approval(root, 'production', 'standing release consent', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'standing release consent', 5, actions=['git-push-branch'], resources=['feature'])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': 'git push origin feature'}})
             self.assertTrue(allowed, reason)
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': 'git push origin v2.1.0'}})
@@ -136,14 +136,14 @@ class PolicyTests(unittest.TestCase):
 
     def test_grant_is_invalid_after_tree_change(self) -> None:
         with github_project() as root:
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             (root / 'AGENTS.md').write_text('changed\n', encoding='utf-8')
             allowed, _ = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': 'git push origin feature'}})
             self.assertFalse(allowed)
 
     def test_grant_is_invalid_after_new_commit(self) -> None:
         with github_project() as root:
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             (root / 'new.txt').write_text('new\n', encoding='utf-8')
             subprocess.run(['git', 'add', 'new.txt'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'new'], cwd=root, check=True)
@@ -152,7 +152,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_workflow_dispatch_is_forbidden_even_with_production_grant(self) -> None:
         with github_project() as root:
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': 'gh workflow run release.yml'}})
             self.assertFalse(allowed)
             self.assertIn('forbidden', (reason or '').lower())
@@ -180,7 +180,7 @@ class PolicyTests(unittest.TestCase):
             command = "bash -lc 'cd dist && git push origin feature'"
             allowed, _ = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertFalse(allowed)
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertTrue(allowed, reason)
 
@@ -196,7 +196,7 @@ class PolicyTests(unittest.TestCase):
                 'create issue',
                 5,
                 actions=['external-write'],
-                resources=['https://api.github.com/repos/Dimkox/Getzilla/*'],
+                resources=['https://api.github.com/repos/Dimkox/Getzilla/issues'],
             )
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertTrue(allowed, reason)

@@ -70,7 +70,7 @@ class HumanGateTests(unittest.TestCase):
             command = {'tool_name': 'Bash', 'tool_input': {'command': 'git push origin feature'}}
 
             with self.assertRaisesRegex(ValueError, 'production_action_approval.*pending'):
-                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             record_gate_decision(
                 root,
                 'production_action_approval',
@@ -90,7 +90,7 @@ class HumanGateTests(unittest.TestCase):
             self.assertFalse(allowed)
             self.assertIn('exact delegated local grant', reason or '')
 
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             allowed, reason = evaluate_pre_tool(root, command)
             self.assertTrue(allowed, reason)
             tag_allowed, _ = evaluate_pre_tool(
@@ -232,7 +232,7 @@ class HumanGateTests(unittest.TestCase):
                 actions=['protected-path-write'],
                 resources=['README.md'],
             )
-            add_approval(root, 'production', 'explicit ship grant', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'explicit ship grant', 5, actions=['git-push-branch'], resources=['feature'])
             self.assertTrue(
                 evaluate_pre_tool(
                     root,
@@ -265,7 +265,7 @@ class HumanGateTests(unittest.TestCase):
             artifact.write_text(json.dumps(value), encoding='utf-8')
             self.assertEqual(gate_statuses(root)[0]['state'], 'stale')
             with self.assertRaisesRegex(ValueError, 'production_action_approval.*stale'):
-                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
 
     def test_removing_declared_gate_with_same_route_id_fails_closed_for_action_and_transition(self) -> None:
         with project_copy(git=True) as root:
@@ -285,7 +285,7 @@ class HumanGateTests(unittest.TestCase):
                 actor='human',
                 action='git-push-branch',
             )
-            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             route = json.loads((root / '.getzilla/runtime/active-route.json').read_text(encoding='utf-8'))
             route['human_gates'] = []
             set_active_route(root, route)
@@ -337,7 +337,7 @@ class HumanGateTests(unittest.TestCase):
             self._active_change(root, ['production_action_approval', 'future_gate'])
             self.assertEqual(gate_statuses(root)[0]['state'], 'invalid')
             with self.assertRaisesRegex(ValueError, 'unknown human gate'):
-                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'])
+                add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
 
     def test_status_cli_reports_every_gate_as_local_workflow_evidence(self) -> None:
         with project_copy(git=True) as root:

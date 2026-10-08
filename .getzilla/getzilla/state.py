@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import secrets
 import time
+import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -221,6 +221,70 @@ def _active_change_id(root: Path) -> str | None:
     return str(value) if value else None
 
 
+_GRANT_PATTERN_CHARACTERS = re.compile(r'[*?\[\]{}]')
+# Category names the policy used to emit: one grant for them authorized every target (#53 review).
+_CATEGORY_RESOURCES = frozenset({
+    'github-api', 'github-pull-request-review', 'github-pr-review', 'direct-http-write',
+    'github-api:unparsed', 'github-pr-review:unparsed',
+})
+_GITHUB_TARGET = re.compile(r'^(github-pr-review:)?([\w.-]+/[\w.-]+)(#\S+)$')
+_CONTROL_PLANE_DIRECTORIES = frozenset({
+    '.agents', '.grok', '.qwen', '.claude', '.codex', '.gemini', '.getzilla', '.github', 'trust-ci',
+})
+
+
+
+def _normalize_grant_resource(scope: str, raw: str) -> str:
+    """One exact grant resource; wildcard patterns are forbidden by AGENTS.md (issue #38).
+
+    Protected paths must be plain repository-relative file paths. External and
+    production resources name one exact target: a URL (``?`` query allowed), an MCP
+    tool, ``github-api:<METHOD> <host>/<endpoint>``, ``github-pr-review:<owner>/<repo>#<n>``,
+    a branch or tag, ``<owner>/<repo>#<n>`` for a merge, or an image/package reference.
+    """
+    resource = raw.replace('\\', '/').strip()
+    patterns = _GRANT_PATTERN_CHARACTERS if scope == 'protected-path' else re.compile(r'[*\[\]]')
+    if patterns.search(resource) or any(ord(char) < 32 or ord(char) == 127 for char in resource):
+        raise ValueError(
+            f'{scope} grants require exact resources; wildcard pattern {resource!r} is forbidden'
+        )
+    if resource in _CATEGORY_RESOURCES or resource.endswith((':', '#')):
+        raise ValueError(f'{scope} grants require an exact target, not the category {resource!r}')
+    if scope == 'protected-path':
+        while resource.startswith('./'):
+            resource = resource[2:]
+        # Percent-encoding can smuggle traversal (%2e%2e) or separators past the split
+        # checks below; a grant path must be a literal, not an encoded one (review P53-5).
+        if urllib.parse.unquote(resource) != resource:
+            raise ValueError(
+                f'protected-path grants must be literal paths, not percent-encoded: {raw!r}'
+            )
+        parts = resource.split('/')
+        if (
+            not resource
+            or resource.startswith(('/', '~'))
+            or ':' in resource
+            or any(part in {'', '.', '..'} or part.endswith(('.', ' ')) for part in parts)
+        ):
+            raise ValueError(
+                f'protected-path grants require an exact repository-relative file path, not {raw!r}'
+            )
+        # A bare control-plane directory would authorize nothing useful under exact-match,
+        # but refuse it so a grant always names a file, never a whole engine directory.
+        if resource in _CONTROL_PLANE_DIRECTORIES:
+            raise ValueError(
+                f'protected-path grants must name a file inside {resource!r}, not the directory'
+            )
+        return resource
+    match = _GITHUB_TARGET.match(resource)
+    if match:
+        # GitHub owner/repository names are case-insensitive; the policy compares them lower-cased.
+        return f'{match.group(1) or ""}{match.group(2).lower()}{match.group(3)}'
+    if scope == 'production':
+        return resource.removeprefix('refs/heads/').removeprefix('refs/tags/')
+    return resource
+
+
 def add_approval(
     root: Path,
     scope: str,
@@ -251,16 +315,15 @@ def add_approval(
     if unsupported:
         raise ValueError(f'actions are outside scope {normalized_scope}: {sorted(unsupported)}')
 
-    normalized_resources = sorted({str(item).replace('\\', '/').strip() for item in (resources or []) if str(item).strip()})
+    normalized_resources = sorted({
+        _normalize_grant_resource(normalized_scope, str(item)) for item in (resources or []) if str(item).strip()
+    })
     if normalized_scope in {'external-write', 'protected-path'} and not normalized_resources:
         raise ValueError(f'{normalized_scope} grants require explicit resources')
 
-    from .human_gates import gate_block_reason, route_has_gate
+    from .human_gates import gate_block_reason
 
     if normalized_scope == 'external-write':
-        if any(any(char in resource for char in '*?[') for resource in normalized_resources):
-            if route_has_gate(root, 'migration_or_external_write_approval'):
-                raise ValueError('route external-write gate requires exact resources, not patterns')
         for resource in normalized_resources:
             gate_reason = gate_block_reason(root, normalized_scope, 'external-write', resource)
             if gate_reason:
@@ -313,7 +376,8 @@ def has_valid_approval(
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
-        if gate_block_reason(root, scope, action, resource):
+        # Production human gates decide per action; the grant itself binds the exact target.
+        if gate_block_reason(root, scope, action, resource if scope == 'external-write' else None):
             return False
     approvals = load_json(approvals_path(root), [])
     if not isinstance(approvals, list):
@@ -361,8 +425,9 @@ def has_valid_approval(
             continue
         if action and action not in set(approval.get('actions') or []):
             continue
-        patterns = [str(item).replace('\\', '/') for item in approval.get('resources') or []]
-        if normalized_resource is not None and not any(fnmatch.fnmatchcase(normalized_resource, pattern) for pattern in patterns):
+        # Exact equality only: a stored pattern (legacy or hand-edited) never widens a grant.
+        resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
+        if normalized_resource is not None and normalized_resource not in resources:
             continue
         matched = True
     if len(kept) != len(approvals):

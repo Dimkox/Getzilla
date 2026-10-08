@@ -206,7 +206,8 @@ class ProductionActionSpellingTests(_ProjectCase):
             'gh api repos/Dimkox/Getzilla/issues -F title=x',
         ):
             with self.subTest(command=command):
-                self.assert_denied(command, 'github-api')
+                # PUT .../pulls/N/merge is also a production merge, which is checked first.
+                self.assert_denied(command, 'pull-request-merge' if '/merge' in command else 'github-api')
 
     def test_gh_api_reads_stay_allowed(self) -> None:
         for command in (
@@ -242,7 +243,9 @@ class ProductionActionSpellingTests(_ProjectCase):
     def test_grant_still_authorizes_normalized_merge(self) -> None:
         with github_project() as root:
             command = 'gh -R Dimkox/Getzilla pr merge 1'
-            add_approval(root, 'production', 'merge', 5, actions=['pull-request-merge'])
+            add_approval(
+                root, 'production', 'merge', 5, actions=['pull-request-merge'], resources=['Dimkox/Getzilla#1'],
+            )
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertTrue(allowed, reason)
 
@@ -253,13 +256,13 @@ class PullRequestReviewTests(_ProjectCase):
     def test_gh_pr_review_requires_external_write_grant(self) -> None:
         for command in ('gh pr review --approve 1', 'gh -R a/b pr review 1 -a', 'gh pr review 1 --request-changes -b x'):
             with self.subTest(command=command):
-                self.assert_denied(command, 'github-pull-request-review')
+                self.assert_denied(command, 'github-pr-review:')
 
     def test_gh_pr_review_with_exact_grant_is_allowed(self) -> None:
         with github_project() as root:
             add_approval(
                 root, 'external-write', 'approve', 5,
-                actions=['external-write'], resources=['github-pull-request-review'],
+                actions=['external-write'], resources=['github-pr-review:Dimkox/Getzilla#1'],
             )
             allowed, reason = evaluate_pre_tool(
                 root, {'tool_name': 'Bash', 'tool_input': {'command': 'gh pr review --approve 1'}},

@@ -9,12 +9,13 @@ Use a normal structured `Edit`, `Write`, or `apply_patch` call for a single cohe
 ```bash
 python3 scripts/getzilla_approve.py protected-path \
   --action protected-path-write \
-  --resource '.grok/agents/*.md' \
+  --resource '.grok/agents/architect.md' \
+  --resource '.grok/agents/general_implementer.md' \
   --resource '.getzilla/config/routing.json' \
   --reason 'Apply reviewed agent reasoning policy'
 ```
 
-The grant is bound to the current repository, route/change, Git HEAD, tree fingerprint, target patterns, and TTL. Create the manifest only after the grant, outside the repository, so it does not invalidate the tree binding.
+The grant is bound to the current repository, route/change, Git HEAD, tree fingerprint, the exact target paths, and TTL. Name every file the manifest writes with its own `--resource`; wildcard patterns, absolute paths, `..` and drive letters are refused. Create the manifest only after the grant, outside the repository, so it does not invalidate the tree binding.
 
 ## 2. Build a manifest outside the repository
 
@@ -55,3 +56,11 @@ The writer validates the complete batch before the first mutation:
 - file and total batch size limits are enforced.
 
 Files are staged in their target directories and replaced atomically per file. If a later replacement fails, already-replaced files are restored from the preflight snapshot. Arbitrary shell mutation remains denied.
+
+## Grant target binding (review S53)
+
+A delegated grant binds the exact target the policy derives from the command. Note:
+
+- A `GH_REPO=`/`GH_HOST=` prefix (or `gh --hostname`) is resolved into the target; a non-default host binds as `host/owner/repo`, so a prefix cannot redirect a granted `gh` merge, review, or api call onto another repository or host.
+- A branch push grant refuses `git push --receive-pack`/`--exec`: these run a command rather than update the granted branch.
+- `gh pr merge --admin` bypasses branch protection and needs its own `--resource 'owner/repo#N!admin'` grant, separate from a plain `owner/repo#N` merge grant.

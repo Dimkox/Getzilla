@@ -164,7 +164,7 @@ class HookTests(unittest.TestCase):
 
     def test_sensitive_nested_workdir_cannot_borrow_session_repository_grant(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             payload = {
                 'cwd': str(session_root),
                 'session_id': 'cross-root',
@@ -177,7 +177,7 @@ class HookTests(unittest.TestCase):
 
     def test_sensitive_root_aliases_canonicalize_and_conflicts_fail_closed(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as other_root:
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             subdir = session_root / 'nested'
             subdir.mkdir()
             (session_root / '$TARGET_ROOT').mkdir()
@@ -275,7 +275,7 @@ class HookTests(unittest.TestCase):
             command_root.rename(nested_command_root)
             command_root = nested_command_root
             (session_root / 'other').mkdir()
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             commands = (
                 f'cd {command_root} && git push origin feature',
                 f'git -C {command_root} push origin feature',
@@ -432,7 +432,7 @@ class HookTests(unittest.TestCase):
 
     def test_execution_wrappers_preserve_root_binding_and_benign_reads(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as other_root:
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             for index, command in enumerate((
                 f'nice -n 10 git -C {other_root} push origin feature',
                 f'time -p git -C {other_root} push origin feature',
@@ -499,7 +499,7 @@ class HookTests(unittest.TestCase):
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
                     self.assertIn('ambiguous-sensitive-shell', data['reason'])
 
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             grant_borrow_commands = (
                 f"chroot {other_root} bash -lc 'git push origin feature'",
                 "xargs -a args.txt bash -lc 'git push \"$@\"' _",
@@ -547,7 +547,7 @@ class HookTests(unittest.TestCase):
                 })
                 self.assertEqual(data['decision'], 'deny', (error, data))
 
-            self._grant(session_root, 'production', actions=['git-push-branch'])
+            self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             unsafe_commands = (
                 f'chroot {other_root} bash /push-script.sh',
                 f'chroot {other_root} sh -s',
@@ -603,7 +603,7 @@ class HookTests(unittest.TestCase):
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
                     self.assertIn('ambiguous-sensitive-shell', data['reason'])
 
-            self._grant(root, 'production', actions=['git-push-branch'])
+            self._grant(root, 'production', actions=['git-push-branch'], resources=['feature'])
             command = 'printf ok\ngit push origin "$REFS"'
             _, data, error = run_hook(root, 'pre_tool_use.py', {
                 'cwd': str(root),
@@ -656,6 +656,7 @@ class HookTests(unittest.TestCase):
                 session_root,
                 'production',
                 actions=['git-push-branch', 'docker-push'],
+                resources=['feature', 'image'],
             )
             grant_borrow_commands = (
                 f'chroot {other_root} git "$ACTION" origin feature',
