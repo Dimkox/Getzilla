@@ -29,7 +29,7 @@ NATIVE_LOGIN = {
 }
 PROFILE_MARKER = '# Getzilla: model keys for coding agents'
 ENV_FILE = '.getzilla/openrouter.env'
-CLAUDE_TOKEN_ENV = 'ANTHROPIC_AUTH_TOKEN'
+CLAUDE_TOKEN_ENV = 'ANTHROPIC_AUTH_TOKEN'  # nosec B105
 NEW_TERMINAL = 'open a new terminal so the agent sees OPENROUTER_API_KEY'
 _KEY_SHAPE = re.compile(r'^[A-Za-z0-9._\-]{16,512}$')
 
