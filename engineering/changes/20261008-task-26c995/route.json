@@ -1,0 +1,120 @@
+{
+  "allowed_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect",
+    "code_reviewer",
+    "test_reviewer",
+    "general_implementer"
+  ],
+  "analysis_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect"
+  ],
+  "base_commit": "851499c21a57631084b445dd8c92f89357b6889a",
+  "base_fingerprint": "4aeb3509e739dee95b71d4f004f5fb5332f879711f23ee25508e939b55b134dd",
+  "complexity": "standard",
+  "created_at": "2026-10-08T14:56:21+00:00",
+  "delivery_expected": true,
+  "domains": [
+    "api"
+  ],
+  "human_gates": [],
+  "intent": "bugfix",
+  "matched_keywords": {},
+  "primary_skill": "getzilla-delivery",
+  "quality_profiles": [
+    "base",
+    "contracts"
+  ],
+  "rationale": [
+    "medium-risk integration, contract, data, AI, or modernization work",
+    "intent=bugfix",
+    "domains=api",
+    "repository=generic",
+    "write-owner=general_implementer",
+    "analysis-wave=4/10"
+  ],
+  "repo": {
+    "bitrix_modules": [],
+    "detected_languages": [
+      "php",
+      "python"
+    ],
+    "domains": [
+      "api"
+    ],
+    "kind": "generic",
+    "language_scan": {
+      "bytes": 867784,
+      "directories": 425,
+      "entries": 4584,
+      "files": 4000,
+      "incomplete_reasons": [
+        "files:4000"
+      ],
+      "non_regular": 0,
+      "skipped_symlinks": 0,
+      "status": "incomplete",
+      "truncated": true,
+      "unknown": true,
+      "unknown_extensions": {
+        ".html": 1,
+        ".in": 1,
+        ".json": 831,
+        ".jsonl": 2,
+        ".patch": 1,
+        ".sh": 1,
+        ".sha256": 3,
+        ".toml": 2,
+        ".xml": 1,
+        ".yaml": 145
+      },
+      "unreadable": 0
+    },
+    "languages": [],
+    "package_scripts": [],
+    "signals": [
+      "contract:engineering/contracts/openapi",
+      "undetected-language",
+      "undetected-language:php=8",
+      "undetected-language:python=64",
+      "undetected-source-extension:.html=1",
+      "undetected-source-extension:.in=1",
+      "undetected-source-extension:.json=831",
+      "undetected-source-extension:.jsonl=2",
+      "undetected-source-extension:.patch=1",
+      "undetected-source-extension:.sh=1",
+      "undetected-source-extension:.sha256=3",
+      "undetected-source-extension:.toml=2",
+      "undetected-source-extension:.xml=1",
+      "undetected-source-extension:.yaml=145",
+      "language-scan:incomplete=files:4000"
+    ]
+  },
+  "required_evidence": [
+    "verification",
+    "code_review",
+    "test_review"
+  ],
+  "review_agents": [
+    "code_reviewer",
+    "test_reviewer"
+  ],
+  "risk": "medium",
+  "route_id": "26c995e9f7f7",
+  "schema_version": 1,
+  "session_id": "manual",
+  "status": "routed",
+  "task": "Fix #33: QG-01 admits bandit skipped because the binary is missing, unlike ruff (bugfix)",
+  "task_domains": [],
+  "workflow_skills": [
+    "getzilla-delivery",
+    "bugfix-workflow",
+    "api-event-change"
+  ],
+  "write_agent": "general_implementer"
+}
