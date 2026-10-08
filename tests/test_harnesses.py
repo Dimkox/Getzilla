@@ -17,11 +17,13 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import harnesses
 from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
 
 
@@ -178,7 +180,7 @@ class CursorRuleTests(unittest.TestCase):
             'two always-applied rules': (CORE, CORE),
             'no always-applied rule': (SCOPED,),
             'unknown key': (CORE, {**SCOPED, 'alwaysApply': True}),
-            'string flag': (CORE, {**SCOPED, 'always_apply': 'false'}),
+            'string flag': ({**CORE, 'always_apply': 'true'},),
             'newline inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py\nalwaysApply: true']}),
             'blank instructions': (CORE, {**SCOPED, 'instructions': ' '}),
             'empty description': (CORE, {**SCOPED, 'description': ' '}),
@@ -225,8 +227,10 @@ class CursorRuleTests(unittest.TestCase):
         (root / '.cursor/rules').symlink_to(outside, target_is_directory=True)
         with self.assertRaises(ValueError):
             write(root)
-        self.assertEqual(list(outside.iterdir()), [])
         self.assertFalse((root / '.qwen').exists())
+        with mock.patch.object(harnesses, '_conflict', return_value=False), self.assertRaises(OSError):
+            write(root)  # a link swapped in after the preflight is still not followed
+        self.assertEqual(list(outside.iterdir()), [])
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
     def test_symlinked_output_is_drift_and_is_replaced_not_followed(self) -> None:
