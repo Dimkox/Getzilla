@@ -12,7 +12,7 @@ from typing import Iterator
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.policy import evaluate_pre_tool
+from getzilla.policy import evaluate_pre_tool, production_action
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path, has_valid_approval, set_active_route
 from tests._support import project_copy
@@ -110,6 +110,140 @@ class ApprovalResourceTests(unittest.TestCase):
             self.assertIn('exact', proc.stderr)
             self.assertNotIn('Traceback', proc.stderr)
             self.assertFalse(approvals_path(root).exists() and json.loads(approvals_path(root).read_text()))
+
+
+class ExactTargetGrantTests(unittest.TestCase):
+    """Review of #53: category resources and unbound production grants acted as wildcards."""
+
+    def bash(self, root: Path, command: str) -> tuple[bool, str | None]:
+        return evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_category_resource_names_are_refused(self) -> None:
+        with github_project() as root:
+            for resource in ('github-api', 'github-pull-request-review', 'direct-http-write'):
+                with self.subTest(resource=resource), self.assertRaisesRegex(ValueError, 'exact'):
+                    add_approval(root, 'external-write', 'x', 5, actions=['external-write'], resources=[resource])
+
+    def test_github_api_grant_binds_method_and_endpoint(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'one issue', 5, actions=['external-write'],
+                resources=['github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'],
+            )
+            allowed, reason = self.bash(root, 'gh api repos/Dimkox/Getzilla/issues -f title=x')
+            self.assertTrue(allowed, reason)
+            self.assertFalse(self.bash(root, 'gh api -X PUT repos/Dimkox/Getzilla/pulls/1/merge')[0])
+            for command in (
+                'gh api -X DELETE repos/Dimkox/Getzilla',
+                'gh -R other/repo api -X PATCH repos/other/repo -f visibility=public',
+                'gh api repos/Dimkox/Getzilla/issues/1/comments -f body=x',
+                'gh api --hostname ghe.example repos/Dimkox/Getzilla/issues -f title=x',
+            ):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+                    self.assertIn('github-api:', reason or '')
+
+    def test_github_api_merge_endpoint_is_a_production_merge(self) -> None:
+        self.assertEqual(production_action('gh api -X PUT repos/Dimkox/Getzilla/pulls/7/merge'), 'pull-request-merge')
+        self.assertIsNone(production_action('gh api repos/Dimkox/Getzilla/pulls/7/merge'))
+
+    def test_pull_request_review_grant_binds_repository_and_number(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'review one PR', 5, actions=['external-write'],
+                resources=['github-pr-review:Dimkox/Getzilla#1'],
+            )
+            for command in ('gh pr review --approve 1', 'gh pr review https://github.com/Dimkox/Getzilla/pull/1 -a'):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertTrue(allowed, reason)
+            for command in ('gh pr review 2 --approve', 'gh -R someone/else pr review 1 --approve', 'gh pr review --approve'):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+                    self.assertIn('github-pr-review:', reason or '')
+
+    def test_branch_push_grant_binds_the_branch(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'push fix/x', 5, actions=['git-push-branch'], resources=['fix/x'])
+            for command in ('git push origin fix/x', 'git push -u origin fix/x', 'git push origin refs/heads/fix/x'):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertTrue(allowed, reason)
+            for command in (
+                'git push origin main', 'git push origin HEAD:main', 'git push --all origin', 'git push --mirror origin',
+                'git push origin fix/y', 'git push origin fix/x:main', 'git push origin fix/x fix/y',
+                'git push origin :fix/x', 'git push --delete origin fix/x', 'git push git@github.com:evil/repo.git fix/x',
+            ):
+                with self.subTest(command=command):
+                    allowed, _ = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+
+    def test_branch_push_without_refspec_resolves_the_current_branch(self) -> None:
+        with github_project() as root:
+            subprocess.run(['git', 'checkout', '-qb', 'fix/x'], cwd=root, check=True)
+            add_approval(root, 'production', 'push fix/x', 5, actions=['git-push-branch'], resources=['fix/x'])
+            for command in ('git push', 'git push origin', 'git push origin HEAD'):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertTrue(allowed, reason)
+
+    def test_push_to_a_protected_branch_is_denied_even_with_a_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'push main', 5, actions=['git-push-branch'], resources=['main'])
+            for command in ('git push origin main', 'git push origin HEAD:refs/heads/main', 'git push origin master'):
+                with self.subTest(command=command):
+                    allowed, reason = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+                    self.assertIn('protected branch', reason or '')
+
+    def test_unbound_production_grant_does_not_authorize_a_targeted_action(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'any push', 5, actions=['git-push-branch'])
+            allowed, reason = self.bash(root, 'git push origin fix/x')
+            self.assertFalse(allowed)
+            self.assertIn('fix/x', reason or '')
+
+    def test_merge_grant_binds_the_pull_request(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'production', 'merge #1', 5, actions=['pull-request-merge'], resources=['Dimkox/Getzilla#1'],
+            )
+            allowed, reason = self.bash(root, 'gh pr merge 1 --squash')
+            self.assertTrue(allowed, reason)
+            for command in ('gh pr merge 2', 'gh -R other/repo pr merge 1', 'gh pr merge'):
+                with self.subTest(command=command):
+                    allowed, _ = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+
+    def test_exact_url_with_query_string_is_grantable(self) -> None:
+        url = 'https://api.github.com/repos/Dimkox/Getzilla/issues?state=open'
+        with github_project() as root:
+            add_approval(root, 'external-write', 'one url', 5, actions=['external-write'], resources=[url])
+            self.assertTrue(has_valid_approval(root, 'external-write', action='external-write', resource=url))
+            self.assertFalse(has_valid_approval(
+                root, 'external-write', action='external-write', resource=url.replace('?state=open', ''),
+            ))
+
+    def test_protected_path_grant_refuses_drive_letters_empty_segments_and_odd_names(self) -> None:
+        with github_project() as root:
+            for resource in ('C:/x', 'c:x', 'a//b', '~/.bashrc', 'AGENTS.md.', 'AGENTS.md::$DATA',
+                             '{AGENTS,README}.md', 'AGENTS.md\x00'):
+                with self.subTest(resource=resource), self.assertRaises(ValueError):
+                    add_approval(
+                        root, 'protected-path', 'edit', 5, actions=['protected-path-write'], resources=[resource],
+                    )
+
+    def test_runbook_grant_examples_name_exact_resources(self) -> None:
+        import re
+
+        text = (ROOT / 'engineering/runbooks/protected-control-plane-write.md').read_text(encoding='utf-8')
+        resources = re.findall(r"--resource '([^']+)'", text)
+        self.assertTrue(resources)
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'runbook', 5, actions=['protected-path-write'], resources=resources)
+        self.assertNotIn('target patterns', text)
 
 
 if __name__ == '__main__':
