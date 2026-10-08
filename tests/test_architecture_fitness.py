@@ -1875,6 +1875,29 @@ class ArchitectureFitnessTests(unittest.TestCase):
             after,
         )
 
+    def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
+        # Widening must join the existing entries into the unbounded summary. A queue that
+        # entered before the loop and is used after it, with only ordinary appends inside
+        # the loop, must still produce the enqueue signal (#41, review mutant M4). The
+        # assertion names the enqueue signal itself: ``uncertain`` is already set here by
+        # the unresolved ``make()``/``rows`` names and would hide a lost summary.
+        reads = {
+            "index": "items[0].enqueue(job)\n",
+            "iteration": "for queue_ in items:\n    queue_.enqueue(job)\n",
+            "pop": "items.pop().enqueue(job)\n",
+        }
+        growths = {"append": "    items.append(make())\n", "concatenation": "    items = items + [make()]\n"}
+        for loop in ("while more():\n", "for row in rows:\n"):
+            for growth_name, growth in growths.items():
+                for read_name, read in reads.items():
+                    with self.subTest(loop=loop, growth=growth_name, read=read_name):
+                        analysis = FIT.analyze_queue_tree(ast.parse(
+                            "from rq import Queue\nitems = [Queue()]\n" + loop + growth + read
+                        ))
+                        enqueues = [item for item in analysis.signals
+                                    if item.startswith("semantic-call:") and "attr='enqueue'" in item]
+                        self.assertEqual(len(enqueues), 1, analysis)
+
     def test_unchanged_bindings_do_not_consume_queue_value_budget(self) -> None:
         # Joining branches used to charge every unchanged local at every merge point, so the
         # value budget scaled with locals x branches although no value was constructed.
