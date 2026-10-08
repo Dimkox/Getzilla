@@ -411,8 +411,13 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
     """
     name, lowered = argv[0], [word.lower() for word in argv]
     if name in _SHELL_EXECUTABLES:
-        index = next((i for i, word in enumerate(argv[1:-1], 1) if _SHELL_COMMAND_OPTION.fullmatch(word)), None)
-        return [argv[index + 1]] if index else []
+        # Short (`-c`, `-qc`) and long (`--command X`, `--command=X`) spellings (#64).
+        for i, word in enumerate(argv[1:], 1):
+            if word.startswith('--command='):
+                return [word.split('=', 1)[1]]
+            if (_SHELL_COMMAND_OPTION.fullmatch(word) or word == '--command') and i + 1 < len(argv):
+                return [argv[i + 1]]
+        return []
     if name == 'cmd':
         index = next((i for i, word in enumerate(lowered) if word in {'/c', '/k'}), None)
         return [' '.join(argv[index + 1:])] if index else []
@@ -438,9 +443,15 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
                 pos += 2
                 continue
             if low in {'-argumentlist', '-args', '-argument'} and pos + 1 < len(rest):
-                launched = [item for item in rest[pos + 1].replace(',', ' ').split() if item]
+                # A comma-separated array spans several words (`'pr', 'merge', '1'`): take all of it (#64).
+                pos += 1
+                items = [rest[pos]]
+                while pos + 1 < len(rest) and (rest[pos].endswith(',') or rest[pos + 1].startswith(',')):
+                    pos += 1
+                    items.append(rest[pos])
+                launched = [item for chunk in items for item in chunk.replace(',', ' ').split() if item]
                 have_arglist = True
-                pos += 2
+                pos += 1
                 continue
             if rest[pos].startswith('-'):
                 pos += 1
@@ -515,7 +526,10 @@ def _expand_command(argv: list[str], depth: int) -> list[list[str] | None]:
     name = _executable_name(argv[0])
     argv = ['git', name[4:], *argv[1:]] if name.startswith('git-') and len(name) > 4 else [name, *argv[1:]]
     result: list[list[str] | None] = [argv]
-    for nested in _nested_commands(argv):
+    nested_commands = _nested_commands(argv)
+    if not nested_commands and name not in _DATA_ARGUMENT_EXECUTABLES:
+        nested_commands = _wrapped_payloads(argv, depth)
+    for nested in nested_commands:
         if nested is None or depth >= 4:
             result.append(None)
         elif isinstance(nested, str):
@@ -523,6 +537,31 @@ def _expand_command(argv: list[str], depth: int) -> list[list[str] | None]:
         elif nested:
             result.extend(_expand_command(nested, depth + 1))
     return result
+
+
+# Executables whose quoted arguments are data (messages, patterns, programs), never a command.
+_DATA_ARGUMENT_EXECUTABLES = frozenset({
+    'echo', 'printf', 'git', 'gh', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ack-grep',
+    'findstr', 'select-string', 'sls', 'jq', 'yq', 'awk', 'sed',
+})
+
+
+def _wrapped_payloads(argv: list[str], depth: int) -> list[str]:
+    """Quoted arguments of an unknown wrapper that parse as a risky command (fail closed, #64).
+
+    ``flock LOCK -c 'CMD'``, ``su -c 'CMD'``, ``watch 'CMD'`` and wrappers not modelled
+    at all hand one argument to a shell. Any multi-word argument (or ``--opt=value``)
+    whose own parse runs a delete verb, an authority client or a shell is inspected.
+    """
+    risky = _REMOVE_VERBS | _AUTHORITY_EXECUTABLES | _SHELL_EXECUTABLES | _WINDOWS_SHELL_EXECUTABLES | {'find', 'rsync'}
+    payloads: list[str] = []
+    for word in argv[1:]:
+        text = word.split('=', 1)[1] if word.startswith('--') and '=' in word else word
+        if not re.search(r'\s', text.strip()) or depth >= 4:
+            continue
+        if any(inner and inner[0] in risky for inner in _simple_commands(text, depth + 1)):
+            payloads.append(text)
+    return payloads
 
 
 def _shell_pieces(command: str) -> list[list[str] | None]:
@@ -949,9 +988,15 @@ def _production_action(argv: list[str]) -> str | None:
         positionals, _ = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
         return 'npm-publish' if 'publish' in positionals[:2] else None
     if executable in _PACKAGE_PUBLISH_CLIENTS:
-        positionals, _ = _positionals(argv, frozenset(), 2)
-        if positionals[:1] and positionals[0] in _PACKAGE_PUBLISH_CLIENTS[executable]:
-            return 'package-publish'
+        # Global options come before the verb (`cargo +toolchain --config K=V publish`,
+        # `gem -C DIR push`); an operand is skipped only as the value of the option before it (#64).
+        words = [executable, *(w for w in argv[1:] if not (executable == 'cargo' and w.startswith('+')))]
+        positionals, indexes = _positionals(words, frozenset(), 3)
+        for word, index in zip(positionals, indexes):
+            if word in _PACKAGE_PUBLISH_CLIENTS[executable]:
+                return 'package-publish'
+            if not words[index - 1].startswith('-'):
+                break
         return None
     return None
 
@@ -1224,8 +1269,23 @@ def _analyze_authority_pieces(
     return AuthorityAnalysis(tuple(actions), ambiguous, context_proven)
 
 
-_IFS_OBFUSCATION = re.compile(r'\S\$\{?IFS|\$\{?IFS\}?[^\s]')
+# $IFS glued to a word; `$IFSx` is another variable and does not split (#64).
+_IFS_OBFUSCATION = re.compile(r'\S\$\{?IFS(?![A-Za-z0-9_])|\$(?:IFS(?![A-Za-z0-9_])|\{IFS\})\S')
 _ENCODED_POWERSHELL = re.compile(r'\b(?:powershell|pwsh)\b[^\n]*\s-e(?:c|nc|ncodedcommand)?\b', re.IGNORECASE)
+_SINGLE_QUOTED = re.compile(r"'[^']*'")
+
+
+def _executable_text(raw_command: str) -> str:
+    """Command text that can expand: inert ``echo``/``printf`` chunks and single-quoted spans dropped."""
+    pieces: list[str] = []
+    for chunk in _command_chunks(raw_command):
+        tokens = _command_tokens(chunk)
+        if tokens and not _HAS_SUBST.search(chunk):
+            bounded, _ = _bounded_command(tokens)
+            if bounded and _executable_name(bounded[0]) in _INERT_EXECUTABLES:
+                continue
+        pieces.append(_SINGLE_QUOTED.sub(' ', chunk))
+    return '\n'.join(pieces)
 
 
 def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
@@ -1241,17 +1301,22 @@ def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     else:
         analysis = _analyze_authority_pieces(raw_command)
     actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
-    if _IFS_OBFUSCATION.search(raw_command):
+    executable_text = _executable_text(raw_command)
+    if _IFS_OBFUSCATION.search(executable_text):
         # `git$IFS'push'`/`git${IFS}push`: $IFS word-splits into `git push` at runtime but
         # tokenizes as one opaque word here, so treat it as ambiguous authority (review S59-5).
         ambiguous = True
-    if _ENCODED_POWERSHELL.search(raw_command):
+    simple = _simple_commands(raw_command)
+    if any(argv is None for argv in simple) and _ENCODED_POWERSHELL.search(executable_text):
         # powershell -EncodedCommand carries an opaque base64 payload the parser cannot read;
-        # fail closed as ambiguous instead of silently allowing it (review S59-6).
+        # fail closed as ambiguous instead of silently allowing it (review S59-6). Parsed text
+        # is checked per command below, so a commit message mentioning it stays allowed (#64).
         ambiguous = True
-    for argv in _simple_commands(raw_command):
+    for argv in simple:
         if argv is None or argv[0] in _INERT_EXECUTABLES:
             continue
+        if argv[0] in {'powershell', 'pwsh'} and _nested_commands(argv) == [None]:
+            ambiguous = True
         action, candidate_ambiguous = _candidate_authority(argv)
         ambiguous = ambiguous or candidate_ambiguous
         if action and action not in actions:
