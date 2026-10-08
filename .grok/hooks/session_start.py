@@ -18,6 +18,16 @@ except Exception:
     raise SystemExit(0)
 
 
+def _tool_update_note() -> str | None:
+    try:
+        import time
+
+        from getzilla.updater import home_dir, reminder
+        return reminder(home_dir(), time.time())
+    except Exception:
+        return None
+
+
 def main() -> None:
     payload = read_payload()
     root = root_from(payload)
@@ -28,6 +38,9 @@ def main() -> None:
         context = route_context(route) + extra
     else:
         context = 'No active route. Submit a development task to classify work.'
+    note = _tool_update_note()
+    if note:
+        context = f'{context} {note}'
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'SessionStart',
