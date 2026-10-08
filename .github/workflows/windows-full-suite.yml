@@ -1,15 +1,14 @@
 # Informational: Getzilla's core suite on native Windows, module by module.
 #
 # It never gates anything (continue-on-error) and took ~36 minutes, so it runs
-# nightly and on manual dispatch by the owner instead of on every PR (#51). The
-# required PR checks stay `linux` and `windows` in getzilla.yml. Agents never
+# nightly instead of on every PR (#51). No manual trigger: the holdout
+# rejects manual dispatch in every workflow. The required PR checks stay `linux` and `windows` in getzilla.yml. Agents never
 # dispatch workflows.
 name: windows-full-suite
 
 on:
   schedule:
     - cron: "17 2 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read

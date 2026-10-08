@@ -40,7 +40,7 @@ Canonical governance JSON under `governance/` remains separately reviewed author
 
 ## Decisions
 
-`workflow_dispatch` is admitted only in windows-full-suite.yml, without inputs, so the owner can run it manually. Agents still never dispatch workflows.
+No workflow uses `workflow_dispatch`; the holdout rejects it everywhere, including windows-full-suite.yml.
 
 ## Risks and mitigations
 

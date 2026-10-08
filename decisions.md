@@ -14,7 +14,7 @@ The FIT-BOUNDED-WORKER-JOBS false failure on `architecture_diff.py` is fixed in 
 
 ## 2026-10-08 — The informational Windows full suite runs nightly, not on PRs
 
-The module-by-module core suite on Windows (`continue-on-error`, never gating) took ~36 of the ~37 minutes every PR waited for the required `windows` check (#51). It moves unchanged to `.github/workflows/windows-full-suite.yml`, which runs on a nightly schedule (02:17 UTC) and on `workflow_dispatch` without inputs, so the owner can run it manually. That workflow is the only one that may use `workflow_dispatch`. Agents still never dispatch workflows. The same hardening applies: actions pinned to full SHAs, `contents: read`, `persist-credentials: false`, no secrets. `getzilla.yml` keeps the `linux` and `windows` job names and the gating Windows steps (doctor, ported tests, hooks/CLI smoke), so branch protection is unchanged. Expected PR wall time drops from ~37 min to ~6 min, bounded by linux.
+The module-by-module core suite on Windows (`continue-on-error`, never gating) took ~36 of the ~37 minutes every PR waited for the required `windows` check (#51). It moves unchanged to `.github/workflows/windows-full-suite.yml`, which runs on a nightly schedule (02:17 UTC) only. It has no `workflow_dispatch`, because the holdout rejects that trigger in every workflow. The same hardening applies: actions pinned to full SHAs, `contents: read`, `persist-credentials: false`, no secrets. `getzilla.yml` keeps the `linux` and `windows` job names and the gating Windows steps (doctor, ported tests, hooks/CLI smoke), so branch protection is unchanged. Expected PR wall time drops from ~37 min to ~6 min, bounded by linux.
 
 ## 2026-10-07 — Trust CI is paid for private repositories
 

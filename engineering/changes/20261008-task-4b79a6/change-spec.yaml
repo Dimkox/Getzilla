@@ -16,7 +16,7 @@
         }
       ],
       "id": "AC-002",
-      "statement": "windows-full-suite.yml runs that step on schedule (minute not 0) plus workflow_dispatch, with no pull_request/push, contents: read, persist-credentials: false and the same pinned actions."
+      "statement": "windows-full-suite.yml runs that step on schedule only (minute not 0), no workflow_dispatch, with no pull_request/push, contents: read, persist-credentials: false and the same pinned actions."
     }
   ],
   "approvals": {

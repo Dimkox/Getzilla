@@ -5,7 +5,7 @@
 ## Acceptance criteria
 
 - [x] getzilla.yml has no module-by-module step and no continue-on-error, and keeps the linux/windows jobs with Doctor, Windows-ported tests, Hooks and CLI smoke and Annotate smoke failure.
-- [x] windows-full-suite.yml runs that step on schedule (minute not 0) plus workflow_dispatch, with no pull_request/push, contents: read, persist-credentials: false and the same pinned actions.
+- [x] windows-full-suite.yml runs that step on schedule only (minute not 0), no workflow_dispatch, with no pull_request/push, contents: read, persist-credentials: false and the same pinned actions.
 
 ## Failure and edge cases
 

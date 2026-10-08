@@ -1044,10 +1044,6 @@ class StructureTests(unittest.TestCase):
                 self.assertIn("permissions:\n  contents: read\n", source)
                 self.assertIn("persist-credentials: false", source)
                 for forbidden in ("pull_request_target", "workflow_dispatch", "secrets.", ": write"):
-                    if forbidden == "workflow_dispatch" and rel.endswith("windows-full-suite.yml"):
-                        # Owner-only manual run of the informational suite (#51): no inputs.
-                        self.assertNotIn("inputs:", source)
-                        continue
                     self.assertNotIn(forbidden, source)
                 references = re.findall(r"uses:\s*(\S+)", source)
                 self.assertTrue(references)
@@ -1076,7 +1072,7 @@ class StructureTests(unittest.TestCase):
         self.assertIn("module by module", nightly)
         self.assertIn("runs-on: windows-latest", nightly)
         triggers = nightly.split("\npermissions:", 1)[0]
-        self.assertIn("workflow_dispatch:", triggers)
+        self.assertNotIn("workflow_dispatch", triggers)
         self.assertNotIn("pull_request", triggers)
         self.assertNotIn("push:", triggers)
         cron = re.search(r"- cron: \"(\d+) (\S+) \* \* \*\"", triggers)
