@@ -1213,6 +1213,18 @@ def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
     return None
 
 
+def _gh_repo_flag(argv: list[str]) -> str | None:
+    """Value of gh's ``-R``/``--repo`` in any pflag spelling: ``-R x``, ``-Rx``, ``-R=x``, ``--repo x``, ``--repo=x``."""
+    for index, word in enumerate(argv):
+        if word in {'-R', '--repo'}:
+            return argv[index + 1].lower() if index + 1 < len(argv) else ''
+        if word.startswith('--repo='):
+            return word.split('=', 1)[1].lower()
+        if word.startswith('-R') and len(word) > 2:
+            return word[3:].lower() if word[2] == '=' else word[2:].lower()
+    return None
+
+
 def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | None = None) -> str:
     """``owner/repo`` (lower-cased) a gh command targets.
 
@@ -1221,17 +1233,7 @@ def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | Non
     is prepended as ``host/owner/repo`` so a grant bound to the default host cannot be
     spoofed onto another GitHub host by an env prefix (review S53-1).
     """
-    repo: str | None = None
-    for index, token in enumerate(argv):
-        if token in {'-R', '--repo'} and index + 1 < len(argv):
-            repo = argv[index + 1].lower()
-            break
-        if token.startswith('--repo='):
-            repo = token.split('=', 1)[1].lower()
-            break
-        if token.startswith('-R') and len(token) > 2:
-            repo = token[2:].lower()
-            break
+    repo = _gh_repo_flag(argv)
     if repo is None and env and env.get('GH_REPO'):
         repo = env['GH_REPO'].lower()
     if repo is None:
@@ -1307,8 +1309,11 @@ def _git_push_targets(arguments: list[str], root: Path | None) -> list[str | Non
     """
     # A grant for a branch never authorizes running a server- or local-side command;
     # --receive-pack/--exec make the target unresolvable so no grant can match (S53-2).
+    # git accepts any unambiguous prefix of a long option (`--receiv=`, `--ex=`), so refuse every
+    # `--` option that is a prefix of either, with or without a value (review round 3).
     for token in arguments:
-        if token in {'--receive-pack', '--exec'} or token.startswith(('--receive-pack=', '--exec=')):
+        name = token[2:].split('=', 1)[0] if token.startswith('--') else ''
+        if name and ('receive-pack'.startswith(name) or 'exec'.startswith(name)):
             return [None]
     value_options = {'--repo', '-o', '--push-option', '--receive-pack', '--exec'}
     positionals: list[str] = []
@@ -1394,7 +1399,7 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
             resource = _gh_pull_request(argv, indexes[1], root, env)
             # gh pr merge --admin bypasses branch protection; a plain merge grant must not
             # authorize it, so the target is a distinct resource that only an explicit grant names.
-            if resource is not None and '--admin' in lowered:
+            if resource is not None and any(w == '--admin' or w.startswith('--admin=') for w in lowered):
                 resource = f'{resource}!admin'
         elif action == 'github-release' and len(positionals) > 2:
             resource = f'{_gh_repository(argv, root, env)}@{argv[indexes[2]]}'
@@ -1464,7 +1469,7 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
     if _production_action(['gh', *lowered[1:]]) or tuple(positionals) == ('pr', 'review'):
         return None
     operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS, 8)
-    repository = next((lowered[i + 1] for i, word in enumerate(lowered[:-1]) if word in {'-r', '--repo'}), None)
+    repository = _gh_repo_flag(argv)
     if repository is None:
         repository = (env or {}).get('GH_REPO', '').lower() or '.'
     host = (env or {}).get('GH_HOST', '').lower()
