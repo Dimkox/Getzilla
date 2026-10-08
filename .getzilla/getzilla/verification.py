@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 import tempfile
@@ -1685,14 +1686,32 @@ OPENGREP_RULES = '.getzilla/sast/rules'
 OPENGREP_EXCLUDES = ('.getzilla/sast', 'tests', '**/fixtures/**', 'node_modules', 'vendor', '.getzilla/runtime')
 
 
+def _unpinned_opengrep(executable: Path) -> str | None:
+    """Why ``executable`` must not run: PATH is not trusted, only the pinned release digest is (#39)."""
+    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file
+
+    pinned = OPENGREP_ASSETS.get(_platform_key())
+    if pinned is None:
+        return f'no pinned OpenGrep v{OPENGREP_VERSION} digest for {_platform_key()}; {executable} not run'
+    actual = _sha256_file(executable)
+    if actual != pinned[1]:
+        return (f'{executable} sha256 {actual} does not match pinned OpenGrep v{OPENGREP_VERSION} {pinned[1]}; '
+                'not run (reinstall with `python3 scripts/getzilla_update.py --only opengrep`)')
+    return None
+
+
 def _opengrep(root: Path) -> CheckResult:
     """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
-    if not command_exists('opengrep'):
+    executable = shutil.which('opengrep')
+    if executable is None:
         return CheckResult('opengrep', 'skip', 'opengrep not available')
-    command = ['opengrep', 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
+    refusal = _unpinned_opengrep(Path(executable))
+    if refusal:
+        return CheckResult('opengrep', 'fail', refusal)
+    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
                '--disable-version-check', '--timeout', '30']
     for pattern in OPENGREP_EXCLUDES:
         command.extend(('--exclude', pattern))
