@@ -1661,11 +1661,24 @@ def _known_vulnerabilities(root: Path) -> CheckResult:
         report = scan_known_vulnerabilities(root)
     except VulnerabilityError as exc:
         return CheckResult('known-vulnerabilities', 'fail', str(exc))
-    details = [
-        {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
-        for item in report['findings'][:200]
-    ]
+    details = [_vulnerability_detail(item) for item in report['findings'][:200]]
     return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
+
+
+def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
+    """Flatten one finding and add the ``path``/``message`` keys the text report prints."""
+    detail = {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+    advisory = detail.get('id', '')
+    if detail.get('aliases'):
+        advisory = f"{advisory} ({detail['aliases']})"
+    message = f"{detail.get('package', '')}=={detail.get('version', '')} {advisory}"
+    if detail.get('summary'):
+        message += f": {detail['summary']}"
+    if detail.get('fixed'):
+        message += f"; fixed in {detail['fixed']}"
+    detail.setdefault('path', detail.get('manifest', ''))
+    detail.setdefault('message', message)
+    return detail
 
 
 OPENGREP_RULES = '.getzilla/sast/rules'
