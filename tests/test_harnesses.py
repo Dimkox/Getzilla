@@ -158,7 +158,8 @@ class CursorRuleTests(unittest.TestCase):
 
     def test_invalid_rule_sources_are_rejected(self) -> None:
         cases = {
-            'comma inside a glob': (CORE, {**SCOPED, 'globs': ['src/{a,b}.py']}),
+            'comma inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py,**/*.pyi']}),
+            'brace list': (CORE, {**SCOPED, 'globs': ['src/{a,b}.py']}),
             'space inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py ']}),
             'quoted glob': (CORE, {**SCOPED, 'globs': ['"**/*.py"']}),
             'absolute glob': (CORE, {**SCOPED, 'globs': ['/etc/*']}),
