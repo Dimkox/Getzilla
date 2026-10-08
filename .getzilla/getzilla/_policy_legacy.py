@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import fnmatch
+import itertools
 import os
 import re
 import shlex
@@ -37,10 +38,18 @@ DEFAULT_SECRET_READ = [
     '.env', '.env.*', '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
     '**/id_rsa', '**/id_ed25519', '**/credentials*', '**/secrets/**', 'trust-ci/env/*.env', 'trust-ci/runtime/**',
     '**/id_ecdsa', '**/id_dsa', '**/.ssh/**', '**/.git-credentials', '**/.netrc', '**/_netrc', '**/.npmrc', '**/.pypirc',
-    '**/.pgpass', '**/.config/gh/hosts.yml', '**/.docker/config.json', '**/.kube/config', '**/.aws/**',
+    '**/.pgpass', '**/.config/gh/hosts.yml', '**/.config/gh/**', '**/.docker/config.json', '**/.kube/config', '**/.aws/**',
+    # Agent-harness and cloud/package credential stores (review S59-4).
+    '**/.claude/.credentials.json', '**/.codex/auth.json', '**/.vault-token',
+    '**/.composer/auth.json', '**/.config/composer/auth.json', '**/.config/gcloud/**',
+    '**/.azure/**', '**/.terraform.d/credentials.tfrc.json', '**/.cargo/credentials*',
+    '**/.gem/credentials',
 ]
 # Names that match a secret glob but are templates or public halves; never secret.
-SECRET_READ_EXCEPTIONS = ('*.pub', '.env.example', '.env.sample', '.env.template', '.env.dist')
+SECRET_READ_EXCEPTIONS = (
+    '*.pub', '.env.example', '.env.sample', '.env.template', '.env.dist',
+    'known_hosts', 'known_hosts.old', 'authorized_keys', 'authorized_keys2',
+)
 DESTRUCTIVE_COMMANDS = [
     r'\bgit\s+reset\s+--hard\b',
     r'\bgit\s+clean\s+[^\n]*(?:-f|-x)',
@@ -53,6 +62,10 @@ DESTRUCTIVE_COMMANDS = [
     r'\btruncate\s+table\b',
     r'\brm\s+-rf\s+(?:/|~|\$HOME)\b',
     r'\bchmod\s+-R\s+777\b',
+    r'\brobocopy\b[^\n]*\s/mir\b',
+    r'(?:^|[\s;&|])format(?:\.com)?\s+(?:/\S+\s+)*[a-z]:',
+    r'\bformat-volume\b',
+    r'\bclear-disk\b',
 ]
 _COMMAND_SPLIT = re.compile(r'(?:&&|\|\||[;|\n])')
 _WRAPPERS = {'sudo', 'doas', 'command', 'time', 'nohup', 'nice'}
@@ -110,6 +123,32 @@ def _executable_name(token: str) -> str:
     return name
 
 
+def _strip_windows_carets(text: str) -> str:
+    """Remove cmd.exe ``^`` escapes outside quotes: ``g^it``/``git^ push`` -> ``git``/``git push``."""
+    result: list[str] = []
+    quote = ''
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ''
+            result.append(char)
+        elif char in {'"', "'"}:
+            quote = char
+            result.append(char)
+        elif char == '^':
+            following = text[index + 1:index + 2]
+            if following:
+                result.append(following)
+                index += 1
+            # a trailing '^' is line continuation; drop it
+        else:
+            result.append(char)
+        index += 1
+    return ''.join(result)
+
+
 def _windows_literal_backslashes(text: str) -> str:
     """Double the backslashes that are Windows directory separators.
 
@@ -147,7 +186,7 @@ def _windows_literal_backslashes(text: str) -> str:
 def _split_words(text: str) -> list[str]:
     """``shlex.split``; on Windows a path backslash survives as a separator."""
     if fsx.WINDOWS:
-        text = _windows_literal_backslashes(text)
+        text = _windows_literal_backslashes(_strip_windows_carets(text))
     return shlex.split(text)
 
 
@@ -186,7 +225,7 @@ def _windows_command_variant(command: str) -> str:
     ``C:/Program Files/Git/cmd/git push --force``: separators, quotes and the
     launcher suffix are not allowed to hide a destructive or external command.
     """
-    folded = command.replace('\\', '/').replace('"', '').replace("'", '')
+    folded = _strip_windows_carets(command).replace('\\', '/').replace('"', '').replace("'", '')
     return _WINDOWS_LAUNCHER.sub('', folded)
 
 
@@ -249,7 +288,7 @@ def _ansi_c(match: re.Match[str]) -> str:
 def _words(text: str) -> list[str]:
     """Shell words and operator tokens (``;``, ``&&``, ``|``, ``(``, ``>``, newline), quotes removed."""
     if fsx.WINDOWS:
-        text = _windows_literal_backslashes(text)
+        text = _windows_literal_backslashes(_strip_windows_carets(text))
     lexer = shlex.shlex(_ANSI_C_QUOTE.sub(_ansi_c, text), posix=True, punctuation_chars=''.join(sorted(_PUNCTUATION)))
     lexer.whitespace, lexer.whitespace_split, lexer.commenters = ' \t\r', True, ''
     return list(lexer)
@@ -296,6 +335,35 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
             None,
         )
         return [' '.join(argv[index + 1:])] if index else []
+    if name in {'start-process', 'saps', 'start'} and fsx.WINDOWS:
+        rest = argv[1:]
+        filepath: str | None = None
+        launched: list[str] = []
+        positionals: list[str] = []
+        have_arglist = False
+        pos = 0
+        while pos < len(rest):
+            low = rest[pos].lower()
+            if low in {'-filepath', '-path'} and pos + 1 < len(rest):
+                filepath = rest[pos + 1]
+                pos += 2
+                continue
+            if low in {'-argumentlist', '-args', '-argument'} and pos + 1 < len(rest):
+                launched = [item for item in rest[pos + 1].replace(',', ' ').split() if item]
+                have_arglist = True
+                pos += 2
+                continue
+            if rest[pos].startswith('-'):
+                pos += 1
+                continue
+            positionals.append(rest[pos])
+            pos += 1
+        if filepath is None and positionals:
+            filepath, positionals = positionals[0], positionals[1:]
+        # Without -ArgumentList, the next positional carries the arguments (`saps git 'push origin main'`).
+        if not have_arglist and positionals:
+            launched = [item for chunk in positionals for item in chunk.replace(',', ' ').split() if item]
+        return [[_executable_name(filepath), *launched]] if filepath else []
     if name == 'find':
         nested: list[str | list[str] | None] = []
         for index, word in enumerate(argv):
@@ -412,8 +480,18 @@ def _remove_operands(argv: list[str]) -> list[str] | None:
     return operands if recursive else None
 
 
+_REMOVE_VERBS = frozenset({'rm', 'del', 'erase', 'rd', 'rmdir', 'remove-item', 'ri'})
+
+
 def _recursive_remove_of_root(command: str) -> bool:
-    """A recursive delete (any spelling, nested or wrapped) of a root-like or expansion-dependent target."""
+    """A recursive delete (any spelling, nested or wrapped) of a root-like or expansion-dependent target.
+
+    The delete verb is matched at the head of the argv and, to cover arbitrary exec
+    wrappers (``ionice``/``chrt``/``flock``/``watch``/``unbuffer`` and multiplexers
+    like ``busybox``/``toybox``) without a fixed allowlist, anywhere in the argv when
+    the command itself is not inert. ``flock /lock rm -rf /`` and ``busybox rm -rf /``
+    are therefore blocked just as ``rm -rf /`` is (review S59-2).
+    """
     for argv in _simple_commands(command):
         if argv is None:
             if re.search(r'\brm\b[^\n]*\s-[A-Za-z-]*[rR]', command) and re.search(
@@ -424,6 +502,15 @@ def _recursive_remove_of_root(command: str) -> bool:
         operands = _remove_operands(argv)
         if operands and any(_dangerous_remove_target(operand) for operand in operands):
             return True
+        if _executable_name(argv[0]) in _INERT_EXECUTABLES:
+            continue
+        for index in range(1, len(argv)):
+            if _executable_name(argv[index]) in _REMOVE_VERBS:
+                wrapped = [_executable_name(argv[index]), *argv[index + 1:]]
+                operands = _remove_operands(wrapped)
+                if operands and any(_dangerous_remove_target(operand) for operand in operands):
+                    return True
+                break
     return False
 
 
@@ -753,6 +840,11 @@ def _production_action(argv: list[str]) -> str | None:
     if executable in {'pnpm', 'yarn'}:
         positionals, _ = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
         return 'npm-publish' if 'publish' in positionals[:2] else None
+    if executable in _PACKAGE_PUBLISH_CLIENTS:
+        positionals, _ = _positionals(argv, frozenset(), 2)
+        if positionals[:1] and positionals[0] in _PACKAGE_PUBLISH_CLIENTS[executable]:
+            return 'package-publish'
+        return None
     return None
 
 
@@ -763,11 +855,23 @@ class AuthorityAnalysis:
     context_proven: bool
 
 
-_AUTHORITY_EXECUTABLES = {'git', 'gh', 'docker', 'npm', 'pnpm', 'yarn', 'podman', 'buildah'}
-_AUTHORITY_WORDS = re.compile(r'\b(?:git|gh|docker|npm|pnpm|yarn|podman|buildah)\b', re.IGNORECASE)
+# Package/registry publish clients that upload artifacts to a remote index; deny by default
+# so an unreviewed `twine upload`/`cargo publish` cannot ship without a production grant (S59-7).
+_PACKAGE_PUBLISH_CLIENTS = {
+    'twine': {'upload'}, 'cargo': {'publish'}, 'gem': {'push'}, 'poetry': {'publish'},
+    'bun': {'publish'}, 'helm': {'push'}, 'crane': {'push'}, 'oras': {'push'},
+    'skopeo': {'copy'}, 'nerdctl': {'push'}, 'flit': {'publish'}, 'maturin': {'publish', 'upload'},
+}
+_AUTHORITY_EXECUTABLES = {
+    'git', 'gh', 'docker', 'npm', 'pnpm', 'yarn', 'podman', 'buildah', *_PACKAGE_PUBLISH_CLIENTS,
+}
+_AUTHORITY_WORDS = re.compile(
+    r'\b(?:git|gh|docker|npm|pnpm|yarn|podman|buildah|' + '|'.join(sorted(_PACKAGE_PUBLISH_CLIENTS)) + r')\b',
+    re.IGNORECASE,
+)
 _AUTHORITY_META = re.compile(r'[$`*?\[\]{}()]')
 _INERT_EXECUTABLES = {'echo', 'printf'}
-_SHELL_EXECUTABLES = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+_SHELL_EXECUTABLES = {'bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'tcsh', 'csh', 'mksh', 'ash', 'script'}
 
 
 def _is_authority(token: str) -> bool:
@@ -1012,6 +1116,10 @@ def _analyze_authority_pieces(
     return AuthorityAnalysis(tuple(actions), ambiguous, context_proven)
 
 
+_IFS_OBFUSCATION = re.compile(r'\S\$\{?IFS|\$\{?IFS\}?[^\s]')
+_ENCODED_POWERSHELL = re.compile(r'\b(?:powershell|pwsh)\b[^\n]*\s-e(?:c|nc|ncodedcommand)?\b', re.IGNORECASE)
+
+
 def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     """Conservatively classify production authority without evaluating shell syntax.
 
@@ -1025,6 +1133,14 @@ def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     else:
         analysis = _analyze_authority_pieces(raw_command)
     actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
+    if _IFS_OBFUSCATION.search(raw_command):
+        # `git$IFS'push'`/`git${IFS}push`: $IFS word-splits into `git push` at runtime but
+        # tokenizes as one opaque word here, so treat it as ambiguous authority (review S59-5).
+        ambiguous = True
+    if _ENCODED_POWERSHELL.search(raw_command):
+        # powershell -EncodedCommand carries an opaque base64 payload the parser cannot read;
+        # fail closed as ambiguous instead of silently allowing it (review S59-6).
+        ambiguous = True
     for argv in _simple_commands(raw_command):
         if argv is None or argv[0] in _INERT_EXECUTABLES:
             continue
@@ -1187,6 +1303,11 @@ def _http_write_resource_text(command: str) -> str | None:
             return 'github-api'
     elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
         return _GH_PULL_REQUEST_REVIEW
+    if not mutation and re.search(r'\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b', lowered):
+        # PowerShell web cmdlets: a non-GET -Method or a request body is a write (review S59-6).
+        mutation = bool(re.search(r'-me(?:thod)?(?:\s+|=|:)["\']?(?:post|put|patch|delete)\b', lowered)) or bool(
+            re.search(r'-(?:body|infile|form|contenttype)\b', lowered)
+        )
     if not mutation:
         return None
     match = _HTTP_URL.search(command)
@@ -1210,6 +1331,9 @@ _GREP_VALUE_OPTIONS = frozenset({
     '--binary-files', '--color', '--colour', '--include', '--exclude', '--exclude-dir', '--include-dir',
 })
 _COPY_READERS = frozenset({'cp', 'rsync', 'scp'})
+_WINDOWS_COPY_READERS = frozenset({'robocopy', 'xcopy', 'copy-item', 'copy', 'cpi'})
+_WINDOWS_ARCHIVE_READERS = frozenset({'compress-archive'})
+_WINDOWS_GREP_READERS = frozenset({'findstr', 'select-string', 'sls'})
 _ARCHIVE_READERS = frozenset({'tar', 'zip', '7z', '7za', 'gzip', 'bsdtar'})
 _GIT_TEXT_OPTIONS = frozenset({
     '-m', '--message', '--grep', '--author', '--committer', '-S', '-G', '--format', '--pretty', '--since', '--until',
@@ -1238,12 +1362,13 @@ def _brace_options(body: str) -> list[str]:
         a, b = int(numeric.group(1)), int(numeric.group(2))
         step = abs(int(numeric.group(3) or 1)) or 1
         span = range(a, b + 1, step) if a <= b else range(a, b - 1, -step)
-        return [str(x) for x in span][:64]
+        # islice so a huge range (`{1..100000000}`) never materializes as a full list.
+        return [str(x) for x in itertools.islice(span, 64)]
     alpha = re.fullmatch(r'([A-Za-z])\.\.([A-Za-z])', body)
     if alpha:
         a, b = ord(alpha.group(1)), ord(alpha.group(2))
         span = range(a, b + 1) if a <= b else range(a, b - 1, -1)
-        return [chr(x) for x in span][:64]
+        return [chr(x) for x in itertools.islice(span, 64)]
     return body.split(',')
 
 
@@ -1284,7 +1409,12 @@ def _secret_path_match(path: str, patterns: list[str]) -> bool:
 
 
 def _secret_exception(raw: str) -> bool:
-    base = os.path.basename(raw.replace('\\', '/').rstrip('/'))
+    normalized = raw.replace('\\', '/').rstrip('/')
+    # The ssh client config and host-key caches are routinely read and carry no key
+    # material; only files like .ssh/id_* stay secret (via their own patterns).
+    if normalized.lower().endswith('.ssh/config'):
+        return True
+    base = os.path.basename(normalized)
     return bool(base) and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS)
 
 
@@ -1321,6 +1451,10 @@ def _secret_reference(
     root: Path, raw: str, patterns: list[str], *, expand: bool = True, budget: _Budget | None = None,
 ) -> bool:
     """Whether ``raw`` names secret material, inside the repository or outside it."""
+    if budget is not None:
+        # Count every literal word checked, not only filesystem globbing, so the overall
+        # wall-clock/entry budget bounds the word x pattern scan and fails closed (review S59-1).
+        budget.tick()
     if not raw or '\x00' in raw or _secret_exception(raw):
         return False
     rel = safe_relative_path(root, raw)
@@ -1347,8 +1481,14 @@ def _resolve_under_root(root: Path, word: str) -> str | None:
 
 def _walk_for_secret(
     root: Path, directory: str, patterns: list[str], budget: _Budget, glob_filter: str | None = None,
+    *, skip_hidden: bool = False,
 ) -> str | None:
-    """First secret file in ``directory`` (recursively, skipping ``.git``), under ``budget``."""
+    """First secret file in ``directory`` (recursively, skipping ``.git``), under ``budget``.
+
+    ``skip_hidden`` models ripgrep's default of not descending into dotfiles/dot-dirs,
+    so a plain ``Grep`` of the tree is not flagged for a hidden ``.env`` it would never
+    open (review S59-8); an explicit glob clears it so a glob targeting secrets still hits.
+    """
     stack = [directory]
     while stack:
         current = stack.pop()
@@ -1357,6 +1497,8 @@ def _walk_for_secret(
                 for entry in entries:
                     budget.tick()
                     if entry.name == '.git':
+                        continue
+                    if skip_hidden and entry.name.startswith('.'):
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
@@ -1487,6 +1629,13 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
         return _find_path_words(rest)
     if name in _COPY_READERS or name in _ARCHIVE_READERS:
         return [token for token in rest if not (token.startswith('-') and len(token) > 1)]
+    if name in _WINDOWS_COPY_READERS or name in _WINDOWS_ARCHIVE_READERS:
+        # Windows copy/archive readers: path operands are bare tokens; '/switch' and '-Option' drop out.
+        return [token for token in rest if not token.startswith(('-', '/'))]
+    if name in _WINDOWS_GREP_READERS:
+        # findstr/Select-String: the first bare operand is the pattern, the rest are paths.
+        paths = [token for token in rest if not token.startswith(('-', '/'))]
+        return paths[1:]
     return [token for token in rest if token]
 
 
@@ -1510,6 +1659,15 @@ def _is_recursive_reader(argv: list[str]) -> bool:
         return True
     if name == 'find':
         return any(token in {'-exec', '-execdir', '-ok', '-okdir'} for token in rest)
+    if name in _WINDOWS_ARCHIVE_READERS:
+        return True
+    if name in _WINDOWS_COPY_READERS:
+        return any(
+            token.lower() in {'/s', '/e', '/mir'} or (len(token) > 1 and '-recurse'.startswith(token.lower()))
+            for token in rest
+        )
+    if name in _WINDOWS_GREP_READERS:
+        return any(token.lower() == '/s' or (len(token) > 1 and '-recurse'.startswith(token.lower())) for token in rest)
     return False
 
 
@@ -1524,6 +1682,10 @@ def _argv_secret_reference(root: Path, argv: list[str], patterns: list[str], bud
         for variant in _brace_expand(word):
             if recursive:
                 full = _resolve_under_root(root, variant)
+                if full is None and _GLOB_META.search(variant):
+                    # `findstr /s PAT deploy\*` / `grep -r PAT deploy/*`: walk the literal prefix dir.
+                    prefix = _literal_pattern_prefix(variant)
+                    full = _resolve_under_root(root, prefix) if prefix else None
                 if full and os.path.isdir(full):
                     hit = _walk_for_secret(root, full, patterns, budget)
                     if hit is not None:
@@ -1549,15 +1711,29 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
     return None
 
 
+_COMMAND_SCAN_BYTE_LIMIT = 131072
+_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...]], str | None] = {}
+
+
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
     The command is tokenized (never executed); per-command path operands are checked,
     interpreter text (commit messages, grep/jq/awk/sed programs) is skipped, recursive
     readers of a directory holding secrets are walked, and brace/ANSI-C expansions are
-    resolved. A bounded, fail-closed marker is returned if the scan exceeds its budget.
+    resolved. The scan is bounded by a wall-clock and entry budget and by a hard command
+    size cap, and fails closed with a marker rather than letting the hook exceed its
+    PreToolUse timeout (review S59-1). The result is memoized for the life of the process
+    so the hook never pays for the same scan twice (sensitive_action + evaluate_pre_tool).
     """
+    key = (str(root), command, tuple(patterns))
+    if key in _SECRET_SCAN_CACHE:
+        return _SECRET_SCAN_CACHE[key]
+    if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
+        _SECRET_SCAN_CACHE[key] = _BUDGET_MARKER
+        return _BUDGET_MARKER
     budget = _Budget()
+    result: str | None = None
     try:
         for argv in _simple_commands(command):
             hit = (
@@ -1566,10 +1742,13 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
                 else _argv_secret_reference(root, argv, patterns, budget)
             )
             if hit is not None:
-                return hit
+                result = hit
+                break
     except _BudgetExceeded:
-        return _BUDGET_MARKER
-    return None
+        result = _BUDGET_MARKER
+    if len(_SECRET_SCAN_CACHE) < 256:
+        _SECRET_SCAN_CACHE[key] = result
+    return result
 
 
 def _agent_type(tool_input: Any) -> str | None:
@@ -1662,15 +1841,27 @@ def evaluate_pre_tool(
 
     if is_read:
         budget = _Budget()
-        glob_filter = tool_input.get('glob') if isinstance(tool_input, dict) and lowered_tool == 'grep' else None
+        is_grep = isinstance(tool_input, dict) and lowered_tool == 'grep'
+        glob_filter = tool_input.get('glob') if is_grep else None
+        glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
+        search_inputs = list(candidate_paths)
+        if is_grep and glob_filter:
+            # A grep glob names the files ripgrep opens even with no path given; a glob that
+            # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
+            search_inputs.append(glob_filter)
         try:
-            for raw in candidate_paths:
+            for raw in search_inputs:
+                if not isinstance(raw, str) or not raw:
+                    continue
                 if _secret_reference(root, raw, secret_read, budget=budget):
                     rel = safe_relative_path(root, raw)
                     return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
                 directory = _resolve_under_root(root, raw)
                 if directory and os.path.isdir(directory):
-                    hit = _walk_for_secret(root, directory, secret_read, budget, glob_filter)
+                    hit = _walk_for_secret(
+                        root, directory, secret_read, budget, glob_filter,
+                        skip_hidden=is_grep and glob_filter is None,
+                    )
                     if hit is not None:
                         rel = safe_relative_path(root, hit)
                         return False, f'Reading secret material is blocked: {rel if rel is not None else hit}'

@@ -125,7 +125,18 @@
     "**/.config/gh/hosts.yml",
     "**/.docker/config.json",
     "**/.kube/config",
-    "**/.aws/**"
+    "**/.aws/**",
+    "**/.config/gh/**",
+    "**/.claude/.credentials.json",
+    "**/.codex/auth.json",
+    "**/.vault-token",
+    "**/.composer/auth.json",
+    "**/.config/composer/auth.json",
+    "**/.config/gcloud/**",
+    "**/.azure/**",
+    "**/.terraform.d/credentials.tfrc.json",
+    "**/.cargo/credentials*",
+    "**/.gem/credentials"
   ],
   "notes": [
     "Bitrix core is protected by default. Put custom code in local/.",
