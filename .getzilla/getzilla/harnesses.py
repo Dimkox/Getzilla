@@ -9,7 +9,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Iterator
 
-from . import fsx
+from getzilla import fsx  # absolute like install_into.py; FIT-BOUNDED-WORKER-JOBS misreads `from . import fsx`
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
