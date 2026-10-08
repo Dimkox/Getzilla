@@ -22,6 +22,7 @@ MANDATORY_PR_CHECKS = frozenset(
         "contract-structure",
         "sql-safety",
         "source-stability",
+        "opengrep",
     }
 )
 
@@ -69,7 +70,7 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
     if name == "ruff":
         return summary == "no python quality paths"
     if name == "bandit":
-        return summary in {"no non-test python paths", "bandit not available"}
+        return summary == "no non-test python paths"
     if name == "architecture-inputs":
         return summary == "architecture authority inputs are absent; not executed"
     if name == "change-spec":
@@ -77,11 +78,9 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
     if name == "coverage":
         return summary == "pytest runner owns tests; measure unittest trees only"
     if name == "known-vulnerabilities":
-        return summary == "no pinned dependencies in lockfiles or requirements" or (
-            summary.endswith("pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1")
-        )
+        return summary == "no pinned dependencies in lockfiles or requirements"
     if name == "opengrep":
-        return summary in {"opengrep not available", "no OpenGrep rules installed"}
+        return summary == "no OpenGrep rules installed"
     if name == "factory-postgres-exit":
         return summary == "repository-sandbox has no nested-container/database capability"
     if name in {"architecture", "governance", "workflow-artifacts"}:

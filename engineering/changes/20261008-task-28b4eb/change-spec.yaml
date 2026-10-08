@@ -1,0 +1,62 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_landing_api.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "The predecessor freeze test passes on the renamed tree and still fails on any byte change to migrations 001-018, the predecessor contracts or the showcase."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-28b4eb",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_landing_api.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Dropping or loosening the byte freeze instead of re-anchoring it."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_landing_api.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Migration bytes 001-018 stay identical to the predecessor (proven: the old digest reproduces under the old package path)."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #28: re-anchor the three predecessor freeze digests that the Getzilla rename invalidated.",
+    "success_metric": "factory.tests.test_landing_api passes in factory-postgres-exit.",
+    "target": "factory/tests/test_landing_api.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

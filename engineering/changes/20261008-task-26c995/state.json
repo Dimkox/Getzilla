@@ -1,0 +1,62 @@
+{
+  "change_id": "20261008-task-26c995",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/verify-bandit-required",
+      "change_id": "20261008-task-26c995",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "851499c21a57631084b445dd8c92f89357b6889a",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-08T14:56:21+00:00",
+      "route_id": "26c995e9f7f7"
+    }
+  ],
+  "created_at": "2026-10-08T14:56:21+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-08T14:56:21+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "280b8f6a2df83351c835114c39ca89255add989c28a0114102b2752b3936f939",
+  "route_id": "26c995e9f7f7",
+  "schema_version": 1,
+  "status": "draft",
+  "title": "Require bandit in PR verification like ruff",
+  "updated_at": "2026-10-08T14:56:21+00:00"
+}

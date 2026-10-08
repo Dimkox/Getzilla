@@ -48,7 +48,7 @@ def fixture(*, workers: object = 2):
             return_value=CheckResult('ruff', 'skip', 'no python quality paths'),
         ), patch(
             'getzilla.verification._bandit',
-            return_value=CheckResult('bandit', 'skip', 'bandit not available'),
+            return_value=CheckResult('bandit', 'skip', 'no non-test python paths'),
         ):
             yield root
 
