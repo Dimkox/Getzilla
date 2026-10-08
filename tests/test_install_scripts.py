@@ -8,6 +8,7 @@ pwsh when that is available on the host.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -37,14 +38,30 @@ def _clean_env(**extra: str) -> dict[str, str]:
 
 
 class InstallScriptContractTests(unittest.TestCase):
-    def test_documented_one_liners_point_at_the_shipped_scripts(self) -> None:
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        quickstart = (ROOT / 'QUICKSTART.md').read_text(encoding='utf-8')
-        for text in (readme, quickstart):
-            self.assertIn(f'irm {RAW}install.ps1 | iex', text)
-            self.assertIn(f'curl -fsSL {RAW}install.sh | bash', text)
-        self.assertIn(f'irm {RAW}install.ps1 | iex', POWERSHELL.read_text(encoding='utf-8'))
-        self.assertIn(f'curl -fsSL {RAW}install.sh | bash', SHELL.read_text(encoding='utf-8'))
+    def test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it(self) -> None:
+        # Issue #63: the documented install path must not pipe an unverified download into a shell.
+        # README and QUICKSTART download the installer from the release tag (= VERSION), compare its
+        # SHA-256 with the published digest of the shipped script, and only then run it pinned to that tag.
+        version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
+        pinned = f'https://raw.githubusercontent.com/Dimkox/Getzilla/v{version}/scripts/'
+        sh_digest = hashlib.sha256(SHELL.read_bytes()).hexdigest()
+        ps_digest = hashlib.sha256(POWERSHELL.read_bytes()).hexdigest()
+        for name in ('README.md', 'QUICKSTART.md'):
+            text = (ROOT / name).read_text(encoding='utf-8')
+            with self.subTest(document=name):
+                self.assertNotIn(f'{RAW}install.sh | bash', text)
+                self.assertNotIn(f'{RAW}install.ps1 | iex', text)
+                self.assertNotRegex(text, r'Getzilla/[^/\s]+/scripts/install\.(sh \| *(ba)?sh|ps1 \| *iex)')
+                sh_fetch = text.index(f'curl -fsSLo getzilla-install.sh {pinned}install.sh')
+                sh_check = text.index(f'echo "{sh_digest}  getzilla-install.sh" | sha256sum -c -')
+                sh_run = text.index(f'GETZILLA_REF=v{version} bash getzilla-install.sh')
+                self.assertLess(sh_fetch, sh_check)
+                self.assertLess(sh_check, sh_run)
+                ps_fetch = text.index(f'Invoke-WebRequest -UseBasicParsing {pinned}install.ps1 -OutFile $f')
+                ps_check = text.index(f"(Get-FileHash $f -Algorithm SHA256).Hash -ne '{ps_digest.upper()}'")
+                ps_run = text.index(f"$env:GETZILLA_REF = 'v{version}'; Invoke-Expression (Get-Content -Raw $f)")
+                self.assertLess(ps_fetch, ps_check)
+                self.assertLess(ps_check, ps_run)
 
     def test_shell_installer_only_acts_from_main(self) -> None:
         text = SHELL.read_text(encoding='utf-8')
