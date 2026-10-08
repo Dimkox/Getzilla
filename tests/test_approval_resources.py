@@ -246,5 +246,101 @@ class ExactTargetGrantTests(unittest.TestCase):
         self.assertNotIn('target patterns', text)
 
 
+class GrantBindingReview2Tests(unittest.TestCase):
+    """Round-2 review: env-prefix target spoofing (S53-1) and over-broad push/merge grants (S53-2)."""
+
+    def bash(self, root: Path, command: str) -> tuple[bool, str | None]:
+        return evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_gh_env_repo_and_host_do_not_bypass_a_merge_grant(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'production', 'merge #5', 5,
+                actions=['pull-request-merge'], resources=['Dimkox/Getzilla#5'],
+            )
+            allowed, reason = self.bash(root, 'gh pr merge 5 --squash')
+            self.assertTrue(allowed, reason)
+            for command in ('GH_REPO=other/x gh pr merge 5', 'GH_HOST=evil.example gh pr merge 5'):
+                with self.subTest(command=command):
+                    allowed, _ = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+
+    def test_gh_env_host_does_not_bypass_an_api_grant(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'one issue', 5, actions=['external-write'],
+                resources=['github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'],
+            )
+            allowed, reason = self.bash(root, 'gh api repos/Dimkox/Getzilla/issues -f title=x')
+            self.assertTrue(allowed, reason)
+            allowed, reason = self.bash(root, 'GH_HOST=evil.example gh api repos/Dimkox/Getzilla/issues -f title=x')
+            self.assertFalse(allowed, reason)
+
+    def test_gh_env_repo_does_not_bypass_a_pr_review_grant(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'review one PR', 5, actions=['external-write'],
+                resources=['github-pr-review:Dimkox/Getzilla#1'],
+            )
+            allowed, reason = self.bash(root, 'gh pr review --approve 1')
+            self.assertTrue(allowed, reason)
+            allowed, _ = self.bash(root, 'GH_REPO=other/x gh pr review 1 --approve')
+            self.assertFalse(allowed)
+
+    def test_push_grant_refuses_receive_pack_and_exec(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'push fix/x', 5, actions=['git-push-branch'], resources=['fix/x'])
+            self.assertTrue(self.bash(root, 'git push origin fix/x')[0])
+            for command in (
+                'git push origin fix/x --receive-pack=/tmp/x',
+                'git push origin fix/x --exec=/tmp/x',
+                'git push origin fix/x --receive-pack /tmp/x',
+            ):
+                with self.subTest(command=command):
+                    allowed, _ = self.bash(root, command)
+                    self.assertFalse(allowed, command)
+
+    def test_merge_grant_refuses_admin_bypass_unless_explicitly_granted(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'production', 'merge #1', 5, actions=['pull-request-merge'], resources=['Dimkox/Getzilla#1'],
+            )
+            self.assertTrue(self.bash(root, 'gh pr merge 1 --squash')[0])
+            self.assertFalse(self.bash(root, 'gh pr merge 1 --admin')[0])
+        with github_project() as root:
+            add_approval(
+                root, 'production', 'admin merge #1', 5,
+                actions=['pull-request-merge'], resources=['Dimkox/Getzilla#1!admin'],
+            )
+            allowed, reason = self.bash(root, 'gh pr merge 1 --admin')
+            self.assertTrue(allowed, reason)
+
+    def test_normalize_rejects_percent_encoded_traversal(self) -> None:
+        with github_project() as root:
+            for resource in ('%2e%2e/AGENTS.md', '%2E%2E/AGENTS.md', 'a/%2e%2e/AGENTS.md'):
+                with self.subTest(resource=resource), self.assertRaises(ValueError):
+                    add_approval(
+                        root, 'protected-path', 'edit', 5,
+                        actions=['protected-path-write'], resources=[resource],
+                    )
+
+    def test_normalize_rejects_bare_control_plane_directory(self) -> None:
+        with github_project() as root:
+            for resource in ('.grok', '.getzilla', '.github', 'trust-ci'):
+                with self.subTest(resource=resource), self.assertRaises(ValueError):
+                    add_approval(
+                        root, 'protected-path', 'edit', 5,
+                        actions=['protected-path-write'], resources=[resource],
+                    )
+
+    def test_github_target_grant_rejects_trailing_hash(self) -> None:
+        with github_project() as root:
+            with self.assertRaises(ValueError):
+                add_approval(
+                    root, 'external-write', 'review', 5,
+                    actions=['external-write'], resources=['github-pr-review:Dimkox/Getzilla#'],
+                )
+
+
 if __name__ == '__main__':
     unittest.main()
