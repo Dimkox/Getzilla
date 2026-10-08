@@ -21,6 +21,9 @@ from getzilla import fsx
 
 MANAGED_DIRS = (
     ".grok",
+    ".qwen",
+    ".claude",
+    ".codex",
     ".agents",
     ".getzilla",
     "factory/contracts",

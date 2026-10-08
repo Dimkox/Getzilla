@@ -17,7 +17,8 @@ WRITE_ROLES = {
 }
 
 DEFAULT_CONTROL_PLANE = [
-    '.agents/**', '.grok/**', '.getzilla/**', '.github/**', 'trust-ci/**',
+    '.agents/**', '.grok/**', '.qwen/**', '.claude/**', '.codex/**', '.getzilla/**', '.github/**', 'trust-ci/**',
+    '**/.grok/**', '**/.qwen/**', '**/.claude/**', '**/.codex/**', '_lib.py',
     '.gitignore', 'AGENTS.md', 'README.md', 'CHANGELOG.md', 'VERSION',
     'decisions.md', 'mistakes.md', 'Makefile', 'ruff.toml', 'bandit.yaml', '.coveragerc',
     'scripts/getzilla_*.py', 'scripts/install_into.py', 'scripts/package_stack.py',
@@ -271,8 +272,13 @@ def _extract_paths(value: Any) -> list[str]:
     paths: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            if key.lower() in {'path', 'file', 'filename', 'file_path', 'filepath', 'directory', 'target'} and isinstance(item, str):
+            if key.lower() in {
+                'path', 'file', 'filename', 'file_path', 'filepath', 'absolute_path', 'notebook_path',
+                'directory', 'target',
+            } and isinstance(item, str):
                 paths.append(item)
+            elif key.lower() in {'paths', 'file_paths'} and isinstance(item, list):
+                paths.extend(entry for entry in item if isinstance(entry, str))
             else:
                 paths.extend(_extract_paths(item))
     elif isinstance(value, list):

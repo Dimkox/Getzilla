@@ -77,7 +77,7 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 - A delegated local grant never creates or substitutes the external Trust CI check, a human-signed security approval, or branch protection. It authorizes only the named local operation.
 - Tagging and GitHub Release publication must use the exact merged commit. No delegated grant permits changing the tested tree after approval and then reusing the grant.
 
-This repository uses an adaptive, task-routed Grok Build workflow. The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
+This repository uses an adaptive, task-routed agent workflow (Grok Build, Qwen Code, Claude Code or Codex; the latter three load generated copies of `.grok/` from `.qwen/`, `.claude/` and `.codex/` — edit `.grok/` and `.agents/skills/`, then run `python3 scripts/getzilla_harness.py --write`). The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
 
 ## Mandatory entrypoint
 

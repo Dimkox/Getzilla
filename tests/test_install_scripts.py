@@ -74,6 +74,20 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertIn('/python-3.13.16-amd64.exe', text)
         self.assertIn('InstallAllUsers=0', text)
 
+    def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
+        shell = SHELL.read_text(encoding='utf-8')
+        powershell = POWERSHELL.read_text(encoding='utf-8')
+        for text in (shell, powershell):
+            for name in ('GETZILLA_AGENT', 'GETZILLA_PROVIDER', 'GETZILLA_MODEL', 'OPENROUTER_API_KEY',
+                         'GETZILLA_SKIP_AGENT', 'GETZILLA_NONINTERACTIVE', 'getzilla_setup_agent.py', '--key-stdin',
+                         '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
+                         'qwen, codex, claude or grok'):
+                self.assertIn(name, text)
+        self.assertIn('https://claude.ai/install.sh', shell)
+        self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
+        self.assertIn('-AsSecureString', powershell)
+        self.assertIn('read -rs key </dev/tty', shell)
+
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_installer_parses(self) -> None:
         command = (
@@ -95,7 +109,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             GETZILLA_REF=subprocess.run(
                 ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True
             ).stdout.strip(),
-            GETZILLA_SKIP_GROK='1',
+            GETZILLA_SKIP_AGENT='1',
             **extra,
         )
         return subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
@@ -118,6 +132,46 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             again = self._run(home)
             self.assertEqual(again.returncode, 0, again.stdout[-2000:] + again.stderr[-2000:])
             self.assertIn('Updating Getzilla in', again.stdout)
+
+    def test_rejects_an_unknown_agent_before_downloading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / 'Getzilla'
+            result = self._run(home, GETZILLA_AGENT='cursor')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('GETZILLA_AGENT must be qwen, codex, claude or grok', result.stderr)
+            self.assertFalse(home.exists())
+
+    def test_defaults_to_qwen_with_openrouter_and_configures_from_the_key(self) -> None:
+        if subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True,
+                          text=True).stdout.strip() == 'HEAD':
+            self.skipTest('detached checkout: no branch to clone')
+        key = 'sk-or-v1-feedfacefeedfacefeedfacefeedface'
+        with tempfile.TemporaryDirectory() as tmp:
+            user_home = Path(tmp) / 'user'
+            user_home.mkdir()
+            env = _clean_env(
+                HOME=str(user_home),
+                GETZILLA_HOME=str(Path(tmp) / 'Getzilla'),
+                GETZILLA_REPO=ROOT.as_uri(),
+                GETZILLA_REF=subprocess.run(
+                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True,
+                    check=True,
+                ).stdout.strip(),
+                GETZILLA_NONINTERACTIVE='1',
+                OPENROUTER_API_KEY=key,
+                PATH=f'{Path(tmp) / "bin"}:{os.environ["PATH"]}',
+            )
+            fake_bin = Path(tmp) / 'bin'
+            fake_bin.mkdir()
+            (fake_bin / 'qwen').write_text('#!/bin/sh\nexit 0\n')
+            (fake_bin / 'qwen').chmod(0o755)
+            result = subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
+            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+            self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
+            self.assertIn('Qwen Code: already installed.', result.stdout)
+            self.assertNotIn(key, result.stdout + result.stderr)
+            self.assertIn(f'OPENROUTER_API_KEY={key}', (user_home / '.qwen/.env').read_text(encoding='utf-8'))
+            self.assertIn('In your project run: qwen', result.stdout)
 
     def test_refuses_a_foreign_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

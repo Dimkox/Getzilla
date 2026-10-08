@@ -37,11 +37,15 @@ def run_doctor(root: Path) -> list[DoctorItem]:
         except Exception as exc:
             items.append(DoctorItem('fail', f'toml:{rel}', str(exc)))
 
-    try:
-        json.loads((root / '.grok/hooks.json').read_text(encoding='utf-8'))
-        items.append(DoctorItem('pass', 'json:.grok/hooks.json', 'valid JSON'))
-    except Exception as exc:
-        items.append(DoctorItem('fail', 'json:.grok/hooks.json', str(exc)))
+    for rel in ('.grok/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json'):
+        if rel != '.grok/hooks.json' and not (root / rel).exists():
+            items.append(DoctorItem('info', f'json:{rel}', 'harness not installed'))
+            continue
+        try:
+            json.loads((root / rel).read_text(encoding='utf-8'))
+            items.append(DoctorItem('pass', f'json:{rel}', 'valid JSON'))
+        except Exception as exc:
+            items.append(DoctorItem('fail', f'json:{rel}', str(exc)))
 
     managed = load_json(root / '.getzilla/config/managed.json', {}) or {}
     managed_agents = managed.get('agents', [])

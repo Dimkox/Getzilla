@@ -2,8 +2,8 @@
 #
 #   irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
 #
-# Installs what is missing (Git, Python 3.13, Grok Build CLI), downloads Getzilla and
-# runs its health check. Uses winget when it is available; otherwise it downloads the
+# Installs what is missing (Git, Python 3.13, your coding agent), downloads Getzilla,
+# points the agent at its models and runs its health check. Uses winget when it is available; otherwise it downloads the
 # official installers and installs them for the current user, without administrator
 # rights. Nothing is changed in your projects unless you ask for it below.
 #
@@ -13,7 +13,18 @@
 #   $env:GETZILLA_REPO = 'https://...'          Git URL to install from
 #   $env:GETZILLA_PROJECT = 'C:\code\my-app'    existing project: print the read-only install plan
 #   $env:GETZILLA_NEW_PROJECT = 'C:\code\new'   create a new project there (the folder must not exist)
-#   $env:GETZILLA_SKIP_GROK = '1'               do not install the Grok Build CLI
+#   $env:GETZILLA_AGENT = 'qwen'                qwen | codex | claude | grok (default: ask, else qwen)
+#   $env:GETZILLA_PROVIDER = 'openrouter'       openrouter | native sign-in (default: ask, else openrouter)
+#   $env:GETZILLA_MODEL = 'qwen/qwen3-coder'    OpenRouter model id for Qwen Code or Codex
+#   $env:OPENROUTER_API_KEY = '...'             your OpenRouter key (otherwise asked for, never echoed)
+#   $env:GETZILLA_SKIP_AGENT = '1'              do not install or configure the coding agent
+#   $env:GETZILLA_SKIP_GROK = '1'               do not install the Grok Build CLI (when the agent is grok)
+#   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
+#
+# Coding agents: Qwen Code and Codex install with npm (Node.js LTS is installed with winget
+# when missing), Claude Code and Grok Build with their vendors' official installers. Models
+# come from OpenRouter with your own key (https://openrouter.ai/keys) unless you pick the
+# agent's own sign-in; the key is stored only in your user settings.
 #
 # Everything runs inside Install-Getzilla, so a partially downloaded script does nothing,
 # and errors are reported without closing your PowerShell window.
@@ -49,17 +60,21 @@ function Install-Getzilla {
     }
     Write-Step ("Python: " + (Invoke-Python $Python @('--version')))
 
-    if ($env:GETZILLA_SKIP_GROK -eq '1') {
-        Write-Step 'Skipping the Grok Build CLI (GETZILLA_SKIP_GROK=1).'
+    $Agent = Select-Agent
+    $Provider = Select-Provider $Agent
+    Write-Step "Coding agent: $Agent (models: $Provider)"
+    if ($env:GETZILLA_SKIP_AGENT -eq '1') {
+        Write-Step 'Skipping the coding agent (GETZILLA_SKIP_AGENT=1).'
     } else {
-        Install-Grok
+        Install-Agent $Agent
     }
 
     Get-GetzillaSource -Repo $Repo -Ref $Ref -Destination $GetzillaHome
 
-    Write-Step 'Checking this machine...'
     Push-Location $GetzillaHome
     try {
+        if ($env:GETZILLA_SKIP_AGENT -ne '1') { Set-AgentConfiguration $Python $Agent $Provider }
+        Write-Step 'Checking this machine...'
         Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
         $DoctorExit = $LASTEXITCODE
         if ($env:GETZILLA_NEW_PROJECT) {
@@ -85,7 +100,7 @@ function Install-Getzilla {
     Write-Host 'Next:'
     Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"
     Write-Host "     Existing project: cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --plan C:\path\to\your\project"
-    Write-Host '  2. In your project run: grok   (first time: sign in, then type /hooks-trust)'
+    Write-Host ('  2. In your project run: ' + (Get-AgentCommand $Agent))
     Write-Host "  3. Vibe-code the feature, then run /getzilla-delivery and $PythonText scripts/getzilla_verify.py --mode pr"
 }
 
@@ -195,6 +210,160 @@ function Install-Python {
     Remove-Item -Force $installer
     if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode)." }
     Update-SessionPath
+}
+
+function Test-CanAsk {
+    if ($env:GETZILLA_NONINTERACTIVE -eq '1') { return $false }
+    try {
+        return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+    } catch {
+        return $false
+    }
+}
+
+function Read-Choice([string]$Prompt, [string]$Default) {
+    if (-not (Test-CanAsk)) { return $Default }
+    try {
+        $answer = Read-Host $Prompt
+    } catch {
+        return $Default
+    }
+    if ($answer) { return $answer.Trim() }
+    return $Default
+}
+
+function Select-Agent {
+    $agent = $env:GETZILLA_AGENT
+    if (-not $agent) {
+        switch (Read-Choice 'Coding agent: 1) Qwen Code  2) Codex  3) Claude Code  4) Grok Build  [1]' '1') {
+            { $_ -in @('2', 'codex') } { $agent = 'codex'; break }
+            { $_ -in @('3', 'claude') } { $agent = 'claude'; break }
+            { $_ -in @('4', 'grok') } { $agent = 'grok'; break }
+            default { $agent = 'qwen' }
+        }
+    }
+    if ($agent -notin @('qwen', 'codex', 'claude', 'grok')) {
+        throw "GETZILLA_AGENT must be qwen, codex, claude or grok (got '$agent')."
+    }
+    return $agent
+}
+
+function Select-Provider([string]$Agent) {
+    if ($Agent -eq 'grok') { return 'native' }
+    $provider = $env:GETZILLA_PROVIDER
+    if (-not $provider) {
+        switch (Read-Choice "Models: 1) OpenRouter with your own key  2) the agent's own sign-in  [1]" '1') {
+            { $_ -in @('2', 'native') } { $provider = 'native'; break }
+            default { $provider = 'openrouter' }
+        }
+    }
+    if ($provider -notin @('openrouter', 'native')) {
+        throw "GETZILLA_PROVIDER must be openrouter or native (got '$provider')."
+    }
+    return $provider
+}
+
+function Get-AgentCommand([string]$Agent) {
+    switch ($Agent) {
+        'codex' { return 'codex   (trust the project when asked)' }
+        'claude' { return 'claude   (trust the project folder when asked)' }
+        'grok' { return 'grok   (first time: sign in, then type /hooks-trust)' }
+        default { return 'qwen' }
+    }
+}
+
+function Install-Agent([string]$Agent) {
+    switch ($Agent) {
+        'qwen' { Install-NpmAgent 'qwen' '@qwen-code/qwen-code@latest' 'Qwen Code' }
+        'codex' { Install-NpmAgent 'codex' '@openai/codex@latest' 'Codex CLI' }
+        'claude' { Install-Claude }
+        'grok' {
+            if ($env:GETZILLA_SKIP_GROK -eq '1') {
+                Write-Step 'Skipping the Grok Build CLI (GETZILLA_SKIP_GROK=1).'
+            } else {
+                Install-Grok
+            }
+        }
+    }
+}
+
+function Test-Node {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
+    $major = (& node -e 'console.log(process.versions.node.split(".")[0])' 2>$null)
+    return ([int]"$major" -ge 20)
+}
+
+function Install-Node {
+    if (Test-Node) { return $true }
+    Write-Step 'Installing Node.js LTS (20 or newer is needed)...'
+    if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
+    if (Test-Node) { return $true }
+    Write-Step 'Node.js 20 or newer is still missing. Install it from https://nodejs.org and run this installer again.'
+    return $false
+}
+
+function Install-NpmAgent([string]$Command, [string]$Package, [string]$Label) {
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        Write-Step "${Label}: already installed."
+        return
+    }
+    if (-not (Install-Node)) { return }
+    Write-Step "Installing $Label..."
+    & npm install -g $Package | Out-Null
+    Update-SessionPath
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        Write-Step "$Label installed."
+    } else {
+        Write-Step "Could not install $Label now. Later run: npm install -g $Package"
+    }
+}
+
+function Install-Claude {
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Step 'Claude Code: already installed.'
+        return
+    }
+    Write-Step 'Installing Claude Code...'
+    $shell = (Get-Process -Id $PID).Path
+    & $shell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://claude.ai/install.ps1 | iex' | Out-Null
+    Add-UserPath (Join-Path $HOME '.local\bin')
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Step 'Claude Code installed.'
+    } else {
+        Write-Step 'Claude Code: if it is not found, open a new PowerShell window. To retry: irm https://claude.ai/install.ps1 | iex'
+    }
+}
+
+function Set-AgentConfiguration([string[]]$Python, [string]$Agent, [string]$Provider) {
+    $arguments = @('scripts/getzilla_setup_agent.py', '--agent', $Agent, '--provider', $Provider)
+    if ($env:GETZILLA_MODEL) { $arguments += @('--model', $env:GETZILLA_MODEL) }
+    $key = $env:OPENROUTER_API_KEY
+    if ($Provider -eq 'openrouter' -and $Agent -ne 'grok' -and -not $key -and (Test-CanAsk)) {
+        try {
+            $secure = Read-Host 'OpenRouter API key (create one at https://openrouter.ai/keys, Enter to skip)' -AsSecureString
+            $key = [System.Net.NetworkCredential]::new('', $secure).Password
+        } catch {
+            $key = $null
+        }
+    }
+    Write-Step "Configuring $Agent..."
+    $exe = $Python[0]
+    $prefix = @()
+    if ($Python.Count -gt 1) { $prefix = $Python[1..($Python.Count - 1)] }
+    if ($key) {
+        $key | & $exe @prefix @arguments '--key-stdin'
+    } else {
+        $saved = $env:OPENROUTER_API_KEY
+        $env:OPENROUTER_API_KEY = $null
+        try {
+            $null | & $exe @prefix @arguments
+        } finally {
+            $env:OPENROUTER_API_KEY = $saved
+        }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Step 'Agent configuration failed (see the message above); run scripts/getzilla_setup_agent.py again later.'
+    }
 }
 
 function Install-Grok {

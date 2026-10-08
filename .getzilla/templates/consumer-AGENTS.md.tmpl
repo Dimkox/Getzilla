@@ -8,7 +8,7 @@ This managed block governs the installed workflow in this consumer repository. C
 Start in the consumer repository root and read this `AGENTS.md`. These installed files and directories support the local workflow:
 
 - [Adaptive delivery skill](.agents/skills/getzilla-delivery/SKILL.md), [routing configuration](.getzilla/config/routing.json), and [policy](.getzilla/config/policy.json).
-- [Agent and skill inventory](.getzilla/config/managed.json), [agent roles](.grok/agents/), [Grok configuration](.grok/config.toml), and [hook declarations](.grok/hooks.json).
+- [Agent and skill inventory](.getzilla/config/managed.json), [agent roles](.grok/agents/), [Grok configuration](.grok/config.toml), and [hook declarations](.grok/hooks.json). Qwen Code, Claude Code and Codex load generated copies from `.qwen/`, `.claude/` and `.codex/`.
 - [Route](scripts/getzilla_route.py), [status](scripts/getzilla_status.py), [change](scripts/getzilla_change.py), and [doctor](scripts/getzilla_doctor.py) commands.
 - [Verification](scripts/getzilla_verify.py), [review receipts](scripts/getzilla_review.py), and [delegated local grants](scripts/getzilla_approve.py).
 - [Durable change packages](engineering/changes/) and [independent review reports](engineering/reviews/).

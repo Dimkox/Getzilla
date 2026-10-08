@@ -17,10 +17,21 @@ _ROOT_CANDIDATES = [
 for _p in _ROOT_CANDIDATES:
     s = str(_p)
     if s not in sys.path:
-        sys.path.insert(0, s)
+        sys.path.append(s)
 
 try:
-    from _lib import RootContext, agent_generation, agent_id, emit, read_payload, root_context, session_id, tool_input, tool_name
+    from _lib import (
+        RootContext,
+        agent_generation,
+        agent_id,
+        emit,
+        permission_output,
+        read_payload,
+        root_context,
+        session_id,
+        tool_input,
+        tool_name,
+    )
 except Exception:
     # If even _lib is missing, never block the agent
     print('{"decision":"allow"}')
@@ -236,13 +247,7 @@ def main() -> None:
             from getzilla.policy import evaluate_pre_tool, sensitive_action
         except Exception:
             # Soft: policy stack not importable → allow everything
-            emit({
-                'decision': 'allow',
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'allow',
-                },
-            })
+            emit(permission_output(True))
             return
 
         classification_root = context.effective_root or context.session_root or Path.cwd()
@@ -277,13 +282,7 @@ def main() -> None:
                 else:
                     raise
         if allowed:
-            emit({
-                'decision': 'allow',
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'allow',
-                },
-            })
+            emit(permission_output(True))
             return
 
         message = _actionable_reason(reason or 'Blocked by Getzilla policy')
@@ -307,24 +306,10 @@ def main() -> None:
         elif objective_count >= 2:
             message = f'{_OBJECTIVE_CIRCUIT_BREAKER_GUIDANCE} Original denial: {message}'
 
-        emit({
-            'decision': 'deny',
-            'reason': message,
-            'hookSpecificOutput': {
-                'hookEventName': 'PreToolUse',
-                'permissionDecision': 'deny',
-                'permissionDecisionReason': message,
-            },
-        })
+        emit(permission_output(False, message))
     except Exception:
         # Fail-open: never lock the agent on hook bugs
-        emit({
-            'decision': 'allow',
-            'hookSpecificOutput': {
-                'hookEventName': 'PreToolUse',
-                'permissionDecision': 'allow',
-            },
-        })
+        emit(permission_output(True))
 
 
 if __name__ == '__main__':

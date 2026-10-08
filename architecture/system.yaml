@@ -1979,9 +1979,12 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        ".grok",
+        ".claude",
+        ".codex",
         ".getzilla/getzilla",
-        ".getzilla/templates"
+        ".getzilla/templates",
+        ".grok",
+        ".qwen"
       ],
       "runtime": {
         "evidence": "source_described",
