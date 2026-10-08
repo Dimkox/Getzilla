@@ -53,6 +53,20 @@ jobs:
           paths=$(python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import QUALITY_PY_PATHS; print(' '.join(p for p in QUALITY_PY_PATHS if Path(p).exists()))")
           ruff check --output-format github $paths
           bandit -c bandit.yaml -q -r $(printf '%s\n' $paths | grep -v '^tests') -f custom --msg-template '::error file={relpath},line={line}::{test_id} {msg}'
+      - name: OpenGrep taint rules (the Trust CI engine)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^ARG OPENGREP_VERSION=//p' trust-ci/runner.Dockerfile)
+          digest=$(sed -n 's/^ARG OPENGREP_SHA256=//p' trust-ci/runner.Dockerfile)
+          mkdir -p "$RUNNER_TEMP/opengrep"
+          curl -fsSL -o "$RUNNER_TEMP/opengrep/opengrep" "https://github.com/opengrep/opengrep/releases/download/v${version}/opengrep_manylinux_x86"
+          echo "${digest}  $RUNNER_TEMP/opengrep/opengrep" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/opengrep/opengrep"
+          export PATH="$RUNNER_TEMP/opengrep:$PATH"
+          python -m unittest tests.test_opengrep
+          python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import _opengrep; r = _opengrep(Path('.')); print(r.status, r.summary); [print(d) for d in r.details]; sys.exit(r.status != 'pass')"
       - name: Core tests
         if: success() || failure()
         shell: bash
