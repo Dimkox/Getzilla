@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-08 — Factory tests assumed the author's host
+
+`factory-postgres-exit` was red on main for host reasons, not code. The landing publication fixture assumed directories and files share `st_dev`, which is false on overlayfs without xino (#34). Schema tests shelled out to a `jsonschema` CLI that the factory project never declared (#26). Real-process adapter tests ran on hosts outside the only supported profile, Ubuntu 24.04 with `/usr/bin/python3.12` (#27). Tests must declare their tools, probe the host property they depend on and skip with a reason when it is absent, and run in the clean `uv run --project factory` environment that the gate uses.
+
 ## 2026-10-08 — A conflict resolution dropped the OpenGrep verifier stage
 
 Root cause: merge `4ae0447` resolved a `verification.py` conflict by keeping only the known-vulnerabilities side, so `_opengrep()`, its rule and exclude constants and the quality-gate skip entry disappeared. Nobody ran the full suite after the merge, and four more failures piled up on main (#19–#23). When resolving a conflict in a verifier module, keep both stages, run `tests/test_opengrep.py` and `tests/test_quality_gates.py`, and run the full PR verifier before pushing the merge.
