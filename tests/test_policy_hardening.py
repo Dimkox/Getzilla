@@ -417,6 +417,19 @@ class Review2PosixTests(_Case):
         self.assertIn(key, legacy._SECRET_SCAN_CACHE)
 
 
+class Review3RootDeleteTests(_Case):
+    """Round-3 review (pre-existing MED): find -delete and rsync --delete aimed at the root."""
+
+    def test_find_delete_and_rsync_delete_of_root_are_blocked(self) -> None:
+        self.assert_denied((
+            'find / -delete', 'find / -mindepth 1 -delete', 'find /  -depth -delete',
+            'rsync -a --delete /tmp/empty/ /', 'rsync --delete -r empty/ /',
+        ))
+
+    def test_scoped_find_and_rsync_deletes_stay_allowed(self) -> None:
+        self.assert_allowed(('find build -name "*.o" -delete', 'rsync -a --delete dist/ out/', 'find / -name x -print'))
+
+
 class Review2WindowsTests(_Case):
     """Round-2 review (S59-6): Windows parity for carets, publish/HTTP, destructive and secret reads."""
 

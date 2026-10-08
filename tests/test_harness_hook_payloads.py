@@ -105,6 +105,25 @@ class HarnessHookPayloadTests(unittest.TestCase):
 
 
 
+class OversizeCommandHookTests(unittest.TestCase):
+    """Round-3 review: an oversize Bash command is denied at hook entry, before any parsing."""
+
+    def test_oversize_command_is_denied_well_within_the_hook_timeout(self) -> None:
+        import time
+        command = 'x;' * 150000 + 'rm -rf /'
+        with project_copy() as root:
+            start = time.monotonic()
+            code, data, stderr = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'oversize', 'hook_event_name': 'PreToolUse',
+                'tool_name': 'Bash', 'tool_input': {'command': command},
+            })
+            elapsed = time.monotonic() - start
+        self.assertEqual(code, 0, stderr)
+        decision = data.get('decision') or (data.get('hookSpecificOutput') or {}).get('permissionDecision')
+        self.assertEqual(decision, 'deny', data)
+        self.assertLess(elapsed, 3.0, f'hook took {elapsed:.1f}s')
+
+
 class GeneratedHookCommandTests(unittest.TestCase):
     """Run the exact generated hook commands, from a subdirectory, as each agent would."""
 
