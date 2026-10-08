@@ -1,0 +1,132 @@
+{
+  "allowed_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect",
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer",
+    "release_reviewer"
+  ],
+  "analysis_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect"
+  ],
+  "base_commit": "07b461ca69b4afe4e31b6e622e02f030ba25445c",
+  "base_fingerprint": "bd626c088c468ddb2ef85c861b23337f6a304bf6a14f1877945735a3517df289",
+  "complexity": "high-risk",
+  "created_at": "2026-10-08T16:23:01+00:00",
+  "delivery_expected": true,
+  "domains": [
+    "security",
+    "api"
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "production_action_approval"
+  ],
+  "intent": "review",
+  "matched_keywords": {
+    "security": [
+      "secret"
+    ]
+  },
+  "primary_skill": "getzilla-delivery",
+  "quality_profiles": [
+    "base",
+    "contracts"
+  ],
+  "rationale": [
+    "high-risk signal: production, secret",
+    "intent=review",
+    "domains=security,api",
+    "repository=generic",
+    "write-owner=none",
+    "analysis-wave=4/10"
+  ],
+  "repo": {
+    "bitrix_modules": [],
+    "detected_languages": [
+      "php",
+      "python"
+    ],
+    "domains": [
+      "api"
+    ],
+    "kind": "generic",
+    "language_scan": {
+      "bytes": 274443,
+      "directories": 433,
+      "entries": 4488,
+      "files": 4000,
+      "incomplete_reasons": [
+        "files:4000"
+      ],
+      "non_regular": 0,
+      "skipped_symlinks": 0,
+      "status": "incomplete",
+      "truncated": true,
+      "unknown": true,
+      "unknown_extensions": {
+        ".html": 1,
+        ".json": 789,
+        ".jsonl": 2,
+        ".patch": 1,
+        ".sha256": 3,
+        ".toml": 1,
+        ".xml": 1,
+        ".yaml": 152
+      },
+      "unreadable": 0
+    },
+    "languages": [],
+    "package_scripts": [],
+    "signals": [
+      "contract:engineering/contracts/openapi",
+      "undetected-language",
+      "undetected-language:php=8",
+      "undetected-language:python=21",
+      "undetected-source-extension:.html=1",
+      "undetected-source-extension:.json=789",
+      "undetected-source-extension:.jsonl=2",
+      "undetected-source-extension:.patch=1",
+      "undetected-source-extension:.sha256=3",
+      "undetected-source-extension:.toml=1",
+      "undetected-source-extension:.xml=1",
+      "undetected-source-extension:.yaml=152",
+      "language-scan:incomplete=files:4000"
+    ]
+  },
+  "required_evidence": [
+    "verification",
+    "code_review",
+    "test_review",
+    "security_review",
+    "release_review"
+  ],
+  "review_agents": [
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer",
+    "release_reviewer"
+  ],
+  "risk": "high",
+  "route_id": "dab7da926b12",
+  "schema_version": 1,
+  "session_id": "sec-a",
+  "status": "routed",
+  "task": "Harden the pre-tool hook policy against the remaining production-authority, recursive-remove, secret-read and external-write bypasses found reviewing PR #54 (issues #36 and #37)",
+  "task_domains": [
+    "security"
+  ],
+  "workflow_skills": [
+    "getzilla-delivery",
+    "verification-evidence",
+    "api-event-change",
+    "security-sensitive-change"
+  ],
+  "write_agent": null
+}
