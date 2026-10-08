@@ -6,7 +6,7 @@ import re
 import secrets
 import tomllib
 from contextlib import contextmanager, suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterator
 
 from getzilla import fsx  # absolute like install_into.py; FIT-BOUNDED-WORKER-JOBS misreads `from . import fsx`
@@ -18,6 +18,7 @@ HOOK_SOURCE = '.grok/hooks.json'
 AGENT_SOURCE = '.grok/agents'
 SKILL_SOURCE = '.agents/skills'
 CURSOR_SOURCE = '.grok/cursor-rules'
+CURSOR_MARKER = '<!-- Generated from .grok/cursor-rules/'  # marks the files Getzilla owns in .cursor/rules
 CURSOR_KEYS = frozenset({'description', 'always_apply', 'globs', 'instructions'})
 CURSOR_BUDGET = {True: 4096, False: 8192}  # bytes per always-applied core / per scoped rule
 # Cursor splits `globs` on commas (https://cursor.com/docs/context/rules), so a pattern
@@ -169,7 +170,7 @@ def _cursor_rules(root: Path) -> dict[str, bytes]:
         globs, scoped = rule.get('globs', []), rule.get('always_apply') is False
         if (set(rule) - CURSOR_KEYS or type(rule.get('always_apply')) is not bool
                 or not isinstance(rule.get('description'), str) or not rule['description'].strip()
-                or not isinstance(rule.get('instructions'), str) or not isinstance(globs, list)
+                or not isinstance(rule.get('instructions'), str) or not rule['instructions'].strip() or not isinstance(globs, list)
                 or scoped != bool(globs) or not all(isinstance(g, str) and _CURSOR_GLOB.fullmatch(g) for g in globs)):
             raise ValueError(f'{source}: needs description, instructions and always_apply, and globs '
                              'exactly when always_apply is false; globs hold no comma, brace, quote or space')
@@ -177,7 +178,7 @@ def _cursor_rules(root: Path) -> dict[str, bytes]:
         head = ['---', f'description: {_yaml_string(rule["description"])}']
         head += [f'globs: {",".join(globs)}'] if globs else []
         head += [f'alwaysApply: {str(not scoped).lower()}', '---', '',
-                 f'<!-- Generated from {source} by scripts/getzilla_harness.py --write; do not edit. -->', '', '']
+                 f'{CURSOR_MARKER}{path.name} by scripts/getzilla_harness.py --write; do not edit. -->', '', '']
         content = ('\n'.join(head) + rule['instructions'].strip() + '\n').encode('utf-8')
         if len(content) > CURSOR_BUDGET[not scoped] or content.count(b'\n') > 500:
             raise ValueError(f'{source}: rendered rule exceeds its context budget')
@@ -236,8 +237,23 @@ def _generated(root: Path) -> Iterator[Path]:
             yield from sorted((root / base).rglob('*'), reverse=True)
 
 
+def _owned(path: Path, rel: str) -> bool:
+    """Cursor rules share .cursor/rules with the user's own: only marked files there are Getzilla's."""
+    if not rel.startswith(CURSOR_OUTPUT + '/') or path.is_symlink() or not path.is_file():
+        return True
+    return CURSOR_MARKER.encode('utf-8') in path.read_bytes()[:4096]
+
+
 def _unexpected(path: Path, rel: str, expected: dict[str, bytes]) -> bool:
-    return (path.is_file() or path.is_symlink()) and rel not in expected and path.name not in LOCAL_FILES
+    return ((path.is_file() or path.is_symlink()) and rel not in expected and path.name not in LOCAL_FILES
+            and _owned(path, rel))
+
+
+def _conflict(root: Path, rel: str) -> bool:
+    """A linked parent, a directory or an unowned file where an output goes blocks every write."""
+    path = root / rel
+    return (any((root / parent).is_symlink() for parent in PurePosixPath(rel).parents)
+            or (path.is_dir() and not path.is_symlink()) or not _owned(path, rel))
 
 
 def drift(root: Path) -> list[str]:
@@ -245,7 +261,9 @@ def drift(root: Path) -> list[str]:
     problems = []
     for rel, content in sorted(expected.items()):
         path = root / rel
-        if not path.is_file():
+        if _conflict(root, rel):
+            problems.append(f'conflict {rel}')
+        elif not path.is_file():
             problems.append(f'missing {rel}')
         elif path.is_symlink() or path.read_bytes() != content:
             problems.append(f'stale {rel}')
@@ -291,6 +309,9 @@ def _write_file(root: Path, rel: str, content: bytes) -> None:
 
 def write(root: Path) -> list[str]:
     expected = render(root)
+    conflicts = [rel for rel in sorted(expected) if _conflict(root, rel)]
+    if conflicts:
+        raise ValueError(f'nothing written; resolve conflict {", ".join(conflicts)}')
     changed = []
     for path in _generated(root):
         rel = path.relative_to(root).as_posix()

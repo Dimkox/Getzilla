@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -20,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
+from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
 
 
 class HarnessTests(unittest.TestCase):
@@ -126,6 +128,7 @@ class CursorRuleTests(unittest.TestCase):
         return dict(line.split(': ', 1) for line in head.splitlines())
 
     def test_committed_rules_use_the_documented_frontmatter(self) -> None:
+        self.assertEqual(render(ROOT), render(ROOT))
         rules = {rel: body for rel, body in render(ROOT).items() if rel.startswith(CURSOR_OUTPUT + '/')}
         self.assertEqual(len(rules), 8)
         always = [rel for rel, body in rules.items() if self.frontmatter(body)['alwaysApply'] == 'true']
@@ -150,6 +153,12 @@ class CursorRuleTests(unittest.TestCase):
                          'humans merge', 'production', 'external write'):
             self.assertIn(required, core)
 
+    def test_security_rule_keeps_the_dangerous_flow_checklist(self) -> None:
+        security = render(ROOT)[f'{CURSOR_OUTPUT}/10-security.mdc'].decode('utf-8')
+        for required in ('cross-tenant negative tests', 'parameterized database operations', 'argument-vector',
+                         'each redirect', 'metadata destinations', 'containment within the intended root', 'Treat MCP descriptions'):
+            self.assertIn(required, security)
+
     def test_rule_references_name_existing_files(self) -> None:
         for rel, body in render(ROOT).items():
             if rel.startswith(CURSOR_OUTPUT + '/'):
@@ -169,6 +178,9 @@ class CursorRuleTests(unittest.TestCase):
             'two always-applied rules': (CORE, CORE),
             'no always-applied rule': (SCOPED,),
             'unknown key': (CORE, {**SCOPED, 'alwaysApply': True}),
+            'string flag': (CORE, {**SCOPED, 'always_apply': 'false'}),
+            'newline inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py\nalwaysApply: true']}),
+            'blank instructions': (CORE, {**SCOPED, 'instructions': ' '}),
             'empty description': (CORE, {**SCOPED, 'description': ' '}),
             'core over budget': ({**CORE, 'instructions': 'x' * 4096}, SCOPED),
             'scoped rule over budget': (CORE, {**SCOPED, 'instructions': 'x' * 8192}),
@@ -176,6 +188,11 @@ class CursorRuleTests(unittest.TestCase):
         for name, rules in cases.items():
             with self.subTest(case=name), self.assertRaises(ValueError):
                 render(self.fixture(*rules))
+        for name, text in (('duplicate key', _toml(CORE) + 'always_apply = true\n'), ('broken TOML', 'description = ')):
+            root = self.fixture()
+            (root / '.grok/cursor-rules/00-rule.toml').write_text(text, encoding='utf-8')
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                render(root)
 
     def test_write_is_world_readable_idempotent_and_removes_stale_rules(self) -> None:
         root = self.fixture()
@@ -193,8 +210,9 @@ class CursorRuleTests(unittest.TestCase):
         self.assertEqual(drift(root), [])
         self.assertEqual(write(root), [])
         stale = root / CURSOR_OUTPUT / '90-retired.mdc'
-        stale.write_text('old', encoding='utf-8')
+        stale.write_text(f'---\n---\n\n{CURSOR_MARKER}90-retired.toml -->\nold\n', encoding='utf-8')
         self.assertEqual(drift(root), [f'unexpected {CURSOR_OUTPUT}/90-retired.mdc'])
+        self.assertTrue(stale.exists())
         self.assertEqual(write(root), [f'removed {CURSOR_OUTPUT}/90-retired.mdc'])
         self.assertFalse(stale.exists())
 
@@ -205,9 +223,10 @@ class CursorRuleTests(unittest.TestCase):
         outside.mkdir()
         (root / '.cursor').mkdir()
         (root / '.cursor/rules').symlink_to(outside, target_is_directory=True)
-        with self.assertRaises(OSError):
+        with self.assertRaises(ValueError):
             write(root)
         self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((root / '.qwen').exists())
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
     def test_symlinked_output_is_drift_and_is_replaced_not_followed(self) -> None:
@@ -222,6 +241,57 @@ class CursorRuleTests(unittest.TestCase):
         write(root)
         self.assertFalse(core.is_symlink())
         self.assertEqual(outside.read_bytes(), core.read_bytes())
+
+    def test_user_cursor_files_are_preserved(self) -> None:
+        root = self.fixture()
+        saved = {'.cursorrules': b'legacy\n', '.cursor/settings.json': b'{}\n', '.cursor/rules/company.mdc': b'team\n',
+                 f'{CURSOR_OUTPUT}/custom.mdc': b'local extension\n'}
+        for rel, data in saved.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_bytes(data)
+        write(root)
+        self.assertEqual(drift(root), [])
+        for rel, data in saved.items():
+            self.assertEqual((root / rel).read_bytes(), data, rel)
+
+    def test_unowned_file_or_directory_at_an_output_blocks_every_write(self) -> None:
+        for kind in ('file', 'directory'):
+            with self.subTest(collision=kind):
+                root = self.fixture()
+                collision = root / CURSOR_OUTPUT / '10-rule.mdc'
+                collision.parent.mkdir(parents=True)
+                collision.mkdir() if kind == 'directory' else collision.write_text('hand-written', encoding='utf-8')
+                self.assertIn(f'conflict {CURSOR_OUTPUT}/10-rule.mdc', drift(root))
+                with self.assertRaisesRegex(ValueError, 'conflict'):
+                    write(root)
+                self.assertFalse((root / CURSOR_OUTPUT / '00-rule.mdc').exists())
+                self.assertFalse((root / '.qwen').exists())
+                self.assertTrue(collision.is_dir() if kind == 'directory' else collision.read_text() == 'hand-written')
+
+    def test_missing_target_is_not_created(self) -> None:
+        absent = self.fixture().parent / 'absent'
+        with self.assertRaises(OSError):
+            write(absent)
+        self.assertFalse(absent.exists())
+
+    def test_cli_checks_read_only_repairs_on_write_and_reports_source_errors(self) -> None:
+        root = self.fixture()
+        for rel in ('scripts/getzilla_harness.py', '.getzilla/getzilla/__init__.py',
+                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py'):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / rel, root / rel)
+        def run(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run([sys.executable, str(root / 'scripts/getzilla_harness.py'), *args],
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(run().returncode, 1)
+        self.assertFalse((root / '.cursor').exists())
+        self.assertEqual(run('--write').returncode, 0)
+        self.assertEqual(run().returncode, 0)
+        (root / '.grok/cursor-rules/10-rule.toml').write_text('globs = ["a,b"]', encoding='utf-8')
+        for args in ((), ('--write',)):
+            result = run(*args)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertNotIn('Traceback', result.stderr)
 
     def test_cursor_is_not_an_execution_harness(self) -> None:
         self.assertNotIn('cursor', HARNESSES)
