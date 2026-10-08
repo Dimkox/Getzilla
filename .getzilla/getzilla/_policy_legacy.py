@@ -451,6 +451,14 @@ def _dangerous_remove_target(operand: str) -> bool:
     }
 
 
+def _root_like_target(operand: str) -> bool:
+    """``/``, ``/.``, ``/*``, ``~``, ``$HOME``, a drive root, or any expansion-dependent word."""
+    if any(c in operand for c in '$`'):
+        return True
+    stripped = operand.lower().replace('\\', '/').rstrip('/.*')
+    return stripped in {'', '~'} or re.fullmatch(r'[a-z]:', stripped) is not None
+
+
 def _remove_operands(argv: list[str]) -> list[str] | None:
     """Operands of a recursive delete (``rm -r``, ``del /s``, ``rd /s``, ``Remove-Item -Recurse``), else ``None``."""
     name, words = argv[0], argv[1:]
@@ -470,8 +478,11 @@ def _remove_operands(argv: list[str]) -> list[str] | None:
         return paths or ['.']
     if name == 'rsync' and any(w.startswith('--del') for w in words):
         # `rsync --delete* src… dest` deletes extraneous files under the destination.
+        # Options may follow the destination (`… x/ / --exclude foo`), so besides the last
+        # operand every root-like operand counts: fail closed (review round 4).
         positionals = [w for w in words if not w.startswith('-')]
-        return positionals[-1:] if len(positionals) > 1 else None
+        rooted = [w for w in positionals if _root_like_target(w)]
+        return [*positionals[-1:], *rooted] if len(positionals) > 1 or rooted else None
     if name != 'rm':
         return None
     recursive = options_done = False
@@ -517,7 +528,7 @@ def _recursive_remove_of_root(command: str) -> bool:
         if _executable_name(argv[0]) in _INERT_EXECUTABLES:
             continue
         for index in range(1, len(argv)):
-            if _executable_name(argv[index]) in _REMOVE_VERBS:
+            if _executable_name(argv[index]) in _REMOVE_VERBS | {'find', 'rsync'}:
                 wrapped = [_executable_name(argv[index]), *argv[index + 1:]]
                 operands = _remove_operands(wrapped)
                 if operands and any(_dangerous_remove_target(operand) for operand in operands):
