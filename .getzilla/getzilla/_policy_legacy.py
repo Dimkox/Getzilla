@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import codecs
 import fnmatch
-import glob
-import itertools
+import os
 import re
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -35,7 +36,11 @@ DEFAULT_PROTECTED = [
 DEFAULT_SECRET_READ = [
     '.env', '.env.*', '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
     '**/id_rsa', '**/id_ed25519', '**/credentials*', '**/secrets/**', 'trust-ci/env/*.env', 'trust-ci/runtime/**',
+    '**/id_ecdsa', '**/id_dsa', '**/.ssh/**', '**/.git-credentials', '**/.netrc', '**/_netrc', '**/.npmrc', '**/.pypirc',
+    '**/.pgpass', '**/.config/gh/hosts.yml', '**/.docker/config.json', '**/.kube/config', '**/.aws/**',
 ]
+# Names that match a secret glob but are templates or public halves; never secret.
+SECRET_READ_EXCEPTIONS = ('*.pub', '.env.example', '.env.sample', '.env.template', '.env.dist')
 DESTRUCTIVE_COMMANDS = [
     r'\bgit\s+reset\s+--hard\b',
     r'\bgit\s+clean\s+[^\n]*(?:-f|-x)',
@@ -216,73 +221,208 @@ RECURSIVE_REMOVE_POLICY = 'rm -r of /, an absolute path, ~, $HOME, . or *'
 _RM_GLOB_ONLY = re.compile(r'^[*?./]+$')
 
 
-def _shell_pieces(command: str, depth: int = 0) -> list[list[str] | None]:
-    """Token lists of every simple command, unwrapping nested ``sh -c`` payloads.
+_PUNCTUATION = frozenset(';&|()<>\n')
+_ASSIGNMENT = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+_ANSI_C_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+# Wrappers that run their operand as a command, with the options that take a value.
+_COMMAND_WRAPPERS = {
+    'sudo': {'-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U'}, 'doas': {'-u', '-C'}, 'env': {'-u', '-C'},
+    'command': set(), 'builtin': set(), 'exec': {'-a'}, 'nice': {'-n', '--adjustment'}, 'nohup': set(),
+    'setsid': set(), 'time': {'-f', '-o'}, 'timeout': {'-s', '-k', '--signal', '--kill-after'},
+    'stdbuf': {'-i', '-o', '-e'}, 'xargs': {'-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter'},
+}
+_SHELL_COMMAND_OPTION = re.compile(r'-[A-Za-z]*c[A-Za-z]*')
+_GIT_FILTER_OPTIONS = frozenset({
+    '--setup', '--env-filter', '--tree-filter', '--index-filter', '--parent-filter', '--msg-filter', '--commit-filter',
+    '--tag-name-filter',
+})
 
-    ``None`` marks a piece that ``shlex`` cannot tokenize.
-    """
-    pieces: list[list[str] | None] = []
-    for chunk in _command_chunks(command):
-        try:
-            tokens = _split_words(chunk)
-        except ValueError:
-            pieces.append(None)
-            continue
-        while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-            tokens = tokens[1:]
-        if not tokens:
-            continue
-        payload = None
-        for index, token in enumerate(tokens):
-            if _executable_name(token) in _SHELL_EXECUTABLES:
-                for option_index in range(index + 1, len(tokens) - 1):
-                    if re.fullmatch(r'-[A-Za-z]*c[A-Za-z]*', tokens[option_index]):
-                        payload = tokens[option_index + 1]
-                        break
+
+def _ansi_c(match: re.Match[str]) -> str:
+    """``$'\x2eenv'`` -> ``'.env'``: decode ANSI-C quoting before tokenizing."""
+    try:
+        return shlex.quote(codecs.decode(match.group(1), 'unicode_escape'))
+    except (UnicodeDecodeError, ValueError):
+        return shlex.quote(match.group(1))
+
+
+def _words(text: str) -> list[str]:
+    """Shell words and operator tokens (``;``, ``&&``, ``|``, ``(``, ``>``, newline), quotes removed."""
+    if fsx.WINDOWS:
+        text = _windows_literal_backslashes(text)
+    lexer = shlex.shlex(_ANSI_C_QUOTE.sub(_ansi_c, text), posix=True, punctuation_chars=''.join(sorted(_PUNCTUATION)))
+    lexer.whitespace, lexer.whitespace_split, lexer.commenters = ' \t\r', True, ''
+    return list(lexer)
+
+
+def _strip_wrappers(argv: list[str]) -> list[str]:
+    """Drop ``VAR=value`` prefixes and command wrappers (``sudo -u x``, ``env``, ``timeout 5``, ``xargs -n1``)."""
+    for _depth in range(8):
+        while argv and _ASSIGNMENT.match(argv[0]):
+            argv = argv[1:]
+        name = _executable_name(argv[0]) if argv else ''
+        if name not in _COMMAND_WRAPPERS:
+            return argv
+        index = 1
+        while index < len(argv) and (argv[index].startswith('-') or (name == 'env' and _ASSIGNMENT.match(argv[index]))):
+            if argv[index] == '--':
+                index += 1
                 break
-        if payload is not None and depth < 4:
-            pieces.extend(_shell_pieces(payload, depth + 1))
+            index += 2 if argv[index] in _COMMAND_WRAPPERS[name] else 1
+        argv = argv[index + (1 if name == 'timeout' else 0):]
+    return argv
+
+
+def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
+    """Command strings (``str``) or argv lists that ``argv`` itself runs.
+
+    ``sh -c``, ``cmd /c``, ``powershell -Command``, ``git submodule foreach``,
+    ``git rebase -x``, ``git bisect run``, ``git filter-branch --*-filter``,
+    ``git -c alias.x=!cmd`` and ``find -exec``; ``None`` for an opaque payload
+    (``powershell -EncodedCommand``).
+    """
+    name, lowered = argv[0], [word.lower() for word in argv]
+    if name in _SHELL_EXECUTABLES:
+        index = next((i for i, word in enumerate(argv[1:-1], 1) if _SHELL_COMMAND_OPTION.fullmatch(word)), None)
+        return [argv[index + 1]] if index else []
+    if name == 'cmd':
+        index = next((i for i, word in enumerate(lowered) if word in {'/c', '/k'}), None)
+        return [' '.join(argv[index + 1:])] if index else []
+    if name in {'powershell', 'pwsh'}:
+        if any(word in {'-e', '-ec'} or (len(word) > 3 and '-encodedcommand'.startswith(word)) for word in lowered[1:]):
+            return [None]
+        index = next(
+            (i for i, word in enumerate(lowered[1:], 1) if word == '-c' or (len(word) > 3 and '-command'.startswith(word))),
+            None,
+        )
+        return [' '.join(argv[index + 1:])] if index else []
+    if name == 'find':
+        nested: list[str | list[str] | None] = []
+        for index, word in enumerate(argv):
+            if word in {'-exec', '-execdir', '-ok', '-okdir'}:
+                end = next((i for i in range(index + 1, len(argv)) if argv[i] in {';', '+'}), len(argv))
+                nested.append(argv[index + 1:end])
+        return nested
+    if name != 'git':
+        return []
+    nested = [value.split('=', 1)[1][1:] for option, value in zip(lowered, argv[1:]) if option == '-c' and '=!' in value]
+    sub, index = _git_subcommand(lowered)
+    rest = argv[index + 1:]
+    if sub == 'submodule' and 'foreach' in lowered[index + 1:]:
+        after = rest[lowered[index + 1:].index('foreach') + 1:]
+        while after and after[0].startswith('-'):
+            after = after[1:]
+        nested.append(' '.join(after))
+    elif sub == 'bisect' and rest[:1] == ['run']:
+        nested.append(rest[1:])
+    elif sub in {'rebase', 'filter-branch'}:
+        for position, word in enumerate(rest):
+            option, _, attached = word.partition('=')
+            if (sub == 'rebase' and option in {'-x', '--exec'}) or (sub == 'filter-branch' and option in _GIT_FILTER_OPTIONS):
+                nested.append(attached or (rest[position + 1] if position + 1 < len(rest) else ''))
+            elif sub == 'rebase' and word.startswith('-x') and len(word) > 2:
+                nested.append(word[2:])
+    return nested
+
+
+def _simple_commands(command: str, depth: int = 0) -> list[list[str] | None]:
+    """Normalized argv of every simple command ``command`` runs, nested command strings included.
+
+    Operators split commands (quotes respected), redirection operators are dropped
+    (their targets stay operands), wrappers are removed, ``argv[0]`` is the
+    lower-cased basename and ``git-<sub>`` helpers become ``git <sub>``. ``None``
+    marks text that cannot be tokenized or nesting deeper than four levels.
+    """
+    if depth > 4:
+        return [None]
+    try:
+        words = _words(command)
+    except ValueError:
+        return [None]
+    commands: list[list[str] | None] = []
+    current: list[str] = []
+    for word in [*words, ';']:
+        if word and set(word) <= _PUNCTUATION:
+            if '<' not in word and '>' not in word and current:
+                commands.extend(_expand_command(current, depth))
+                current = []
             continue
-        pieces.append(tokens)
-    return pieces
+        current.append(word)
+    return commands
+
+
+def _expand_command(argv: list[str], depth: int) -> list[list[str] | None]:
+    argv = _strip_wrappers(argv)
+    if not argv:
+        return []
+    name = _executable_name(argv[0])
+    argv = ['git', name[4:], *argv[1:]] if name.startswith('git-') and len(name) > 4 else [name, *argv[1:]]
+    result: list[list[str] | None] = [argv]
+    for nested in _nested_commands(argv):
+        if nested is None or depth >= 4:
+            result.append(None)
+        elif isinstance(nested, str):
+            result.extend(_simple_commands(nested, depth + 1))
+        elif nested:
+            result.extend(_expand_command(nested, depth + 1))
+    return result
+
+
+def _shell_pieces(command: str) -> list[list[str] | None]:
+    """Compatibility name for :func:`_simple_commands`."""
+    return _simple_commands(command)
 
 
 def _dangerous_remove_target(operand: str) -> bool:
-    lowered = operand.lower()
-    if lowered.startswith(('/', '~', '$home', '${home')):
+    """Root, home, absolute, drive or expansion-dependent (``$``, ``{``, backtick) targets fail closed."""
+    lowered = operand.lower().replace('\\', '/')
+    if lowered.startswith(('/', '~', '$', '%')) or re.match(r'^[a-z]:', lowered) or any(c in operand for c in '{`'):
         return True
     return _RM_GLOB_ONLY.fullmatch(operand) is not None and operand.strip('/') in {
         '', '.', '..', '*', '.*', './*', '**',
     }
 
 
+def _remove_operands(argv: list[str]) -> list[str] | None:
+    """Operands of a recursive delete (``rm -r``, ``del /s``, ``rd /s``, ``Remove-Item -Recurse``), else ``None``."""
+    name, words = argv[0], argv[1:]
+    if name in {'del', 'erase', 'rd', 'rmdir'} and any(re.fullmatch(r'(?:/[a-z])*/s(?:/[a-z])*', w.lower()) for w in words):
+        return [w for w in words if not re.fullmatch(r'(?:/[a-z?])+', w.lower())]
+    if name in {'remove-item', 'ri', 'rm', 'rmdir', 'del', 'erase', 'rd'} and any(
+        len(w) > 1 and '-recurse'.startswith(w.lower()) for w in words
+    ):
+        return [w for w in words if not w.startswith('-')]
+    if name != 'rm':
+        return None
+    recursive = options_done = False
+    operands: list[str] = []
+    for word in words:
+        option = word.split('=', 1)[0]
+        if not options_done and word == '--':
+            options_done = True
+        elif not options_done and word.startswith('--'):
+            # GNU getopt accepts any unambiguous prefix: --rec == --recursive, --no == --no-preserve-root.
+            recursive = recursive or (len(option) > 2 and '--recursive'.startswith(option)) or (
+                len(option) > 3 and '--no-preserve-root'.startswith(option)
+            )
+        elif not options_done and word.startswith('-') and len(word) > 1:
+            recursive = recursive or 'r' in word[1:].lower()
+        else:
+            operands.append(word)
+    return operands if recursive else None
+
+
 def _recursive_remove_of_root(command: str) -> bool:
-    """``rm`` with -r/-R/--recursive (any flag order) or --no-preserve-root on a root-like target."""
-    for tokens in _shell_pieces(command):
-        if tokens is None:
+    """A recursive delete (any spelling, nested or wrapped) of a root-like or expansion-dependent target."""
+    for argv in _simple_commands(command):
+        if argv is None:
             if re.search(r'\brm\b[^\n]*\s-[A-Za-z-]*[rR]', command) and re.search(
-                r'\brm\b[^\n]*\s["\']?(?:/|~|\$\{?HOME|\.\s|\.$|\*)', command,
+                r'\brm\b[^\n]*\s["\']?(?:/|~|\$|\.\s|\.$|\*|\{)', command,
             ):
                 return True
             continue
-        if _executable_name(tokens[0]) in _INERT_EXECUTABLES:
-            continue
-        index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'rm'), None)
-        if index is None:
-            continue
-        recursive = no_preserve = options_done = False
-        operands: list[str] = []
-        for word in tokens[index + 1:]:
-            if not options_done and word == '--':
-                options_done = True
-            elif not options_done and word.startswith('--'):
-                recursive = recursive or word == '--recursive'
-                no_preserve = no_preserve or word == '--no-preserve-root'
-            elif not options_done and word.startswith('-') and len(word) > 1:
-                recursive = recursive or 'r' in word[1:].lower()
-            else:
-                operands.append(word)
-        if (recursive or no_preserve) and any(_dangerous_remove_target(operand) for operand in operands):
+        operands = _remove_operands(argv)
+        if operands and any(_dangerous_remove_target(operand) for operand in operands):
             return True
     return False
 
@@ -513,7 +653,7 @@ _NPM_VALUE_OPTIONS = frozenset({
     '--registry', '--userconfig', '--globalconfig', '--prefix', '-w', '--workspace', '--tag', '--otp',
     '--access', '--cache', '--loglevel', '--scope',
 })
-_GIT_PUSH_SUBCOMMANDS = frozenset({'push', 'send-pack'})
+_GIT_PUSH_SUBCOMMANDS = frozenset({'push', 'send-pack', 'http-push'})
 
 
 def _positionals(
@@ -582,7 +722,8 @@ def _production_action(argv: list[str]) -> str | None:
     executable = argv[0]
     if executable == 'git':
         subcommand, index = _git_subcommand(argv)
-        if subcommand in _GIT_PUSH_SUBCOMMANDS:
+        # git-remote-<transport> helpers speak the push protocol on stdin.
+        if subcommand in _GIT_PUSH_SUBCOMMANDS or (subcommand or '').startswith('remote-'):
             return _git_push_action(argv[index + 1:])
         return None
     if executable == 'gh':
@@ -594,7 +735,7 @@ def _production_action(argv: list[str]) -> str | None:
         if len(command) == 2 and command[0] == 'release' and command[1] in {'create', 'upload', 'edit'}:
             return 'github-release'
         return None
-    if executable == 'docker':
+    if executable in {'docker', 'podman', 'buildah'}:
         positionals, _ = _positionals(argv, _DOCKER_VALUE_OPTIONS, 2)
         if positionals[:1] == ['push'] or positionals in (['image', 'push'], ['manifest', 'push'], ['compose', 'push']):
             return 'docker-push'
@@ -609,6 +750,9 @@ def _production_action(argv: list[str]) -> str | None:
         if positionals[1:2] == ['publish'] and argv[indexes[0] - 1].startswith('-'):
             return 'npm-publish'
         return None
+    if executable in {'pnpm', 'yarn'}:
+        positionals, _ = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
+        return 'npm-publish' if 'publish' in positionals[:2] else None
     return None
 
 
@@ -619,10 +763,24 @@ class AuthorityAnalysis:
     context_proven: bool
 
 
-_AUTHORITY_EXECUTABLES = {'git', 'gh', 'docker', 'npm'}
+_AUTHORITY_EXECUTABLES = {'git', 'gh', 'docker', 'npm', 'pnpm', 'yarn', 'podman', 'buildah'}
+_AUTHORITY_WORDS = re.compile(r'\b(?:git|gh|docker|npm|pnpm|yarn|podman|buildah)\b', re.IGNORECASE)
 _AUTHORITY_META = re.compile(r'[$`*?\[\]{}()]')
 _INERT_EXECUTABLES = {'echo', 'printf'}
 _SHELL_EXECUTABLES = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+
+
+def _is_authority(token: str) -> bool:
+    name = _executable_name(token)
+    return name in _AUTHORITY_EXECUTABLES or (name.startswith('git-') and len(name) > 4)
+
+
+def _git_config_defines_command(argv: list[str]) -> bool:
+    """``git config`` writing ``alias.*``/``include*`` (a later bare ``git <alias>`` would run anything)."""
+    words = [word.lower() for word in argv[2:]]
+    if not any(word.startswith(('alias.', 'include.', 'includeif.')) for word in words):
+        return False
+    return not any(word in {'--get', '--get-all', '--get-regexp', '-l', '--list', 'get', 'list'} for word in words)
 
 
 def _authority_token_is_dynamic(token: str) -> bool:
@@ -669,8 +827,17 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
     if not argv:
         return None, False
     executable = _executable_name(argv[0])
+    if executable.startswith('git-') and len(executable) > 4:
+        argv, executable = ['git', executable[4:], *argv[1:]], 'git'
     normalized = [executable, *[token.lower() for token in argv[1:]]]
     action = _production_action(normalized)
+    if executable == 'git' and (
+        (_git_subcommand(normalized)[0] == 'config' and _git_config_defines_command(normalized))
+        or any(a == '-c' and b.startswith('alias.') for a, b in zip(normalized, normalized[1:]))
+    ):
+        return action, True
+    if executable == 'gh' and _gh_command(normalized) in {('alias', 'set'), ('alias', 'import')}:
+        return action, True
     if executable == 'git':
         selector_index = _git_selector_index(argv)
         if selector_index >= len(argv):
@@ -681,7 +848,7 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
             _authority_token_is_dynamic(token) for token in argv[selector_index + 1:]
         ):
             return action, True
-    elif executable in {'docker', 'npm'}:
+    elif executable in _AUTHORITY_EXECUTABLES - {'git', 'gh'}:
         if len(argv) > 1 and _authority_token_is_dynamic(argv[1]):
             return action, True
         if action and any(_authority_token_is_dynamic(token) for token in argv[2:]):
@@ -778,7 +945,7 @@ def _analyze_authority_pieces(
     for chunk in _command_chunks(raw_command):
         raw_tokens = _command_tokens(chunk)
         if raw_tokens is None:
-            if re.search(r'\b(?:git|gh|docker|npm)\b', chunk, re.IGNORECASE):
+            if _AUTHORITY_WORDS.search(chunk):
                 ambiguous = True
                 context_proven = False
             continue
@@ -791,18 +958,18 @@ def _analyze_authority_pieces(
         if outer == 'xargs':
             target = _literal_xargs_target(tokens)
             if target is None:
-                if any(_executable_name(token) in _AUTHORITY_EXECUTABLES for token in tokens[1:]):
+                if any(_is_authority(token) for token in tokens[1:]):
                     ambiguous = True
                     context_proven = False
                 continue
             target, target_bounded = _bounded_command(target)
             if not target or _executable_name(target[0]) in _INERT_EXECUTABLES:
                 continue
-            if _executable_name(target[0]) in _AUTHORITY_EXECUTABLES:
+            if _is_authority(target[0]):
                 record(target, proven=False)
-            elif any(_executable_name(token) in _AUTHORITY_EXECUTABLES for token in target):
+            elif any(_is_authority(token) for token in target):
                 for index, token in enumerate(target):
-                    if _executable_name(token) in _AUTHORITY_EXECUTABLES:
+                    if _is_authority(token):
                         record(target[index:], proven=False)
             if not target_bounded:
                 context_proven = False
@@ -823,7 +990,7 @@ def _analyze_authority_pieces(
             # cmd /c, powershell -Command and their options are not modelled: the
             # authority they carry is reported but never proven.
             if shell_depth > 1:
-                if re.search(r'\b(?:git|gh|docker|npm)\b', chunk, re.IGNORECASE):
+                if _AUTHORITY_WORDS.search(chunk):
                     ambiguous = True
                     context_proven = False
                 continue
@@ -835,22 +1002,38 @@ def _analyze_authority_pieces(
             if inner.actions or inner.ambiguous:
                 context_proven = False
             continue
-        if outer in _AUTHORITY_EXECUTABLES:
+        if _is_authority(tokens[0]):
             record(tokens, proven=bounded)
             continue
         for index, token in enumerate(tokens[1:], 1):
-            if _executable_name(token) in _AUTHORITY_EXECUTABLES:
+            if _is_authority(token):
                 record(tokens[index:], proven=False)
 
     return AuthorityAnalysis(tuple(actions), ambiguous, context_proven)
 
 
 def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
-    """Conservatively classify production authority without evaluating shell syntax."""
+    """Conservatively classify production authority without evaluating shell syntax.
+
+    The literal pass proves the context of top-level commands; a second pass over
+    every nested command string (``git submodule foreach``, ``rebase -x``, nested
+    ``sh -c``, ``find -exec``) reports what it finds there as unproven.
+    """
     shell_payload = _exact_outer_shell_payload(raw_command)
     if shell_payload is not None:
-        return _analyze_authority_pieces(shell_payload, shell_depth=1)
-    return _analyze_authority_pieces(raw_command)
+        analysis = _analyze_authority_pieces(shell_payload, shell_depth=1)
+    else:
+        analysis = _analyze_authority_pieces(raw_command)
+    actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
+    for argv in _simple_commands(raw_command):
+        if argv is None or argv[0] in _INERT_EXECUTABLES:
+            continue
+        action, candidate_ambiguous = _candidate_authority(argv)
+        ambiguous = ambiguous or candidate_ambiguous
+        if action and action not in actions:
+            actions.append(action)
+            proven = False
+    return AuthorityAnalysis(tuple(actions), ambiguous, proven)
 
 
 def production_action(command: str) -> str | None:
@@ -923,12 +1106,73 @@ def _gh_external_write(command: str) -> str | None:
     return None
 
 
+_CURL_BODY_OPTIONS = frozenset({
+    '-d', '--data', '--data-raw', '--data-binary', '--data-ascii', '--data-urlencode', '--json', '-F', '--form',
+    '--form-string', '-T', '--upload-file',
+})
+_WGET_BODY_OPTIONS = frozenset({'--post-data', '--post-file', '--body-data', '--body-file'})
+# gh subcommands that only read; every other gh subcommand is an external write unless it is a
+# modelled production action (pr merge, workflow run, release create/upload/edit) or gh api/pr review.
+_GH_READ_COMMANDS = frozenset({
+    'view', 'list', 'ls', 'status', 'diff', 'checks', 'checkout', 'clone', 'download', 'watch', 'get', 'search',
+})
+_GH_READ_GROUPS = frozenset({'search', 'status', 'help', 'version', 'completion', 'browse', 'api'})
+_GH_TEXT_OPTIONS = frozenset({
+    '-b', '--body', '-F', '--body-file', '-t', '--title', '-l', '--label', '-a', '--assignee', '-m', '--milestone',
+    '-B', '--base', '-H', '--head', '-r', '--reviewer', '--add-label', '--remove-label', '--visibility', '-e', '--env',
+    '-o', '--org', '-n', '--name', '-d', '--description', '-c', '--color',
+})
+
+
+def _http_tool_write(argv: list[str]) -> str | None:
+    """URL a ``curl``/``wget`` argv writes to (non-GET method, body, form or upload), else ``None``."""
+    options = _CURL_BODY_OPTIONS if argv[0] == 'curl' else _WGET_BODY_OPTIONS
+    method_options = {'-X', '--request'} if argv[0] == 'curl' else {'--method'}
+    write, url = False, None
+    for index, word in enumerate(argv[1:], 1):
+        option, _, attached = word.partition('=') if word.startswith('--') else (word, '', '')
+        method = attached or (argv[index + 1] if index + 1 < len(argv) else '') if option in method_options else None
+        if argv[0] == 'curl' and word.startswith('-X') and len(word) > 2:
+            method = word[2:]
+        if method is not None and method.strip().upper() not in {'GET', 'HEAD', ''}:
+            write = True
+        if option in options or (argv[0] == 'curl' and re.match(r'^-[dFT]\S', word)) or option.startswith('--data-'):
+            write = True
+        if url is None and re.match(r'^https?://', word, re.IGNORECASE):
+            url = word
+    return (url or 'direct-http-write') if write else None
+
+
+def _gh_write_resource(argv: list[str]) -> str | None:
+    """Exact resource of a gh subcommand outside the read-only allowlist, e.g. ``gh:a/b pr close 1``."""
+    if any('$' in word or '`' in word for word in argv):
+        return None  # a dynamic selector is ambiguous authority, not a grantable exact target
+    lowered = [word.lower() for word in argv]
+    positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
+    if not positionals or positionals[0] in _GH_READ_GROUPS or (len(positionals) > 1 and positionals[1] in _GH_READ_COMMANDS):
+        return None
+    if len(positionals) == 1:
+        return None  # `gh pr` alone prints help
+    if _production_action(['gh', *lowered[1:]]) or tuple(positionals) == ('pr', 'review'):
+        return None
+    operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS, 8)
+    repository = next((lowered[i + 1] for i, word in enumerate(lowered[:-1]) if word in {'-r', '--repo'}), '.')
+    return f'gh:{repository} ' + ' '.join([*positionals, *operands])
+
+
 def _http_write_resource_text(command: str) -> str | None:
     lowered = command.lower()
     mutation = False
     gh_resource = _gh_external_write(command)
     if gh_resource:
         return gh_resource
+    for argv in _simple_commands(command):
+        if argv is None:
+            continue
+        if argv[0] in {'curl', 'wget'} and _http_tool_write(argv):
+            return _http_tool_write(argv)
+        if argv[0] == 'gh' and _gh_write_resource(argv):
+            return _gh_write_resource(argv)
     if re.search(r'\bcurl\b', lowered):
         mutation = bool(re.search(r'(?:-x|--request)\s*(?:post|put|patch|delete)\b|(?:-d|--data(?:-raw|-binary)?)(?:\s|=)', lowered))
     elif re.search(r'\bwget\b', lowered):
@@ -950,7 +1194,75 @@ def _http_write_resource_text(command: str) -> str | None:
 
 
 _SECRET_PIECE_SPLIT = re.compile(r"""[\s'"`=:@,;()<>|&{}]+""")
-_SECRET_GLOB_LIMIT = 512
+_SCAN_SECONDS = 3.0
+_SCAN_ENTRY_LIMIT = 20000
+_HAS_SUBST = re.compile(r'\$\(|`|<\(')
+_BRACE = re.compile(r'\{([^{}]*)\}')
+_BUDGET_MARKER = 'a bounded filesystem scan did not complete'
+_INERT_SECRET = frozenset({
+    'echo', 'printf', 'ls', 'stat', 'test', '[', 'du', 'touch', 'mkdir', 'which', 'basename', 'dirname', 'realpath',
+    'readlink',
+})
+_GREP_FAMILY = frozenset({'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ack-grep'})
+_ALWAYS_RECURSIVE_GREP = frozenset({'rg', 'ag', 'ack', 'ack-grep'})
+_GREP_VALUE_OPTIONS = frozenset({
+    '-m', '--max-count', '-A', '-B', '-C', '--before-context', '--after-context', '--context', '-d', '-D', '--devices',
+    '--binary-files', '--color', '--colour', '--include', '--exclude', '--exclude-dir', '--include-dir',
+})
+_COPY_READERS = frozenset({'cp', 'rsync', 'scp'})
+_ARCHIVE_READERS = frozenset({'tar', 'zip', '7z', '7za', 'gzip', 'bsdtar'})
+_GIT_TEXT_OPTIONS = frozenset({
+    '-m', '--message', '--grep', '--author', '--committer', '-S', '-G', '--format', '--pretty', '--since', '--until',
+    '--date', '-F', '--file',
+})
+
+
+class _BudgetExceeded(Exception):
+    """Raised when a filesystem scan exceeds its entry or time budget (fail closed)."""
+
+
+class _Budget:
+    def __init__(self) -> None:
+        self._deadline = time.monotonic() + _SCAN_SECONDS
+        self._entries = 0
+
+    def tick(self) -> None:
+        self._entries += 1
+        if self._entries > _SCAN_ENTRY_LIMIT or time.monotonic() > self._deadline:
+            raise _BudgetExceeded
+
+
+def _brace_options(body: str) -> list[str]:
+    numeric = re.fullmatch(r'(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?', body)
+    if numeric:
+        a, b = int(numeric.group(1)), int(numeric.group(2))
+        step = abs(int(numeric.group(3) or 1)) or 1
+        span = range(a, b + 1, step) if a <= b else range(a, b - 1, -step)
+        return [str(x) for x in span][:64]
+    alpha = re.fullmatch(r'([A-Za-z])\.\.([A-Za-z])', body)
+    if alpha:
+        a, b = ord(alpha.group(1)), ord(alpha.group(2))
+        span = range(a, b + 1) if a <= b else range(a, b - 1, -1)
+        return [chr(x) for x in span][:64]
+    return body.split(',')
+
+
+def _brace_expand(word: str) -> list[str]:
+    """Brace expansion of comma lists and ``x..y`` ranges, capped so it cannot explode."""
+    stack, results, guard = [word], [], 0
+    while stack and guard < 512:
+        guard += 1
+        current = stack.pop()
+        match = _BRACE.search(current)
+        if not match:
+            results.append(current)
+            continue
+        prefix, suffix = current[: match.start()], current[match.end():]
+        for option in _brace_options(match.group(1)):
+            stack.append(prefix + option + suffix)
+        if len(stack) + len(results) > 256:
+            break
+    return (results or [word])[:64]
 
 
 def _secret_path_match(path: str, patterns: list[str]) -> bool:
@@ -971,9 +1283,45 @@ def _secret_path_match(path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _secret_reference(root: Path, raw: str, patterns: list[str], *, expand: bool = True) -> bool:
+def _secret_exception(raw: str) -> bool:
+    base = os.path.basename(raw.replace('\\', '/').rstrip('/'))
+    return bool(base) and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS)
+
+
+def _bounded_glob(start: str, pattern: str, budget: _Budget) -> list[str]:
+    """Filesystem matches of a glob pattern, one path segment at a time, under ``budget``."""
+    normalized = pattern.replace('\\', '/')
+    if normalized.startswith('/'):
+        bases, segments = ['/'], [seg for seg in normalized.split('/') if seg]
+    else:
+        bases, segments = [start], [seg for seg in normalized.split('/') if seg]
+    for segment in segments:
+        nxt: list[str] = []
+        if _GLOB_META.search(segment):
+            for base in bases:
+                try:
+                    with os.scandir(base) as entries:
+                        for entry in entries:
+                            budget.tick()
+                            if fnmatch.fnmatch(entry.name, segment):
+                                nxt.append(os.path.join(base, entry.name))
+                except OSError:
+                    continue
+        else:
+            for base in bases:
+                budget.tick()
+                nxt.append(os.path.join(base, segment))
+        bases = nxt
+        if not bases:
+            break
+    return bases
+
+
+def _secret_reference(
+    root: Path, raw: str, patterns: list[str], *, expand: bool = True, budget: _Budget | None = None,
+) -> bool:
     """Whether ``raw`` names secret material, inside the repository or outside it."""
-    if not raw or '\x00' in raw:
+    if not raw or '\x00' in raw or _secret_exception(raw):
         return False
     rel = safe_relative_path(root, raw)
     if rel is not None and _secret_path_match(rel, patterns):
@@ -981,32 +1329,246 @@ def _secret_reference(root: Path, raw: str, patterns: list[str], *, expand: bool
     if _secret_path_match(raw, patterns):
         return True
     if expand and _GLOB_META.search(raw):
-        base = raw if Path(raw).is_absolute() else str(root / raw)
-        for match in itertools.islice(glob.iglob(base), _SECRET_GLOB_LIMIT):
+        budget = budget or _Budget()
+        for match in _bounded_glob(str(root), raw, budget):
             if _secret_reference(root, match, patterns, expand=False):
                 return True
     return False
 
 
-def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
-    """First secret path a shell command names, under any quoting, nesting or option form.
+def _resolve_under_root(root: Path, word: str) -> str | None:
+    if not word or _GLOB_META.search(word):
+        return None
+    rel = safe_relative_path(root, word)
+    if rel is None:
+        return None
+    return str(root) if rel in ('', '.') else os.path.join(str(root), rel)
 
-    The command is not evaluated: every word fragment (split at quotes, ``=``, ``:``,
-    ``@``, parentheses and shell operators, with URLs removed) is checked against the
-    secret patterns, so ``cat``, ``cp``, ``git show HEAD:``, ``curl -d @``, interpreter
-    one-liners and unparseable text are all covered. Glob words are expanded against
-    the filesystem; variables are not.
-    """
+
+def _walk_for_secret(
+    root: Path, directory: str, patterns: list[str], budget: _Budget, glob_filter: str | None = None,
+) -> str | None:
+    """First secret file in ``directory`` (recursively, skipping ``.git``), under ``budget``."""
+    stack = [directory]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    budget.tick()
+                    if entry.name == '.git':
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                    elif (not glob_filter or fnmatch.fnmatch(entry.name, glob_filter)) and _secret_reference(
+                        root, entry.path, patterns, expand=False,
+                    ):
+                        return entry.path
+        except OSError:
+            continue
+    return None
+
+
+def _consume_options(rest: list[str], value_options: frozenset[str]) -> list[str]:
+    """Positional operands of ``rest``, dropping options and the values of ``value_options``."""
+    positionals: list[str] = []
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == '--':  # nosec B105
+            positionals.extend(rest[index + 1:])
+            break
+        if token in value_options:
+            index += 2
+            continue
+        if token.startswith('-') and len(token) > 1:
+            index += 1
+            continue
+        positionals.append(token)
+        index += 1
+    return positionals
+
+
+def _git_path_words(rest: list[str]) -> list[str]:
+    words: list[str] = []
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        option = token.split('=', 1)[0]
+        if '=' in token and option in _GIT_TEXT_OPTIONS:
+            index += 1
+            continue
+        if token in _GIT_TEXT_OPTIONS:
+            index += 2
+            continue
+        if token.startswith('-') and len(token) > 1:
+            index += 1
+            continue
+        words.append(token)
+        index += 1
+    return words
+
+
+def _grep_path_words(rest: list[str]) -> list[str]:
+    words: list[str] = []
+    have_pattern = False
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == '--':  # nosec B105
+            tail = rest[index + 1:]
+            if not have_pattern and tail:
+                tail = tail[1:]
+            words.extend(tail)
+            break
+        if token in {'-e', '--regexp'}:  # the regexp is data, not a path
+            have_pattern = True
+            index += 2
+            continue
+        if token.startswith('--regexp='):
+            have_pattern = True
+            index += 1
+            continue
+        if token in {'-f', '--file'}:  # a pattern file is itself a path to read
+            if index + 1 < len(rest):
+                words.append(rest[index + 1])
+            have_pattern = True
+            index += 2
+            continue
+        if token.startswith('--file='):
+            words.append(token.split('=', 1)[1])
+            have_pattern = True
+            index += 1
+            continue
+        if token in _GREP_VALUE_OPTIONS:
+            index += 2
+            continue
+        if token.startswith('-') and len(token) > 1:
+            index += 1
+            continue
+        if not have_pattern:
+            have_pattern = True  # the first bare operand is the pattern
+        else:
+            words.append(token)
+        index += 1
+    return words
+
+
+def _skip_first_positional(rest: list[str], value_options: frozenset[str]) -> list[str]:
+    positionals = _consume_options(rest, value_options)
+    return positionals[1:]  # first positional is a filter/script/program, not a path
+
+
+def _find_path_words(rest: list[str]) -> list[str]:
+    words: list[str] = []
+    for token in rest:
+        if token.startswith('-') or token in {'(', ')', '!', ';', '+'}:
+            break
+        words.append(token)
+    return words
+
+
+def _secret_path_words(argv: list[str]) -> list[str] | None:
+    """Path operands worth checking for secrets; ``None`` for an inert command (``echo``, ``ls``)."""
+    name, rest = argv[0], argv[1:]
+    if name in _INERT_SECRET and not any(_HAS_SUBST.search(token) for token in argv):
+        return None
+    if name == 'git':
+        return _git_path_words(rest)
+    if name in _GREP_FAMILY:
+        return _grep_path_words(rest)
+    if name in {'jq', 'yq'}:
+        return _skip_first_positional(rest, frozenset({'--arg', '--argjson', '--slurpfile', '--rawfile', '-L'}))
+    if name == 'awk':
+        return _skip_first_positional(rest, frozenset({'-v', '-F'}))
+    if name == 'sed':
+        return _skip_first_positional(rest, frozenset({'-e', '--expression', '-f', '--file', '-l', '-i'}))
+    if name == 'find':
+        return _find_path_words(rest)
+    if name in _COPY_READERS or name in _ARCHIVE_READERS:
+        return [token for token in rest if not (token.startswith('-') and len(token) > 1)]
+    return [token for token in rest if token]
+
+
+def _is_recursive_reader(argv: list[str]) -> bool:
+    name, rest = argv[0], argv[1:]
+    if name in _ALWAYS_RECURSIVE_GREP:
+        return True
+    if name in _GREP_FAMILY:
+        return any(
+            token in {'--recursive', '--dereference-recursive', '-r', '-R'}
+            or (token.startswith('-') and not token.startswith('--') and ('r' in token[1:] or 'R' in token[1:]))
+            for token in rest
+        )
+    if name in _COPY_READERS:
+        return any(
+            token in {'-r', '-R', '-a', '--recursive', '--archive'}
+            or (token.startswith('-') and not token.startswith('--') and ('r' in token[1:].lower() or 'a' in token[1:]))
+            for token in rest
+        )
+    if name in _ARCHIVE_READERS:
+        return True
+    if name == 'find':
+        return any(token in {'-exec', '-execdir', '-ok', '-okdir'} for token in rest)
+    return False
+
+
+def _argv_secret_reference(root: Path, argv: list[str], patterns: list[str], budget: _Budget) -> str | None:
+    if not argv:
+        return None
+    words = _secret_path_words(argv)
+    if words is None:
+        return None
+    recursive = _is_recursive_reader(argv)
+    for word in words:
+        for variant in _brace_expand(word):
+            if recursive:
+                full = _resolve_under_root(root, variant)
+                if full and os.path.isdir(full):
+                    hit = _walk_for_secret(root, full, patterns, budget)
+                    if hit is not None:
+                        rel = safe_relative_path(root, hit)
+                        return rel if rel is not None else hit
+            for piece in _SECRET_PIECE_SPLIT.split(_HTTP_URL.sub(' ', variant)):
+                if piece and _secret_reference(root, piece, patterns, budget=budget):
+                    return piece
+    return None
+
+
+def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget: _Budget) -> str | None:
+    """Fallback for untokenizable text: scan every quoted/fragmented piece."""
     unquoted = command.replace('"', '').replace("'", '')
-    variants = [command, unquoted, unquoted.replace('\\', '')]
     seen: set[str] = set()
-    for variant in variants:
+    for variant in (command, unquoted, unquoted.replace('\\', '')):
         for piece in _SECRET_PIECE_SPLIT.split(_HTTP_URL.sub(' ', variant)):
             if not piece or piece in seen:
                 continue
             seen.add(piece)
-            if _secret_reference(root, piece, patterns):
+            if _secret_reference(root, piece, patterns, budget=budget):
                 return piece
+    return None
+
+
+def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
+    """First secret path a shell command names, under any quoting, nesting or option form.
+
+    The command is tokenized (never executed); per-command path operands are checked,
+    interpreter text (commit messages, grep/jq/awk/sed programs) is skipped, recursive
+    readers of a directory holding secrets are walked, and brace/ANSI-C expansions are
+    resolved. A bounded, fail-closed marker is returned if the scan exceeds its budget.
+    """
+    budget = _Budget()
+    try:
+        for argv in _simple_commands(command):
+            hit = (
+                _raw_secret_reference(root, command, patterns, budget)
+                if argv is None
+                else _argv_secret_reference(root, argv, patterns, budget)
+            )
+            if hit is not None:
+                return hit
+    except _BudgetExceeded:
+        return _BUDGET_MARKER
     return None
 
 
@@ -1052,8 +1614,13 @@ def evaluate_pre_tool(
         )
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
-        action = production_action(command)
-        if action:
+        authority = analyze_command_authority(command)
+        if authority.ambiguous or (authority.actions and not authority.context_proven):
+            return False, (
+                'Ambiguous production authority (alias definition, nested or dynamic command): spell the git/gh/'
+                'docker/npm operation literally at the top level so it can be matched to an exact grant.'
+            )
+        for action in authority.actions:
             if action == 'workflow-dispatch':
                 return False, 'GitHub Actions workflow dispatch is forbidden for this repository.'
             from .human_gates import gate_block_reason
@@ -1078,7 +1645,10 @@ def evaluate_pre_tool(
         candidate_paths.extend(_extract_patch_paths(str(tool_input.get('command', ''))))
 
     lowered_tool = tool.lower()
-    is_read = lowered_tool in {'read', 'read_file', 'open_file', 'fs_read'} or ('read' in lowered_tool and tool.startswith('mcp__'))
+    is_read = (
+        lowered_tool in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'}
+        or ('read' in lowered_tool and tool.startswith('mcp__'))
+    )
     is_write = tool in {'apply_patch', 'Edit', 'Write'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
 
     normalized: list[str] = []
@@ -1091,10 +1661,21 @@ def evaluate_pre_tool(
         normalized.append(rel)
 
     if is_read:
-        for raw in candidate_paths:
-            if _secret_reference(root, raw, secret_read):
-                rel = safe_relative_path(root, raw)
-                return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
+        budget = _Budget()
+        glob_filter = tool_input.get('glob') if isinstance(tool_input, dict) and lowered_tool == 'grep' else None
+        try:
+            for raw in candidate_paths:
+                if _secret_reference(root, raw, secret_read, budget=budget):
+                    rel = safe_relative_path(root, raw)
+                    return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
+                directory = _resolve_under_root(root, raw)
+                if directory and os.path.isdir(directory):
+                    hit = _walk_for_secret(root, directory, secret_read, budget, glob_filter)
+                    if hit is not None:
+                        rel = safe_relative_path(root, hit)
+                        return False, f'Reading secret material is blocked: {rel if rel is not None else hit}'
+        except _BudgetExceeded:
+            return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
 
     if is_write:
         for rel in normalized:

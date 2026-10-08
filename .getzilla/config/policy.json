@@ -112,7 +112,20 @@
     "**/credentials*",
     "**/secrets/**",
     "trust-ci/env/*.env",
-    "trust-ci/runtime/**"
+    "trust-ci/runtime/**",
+    "**/id_ecdsa",
+    "**/id_dsa",
+    "**/.ssh/**",
+    "**/.git-credentials",
+    "**/.netrc",
+    "**/_netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.pgpass",
+    "**/.config/gh/hosts.yml",
+    "**/.docker/config.json",
+    "**/.kube/config",
+    "**/.aws/**"
   ],
   "notes": [
     "Bitrix core is protected by default. Put custom code in local/.",
