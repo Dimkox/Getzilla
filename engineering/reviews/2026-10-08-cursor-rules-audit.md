@@ -1,9 +1,8 @@
 # Cursor rules comparison and bounded implementation
 
-Date: 2026-10-08. Status: implementation candidate; **UNVERIFIED transport**.
-Initial main: `851499c21a57631084b445dd8c92f89357b6889a`.
-Publication base: `be14794d67ba60082d14fce285cee5908b159a4a`, tree
-`6582c5e84f16111a38f52bbe471a20f1b0e6c2b2`.
+Date: 2026-10-08. Research for PR #55 (first candidate `c0d3d407`, base `be14794d`).
+The candidate's separate generator was replaced by a target of the existing harness
+renderer; this document describes that design.
 
 ## Scope of the comparison
 
@@ -37,12 +36,18 @@ no external rule library, installer or package is executed or copied.
    stale extra files. Cursor is not registered as a runtime executor (`HARNESSES`).
    Cursor already reads `AGENTS.md` and `.agents/skills/` natively, so the rules stay
    short and point to those files instead of copying them.
-2. **Adapter hygiene.** The renderer rejects unknown keys, a scoped rule without
-   globs, an always-applied rule with globs, other than one always-applied core,
-   globs Cursor would split or misread (comma, brace list, quote, space, absolute,
-   `..`) and rules over 4 KiB (core) / 8 KiB (scoped). Writes walk directories by
-   descriptor through `getzilla.fsx` without following links and land files with mode
-   0644 for every generated harness. `.cursor/**` is protected control plane.
+2. **Adapter hygiene.** The renderer rejects unknown keys, non-boolean flags, blank
+   description/instructions, a scoped rule without globs, an always-applied rule with
+   globs, other than one always-applied core, globs Cursor would split or misread
+   (comma, brace list, quote, whitespace/newline, absolute, `..`) and rules over 4 KiB
+   (core) / 8 KiB (scoped) / 500 lines; TOML rejects duplicate keys and file names make
+   rule IDs unique. Writes walk directories by descriptor through `getzilla.fsx` without
+   following links and land files with mode 0644 for every generated harness.
+   `.cursor/rules` is shared with the user: only files carrying the generated marker are
+   Getzilla's. Unmarked files there (and `.cursorrules`, `.cursor/settings.json`, other
+   rule folders) are never touched; an unmarked file, a directory or a linked parent
+   where an output goes is a `conflict` that blocks every harness write before any file
+   changes. `.cursor/**` is protected control plane.
 3. **Conflicting delivery sequence.** The delivery skill requested a full gate before
    reviews and another after them; `verification-evidence` and the evidence template
    still said "reruns final verification". All of them now state one order: bounded
@@ -58,3 +63,23 @@ no external rule library, installer or package is executed or copied.
 `.cursor/rules/getzilla/` (adding it to `MANAGED_DIRS` is a separate owner decision).
 Verification for this change lives in its change package; live Cursor
 behavior (rule attachment by globs) still needs a check in a real Cursor install.
+
+## Mapping of the first candidate's 27 tests
+
+All in `tests/test_harnesses.py` (`CursorRuleTests`) unless noted.
+
+| First candidate test | Now |
+| --- | --- |
+| committed rules current; core only always-applied | `test_committed_harnesses_match_the_canonical_sources`, `test_committed_rules_use_the_documented_frontmatter` |
+| render deterministic and scoped | `test_committed_rules_use_the_documented_frontmatter` |
+| missing → write → clean → idempotent; stale detected and repaired; obsolete reported, removed only on write | `test_write_is_world_readable_idempotent_and_removes_stale_rules`, `test_symlinked_output_is_drift_and_is_replaced_not_followed` |
+| invalid metadata; duplicate JSON keys; invalid JSON; core/scoped budgets | `test_invalid_rule_sources_are_rejected` (TOML source) |
+| custom rules, legacy `.cursorrules`, local settings preserved | `test_user_cursor_files_are_preserved` |
+| unowned collision / directory collision block all writes; Cursor conflict prevents other harness rewrites | `test_unowned_file_or_directory_at_an_output_blocks_every_write` |
+| symlink components rejected without touching outside | `test_write_never_follows_a_symlinked_directory` |
+| output symlink rejected | changed: the link is drift and is replaced, never followed (`test_symlinked_output_is_drift_and_is_replaced_not_followed`) |
+| missing target not created | `test_missing_target_is_not_created` |
+| CLI read-only check, explicit repair, source error without traceback; harness CLI covers Cursor | `test_cli_checks_read_only_repairs_on_write_and_reports_source_errors` |
+| no Cursor execution harness | `test_cursor_is_not_an_execution_harness` |
+| install into an existing consumer preserves its contract; missing consumer reference blocks writes | dropped with `--target`: generation targets this repository only and `install_into.py` is unchanged; committed references are checked by `test_rule_references_name_existing_files` |
+| three delivery-sequence tests | `tests/test_delivery_sequence.py`; copy equality by the harness drift test |

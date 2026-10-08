@@ -19,11 +19,14 @@ parser = argparse.ArgumentParser(
 parser.add_argument('--write', action='store_true', help='Rewrite the generated harness files.')
 args = parser.parse_args()
 
-if args.write:
-    for line in write(ROOT):
-        print(line)
-    raise SystemExit(0)
-problems = drift(ROOT)
+try:
+    if args.write:
+        for line in write(ROOT):
+            print(line)
+        raise SystemExit(0)
+    problems = drift(ROOT)
+except (ValueError, OSError) as exc:
+    parser.exit(2, f'harness generation: {exc}\n')
 for line in problems:
     print(line)
 raise SystemExit(1 if problems else 0)

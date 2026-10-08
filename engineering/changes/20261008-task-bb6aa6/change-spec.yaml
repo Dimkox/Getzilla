@@ -62,6 +62,15 @@
       ],
       "id": "AC-006",
       "statement": "The always-applied Cursor core forbids reading .env/keys, pushing to main, force-push, merging, production and external writes."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "AC-007",
+      "statement": "User files in .cursor (unmarked rules, .cursorrules, settings) are never changed; an unmarked file, directory or linked parent at an output blocks every harness write before any change; the CLI checks read-only, repairs only with --write and reports source errors with exit 2 and no traceback."
     }
   ],
   "approvals": {
