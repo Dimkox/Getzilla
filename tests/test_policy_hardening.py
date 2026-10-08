@@ -447,6 +447,19 @@ class Review4WrappedRootDeleteTests(_Case):
         self.assert_allowed(('ionice find build -delete', 'ionice rsync -a --delete dist/ out/ --exclude foo'))
 
 
+class Review5WrapperVerbTests(_Case):
+    """Round-5 review: a wrapper argument named like a verb must not hide the real delete."""
+
+    def test_every_verb_in_the_argv_is_checked(self) -> None:
+        self.assert_denied((
+            'flock /tmp/find rm -rf /', 'flock find rm -rf /', 'flock /tmp/rsync rm -rf /',
+            'timeout 9 nice flock /var/lock/rsync rm -rf ~',
+        ))
+
+    def test_rsync_delete_checks_every_operand(self) -> None:
+        self.assert_denied(('rsync --delete x/ /etc --exclude foo', 'rsync --delete x/ /etc'))
+
+
 class Review2WindowsTests(_Case):
     """Round-2 review (S59-6): Windows parity for carets, publish/HTTP, destructive and secret reads."""
 
