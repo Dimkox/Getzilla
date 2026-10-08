@@ -1,10 +1,6 @@
----
-description: "Core boundaries for every Getzilla-assisted development task"
-alwaysApply: true
----
-
-<!-- Generated from .grok/cursor-rules/00-core.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "Core boundaries for every Getzilla-assisted development task"
+always_apply = true
+instructions = '''
 # Getzilla engineering contract
 
 - Follow the repository AGENTS.md and any more specific local instructions. These Cursor rules are a prompt-only adapter, not execution permissions, OS isolation, or merge authority.
@@ -30,3 +26,4 @@ Getzilla installs no Cursor hooks, so these rules are the only Getzilla guard in
 
 - `AGENTS.md`
 - `.agents/skills/getzilla-delivery/SKILL.md`
+'''

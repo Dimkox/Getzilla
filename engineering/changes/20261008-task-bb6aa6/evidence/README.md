@@ -19,3 +19,56 @@ Each report must include:
 - each claim probed, exact command, concise observed output, and mutant outcome (`killed`, `survived`, or `inconclusive`);
 - claims not executed and why; static claims without executable probes are unexecuted;
 - surviving mutants as findings or explicit limitations (no blanket mutation-score threshold unless a scoped policy requires it).
+
+<!-- checkpoint:initial -->
+## Initial checkpoint
+
+Local observation only; not verification or publication evidence.
+
+```json
+{
+  "kind": "initial",
+  "change_id": "20261008-task-bb6aa6",
+  "route_id": "bb6aa6614f38",
+  "observed_at": "2026-10-08T16:27:07+00:00",
+  "branch": "feat/cursor-enterprise-rules-20261008-6685422",
+  "head": "e8fa9eb1f4daaddaab91bbd4dac4c0d8dd0591d0",
+  "detached": false,
+  "git_available": true,
+  "git_findings": [],
+  "dirty_product_state": "clean",
+  "dirty_product_paths": [],
+  "note": "draft; implementation not started"
+}
+```
+
+Initial evidence accounting (current records are in `state.json`):
+
+```json
+{
+  "schema_version": 1,
+  "obligations": [
+    {
+      "id": "verification",
+      "kind": "receipt",
+      "receipt_kind": "verification",
+      "status": "not_run",
+      "reason": "implementation not started"
+    },
+    {
+      "id": "code_review",
+      "kind": "receipt",
+      "receipt_kind": "code_review",
+      "status": "not_run",
+      "reason": "implementation not started"
+    },
+    {
+      "id": "test_review",
+      "kind": "receipt",
+      "receipt_kind": "test_review",
+      "status": "not_run",
+      "reason": "implementation not started"
+    }
+  ]
+}
+```

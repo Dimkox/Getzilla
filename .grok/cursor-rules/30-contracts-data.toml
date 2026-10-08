@@ -1,11 +1,7 @@
----
-description: "API/event/data contracts, schema evolution, migrations and enterprise integrations"
-globs: **/*.sql,**/migrations/**,**/contracts/**,schemas/**,**/openapi*,**/asyncapi*
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/30-contracts-data.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "API/event/data contracts, schema evolution, migrations and enterprise integrations"
+always_apply = false
+globs = ["**/*.sql", "**/migrations/**", "**/contracts/**", "schemas/**", "**/openapi*", "**/asyncapi*"]
+instructions = '''
 # Contracts, migrations and integrations
 
 - Change the machine-readable contract and its consumers/tests together. Preserve backward compatibility unless a breaking change is explicitly approved and versioned.
@@ -20,3 +16,4 @@ alwaysApply: false
 - `.agents/skills/api-event-change/SKILL.md`
 - `.agents/skills/data-change/SKILL.md`
 - `.agents/skills/enterprise-integration/SKILL.md`
+'''

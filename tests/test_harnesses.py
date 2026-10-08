@@ -8,7 +8,11 @@ from them. These tests fail when the committed copies drift.
 from __future__ import annotations
 
 import json
+import os
+import re
+import stat
 import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -16,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, GEMINI_EVENTS, drift, render
+from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
 
 
 class HarnessTests(unittest.TestCase):
@@ -94,6 +98,139 @@ class HarnessTests(unittest.TestCase):
             json.loads((ROOT / '.qwen/settings.json').read_text(encoding='utf-8'))['context']['fileName'],
             ['AGENTS.md'],
         )
+
+
+CORE = {'description': 'Core', 'always_apply': True, 'instructions': '- Follow AGENTS.md.'}
+SCOPED = {'description': 'Python', 'always_apply': False, 'globs': ['**/*.py', 'ruff.toml'], 'instructions': '- Test.'}
+
+
+def _toml(rule: dict) -> str:
+    return ''.join(f'{key} = {json.dumps(value)}\n' for key, value in rule.items())
+
+
+class CursorRuleTests(unittest.TestCase):
+    """Cursor project rules are one more generated target of the same harness renderer."""
+
+    def fixture(self, *rules: dict) -> Path:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name) / 'repo'
+        (root / '.grok/cursor-rules').mkdir(parents=True)
+        (root / '.grok/hooks.json').write_text('{"hooks": {}}', encoding='utf-8')
+        for index, rule in enumerate(rules or (CORE, SCOPED)):
+            (root / f'.grok/cursor-rules/{index}0-rule.toml').write_text(_toml(rule), encoding='utf-8')
+        return root
+
+    def frontmatter(self, content: bytes) -> dict[str, str]:
+        head = content.decode('utf-8').split('---\n')[1]
+        return dict(line.split(': ', 1) for line in head.splitlines())
+
+    def test_committed_rules_use_the_documented_frontmatter(self) -> None:
+        rules = {rel: body for rel, body in render(ROOT).items() if rel.startswith(CURSOR_OUTPUT + '/')}
+        self.assertEqual(len(rules), 8)
+        always = [rel for rel, body in rules.items() if self.frontmatter(body)['alwaysApply'] == 'true']
+        self.assertEqual(always, [f'{CURSOR_OUTPUT}/00-core.mdc'])
+        for rel, body in rules.items():
+            with self.subTest(rule=rel):
+                head = self.frontmatter(body)
+                self.assertTrue(rel.endswith('.mdc'))
+                self.assertEqual(set(head) - {'globs'}, {'description', 'alwaysApply'})
+                self.assertTrue(json.loads(head['description']).strip())
+                self.assertLessEqual(len(body), 4096 if rel in always else 8192)
+                if rel in always:
+                    self.assertNotIn('globs', head)
+                    continue
+                self.assertEqual(head['alwaysApply'], 'false')
+                # https://cursor.com/docs/context/rules: unquoted patterns separated by commas.
+                self.assertRegex(head['globs'], r'^[^\s,"\']+(,[^\s,"\']+)*$')
+
+    def test_core_rule_forbids_what_agents_md_forbids(self) -> None:
+        core = render(ROOT)[f'{CURSOR_OUTPUT}/00-core.mdc'].decode('utf-8')
+        for required in ('`.env`', '`*.pem`', '`*.key`', 'push to `main`', 'force-push', 'merge',
+                         'humans merge', 'production', 'external write'):
+            self.assertIn(required, core)
+
+    def test_rule_references_name_existing_files(self) -> None:
+        for rel, body in render(ROOT).items():
+            if rel.startswith(CURSOR_OUTPUT + '/'):
+                for ref in re.findall(r'`([\w./-]+\.(?:md|mdc|py|json))`', body.decode('utf-8')):
+                    self.assertTrue((ROOT / ref).is_file(), (rel, ref))
+
+    def test_invalid_rule_sources_are_rejected(self) -> None:
+        cases = {
+            'comma inside a glob': (CORE, {**SCOPED, 'globs': ['src/{a,b}.py']}),
+            'space inside a glob': (CORE, {**SCOPED, 'globs': ['**/*.py ']}),
+            'quoted glob': (CORE, {**SCOPED, 'globs': ['"**/*.py"']}),
+            'absolute glob': (CORE, {**SCOPED, 'globs': ['/etc/*']}),
+            'parent glob': (CORE, {**SCOPED, 'globs': ['../**']}),
+            'scoped rule without globs': (CORE, {**SCOPED, 'globs': []}),
+            'always-applied rule with globs': ({**CORE, 'globs': ['**/*.py']}, SCOPED),
+            'two always-applied rules': (CORE, CORE),
+            'no always-applied rule': (SCOPED,),
+            'unknown key': (CORE, {**SCOPED, 'alwaysApply': True}),
+            'empty description': (CORE, {**SCOPED, 'description': ' '}),
+            'core over budget': ({**CORE, 'instructions': 'x' * 4096}, SCOPED),
+            'scoped rule over budget': (CORE, {**SCOPED, 'instructions': 'x' * 8192}),
+        }
+        for name, rules in cases.items():
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                render(self.fixture(*rules))
+
+    def test_write_is_world_readable_idempotent_and_removes_stale_rules(self) -> None:
+        root = self.fixture()
+        cursor = [problem for problem in drift(root) if CURSOR_OUTPUT in problem]
+        self.assertEqual(cursor, [f'missing {CURSOR_OUTPUT}/00-rule.mdc', f'missing {CURSOR_OUTPUT}/10-rule.mdc'])
+        old = os.umask(0o077)
+        try:
+            write(root)
+        finally:
+            os.umask(old)
+        core = root / CURSOR_OUTPUT / '00-rule.mdc'
+        if os.name != 'nt':
+            self.assertEqual(stat.S_IMODE(core.stat().st_mode), 0o644)
+        self.assertIn(b'globs: **/*.py,ruff.toml\n', (root / CURSOR_OUTPUT / '10-rule.mdc').read_bytes())
+        self.assertEqual(drift(root), [])
+        self.assertEqual(write(root), [])
+        stale = root / CURSOR_OUTPUT / '90-retired.mdc'
+        stale.write_text('old', encoding='utf-8')
+        self.assertEqual(drift(root), [f'unexpected {CURSOR_OUTPUT}/90-retired.mdc'])
+        self.assertEqual(write(root), [f'removed {CURSOR_OUTPUT}/90-retired.mdc'])
+        self.assertFalse(stale.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
+    def test_write_never_follows_a_symlinked_directory(self) -> None:
+        root = self.fixture()
+        outside = root.parent / 'outside'
+        outside.mkdir()
+        (root / '.cursor').mkdir()
+        (root / '.cursor/rules').symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(OSError):
+            write(root)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
+    def test_symlinked_output_is_drift_and_is_replaced_not_followed(self) -> None:
+        root = self.fixture()
+        write(root)
+        outside = root.parent / 'outside.mdc'
+        core = root / CURSOR_OUTPUT / '00-rule.mdc'
+        outside.write_bytes(core.read_bytes())
+        core.unlink()
+        core.symlink_to(outside)
+        self.assertEqual(drift(root), [f'stale {CURSOR_OUTPUT}/00-rule.mdc'])
+        write(root)
+        self.assertFalse(core.is_symlink())
+        self.assertEqual(outside.read_bytes(), core.read_bytes())
+
+    def test_cursor_is_not_an_execution_harness(self) -> None:
+        self.assertNotIn('cursor', HARNESSES)
+
+    def test_every_generated_root_is_protected_control_plane(self) -> None:
+        from getzilla.policy import DEFAULT_CONTROL_PLANE, DEFAULT_PROTECTED, _matches_any
+        policy = json.loads((ROOT / '.getzilla/config/policy.json').read_text(encoding='utf-8'))
+        for patterns in (DEFAULT_CONTROL_PLANE, DEFAULT_PROTECTED, policy['control_plane_paths'], policy['protected_paths']):
+            for rel in (*(f'{base}/x' for base in GENERATED_ROOTS), 'nested/.cursor/rules/x'):
+                self.assertTrue(_matches_any(rel, list(patterns)), rel)
 
 
 if __name__ == '__main__':

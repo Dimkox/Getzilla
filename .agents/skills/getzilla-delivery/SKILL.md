@@ -75,13 +75,15 @@ Do not spawn a second write agent for the same route. Review fixes return to the
 
 ## 5. Bounded observations
 
+Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying `python3 scripts/getzilla_verify.py --mode pr`.
+
 Run change-relevant checks during implementation and repair. On a clean committed HEAD, a named smoke may use the contract's `--mode fast --no-record --test tests.test_module --budget 180` form. These observations create no verification receipt or scope admission; do not run a preliminary full qualifying gate before reviews.
 
 Record exact commands, comparison base/HEAD and outcomes. A failing check returns to the write owner. Do not manufacture an active route, shorten the comparison range or record passing evidence against a failing or stale tree.
 
 ## 6. Independent review
 
-Dispatch all route `review_agents` in parallel. Each reviews the same final tree from its own perspective and returns the complete report to the coordinator out-of-band; reviewers must not write into the candidate worktree.
+Dispatch all route `review_agents` in parallel. Each reviews the same committed candidate from its own perspective and records its commit and tree hash (`git rev-parse HEAD HEAD^{tree}`) and returns the complete report to the coordinator out-of-band; reviewers must not write into the candidate worktree.
 
 Code and test reviewers perform bounded, change-relevant mutation probes in a reviewer-owned private scratch copy outside the reviewed worktree. The candidate stays read-only: do not edit or restore it, or generate artifacts there. Scratch must be below a trusted non-sticky parent with mode `0700` and reproduce the exact candidate snapshot, including relevant staged, unstaged, and untracked changes. Record HEAD and candidate tree fingerprint before and after review; unsafe scratch, mismatched snapshot, or changed candidate makes the review inconclusive/stale. Read-only reviewer configuration and prompts are workflow requirements, not OS-enforced filesystem isolation.
 
@@ -89,7 +91,7 @@ Reports list source identity, scratch path, literal `reviewed-tree-modified: no`
 
 ## 7. Final verification and receipts
 
-After all selected independent reports are complete and persisted, commit and freeze the candidate. Run one final qualifying local PR gate on that exact candidate using the measured CPU allocation:
+After all selected independent reports are complete and persisted, commit and freeze the candidate. The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; any other difference makes every review stale. Run one final qualifying local PR gate on that exact candidate using the measured CPU allocation:
 
 ```bash
 python3 scripts/getzilla_verify.py --mode pr
@@ -112,7 +114,7 @@ python scripts/getzilla_review.py code_review --status pass --report engineering
 python scripts/getzilla_review.py test_review --status pass --report engineering/changes/<id>/evidence/test-review.md
 ```
 
-Use `bitrix_review`, `security_review`, `data_review`, and `release_review` when requested. If review or verification cannot execute, record `NOT_RUN` or `BLOCKED` with the reason; do not fabricate a passing receipt or substitute self-review for an independent reviewer. Repairs invalidate affected evidence: rerun affected observations and independent reviews, persist the new reports, commit and freeze again before a new final gate. The single-final-gate rule does not allow stale evidence reuse.
+Use `bitrix_review`, `security_review`, `data_review`, and `release_review` when requested. If review or verification cannot execute, record `NOT_RUN` or `BLOCKED` with the reason; do not fabricate a passing receipt or substitute self-review for an independent reviewer. Any change after review invalidates all receipts: repeat the independent reviews on the new tree, save the new reports, commit and freeze again, and run a new final gate. Never reuse evidence from another tree.
 
 ## 8. Close
 

@@ -1,11 +1,7 @@
----
-description: "Routing, context selection, provider adapters, budgets and factory runtime changes"
-globs: .getzilla/getzilla/**,factory/src/**,factory/runtime/**,.grok/**
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/50-agent-runtime.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "Routing, context selection, provider adapters, budgets and factory runtime changes"
+always_apply = false
+globs = [".getzilla/getzilla/**", "factory/src/**", "factory/runtime/**", ".grok/**"]
+instructions = '''
 # Bounded agent execution
 
 - Reuse the current routing, provider-profile, capability, authority and budget contracts. Cursor rule installation does not qualify a new runtime provider or make an executor eligible.
@@ -21,3 +17,4 @@ alwaysApply: false
 - `AGENTS.md`
 - `.agents/skills/getzilla-delivery/SKILL.md`
 - `.agents/skills/ai-rag-change/SKILL.md`
+'''
