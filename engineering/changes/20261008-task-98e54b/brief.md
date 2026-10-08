@@ -2,8 +2,8 @@
 
 > Typed authority: [`change-spec.yaml`](change-spec.yaml). This Markdown explains context and cannot override typed IDs, risk, acceptance criteria, forbidden outcomes, or approval scopes.
 
-Change ID: `20261008-task-22f19c`
-Created: 2026-10-08T14:55:57+00:00
+Change ID: `20261008-task-98e54b`
+Created: 2026-10-08T15:32:22+00:00
 Risk: high
 Complexity: high-risk
 Domains: security, api
@@ -38,3 +38,5 @@ Grants name exact resources only; a stored pattern never widens a grant; the CLI
 - Data/privacy: none.
 - Performance: none.
 - Operational: grants are per-tree runtime state, so no migration is needed.
+
+Re-routed at `07b461c` after `main` advanced (the owner merged the 2026-10-08 fix batch). This supersedes route `22f19c781423` (base `a8f9338`), so architecture comparison uses the current base. Implementation and tests are unchanged.

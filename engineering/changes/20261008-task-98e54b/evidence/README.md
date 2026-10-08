@@ -26,12 +26,12 @@ Local observation only; not verification or publication evidence.
 ```json
 {
   "kind": "initial",
-  "change_id": "20261008-task-22f19c",
-  "route_id": "22f19c781423",
-  "observed_at": "2026-10-08T14:55:57+00:00",
-  "branch": "fix/approve-wildcard-grants",
-  "head": "a8f9338a298c4717953a0acd9c23339b8f85c637",
-  "detached": false,
+  "change_id": "20261008-task-98e54b",
+  "route_id": "98e54b99de1c",
+  "observed_at": "2026-10-08T15:32:22+00:00",
+  "branch": null,
+  "head": "07b461ca69b4afe4e31b6e622e02f030ba25445c",
+  "detached": true,
   "git_available": true,
   "git_findings": [],
   "dirty_product_state": "clean",
