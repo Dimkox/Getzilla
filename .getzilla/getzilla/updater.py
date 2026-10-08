@@ -220,16 +220,35 @@ def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None
         if os.name != 'nt' and not os.access(target, os.X_OK):
             target.chmod(0o755)  # a restored or copied binary may have lost its execute bits
         return [Result('tool:opengrep', 'ok', f'{version} (already installed, sha256 verified)')]
+    note = ''
     try:
+        # Whatever sits at the target now does not match the pin: never leave it runnable,
+        # even if the pinned download below fails.
+        note = _quarantine(target)
         data = fetch(OPENGREP_DOWNLOAD.format(version=OPENGREP_VERSION, asset=asset_name))
         actual = hashlib.sha256(data).hexdigest()
         if not hmac.compare_digest(actual, expected):
             return [Result('tool:opengrep', 'fail',
-                           f'{asset_name} {version}: sha256 {actual} does not match pinned {expected}; not installed')]
+                           f'{asset_name} {version}: sha256 {actual} does not match pinned {expected}; '
+                           f'not installed{note}')]
         _replace_bytes(target, data, mode=0o755)
-        return [Result('tool:opengrep', 'ok', f'{version} (sha256 verified)')]
+        return [Result('tool:opengrep', 'ok', f'{version} (sha256 verified){note}')]
     except Exception as exc:  # noqa: BLE001
-        return [Result('tool:opengrep', 'fail', str(exc)[:200])]
+        return [Result('tool:opengrep', 'fail', f'{str(exc)[:200]}{note}')]
+
+
+def _quarantine(target: Path) -> str:
+    """Move an unverified binary off its runnable name (``<name>.unverified``, no execute bits)."""
+    if target.is_symlink():
+        target.unlink()
+        return '; unverified previous symlink removed'
+    if not target.exists():
+        return ''
+    destination = target.with_name(target.name + '.unverified')
+    os.replace(target, destination)
+    if os.name != 'nt':
+        destination.chmod(0o600)
+    return f'; unverified previous binary quarantined to {destination}'
 
 
 def export_environment(root: Path) -> list[str]:
