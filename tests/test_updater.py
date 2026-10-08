@@ -143,10 +143,26 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(result[0].status, 'fail')
             self.assertIn('sha256', result[0].detail)
             self.assertFalse((self.root / 'bin/opengrep').exists())
-            (self.root / 'bin').mkdir(parents=True)
-            (self.root / 'bin/opengrep').write_bytes(b'previous')
-            updater.update_opengrep(lambda url: b'tampered', self.root, ('linux', 'x86_64'))
-            self.assertEqual((self.root / 'bin/opengrep').read_bytes(), b'previous')
+
+    def test_unverified_previous_opengrep_is_quarantined_not_kept(self) -> None:
+        # A binary that does not match the pin (e.g. installed from `latest` by an older updater)
+        # must not stay runnable when the pinned download fails or does not verify (#39).
+        def offline(url: str) -> bytes:
+            raise OSError('offline')
+        for fetch in (lambda url: b'tampered', offline):
+            with self.subTest(fetch=fetch), self._pinned(b'\x7fELF'):
+                (self.root / 'bin').mkdir(parents=True, exist_ok=True)
+                binary = self.root / 'bin/opengrep'
+                binary.write_bytes(b'previous')
+                binary.chmod(0o755)
+                result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
+                self.assertEqual(result[0].status, 'fail')
+                self.assertIn('quarantined', result[0].detail)
+                self.assertFalse(binary.exists())
+                quarantined = self.root / 'bin/opengrep.unverified'
+                self.assertEqual(quarantined.read_bytes(), b'previous')
+                if os.name != 'nt':
+                    self.assertEqual(stat.S_IMODE(quarantined.stat().st_mode) & 0o111, 0)
 
     def test_opengrep_never_follows_the_latest_release(self) -> None:
         urls: list[str] = []
