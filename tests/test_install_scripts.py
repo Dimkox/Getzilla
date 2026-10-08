@@ -53,15 +53,32 @@ class InstallScriptContractTests(unittest.TestCase):
                 self.assertNotIn(f'{RAW}install.ps1 | iex', text)
                 self.assertNotRegex(text, r'Getzilla/[^/\s]+/scripts/install\.(sh \| *(ba)?sh|ps1 \| *iex)')
                 sh_fetch = text.index(f'curl -fsSLo getzilla-install.sh {pinned}install.sh')
-                sh_check = text.index(f'echo "{sh_digest}  getzilla-install.sh" | sha256sum -c -')
-                sh_run = text.index(f'GETZILLA_REF=v{version} bash getzilla-install.sh')
-                self.assertLess(sh_fetch, sh_check)
-                self.assertLess(sh_check, sh_run)
+                sh_run = f'GETZILLA_REF=v{version} bash getzilla-install.sh'
+                lines = text.splitlines()
+                # The check and the run must be one fail-stop command line (`check && run`), so a
+                # line-by-line paste cannot reach the installer after a failed check (Linux and macOS).
+                for tool in ('sha256sum -c -', 'shasum -a 256 -c -'):
+                    line = f'echo "{sh_digest}  getzilla-install.sh" | {tool} && {sh_run}'
+                    self.assertIn(line, lines)
+                    self.assertLess(sh_fetch, text.index(line))
+                for line in lines:
+                    if 'bash getzilla-install.sh' in line:
+                        self.assertRegex(line, rf'^echo "{sh_digest}  getzilla-install\.sh" \| (sha256sum|shasum -a 256) -c - && ')
                 ps_fetch = text.index(f'Invoke-WebRequest -UseBasicParsing {pinned}install.ps1 -OutFile $f')
-                ps_check = text.index(f"(Get-FileHash $f -Algorithm SHA256).Hash -ne '{ps_digest.upper()}'")
-                ps_run = text.index(f"$env:GETZILLA_REF = 'v{version}'; Invoke-Expression (Get-Content -Raw $f)")
-                self.assertLess(ps_fetch, ps_check)
-                self.assertLess(ps_check, ps_run)
+                ps_line = (
+                    f"if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '{ps_digest.upper()}') "
+                    f"{{ $env:GETZILLA_REF = 'v{version}'; Invoke-Expression (Get-Content -Raw $f) }} "
+                    "else { throw 'install.ps1 SHA-256 mismatch: do not run it' }"
+                )
+                self.assertIn(ps_line, lines)
+                self.assertLess(ps_fetch, text.index(ps_line))
+                self.assertEqual([line for line in lines if 'Invoke-Expression (Get-Content -Raw $f)' in line], [ps_line])
+
+    def test_hashed_installers_keep_lf_endings_in_every_checkout(self) -> None:
+        # The documented digests hash the repository bytes; an eol rule keeps Windows checkouts identical.
+        rules = (ROOT / '.gitattributes').read_text(encoding='utf-8').splitlines()
+        for path in ('scripts/install.sh', 'scripts/install.ps1'):
+            self.assertIn(f'{path} text eol=lf', rules)
 
     def test_shell_installer_only_acts_from_main(self) -> None:
         text = SHELL.read_text(encoding='utf-8')
