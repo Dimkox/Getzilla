@@ -18,6 +18,7 @@ from ._policy_legacy import (
     load_json as _legacy_load_json,
     production_action as _legacy_production_action,
     shell_secret_reference as _legacy_shell_secret_reference,
+    _COMMAND_SCAN_BYTE_LIMIT as _LEGACY_COMMAND_LIMIT,
 )
 from .shell_targets import control_plane_shell_mutation
 
@@ -37,6 +38,8 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
     if tool != 'Bash':
         return None
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
+    if len(command) > _LEGACY_COMMAND_LIMIT:
+        return 'oversize-command'
     action = _legacy_production_action(command)
     if action:
         return action
@@ -89,6 +92,8 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
         _LEGACY_CONTROL_PLANE,
     )
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
+    if len(command) > _LEGACY_COMMAND_LIMIT:
+        return False, f'Blocked a Bash command longer than {_LEGACY_COMMAND_LIMIT} characters before parsing it.'
     protected_targets, opaque = _shell_mutation(root, command, control_plane)
     if protected_targets:
         targets = ', '.join(protected_targets)

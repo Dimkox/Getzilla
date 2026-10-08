@@ -460,6 +460,18 @@ def _remove_operands(argv: list[str]) -> list[str] | None:
         len(w) > 1 and '-recurse'.startswith(w.lower()) for w in words
     ):
         return [w for w in words if not w.startswith('-')]
+    if name == 'find' and '-delete' in words:
+        # `find <paths> … -delete` removes every match under its start paths (review round 3).
+        paths = []
+        for word in words:
+            if word.startswith(('-', '(', '!')):
+                break
+            paths.append(word)
+        return paths or ['.']
+    if name == 'rsync' and any(w.startswith('--del') for w in words):
+        # `rsync --delete* src… dest` deletes extraneous files under the destination.
+        positionals = [w for w in words if not w.startswith('-')]
+        return positionals[-1:] if len(positionals) > 1 else None
     if name != 'rm':
         return None
     recursive = options_done = False
