@@ -1138,3 +1138,6 @@ The pre-tool hook now tokenizes a Bash command once (shlex, never executed), nor
 ## 2026-10-08 — Pin executables the verifier runs, keep the pin in lockstep with CI
 
 The updater now installs OpenGrep only from a pinned release after a SHA-256 match, using Python constants because consumer installs do not ship `trust-ci/`, and a test keeps the version and linux digest equal to `trust-ci/runner.Dockerfile`. One pin, checked in two places, gives local machines the same integrity guarantee as CI without a second source of truth drifting (#39).
+## 2026-10-08 — Declare the updater's https egress as an architecture edge, don't loosen the rule
+
+`updater.py` has always imported `urllib.request` to fetch pinned supply-chain artifacts, but the architecture model never declared that boundary; the gap only surfaced once a change touched `updater.py` and FIT-DECLARED-NETWORK-ONLY became applicable. Fixed by adding the external node `NODE-SUPPLY-CHAIN-REGISTRY` and the allowlisted-egress edge `EDGE-LOCAL-SUPPLY-CHAIN-FETCH` from `NODE-LOCAL-ROUTE-POLICY` (https, fail-closed), setting that node's `runtime.network` to `declared_egress`, and regenerating the diagrams — declaring the real network boundary rather than dropping `require_declared_edge` or widening allowed protocols (#39).

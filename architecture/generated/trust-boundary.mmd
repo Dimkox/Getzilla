@@ -2,6 +2,7 @@ flowchart LR
   subgraph domain_96fb748595c57dce["TD-EXTERNAL-PLATFORM"]
     node_8b8a8cd21b180532["NODE-GITHUB | external_system | GitHub"]
     node_69f0245ef987c48b["NODE-PILOT-MODEL-PROVIDER | external_system | external model provider"]
+    node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
   end
   subgraph domain_ece8d94ff661d9fb["TD-EXTERNAL-POLICY"]
     node_0a0fe2f046a648e9["NODE-EXTERNAL-HOLDOUT | policy_bundle | external Trust CI policy operators"]
@@ -90,6 +91,7 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
+  node_770cf3a1783e8525 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532
