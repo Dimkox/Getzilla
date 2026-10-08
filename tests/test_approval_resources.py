@@ -299,6 +299,50 @@ class GrantBindingEnvSpellingTests(unittest.TestCase):
                     self.assertFalse(self.bash(root, command)[0], command)
 
 
+class GrantBindingReview3Tests(unittest.TestCase):
+    """Round-3 review: flag spellings that must not escape a grant (admin, repo, push helpers)."""
+
+    def bash(self, root: Path, command: str) -> tuple[bool, str | None]:
+        return evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_admin_with_a_value_needs_the_admin_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'merge #5', 5, actions=['pull-request-merge'], resources=['Dimkox/Getzilla#5'])
+            self.assertTrue(self.bash(root, 'gh pr merge 5 --squash')[0])
+            for command in ('gh pr merge 5 --admin=true', 'gh pr merge 5 --admin=1', 'gh pr merge --admin=false 5'):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+    def test_attached_repo_flags_retarget_a_generic_gh_write(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'external-write', 'close', 5, actions=['external-write'], resources=['gh:. issue close 5'])
+            self.assertTrue(self.bash(root, 'gh issue close 5')[0])
+            for command in (
+                'gh --repo=evil/r issue close 5', 'gh issue close 5 --repo=evil/r', 'gh -Revil/r issue close 5',
+                'gh issue close 5 -R=evil/r', 'gh issue close -R evil/r 5',
+            ):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+    def test_attached_repo_flags_retarget_a_merge_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'merge #5', 5, actions=['pull-request-merge'], resources=['Dimkox/Getzilla#5'])
+            for command in ('gh pr merge 5 -R=evil/r', 'gh -R=evil/r pr merge 5', 'gh pr merge 5 --repo=evil/r'):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+    def test_abbreviated_push_helper_options_are_refused(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'push', 5, actions=['git-push-branch'], resources=['fix/x'])
+            self.assertTrue(self.bash(root, 'git push origin fix/x')[0])
+            for command in (
+                'git push --receiv=evil origin fix/x', 'git push --rec evil origin fix/x',
+                'git push --ex=evil origin fix/x', 'git push --receive-p=evil origin fix/x',
+            ):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+
 class GrantBindingReview2Tests(unittest.TestCase):
     """Round-2 review: env-prefix target spoofing (S53-1) and over-broad push/merge grants (S53-2)."""
 
