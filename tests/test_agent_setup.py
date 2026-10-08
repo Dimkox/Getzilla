@@ -213,12 +213,12 @@ class AgentSetupTests(unittest.TestCase):
         self.assertEqual([p.name for p in real.parent.iterdir()], ['claude.json'])
 
     def test_gemini_and_copilot_keys_become_environment_variables(self) -> None:
-        result = configure('gemini', 'openrouter', self.home, key='AIzaSyA-0123456789abcdefghijklmnopqrstu')
+        result = configure('gemini', 'openrouter', self.home, key='test-gemini-key-not-a-secret-0001')
         self.assertIn('open a new terminal so the agent sees GEMINI_API_KEY', result.next_steps)
-        configure('copilot', 'native', self.home, key='github_pat_0123456789abcdefABCDEF')
+        configure('copilot', 'native', self.home, key='test-copilot-token-not-a-secret-0001')
         self.assertEqual(_exported(self.home), {
-            'GEMINI_API_KEY': 'AIzaSyA-0123456789abcdefghijklmnopqrstu',
-            'COPILOT_GITHUB_TOKEN': 'github_pat_0123456789abcdefABCDEF',
+            'GEMINI_API_KEY': 'test-gemini-key-not-a-secret-0001',
+            'COPILOT_GITHUB_TOKEN': 'test-copilot-token-not-a-secret-0001',
         })
         agent_setup.forget_key(self.home)
         self.assertEqual(_exported(self.home), {})
