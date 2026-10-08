@@ -1859,3 +1859,7 @@ Root cause: the tool updater was written as "follow upstream latest" for every c
 ## 2026-10-08 — Hook guards matched literal spellings, not the operation
 
 Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).
+
+## 2026-10-08 — A long-standing network client was never declared in the architecture model
+
+Root cause: `updater.py`'s https client predates the architecture fitness model, and because fitness only applies to changed owned source, the undeclared boundary stayed invisible on `main` until the OpenGrep-pin change touched `updater.py`. An existing network client must be declared when its owner node is first modeled, not only when a diff happens to re-expose it; the fix adds the edge and a regression test asserting the declaration stays present (#39).

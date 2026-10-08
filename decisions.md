@@ -1117,3 +1117,7 @@ The updater now installs OpenGrep only from a pinned release after a SHA-256 mat
 ## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
 
 Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).
+
+## 2026-10-08 — Declare the updater's https egress as an architecture edge, don't loosen the rule
+
+`updater.py` has always imported `urllib.request` to fetch pinned supply-chain artifacts, but the architecture model never declared that boundary; the gap only surfaced once a change touched `updater.py` and FIT-DECLARED-NETWORK-ONLY became applicable. Fixed by adding the external node `NODE-SUPPLY-CHAIN-REGISTRY` and the allowlisted-egress edge `EDGE-LOCAL-SUPPLY-CHAIN-FETCH` from `NODE-LOCAL-ROUTE-POLICY` (https, fail-closed), setting that node's `runtime.network` to `declared_egress`, and regenerating the diagrams — declaring the real network boundary rather than dropping `require_declared_edge` or widening allowed protocols (#39).
