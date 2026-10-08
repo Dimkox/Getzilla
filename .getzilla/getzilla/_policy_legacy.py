@@ -1818,14 +1818,24 @@ def _secret_path_match(path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _secret_exception(raw: str) -> bool:
+def _secret_exception(raw: str, patterns: list[str]) -> bool:
     normalized = raw.replace('\\', '/').rstrip('/')
     # The ssh client config and host-key caches are routinely read and carry no key
     # material; only files like .ssh/id_* stay secret (via their own patterns).
-    if normalized.lower().endswith('.ssh/config'):
-        return True
     base = os.path.basename(normalized)
-    return bool(base) and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS)
+    if normalized.lower().endswith('.ssh/config'):
+        enclosing = normalized[:-len('.ssh/config')]
+    elif base and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS):
+        enclosing = os.path.dirname(normalized)
+        if os.path.basename(enclosing).lower() == '.ssh':
+            enclosing = os.path.dirname(enclosing)
+    else:
+        return False
+    # A public name never overrides a protected enclosing tree (`trust-ci/runtime/**`,
+    # `**/secrets/**`); only the ordinary SSH store pattern is waived (#64).
+    enclosing = enclosing.rstrip('/')
+    stronger = [pattern for pattern in patterns if '.ssh' not in pattern.lower()]
+    return not (enclosing.strip('./~') and _secret_path_match(enclosing + '/', stronger))
 
 
 def _bounded_glob(start: str, pattern: str, budget: _Budget) -> list[str]:
@@ -1865,7 +1875,7 @@ def _secret_reference(
         # Count every literal word checked, not only filesystem globbing, so the overall
         # wall-clock/entry budget bounds the word x pattern scan and fails closed (review S59-1).
         budget.tick()
-    if not raw or '\x00' in raw or _secret_exception(raw):
+    if not raw or '\x00' in raw or _secret_exception(raw, patterns):
         return False
     rel = safe_relative_path(root, raw)
     if rel is not None and _secret_path_match(rel, patterns):
@@ -1912,7 +1922,7 @@ def _walk_for_secret(
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
-                    elif (not glob_filter or fnmatch.fnmatch(entry.name, glob_filter)) and _secret_reference(
+                    elif (not glob_filter or any(fnmatch.fnmatch(entry.name, g) for g in _brace_expand(glob_filter))) and _secret_reference(
                         root, entry.path, patterns, expand=False,
                     ):
                         return entry.path
@@ -2042,6 +2052,20 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
     if name in _WINDOWS_COPY_READERS or name in _WINDOWS_ARCHIVE_READERS:
         # Windows copy/archive readers: path operands are bare tokens; '/switch' and '-Option' drop out.
         return [token for token in rest if not token.startswith(('-', '/'))]
+    if name in {'select-string', 'sls'}:
+        # Named parameters: `-Pattern X` is data, any other bare word may be a path (#64).
+        words: list[str] = []
+        named_pattern = False
+        index = 0
+        while index < len(rest):
+            low = rest[index].lower()
+            if low.startswith('-patt') and '-pattern'.startswith(low):
+                named_pattern, index = True, index + 2
+                continue
+            if not low.startswith('-'):
+                words.append(rest[index])
+            index += 1
+        return words if named_pattern else words[1:]
     if name in _WINDOWS_GREP_READERS:
         # findstr/Select-String: the first bare operand is the pattern, the rest are paths.
         paths = [token for token in rest if not token.startswith(('-', '/'))]
@@ -2070,6 +2094,9 @@ def _is_recursive_reader(argv: list[str]) -> bool:
     if name == 'find':
         return any(token in {'-exec', '-execdir', '-ok', '-okdir'} for token in rest)
     if name in _WINDOWS_ARCHIVE_READERS:
+        return True
+    if name in {'robocopy', 'xcopy'}:
+        # Without /S they still copy every file directly in the source directory (#64).
         return True
     if name in _WINDOWS_COPY_READERS:
         return any(
@@ -2270,7 +2297,8 @@ def evaluate_pre_tool(
         if is_grep and glob_filter:
             # A grep glob names the files ripgrep opens even with no path given; a glob that
             # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
-            search_inputs.append(glob_filter)
+            # ripgrep globs take `{a,b}` alternatives: check every alternative (#64).
+            search_inputs.extend(_brace_expand(glob_filter))
         try:
             for raw in search_inputs:
                 if not isinstance(raw, str) or not raw:
