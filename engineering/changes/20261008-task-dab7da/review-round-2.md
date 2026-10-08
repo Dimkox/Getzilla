@@ -33,13 +33,19 @@ credential patterns). Public-repo rule: the probes live in the tests, not in pro
   (twine/cargo/gem/poetry/bun/helm/crane/oras/skopeo/nerdctl/flit/maturin).
 - **S59-8** `ssh` `known_hosts`/`authorized_keys` and `.ssh/config` are not secrets.
 
-## Overlap with #53 (grant binding) — merge order
+## Delivery and overlap with #53 (grant binding) — merge order
 
-Both PRs edit `_policy_legacy.py`. The regions are disjoint except the production path:
-#53 rewrote production authority to **resource-bound** (`production_targets` +
-`has_valid_approval(resource=...)`), while this PR adds `package-publish` as a new
-production action. **Merge order: #53 first, then this PR rebased on top.** On the rebase
-the `package-publish` action must bind to the publish target in #53's resource model
-(the registry/index or artifact ref) rather than the action-level grant used here against
-main; the `_production_action` return value is unchanged, only the grant lookup it feeds
-moves to the resource-bound form. No other hunks conflict.
+PR #59 was merged at its round-1 head (`655c16a`) before these round-2 commits were
+pushed, so they ship as a separate follow-up PR from the same branch; its base is current
+`main`, whose tree equals `655c16a`.
+
+#53 has since merged `main` (round-1 #59) into its branch. Either order now works:
+
+- **Recommended: #53 first, then this PR.** Merging `main` into this branch then has a
+  single conflict in `_http_write_resource_text`: keep #53's exact
+  `github-pr-review:unparsed` return and add this PR's PowerShell web-cmdlet block below it.
+  A scratch integration of both heads passes the policy, hook and approval suites
+  (149 tests).
+- With #53's resource-bound production model, `package-publish` resolves to no resource,
+  so no grant can authorize it (fail-closed); modelling the publish target (registry/index
+  plus artifact) is a follow-up if granted publishing is wanted.

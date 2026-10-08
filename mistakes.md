@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-08 — Pushed review fixes to a branch whose PR had already merged
+
+Root cause: I pushed the round-2 #59 fixes to `fix/hook-policy-followup` without first checking the PR state; the owner had merged #59 at its round-1 head half an hour earlier, so the push landed on a closed PR and `main` kept the reviewed HIGH findings. Before pushing to an existing PR branch, check `gh pr view <n> --json state,headRefOid` and that the head still matches what was reviewed; if the PR is merged, open a follow-up PR instead.
+
 ## 2026-10-08 — A repo config override silently disabled the new secret patterns
 
 Root cause: I added the credential-store patterns to `DEFAULT_SECRET_READ` in code and verified nothing, but `.getzilla/config/policy.json` ships its own `secret_read_paths`, and a present config override replaces the code default rather than extending it, so the new patterns had no effect until they were also appended to the config file. When a behaviour is seeded from a config file that the repo overrides, change the override too and assert the deny with the repo's own config loaded, not just the code default.
