@@ -80,6 +80,8 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "no pinned dependencies in lockfiles or requirements" or (
             summary.endswith("pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1")
         )
+    if name == "opengrep":
+        return summary in {"opengrep not available", "no OpenGrep rules installed"}
     if name == "factory-postgres-exit":
         return summary == "repository-sandbox has no nested-container/database capability"
     if name in {"architecture", "governance", "workflow-artifacts"}:
