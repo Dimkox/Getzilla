@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_ENTRIES = frozenset(
     {
-        ".agents", ".coveragerc", ".gitattributes", ".github", ".gitignore", ".getzilla", ".grok", ".specify", ".superpowers",
+        ".agents", ".claude", ".codex", ".coveragerc", ".gemini", ".gitattributes", ".github", ".gitignore", ".getzilla", ".grok",
+        ".qwen", ".specify", ".superpowers",
         "AGENTS.md", "CHANGELOG.md", "DARK_FACTORY_ROADMAP.md", "GROK_BUILD_HANDOFF.md",
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
         "FACTORY_UNIFIED_UPGRADE_TZ_v1.5_FINAL.md",

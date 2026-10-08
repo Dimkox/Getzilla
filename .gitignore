@@ -69,3 +69,8 @@ bitrix/tmp/
 # Docker local data
 .docker-data/
 .getzilla-test-runner.json
+
+# Agent-local settings (never commit keys or personal overrides)
+.claude/settings.local.json
+.claude/CLAUDE.local.md
+.qwen/.env

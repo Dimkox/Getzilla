@@ -21,6 +21,12 @@ from getzilla import fsx
 
 MANAGED_DIRS = (
     ".grok",
+    ".qwen",
+    ".claude",
+    ".codex",
+    ".gemini",
+    ".github/hooks",
+    ".github/agents",
     ".agents",
     ".getzilla",
     "factory/contracts",

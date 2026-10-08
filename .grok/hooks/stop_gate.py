@@ -8,7 +8,7 @@ from pathlib import Path
 for _p in (Path.cwd(), Path.cwd() / ".getzilla"):
     s = str(_p)
     if s not in sys.path:
-        sys.path.insert(0, s)
+        sys.path.append(s)
 
 try:
     from _lib import emit, read_payload, root_from

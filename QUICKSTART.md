@@ -2,10 +2,10 @@
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
-**One-command install.** These installers add whatever is missing (Git, Python 3.10+, the Grok Build CLI), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
+**One-command install.** These installers add whatever is missing (Git, Python 3.10+, your coding agent: Qwen Code by default, or Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Grok Build), point the agent at its models (OpenRouter with your own key from https://openrouter.ai/keys by default, or the agent's own sign-in), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
 
 ```powershell
-# Windows: winget when available, otherwise official per-user installers (no admin rights needed)
+# Windows: winget when available (installed from github.com/microsoft/winget-cli when missing, e.g. on Windows 10), otherwise official per-user downloads (no admin rights needed)
 irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
 ```
 
@@ -14,18 +14,24 @@ irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 |
 curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
 ```
 
-With the installer done, continue at step 2 (sign in to Grok). The manual steps below are the same path by hand.
+Without a terminal to ask in, the installers use `GETZILLA_AGENT` (`qwen` default, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter` default, `native`), `GETZILLA_MODEL` and `OPENROUTER_API_KEY`. The key becomes the user environment variable `OPENROUTER_API_KEY` (and `ANTHROPIC_AUTH_TOKEN` for Claude Code) that every agent reads: an owner-only `~/.getzilla/openrouter.env` sourced from your shell profiles on Linux/macOS, persistent user variables on Windows. Open a new terminal afterwards. `--forget-key` removes it. Minimum versions: Python 3.10, Node.js 20 (Qwen Code, Codex), PowerShell 7.4 on Windows (the installer adds it). Re-run the setup any time with `python3 scripts/getzilla_setup_agent.py --agent <agent>`.
+
+With the installer done, continue at step 3. The manual steps below are the same path by hand.
 
 0. Check tools (minimum or newer; doctor offers a fallback install if something is missing):
    ```bash
    python3 scripts/getzilla_doctor.py --offer-install
    ```
 
-1. Install Grok Build:
-   - Windows: `irm https://x.ai/cli/install.ps1 | iex`
-   - macOS/Linux: `curl -fsSL https://x.ai/cli/install.sh | bash`
+1. Install one coding agent:
+   - Qwen Code: `npm install -g @qwen-code/qwen-code@latest` (Node.js 20+)
+   - Codex: `npm install -g @openai/codex@latest` (Node.js 20+)
+   - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash` (Windows: `irm https://claude.ai/install.ps1 | iex`)
+   - Gemini CLI: `npm install -g @google/gemini-cli@latest` (Google sign-in or `GEMINI_API_KEY`)
+   - GitHub Copilot CLI: `npm install -g @github/copilot@latest` (Node.js 22+; `/login` or `COPILOT_GITHUB_TOKEN`)
+   - Grok Build: `curl -fsSL https://x.ai/cli/install.sh | bash` (Windows: `irm https://x.ai/cli/install.ps1 | iex`)
 
-2. Auth: run `grok` once, sign in with SuperGrok account.
+2. Models: `python3 scripts/getzilla_setup_agent.py --agent qwen` (or `codex`, `claude`) asks for your OpenRouter key and writes your user settings; `--provider native` uses the agent's own sign-in instead. Grok Build always signs in with your xAI account.
 
 3. Plan an update for an existing repository without changing it:
    ```bash
@@ -91,8 +97,9 @@ python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40
 4. Work:
    ```bash
    cd /path/to/repo
-   grok
+   qwen      # or: codex, claude, gemini, copilot, grok
    ```
+   Each agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
    Prompt example: `Добавь обработчик события OnAfterUserAdd в local-модуль`
 
    If hooks did not create a route, create one explicitly:

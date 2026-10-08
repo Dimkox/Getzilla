@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import re
+import shlex
 import sys
 import traceback
 from dataclasses import dataclass
@@ -71,6 +72,7 @@ def run_hook(main: Callable[[], None], fallback: dict[str, Any]) -> None:
 TOOL_ALIASES = {
     'run_terminal_command': 'Bash',
     'read_file': 'Read',
+    'read_many_files': 'Read',
     'open_file': 'Read',
     'search_replace': 'Edit',
     'write': 'Write',
@@ -79,6 +81,25 @@ TOOL_ALIASES = {
     'spawn_subagent': 'Agent',
     'task': 'Agent',
     'Task': 'Agent',
+    'run_shell_command': 'Bash',
+    'monitor': 'Bash',
+    'Monitor': 'Bash',
+    'PowerShell': 'Bash',
+    'shell': 'Bash',
+    'local_shell': 'Bash',
+    'exec_command': 'Bash',
+    'container.exec': 'Bash',
+    'write_file': 'Write',
+    'edit': 'Edit',
+    'replace': 'Edit',
+    'MultiEdit': 'Edit',
+    'NotebookEdit': 'Edit',
+    'agent': 'Agent',
+    'bash': 'Bash',
+    'powershell': 'Bash',
+    'create': 'Write',
+    'view': 'Read',
+    'str_replace': 'Edit',
 }
 
 
@@ -100,6 +121,45 @@ def emit(data: dict[str, Any]) -> None:
     sys.stdout.write('\n')
 
 
+def harness() -> str:
+    """Name of the agent that launched this hook: grok unless the command passed --harness."""
+    args = sys.argv[1:]
+    if '--harness' in args:
+        index = args.index('--harness')
+        if index + 1 < len(args):
+            return args[index + 1]
+    return 'grok'
+
+
+def permission_output(allowed: bool, reason: str | None = None) -> dict[str, Any]:
+    """A PreToolUse verdict in the shape the launching agent validates.
+
+    Grok Build accepts the combined legacy shape. Claude Code, Codex and Qwen Code
+    reject a top-level ``decision`` of allow/deny, so they get only
+    ``hookSpecificOutput`` on denial. Copilot CLI reads a top-level
+    ``permissionDecision`` and Gemini CLI a top-level ``decision``. Every agent but
+    Grok gets no output on allow, which keeps its own permission prompts in force.
+    """
+    verdict = 'allow' if allowed else 'deny'
+    specific: dict[str, Any] = {'hookEventName': 'PreToolUse', 'permissionDecision': verdict}
+    if not allowed:
+        specific['permissionDecisionReason'] = reason or ''
+    agent = harness()
+    if agent == 'grok':
+        data: dict[str, Any] = {'decision': verdict}
+        if not allowed:
+            data['reason'] = reason or ''
+        data['hookSpecificOutput'] = specific
+        return data
+    if allowed:
+        return {}
+    if agent == 'copilot':
+        return {'permissionDecision': 'deny', 'permissionDecisionReason': reason or ''}
+    if agent == 'gemini':
+        return {'decision': 'deny', 'reason': reason or ''}
+    return {'hookSpecificOutput': specific}
+
+
 def first(*values: Any) -> Any:
     for value in values:
         if value not in (None, ''):
@@ -113,7 +173,7 @@ def root_from(payload: dict[str, Any]) -> Path:
 
 
 _SESSION_ROOT_ALIASES = ('cwd', 'workspaceRoot', 'workspace_root')
-_COMMAND_ROOT_ALIASES = ('workdir', 'cwd', 'working_directory', 'workingDirectory')
+_COMMAND_ROOT_ALIASES = ('workdir', 'cwd', 'working_directory', 'workingDirectory', 'directory')
 
 
 @dataclass(frozen=True)
@@ -472,9 +532,23 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
     value = payload.get('tool_input')
     if value is None:
         value = payload.get('toolInput')
+    if value is None and isinstance(payload.get('toolArgs'), str):
+        try:
+            value = json.loads(payload['toolArgs'])
+        except json.JSONDecodeError:
+            value = {'command': payload['toolArgs']}
+    elif value is None:
+        value = payload.get('toolArgs')
     if not isinstance(value, dict):
         return {}
     mapped = dict(value)
+    if 'command' not in mapped and str(first(payload.get('tool_name'), payload.get('toolName'), '')) == 'apply_patch':
+        patch = first(mapped.get('patch'), mapped.get('input'))
+        if isinstance(patch, str):
+            mapped['command'] = patch
+    command = mapped.get('command')
+    if isinstance(command, list) and command and all(isinstance(part, str) for part in command):
+        mapped['command'] = shlex.join(command)
     if 'subagent_type' in mapped and 'agent_type' not in mapped:
         mapped['agent_type'] = mapped['subagent_type']
     if 'agentType' in mapped and 'agent_type' not in mapped:

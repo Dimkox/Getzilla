@@ -74,6 +74,89 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertIn('/python-3.13.16-amd64.exe', text)
         self.assertIn('InstallAllUsers=0', text)
 
+    def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
+        shell = SHELL.read_text(encoding='utf-8')
+        powershell = POWERSHELL.read_text(encoding='utf-8')
+        for text in (shell, powershell):
+            for name in ('GETZILLA_AGENT', 'GETZILLA_PROVIDER', 'GETZILLA_MODEL', 'OPENROUTER_API_KEY',
+                         'GETZILLA_SKIP_AGENT', 'GETZILLA_NONINTERACTIVE', 'getzilla_setup_agent.py', '--key-stdin',
+                         '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
+                         '@google/gemini-cli@latest', '@github/copilot@latest', 'GEMINI_API_KEY',
+                         'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok'):
+                self.assertIn(name, text)
+        self.assertIn('https://claude.ai/install.sh', shell)
+        self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
+        self.assertIn('-AsSecureString', powershell)
+        self.assertIn("$MinimumPowerShell = [version]'7.4'", powershell)
+        self.assertIn("Invoke-Winget 'Microsoft.PowerShell'", powershell)
+        toolchain = json.loads((ROOT / '.getzilla/config/toolchain.json').read_text(encoding='utf-8'))
+        pwsh = next(item for item in toolchain['tools'] if item['id'] == 'pwsh')
+        self.assertEqual(pwsh['minimum'], '7.4')
+        self.assertIn('Microsoft.PowerShell', pwsh['install']['windows'])
+        node = next(item for item in toolchain['tools'] if item['id'] == 'node')
+        self.assertEqual(node['minimum'], '20.0')
+        self.assertIn('read -rs key </dev/tty', shell)
+
+    def test_powershell_installer_installs_winget_or_falls_back_to_direct_downloads(self) -> None:
+        text = POWERSHELL.read_text(encoding='utf-8')
+        for needle in ('    Initialize-Winget\n', 'repos/microsoft/winget-cli/releases/latest',
+                       'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle', 'DesktopAppInstaller_Dependencies.zip',
+                       'Add-AppxPackage -Path $package -DependencyPath $paths', 'GETZILLA_SKIP_WINGET',
+                       'repos/PowerShell/PowerShell/releases/latest', 'https://nodejs.org/dist/index.json'):
+            self.assertIn(needle, text)
+        self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
+
+    @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
+    def test_powershell_no_winget_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            deps = Path(tmp) / 'deps'
+            for arch in ('x64', 'arm64', 'x86'):
+                (deps / arch).mkdir(parents=True)
+                (deps / arch / f'Microsoft.VCLibs.140.00.UWPDesktop_14.0_{arch}.appx').write_text('x')
+                (deps / arch / f'Microsoft.UI.Xaml.2.8_8.2310_{arch}.appx').write_text('x')
+            archive = Path(tmp) / 'node.zip'
+            shutil.make_archive(str(archive.with_suffix('')), 'zip', root_dir=ROOT / 'tests', base_dir='fixtures')
+            command = (
+                f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
+                '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
+                'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
+                "$index = @(@{version='v25.1.0'; lts=$false}, @{version='v24.11.1'; lts='Krypton'}, "
+                "@{version='v22.21.0'; lts='Jod'}, @{version='v20.19.5'; lts='Iron'}); "
+                "'node20=' + (Select-NodeLts $index 20); 'node25=' + (Select-NodeLts $index 25); "
+                "$env:PROCESSOR_ARCHITEW6432 = $null; $env:PROCESSOR_ARCHITECTURE = 'ARM64'; 'arch=' + (Get-WindowsArchitecture); "
+                f"'deps=' + ((Select-WingetDependencies '{deps}' 'arm64' | ForEach-Object {{ Split-Path $_ -Leaf }}) -join ','); "
+                f"$env:LOCALAPPDATA = '{tmp}'; 'program=' + (Expand-ToUserPrograms '{archive}' 'nodejs'); "
+                "function Test-Winget { $false }; $env:GETZILLA_SKIP_WINGET = '1'; Initialize-Winget"
+            )
+            result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True,
+                                    timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('node20=v24.11.1', result.stdout)
+            self.assertIn('node25=\n', result.stdout + '\n')
+            self.assertIn('arch=arm64', result.stdout)
+            deps_line = next(line for line in result.stdout.splitlines() if line.startswith('deps='))
+            self.assertEqual(sorted(deps_line[5:].split(',')), [
+                'Microsoft.UI.Xaml.2.8_8.2310_arm64.appx', 'Microsoft.VCLibs.140.00.UWPDesktop_14.0_arm64.appx',
+            ])
+            program = Path(tmp) / 'Programs' / 'nodejs'
+            self.assertIn(f'program={program}', result.stdout)
+            self.assertTrue(any(program.iterdir()))
+            self.assertFalse(archive.exists())
+            self.assertIn('skipping its installation (GETZILLA_SKIP_WINGET=1)', result.stdout)
+
+    @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
+    def test_powershell_minimum_version_check_accepts_the_host_pwsh(self) -> None:
+        command = (
+            f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
+            '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
+            'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
+            "$MinimumPowerShell = [version]'7.4'; "
+            'function Test-Winget { $false }; Install-PowerShell7'
+        )
+        result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r'==> PowerShell: 7\.\d+')
+
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_installer_parses(self) -> None:
         command = (
@@ -95,7 +178,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             GETZILLA_REF=subprocess.run(
                 ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True
             ).stdout.strip(),
-            GETZILLA_SKIP_GROK='1',
+            GETZILLA_SKIP_AGENT='1',
             **extra,
         )
         return subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
@@ -118,6 +201,48 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             again = self._run(home)
             self.assertEqual(again.returncode, 0, again.stdout[-2000:] + again.stderr[-2000:])
             self.assertIn('Updating Getzilla in', again.stdout)
+
+    def test_rejects_an_unknown_agent_before_downloading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / 'Getzilla'
+            result = self._run(home, GETZILLA_AGENT='cursor')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok', result.stderr)
+            self.assertFalse(home.exists())
+
+    def test_defaults_to_qwen_with_openrouter_and_configures_from_the_key(self) -> None:
+        if subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True,
+                          text=True).stdout.strip() == 'HEAD':
+            self.skipTest('detached checkout: no branch to clone')
+        key = 'sk-or-v1-feedfacefeedfacefeedfacefeedface'
+        with tempfile.TemporaryDirectory() as tmp:
+            user_home = Path(tmp) / 'user'
+            user_home.mkdir()
+            env = _clean_env(
+                HOME=str(user_home),
+                GETZILLA_HOME=str(Path(tmp) / 'Getzilla'),
+                GETZILLA_REPO=ROOT.as_uri(),
+                GETZILLA_REF=subprocess.run(
+                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True,
+                    check=True,
+                ).stdout.strip(),
+                GETZILLA_NONINTERACTIVE='1',
+                OPENROUTER_API_KEY=key,
+                PATH=f'{Path(tmp) / "bin"}:{os.environ["PATH"]}',
+            )
+            fake_bin = Path(tmp) / 'bin'
+            fake_bin.mkdir()
+            (fake_bin / 'qwen').write_text('#!/bin/sh\nexit 0\n')
+            (fake_bin / 'qwen').chmod(0o755)
+            result = subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
+            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+            self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
+            self.assertIn('Qwen Code: already installed.', result.stdout)
+            self.assertNotIn(key, result.stdout + result.stderr)
+            self.assertIn(f"export OPENROUTER_API_KEY='{key}'",
+                          (user_home / '.getzilla/openrouter.env').read_text(encoding='utf-8'))
+            self.assertIn('.getzilla/openrouter.env', (user_home / '.bashrc').read_text(encoding='utf-8'))
+            self.assertIn('In your project run: qwen', result.stdout)
 
     def test_refuses_a_foreign_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,8 +22,12 @@
     {
       "id": "FIT-TRUST-CI-SEPARATION",
       "implementation_prefixes": [
-        ".grok",
+        ".claude",
+        ".codex",
+        ".gemini",
         ".getzilla",
+        ".grok",
+        ".qwen",
         "architecture",
         "delivery",
         "engineering/contracts",
@@ -302,8 +306,12 @@
       "id": "FIT-LOCAL-CANNOT-DEFINE-TRUST-CI",
       "severity": "error",
       "source_prefixes": [
-        ".grok",
+        ".claude",
+        ".codex",
+        ".gemini",
         ".getzilla",
+        ".grok",
+        ".qwen",
         "architecture",
         "delivery",
         "engineering/contracts",

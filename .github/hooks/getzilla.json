@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "powershell": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "powershell": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "cwd": ".",
+        "timeoutSec": 20
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "powershell": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/post_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/post_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "powershell": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/post_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/post_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "powershell": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','copilot'];runpy.run_path(str(f),run_name='__main__')\"",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
