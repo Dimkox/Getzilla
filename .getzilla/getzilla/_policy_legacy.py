@@ -216,20 +216,32 @@ RECURSIVE_REMOVE_POLICY = 'rm -r of /, an absolute path, ~, $HOME, . or *'
 _RM_GLOB_ONLY = re.compile(r'^[*?./]+$')
 
 
-def _shell_pieces(command: str, depth: int = 0) -> list[list[str] | None]:
-    """Token lists of every simple command, unwrapping nested ``sh -c`` payloads.
+def _leading_env(tokens: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Split a simple command's leading ``VAR=value`` assignments from its argv."""
+    env: dict[str, str] = {}
+    index = 0
+    while index < len(tokens) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[index]):
+        name, _, value = tokens[index].partition('=')
+        env[name] = value
+        index += 1
+    return env, tokens[index:]
 
-    ``None`` marks a piece that ``shlex`` cannot tokenize.
+
+def _shell_commands(command: str, depth: int = 0) -> list[tuple[dict[str, str], list[str]] | None]:
+    """``(leading env assignments, argv)`` of every simple command, unwrapping ``sh -c``.
+
+    ``None`` marks a piece that ``shlex`` cannot tokenize. The env map is retained so
+    target binding cannot be spoofed by a ``GH_REPO=``/``GH_HOST=`` assignment prefix;
+    an outer assignment is propagated into any ``sh -c`` payload it exports to.
     """
-    pieces: list[list[str] | None] = []
+    pieces: list[tuple[dict[str, str], list[str]] | None] = []
     for chunk in _command_chunks(command):
         try:
             tokens = _split_words(chunk)
         except ValueError:
             pieces.append(None)
             continue
-        while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-            tokens = tokens[1:]
+        env, tokens = _leading_env(tokens)
         if not tokens:
             continue
         payload = None
@@ -241,10 +253,19 @@ def _shell_pieces(command: str, depth: int = 0) -> list[list[str] | None]:
                         break
                 break
         if payload is not None and depth < 4:
-            pieces.extend(_shell_pieces(payload, depth + 1))
+            for sub in _shell_commands(payload, depth + 1):
+                pieces.append(None if sub is None else ({**env, **sub[0]}, sub[1]))
             continue
-        pieces.append(tokens)
+        pieces.append((env, tokens))
     return pieces
+
+
+def _shell_pieces(command: str, depth: int = 0) -> list[list[str] | None]:
+    """Token lists of every simple command, unwrapping nested ``sh -c`` payloads.
+
+    ``None`` marks a piece that ``shlex`` cannot tokenize.
+    """
+    return [None if piece is None else piece[1] for piece in _shell_commands(command, depth)]
 
 
 def _dangerous_remove_target(operand: str) -> bool:
@@ -888,14 +909,14 @@ _GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IG
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
 
 
-def _gh_api_request(arguments: list[str]) -> tuple[str, str, str] | None:
+def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') -> tuple[str, str, str] | None:
     """``(METHOD, host, endpoint)`` of ``gh api <arguments>`` when it writes, else ``None``.
 
     A write is any non-GET method, or request fields/body (gh then defaults to POST).
     """
     method: str | None = None
     fields = False
-    host = 'api.github.com'
+    host = default_host
     endpoint = ''
     index = 0
     while index < len(arguments):
@@ -929,26 +950,56 @@ def _gh_api_request(arguments: list[str]) -> tuple[str, str, str] | None:
     return method, host, endpoint.lstrip('/')
 
 
-def _gh_repository(argv: list[str], root: Path | None) -> str:
-    """``owner/repo`` (lower-cased) a gh command targets: ``-R``/``--repo`` or the root's origin."""
+def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
+    """Target host of a gh command: ``--hostname`` flag, else ``GH_HOST`` from the prefix."""
+    for index, token in enumerate(argv):
+        if token == '--hostname' and index + 1 < len(argv):
+            return argv[index + 1].lower()
+        if token.startswith('--hostname='):
+            return token.split('=', 1)[1].lower()
+    if env and env.get('GH_HOST'):
+        return env['GH_HOST'].lower()
+    return None
+
+
+def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | None = None) -> str:
+    """``owner/repo`` (lower-cased) a gh command targets.
+
+    Resolution order is the explicit ``-R``/``--repo`` flag, then a ``GH_REPO=`` prefix
+    assignment, then the repository's origin. A non-default ``--hostname``/``GH_HOST``
+    is prepended as ``host/owner/repo`` so a grant bound to the default host cannot be
+    spoofed onto another GitHub host by an env prefix (review S53-1).
+    """
+    repo: str | None = None
     for index, token in enumerate(argv):
         if token in {'-R', '--repo'} and index + 1 < len(argv):
-            return argv[index + 1].lower()
+            repo = argv[index + 1].lower()
+            break
         if token.startswith('--repo='):
-            return token.split('=', 1)[1].lower()
+            repo = token.split('=', 1)[1].lower()
+            break
         if token.startswith('-R') and len(token) > 2:
-            return token[2:].lower()
-    if root is not None:
-        from .state import _repository_identity
+            repo = token[2:].lower()
+            break
+    if repo is None and env and env.get('GH_REPO'):
+        repo = env['GH_REPO'].lower()
+    if repo is None:
+        if root is not None:
+            from .state import _repository_identity
 
-        try:
-            return _repository_identity(root).lower()
-        except RuntimeError:
-            return '.'
-    return '.'
+            try:
+                repo = _repository_identity(root).lower()
+            except RuntimeError:
+                repo = '.'
+        else:
+            repo = '.'
+    host = _gh_host(argv, env)
+    if host and host != 'github.com':
+        return f'{host}/{repo}'
+    return repo
 
 
-def _gh_pull_request(argv: list[str], index: int, root: Path | None) -> str | None:
+def _gh_pull_request(argv: list[str], index: int, root: Path | None, env: dict[str, str] | None = None) -> str | None:
     """``owner/repo#N`` for the PR a ``gh pr <command>`` names after ``argv[index]``, or ``None``."""
     selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
         '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
@@ -958,7 +1009,14 @@ def _gh_pull_request(argv: list[str], index: int, root: Path | None) -> str | No
     url = _GITHUB_PULL_URL.match(selectors[0])
     if url:
         return f'{url.group(1).lower()}#{url.group(2)}'
-    return f'{_gh_repository(argv, root)}#{selectors[0]}'
+    return f'{_gh_repository(argv, root, env)}#{selectors[0]}'
+
+
+def _api_host(env: dict[str, str] | None) -> str:
+    """Default host for a ``gh api`` call: ``GH_HOST`` from the prefix, else api.github.com."""
+    if env and env.get('GH_HOST'):
+        return env['GH_HOST'].lower()
+    return 'api.github.com'
 
 
 def _gh_external_write(command: str, root: Path | None = None) -> str | None:
@@ -968,9 +1026,10 @@ def _gh_external_write(command: str, root: Path | None = None) -> str | None:
     a review whose PR cannot be named statically yields ``github-pr-review:<owner>/<repo>#``,
     which no grant can match.
     """
-    for tokens in _shell_pieces(command):
-        if tokens is None:
+    for piece in _shell_commands(command):
+        if piece is None:
             continue
+        env, tokens = piece
         index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'gh'), None)
         if index is None:
             continue
@@ -978,12 +1037,12 @@ def _gh_external_write(command: str, root: Path | None = None) -> str | None:
         lowered = ['gh', *[token.lower() for token in argv[1:]]]
         positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
         if positionals[:1] == ['api']:
-            request = _gh_api_request(argv[indexes[0] + 1:])
+            request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
             if request:
                 return f'github-api:{request[0]} {request[1]}/{request[2]}'
         if positionals == ['pr', 'review']:
-            target = _gh_pull_request(argv, indexes[1], root)
-            return f'github-pr-review:{target or _gh_repository(argv, root) + "#"}'
+            target = _gh_pull_request(argv, indexes[1], root, env)
+            return f'github-pr-review:{target or _gh_repository(argv, root, env) + "#"}'
     return None
 
 
@@ -994,6 +1053,11 @@ def _git_push_targets(arguments: list[str], root: Path | None) -> list[str | Non
     ``delete:<ref>`` and ``--all``/``--mirror``/``--tags`` stay literal, so a grant
     for one branch never matches them.
     """
+    # A grant for a branch never authorizes running a server- or local-side command;
+    # --receive-pack/--exec make the target unresolvable so no grant can match (S53-2).
+    for token in arguments:
+        if token in {'--receive-pack', '--exec'} or token.startswith(('--receive-pack=', '--exec=')):
+            return [None]
     value_options = {'--repo', '-o', '--push-option', '--receive-pack', '--exec'}
     positionals: list[str] = []
     remote: str | None = None
@@ -1047,9 +1111,10 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
     """
     targets: list[tuple[str, str | None]] = []
     payload = _exact_outer_shell_payload(command)
-    for tokens in _shell_pieces(command if payload is None else payload):
-        if tokens is None:
+    for piece in _shell_commands(command if payload is None else payload):
+        if piece is None:
             continue
+        env, tokens = piece
         index = next((i for i, token in enumerate(tokens) if _executable_name(token) in _AUTHORITY_EXECUTABLES), None)
         if index is None:
             continue
@@ -1065,13 +1130,21 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
         positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS if argv[0] == 'gh' else frozenset(), 3)
         resource: str | None = None
         if action == 'pull-request-merge' and positionals[:1] == ['api']:
-            request = _gh_api_request(argv[indexes[0] + 1:])
+            request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
             merge = _GITHUB_PULL_MERGE.search(request[2]) if request else None
-            resource = f'{merge.group(1).lower()}#{merge.group(2)}' if merge else None
+            host = _gh_host(argv, env)
+            repo = f'{merge.group(1).lower()}' if merge else None
+            if repo is not None and host and host != 'github.com':
+                repo = f'{host}/{repo}'
+            resource = f'{repo}#{merge.group(2)}' if merge else None
         elif action == 'pull-request-merge':
-            resource = _gh_pull_request(argv, indexes[1], root)
+            resource = _gh_pull_request(argv, indexes[1], root, env)
+            # gh pr merge --admin bypasses branch protection; a plain merge grant must not
+            # authorize it, so the target is a distinct resource that only an explicit grant names.
+            if resource is not None and '--admin' in lowered:
+                resource = f'{resource}!admin'
         elif action == 'github-release' and len(positionals) > 2:
-            resource = f'{_gh_repository(argv, root)}@{argv[indexes[2]]}'
+            resource = f'{_gh_repository(argv, root, env)}@{argv[indexes[2]]}'
         elif action == 'docker-push':
             pushed = [argv[i] for p, i in zip(positionals, indexes) if p not in {'push', 'image', 'manifest'}]
             tags = [argv[i + 1] for i, token in enumerate(argv[:-1]) if token in {'-t', '--tag'}]

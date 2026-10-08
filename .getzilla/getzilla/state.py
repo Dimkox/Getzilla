@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import time
+import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -227,6 +228,10 @@ _CATEGORY_RESOURCES = frozenset({
     'github-api:unparsed', 'github-pr-review:unparsed',
 })
 _GITHUB_TARGET = re.compile(r'^(github-pr-review:)?([\w.-]+/[\w.-]+)(#\S+)$')
+_CONTROL_PLANE_DIRECTORIES = frozenset({
+    '.agents', '.grok', '.qwen', '.claude', '.codex', '.gemini', '.getzilla', '.github', 'trust-ci',
+})
+
 
 
 def _normalize_grant_resource(scope: str, raw: str) -> str:
@@ -248,6 +253,12 @@ def _normalize_grant_resource(scope: str, raw: str) -> str:
     if scope == 'protected-path':
         while resource.startswith('./'):
             resource = resource[2:]
+        # Percent-encoding can smuggle traversal (%2e%2e) or separators past the split
+        # checks below; a grant path must be a literal, not an encoded one (review P53-5).
+        if urllib.parse.unquote(resource) != resource:
+            raise ValueError(
+                f'protected-path grants must be literal paths, not percent-encoded: {raw!r}'
+            )
         parts = resource.split('/')
         if (
             not resource
@@ -257,6 +268,12 @@ def _normalize_grant_resource(scope: str, raw: str) -> str:
         ):
             raise ValueError(
                 f'protected-path grants require an exact repository-relative file path, not {raw!r}'
+            )
+        # A bare control-plane directory would authorize nothing useful under exact-match,
+        # but refuse it so a grant always names a file, never a whole engine directory.
+        if resource in _CONTROL_PLANE_DIRECTORIES:
+            raise ValueError(
+                f'protected-path grants must name a file inside {resource!r}, not the directory'
             )
         return resource
     match = _GITHUB_TARGET.match(resource)
