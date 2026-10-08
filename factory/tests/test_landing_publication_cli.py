@@ -9,6 +9,7 @@ import json
 import io
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -26,9 +27,38 @@ from getzilla_factory.landing_artifact import ExactGitLandingArtifactSource, Lan
 from factory.tests.test_landing_artifact import candidate_fixture
 
 
+def _device_consistent_base():
+    """Return (base, ok) for a temp base whose directories and files share st_dev.
+
+    The publisher fails closed when a file's st_dev differs from the target's. Overlayfs
+    without xino (common in containers) reports different devices for directories and
+    regular files, so the fixture needs a filesystem where that invariant holds.
+    """
+    for base in (None, "/dev/shm"):
+        if base is not None and not os.path.isdir(base):
+            continue
+        probe = tempfile.mkdtemp(prefix="publication-device-probe-", dir=base)
+        try:
+            marker = os.path.join(probe, "probe")
+            with open(marker, "wb"):
+                pass
+            if os.stat(probe).st_dev == os.stat(marker).st_dev:
+                return base, True
+        except OSError:
+            continue
+        finally:
+            shutil.rmtree(probe, ignore_errors=True)
+    return None, False
+
+
+_DEVICE_BASE, _DEVICE_CONSISTENT = _device_consistent_base()
+
+
 class LandingPublicationBoundaryTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="publication-boundary-")
+        if not _DEVICE_CONSISTENT:
+            self.skipTest("no temporary filesystem keeps st_dev equal for directories and files")
+        temporary = tempfile.TemporaryDirectory(prefix="publication-boundary-", dir=_DEVICE_BASE)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.target_root = self.root / "target"
@@ -56,6 +86,13 @@ class LandingPublicationBoundaryTests(unittest.TestCase):
         self.adapter = FilesystemLandingPublisher(self.target)
         self.coordinator = LandingPublicationCoordinator(self.store, self.adapter, lambda reference: self.bundle)
         self.reference = {"tenant_id": "test-tenant", "repository_id": "test-repository", "job_id": "test-job"}
+
+    def test_fixture_target_is_on_a_device_consistent_filesystem(self):
+        # The publisher requires st_dev(file) == target.device (the target root's st_dev).
+        probe = self.target_root / "device-probe"
+        probe.write_bytes(b"probe")
+        self.addCleanup(probe.unlink)
+        self.assertEqual(self.target.device, probe.stat().st_dev)
 
     def unfreeze(self):
         for directory, _names, files in os.walk(self.target_root):
