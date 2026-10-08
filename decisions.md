@@ -1117,3 +1117,7 @@ Prepare every disposable fixture head before evaluating exact-base/head diffs, b
 ## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
 
 Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).
+
+## 2026-10-08 — A grant names the exact target the command acts on
+
+Delegated grants are compared with the target the policy derives from the command itself: `github-api:<METHOD> <host>/<endpoint>`, `github-pr-review:<owner>/<repo>#<n>`, the pushed branch or tag, `owner/repo#N` for a merge. Deriving the resource from parsed argv and comparing by equality makes a grant cover one operation, and an undeterminable target simply matches no grant (fail closed) instead of falling back to a category (#38).

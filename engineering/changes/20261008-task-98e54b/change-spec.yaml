@@ -46,6 +46,42 @@
       ]
     },
     {
+      "id": "AC-006",
+      "statement": "External-write grants for gh api and PR reviews name the exact request (github-api:<METHOD> <host>/<endpoint>, github-pr-review:<owner>/<repo>#<n>); category resource names are refused and a grant authorizes no other method, endpoint, repository or PR.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Production grants are checked against the exact target of the command (branch or tag for git push, owner/repo#N for a merge including gh api PUT .../pulls/N/merge, owner/repo@tag for a release, image for docker push, name@version for npm publish); an unbound grant or an undeterminable target authorizes nothing, and push to main/master, --all or --mirror is refused even with a grant.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "Exact URLs with a query string are grantable; protected-path grants refuse drive letters, ':' streams, '~', braces, empty segments and trailing dots; the control-plane runbook lists exact files.",
+      "evidence": [
+        {
+          "test": "tests/test_approval_resources.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
       "id": "AC-005",
       "statement": "Full PR verification, independent reviews and the exact-head external check precede merge.",
       "evidence": [

@@ -84,3 +84,7 @@ Initial evidence accounting (current records are in `state.json`):
   ]
 }
 ```
+
+## Review follow-up (2026-10-08)
+
+Independent security review of head `77e2a7d` requested changes (P53-1 high, P53-2 medium, P53-3/4/5 low). Fixed test-first in `eb53d54` (tests) and the following `fix(approve)` commit; see AC-006..AC-008. CPU snapshot for this pass: `evidence/cpu-capacity-followup.md`.

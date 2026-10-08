@@ -1859,3 +1859,7 @@ Root cause: the approve CLI advertised `--resource` as an "fnmatch pattern" and 
 ## 2026-10-08 — Hook guards matched literal spellings, not the operation
 
 Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).
+
+## 2026-10-08 — Exact-looking category names were wildcards
+
+Root cause: the #38 fix forbade glob characters but kept the policy's category resources (`github-api`, `github-pull-request-review`) and production grants whose `--resource` was never compared, so one grant still authorized every endpoint, PR or branch. "No wildcard" has to mean "the grant is compared with the concrete target of the action", not "the string contains no `*`".
