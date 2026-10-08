@@ -6,14 +6,18 @@ installers are recorded instead of run. Nothing starts updates on its own.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +28,13 @@ from getzilla import updater
 
 from tests._support import project_copy, run_hook
 
+
+
+def _zip_bytes(name: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
+        archive.writestr('osv-test.json', ('{"id": "%s", "padding": "%s"}' % (name, 'x' * 64)).encode())
+    return buffer.getvalue()
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -80,7 +91,7 @@ class UpdaterTests(unittest.TestCase):
         def fetch(url: str) -> bytes:
             if '/npm/' in url:
                 raise OSError('offline')
-            return b'PK\x03\x04' + url.encode()
+            return _zip_bytes(url)
         results = {item.component: item for item in updater.update_osv(fetch, self.root)}
         self.assertEqual(results['osv:npm'].status, 'fail')
         self.assertEqual(results['osv:PyPI'].status, 'ok')
@@ -89,20 +100,78 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue(all(item.status == 'fail' for item in rejected))
         self.assertTrue((self.root / 'osv/PyPI/all.zip').read_bytes().startswith(b'PK'))
 
-    def test_opengrep_latest_release_is_installed_executable(self) -> None:
-        release = {'tag_name': 'v9.9.9', 'assets': [
-            {'name': 'opengrep_manylinux_x86', 'browser_download_url': 'https://example.invalid/bin'},
-        ]}
+    def test_osv_archive_with_bad_crc_is_rejected(self) -> None:
+        good = _zip_bytes('x')
+        updater.update_osv(lambda url: good, self.root)
+        corrupt = bytearray(good)
+        corrupt[good.index(b'osv-test') + len(b'osv-test') + 2] ^= 0xFF  # flip one byte of the member data
+        results = updater.update_osv(lambda url: bytes(corrupt), self.root)
+        self.assertTrue(all(item.status == 'fail' for item in results), results)
+        self.assertEqual((self.root / 'osv/PyPI/all.zip').read_bytes(), good)
+        truncated = updater.update_osv(lambda url: b'PK\x03\x04' + b'x' * 32, self.root)
+        self.assertTrue(all(item.status == 'fail' for item in truncated))
+
+    def _pinned(self, payload: bytes) -> mock._patch:
+        return mock.patch.dict(updater.OPENGREP_ASSETS, {
+            ('linux', 'x86_64'): ('opengrep_manylinux_x86', hashlib.sha256(payload).hexdigest()),
+        })
+
+    def test_opengrep_pinned_release_is_verified_and_installed_executable(self) -> None:
+        urls: list[str] = []
         def fetch(url: str) -> bytes:
-            return json.dumps(release).encode() if url == updater.OPENGREP_RELEASE else b'\x7fELF'
-        result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
-        self.assertEqual(result[0].detail, 'v9.9.9')
+            urls.append(url)
+            return b'\x7fELF'
+        with self._pinned(b'\x7fELF'):
+            result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
+        self.assertEqual(result[0].status, 'ok', result)
+        self.assertIn(f'v{updater.OPENGREP_VERSION}', result[0].detail)
+        self.assertEqual(urls, [
+            f'https://github.com/opengrep/opengrep/releases/download/v{updater.OPENGREP_VERSION}/opengrep_manylinux_x86',
+        ])
         binary = self.root / 'bin/opengrep'
         self.assertEqual(binary.read_bytes(), b'\x7fELF')
         if os.name != 'nt':
             self.assertTrue(stat.S_IMODE(binary.stat().st_mode) & stat.S_IXUSR)
-        self.assertEqual(updater.update_opengrep(fetch, self.root, ('linux', 'aarch64'))[0].status, 'fail')
         self.assertEqual(updater.update_opengrep(fetch, self.root, ('sunos', 'sparc'))[0].status, 'skip')
+
+    def test_opengrep_checksum_mismatch_is_not_installed(self) -> None:
+        with self._pinned(b'\x7fELF'):
+            result = updater.update_opengrep(lambda url: b'tampered', self.root, ('linux', 'x86_64'))
+            self.assertEqual(result[0].status, 'fail')
+            self.assertIn('sha256', result[0].detail)
+            self.assertFalse((self.root / 'bin/opengrep').exists())
+            (self.root / 'bin').mkdir(parents=True)
+            (self.root / 'bin/opengrep').write_bytes(b'previous')
+            updater.update_opengrep(lambda url: b'tampered', self.root, ('linux', 'x86_64'))
+            self.assertEqual((self.root / 'bin/opengrep').read_bytes(), b'previous')
+
+    def test_opengrep_never_follows_the_latest_release(self) -> None:
+        urls: list[str] = []
+        def fetch(url: str) -> bytes:
+            urls.append(url)
+            raise OSError('offline')
+        for key in updater.OPENGREP_ASSETS:
+            updater.update_opengrep(fetch, self.root, key)
+        self.assertTrue(urls)
+        self.assertFalse([url for url in urls if 'latest' in url or 'api.github.com' in url], urls)
+
+    def test_installed_opengrep_with_pinned_digest_is_not_downloaded_again(self) -> None:
+        (self.root / 'bin').mkdir(parents=True)
+        (self.root / 'bin/opengrep').write_bytes(b'\x7fELF')
+        def fetch(url: str) -> bytes:
+            raise AssertionError('must not download')
+        with self._pinned(b'\x7fELF'):
+            result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
+        self.assertEqual(result[0].status, 'ok', result)
+
+    def test_opengrep_pin_matches_the_ci_runner_pin(self) -> None:
+        runner = (ROOT / 'trust-ci/runner.Dockerfile').read_text(encoding='utf-8')
+        version = re.search(r'ARG OPENGREP_VERSION=(\S+)', runner).group(1)
+        digest = re.search(r'ARG OPENGREP_SHA256=([0-9a-f]{64})', runner).group(1)
+        self.assertEqual(updater.OPENGREP_VERSION, version)
+        self.assertEqual(updater.OPENGREP_ASSETS[('linux', 'x86_64')], ('opengrep_manylinux_x86', digest))
+        for asset, sha256 in updater.OPENGREP_ASSETS.values():
+            self.assertRegex(sha256, r'^[0-9a-f]{64}$', asset)
 
     def test_only_installed_agents_are_updated(self) -> None:
         calls: list[list[str]] = []
