@@ -30,10 +30,10 @@ from tests._support import project_copy, run_hook
 
 
 
-def _zip_bytes(name: str) -> bytes:
+def _zip_bytes(name: str, padding: int = 64) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
-        archive.writestr('osv-test.json', ('{"id": "%s", "padding": "%s"}' % (name, 'x' * 64)).encode())
+        archive.writestr('osv-test.json', ('{"id": "%s", "padding": "%s"}' % (name, 'x' * padding)).encode())
     return buffer.getvalue()
 
 
@@ -101,10 +101,13 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue((self.root / 'osv/PyPI/all.zip').read_bytes().startswith(b'PK'))
 
     def test_osv_archive_with_bad_crc_is_rejected(self) -> None:
-        good = _zip_bytes('x')
+        good = _zip_bytes('x', padding=64 * 1024)
         updater.update_osv(lambda url: good, self.root)
         corrupt = bytearray(good)
-        corrupt[good.index(b'osv-test') + len(b'osv-test') + 2] ^= 0xFF  # flip one byte of the member data
+        # ZIP_STORED keeps the payload verbatim. Flip one byte near the end of a member larger
+        # than zipfile's read chunk: headers and filename stay intact, and a reader that stops
+        # after the first chunk never sees it -- only a full CRC check (testzip) does.
+        corrupt[good.rindex(b'x' * 64) + 32] ^= 0x01
         results = updater.update_osv(lambda url: bytes(corrupt), self.root)
         self.assertTrue(all(item.status == 'fail' for item in results), results)
         self.assertEqual((self.root / 'osv/PyPI/all.zip').read_bytes(), good)
@@ -163,6 +166,20 @@ class UpdaterTests(unittest.TestCase):
         with self._pinned(b'\x7fELF'):
             result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
         self.assertEqual(result[0].status, 'ok', result)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits')
+    def test_installed_opengrep_without_execute_bits_is_made_executable(self) -> None:
+        (self.root / 'bin').mkdir(parents=True)
+        binary = self.root / 'bin/opengrep'
+        binary.write_bytes(b'\x7fELF')
+        binary.chmod(0o644)
+        def fetch(url: str) -> bytes:
+            raise AssertionError('must not download')
+        with self._pinned(b'\x7fELF'):
+            result = updater.update_opengrep(fetch, self.root, ('linux', 'x86_64'))
+        self.assertEqual(result[0].status, 'ok', result)
+        self.assertTrue(os.access(binary, os.X_OK))
+        self.assertEqual(stat.S_IMODE(binary.stat().st_mode) & 0o111, 0o111)
 
     def test_opengrep_pin_matches_the_ci_runner_pin(self) -> None:
         runner = (ROOT / 'trust-ci/runner.Dockerfile').read_text(encoding='utf-8')
