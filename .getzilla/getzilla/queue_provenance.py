@@ -84,6 +84,11 @@ class _Environment(NamedTuple):
 NON_QUEUE = AbstractValue("non_queue")
 QUEUE = AbstractValue("queue")
 UNKNOWN_QUEUE = AbstractValue("unknown_queue")
+# Marks a sequence whose length is no longer tracked; only the element summary is kept.
+# The key kind never comes from normalize_literal_key, so no subscript can select it.
+_UNBOUNDED_LENGTH: LiteralKey = ("length", "unbounded")
+# Loop iterations analysed exactly before growing sequences are widened to a summary.
+_LOOP_WIDENING_DELAY = 2
 
 
 def _entry_map(value: AbstractValue) -> dict[LiteralKey, AbstractValue]:
@@ -178,12 +183,37 @@ def _aggregate(value: AbstractValue) -> AbstractValue:
 def _sequence_length(value: AbstractValue) -> int | None:
     if value.state != "sequence" or value.default != NON_QUEUE:
         return None
+    if any(key == _UNBOUNDED_LENGTH for key, _item in value.entries):
+        return None
     indexes = sorted(
         int(key[1])
         for key, _item in value.entries
         if key[0] == "number" and isinstance(key[1], int)
     )
     return len(indexes) if indexes == list(range(len(indexes))) else None
+
+
+def _unbounded_sequence(summary: AbstractValue) -> AbstractValue:
+    """Return a sequence of unknown length whose every element is within ``summary``."""
+    if summary == NON_QUEUE:
+        return _structured("sequence", {_UNBOUNDED_LENGTH: NON_QUEUE})
+    return _structured("sequence", {}, summary)
+
+
+def widen_sequence(previous: AbstractValue, current: AbstractValue) -> AbstractValue:
+    """Widen a sequence that gained indexes between loop iterations.
+
+    Appending inside a loop adds one index per abstract iteration, an infinite ascending
+    chain that never reaches a fixpoint. Collapsing such a sequence into an unbounded
+    sequence summarised by the join of all its elements is sound: every index (and every
+    unpacking or negative index, which need a known length) now answers with that summary
+    or ``UNKNOWN_QUEUE``.
+    """
+    if previous.state != "sequence" or current.state != "sequence":
+        return current
+    if not set(_entry_map(current)) - set(_entry_map(previous)):
+        return current
+    return _unbounded_sequence(_aggregate(current))
 
 
 def _select(value: AbstractValue, key: LiteralKey | None) -> AbstractValue:
@@ -437,7 +467,12 @@ class _Interpreter:
         for name in names:
             value = environments[0].values.get(name, NON_QUEUE)
             for environment in environments[1:]:
-                value = self._join(value, environment.values.get(name, NON_QUEUE))
+                other = environment.values.get(name, NON_QUEUE)
+                # A binding unchanged on every path constructs no value; charging it made
+                # the value budget scale with locals x merge points instead of new values.
+                # The comparison is as cheap as the uncharged dict copy in _fork.
+                if other is not value and other != value:
+                    value = self._join(value, other)
             result[name] = value
         aliases = _AliasState({}, {})
         mutable_names = sorted(
@@ -504,6 +539,8 @@ class _Interpreter:
                 left_length = _sequence_length(left)
                 right_length = _sequence_length(right)
                 if left_length is None or right_length is None:
+                    if _aggregate(left) == NON_QUEUE and _aggregate(right) == NON_QUEUE:
+                        return self._value(_unbounded_sequence(NON_QUEUE))
                     return UNKNOWN_QUEUE
                 entries = _entry_map(left)
                 entries.update({
@@ -691,6 +728,10 @@ class _Interpreter:
             return True
         length = _sequence_length(container)
         if length is None:
+            added = self._evaluate(node.args[0], environment)
+            if _aggregate(container) == NON_QUEUE and _aggregate(added) == NON_QUEUE:
+                # Length stays unknown and every element stays ordinary: nothing changes.
+                return True
             self._set_alias_value(name, UNKNOWN_QUEUE, environment)
             return True
         entries = _entry_map(container)
@@ -852,12 +893,20 @@ class _Interpreter:
     ) -> _Environment:
         zero = self._fork(environment)
         current = self._fork(environment)
-        for _iteration in range(self.loop_limit):
+        for iteration in range(self.loop_limit):
             one = self._fork(current)
             if target is not None:
                 self._bind(target, _aggregate(iterable), one)
             one = self._block(body, one)
             joined = self._join_envs([zero, one])
+            if iteration + 1 >= _LOOP_WIDENING_DELAY:
+                # Widen before the stability check: the next state is current widened by
+                # join(zero, body(current)), so stability proves a post-fixpoint even when
+                # the pre-loop entries re-enter through ``zero``.
+                for name, value in joined.values.items():
+                    widened = widen_sequence(current.values.get(name, NON_QUEUE), value)
+                    if widened is not value:
+                        joined.values[name] = self._value(widened)
             if joined == current:
                 return self._block(orelse, joined)
             current = joined
