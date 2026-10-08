@@ -1,11 +1,7 @@
----
-description: "Release preparation, CI, scripts, containers, dependency locks and operational changes"
-globs: .github/workflows/**,scripts/**,**/Dockerfile*,**/compose*.yml,**/compose*.yaml,**/uv.lock,**/package-lock.json
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/70-delivery.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "Release preparation, CI, scripts, containers, dependency locks and operational changes"
+always_apply = false
+globs = [".github/workflows/**", "scripts/**", "**/Dockerfile*", "**/compose*.yml", "**/compose*.yaml", "**/uv.lock", "**/package-lock.json"]
+instructions = '''
 # Delivery, CI and operations
 
 - Follow the current public/private CI selection and external gate policy; do not change approval modes, branch protections, deployed trust material or provider eligibility as a side effect.
@@ -21,3 +17,4 @@ alwaysApply: false
 - `AGENTS.md`
 - `.agents/skills/getzilla-delivery/SKILL.md`
 - `.agents/skills/release-readiness/SKILL.md`
+'''

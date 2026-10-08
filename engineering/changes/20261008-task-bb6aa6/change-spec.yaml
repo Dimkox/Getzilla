@@ -1,0 +1,134 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "getzilla_harness.py --write renders .cursor/rules/getzilla/*.mdc from .grok/cursor-rules/*.toml with Cursor-documented frontmatter (unquoted comma-separated globs, one alwaysApply core)."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "The harness drift check reports missing, stale, symlinked and unexpected extra Cursor rule files; write removes the extras."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "Generated files are written by descriptor without following links and get mode 0644."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        },
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "AC-004",
+      "statement": ".cursor/** is control plane and protected in the policy defaults and in .getzilla/config/policy.json."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_delivery_sequence.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "AC-005",
+      "statement": "Delivery skills, verification-evidence and the evidence template state one order: local checks, reviews, saved reports, commit/freeze, one final verify; frozen tree equals reviewed tree apart from reports; any later change invalidates all receipts."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "AC-006",
+      "statement": "The always-applied Cursor core forbids reading .env/keys, pushing to main, force-push, merging, production and external writes."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-bb6aa6",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "A second Cursor generator or source format next to harnesses.py."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "A glob containing a comma, brace list, quote, whitespace, absolute path or .. is accepted."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_delivery_sequence.py"
+        }
+      ],
+      "id": "FORBID-003",
+      "statement": "Delivery wording that reruns verification before review, saves reports after the gate or reuses reviews of another tree."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_harnesses.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Cursor is not an execution harness (absent from HARNESSES); install_into.py and the verifier are unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix PR #55: Cursor project rules are a target of the existing harness renderer, written safely, protected and drift-checked; all delivery documents state one delivery order.",
+    "success_metric": "getzilla_verify.py --mode pr passes on the PR head; no second Cursor generator remains.",
+    "target": ".getzilla/getzilla/harnesses.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

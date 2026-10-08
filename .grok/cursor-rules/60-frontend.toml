@@ -1,11 +1,7 @@
----
-description: "UI components, HTML, CSS and accessibility changes"
-globs: **/*.tsx,**/*.jsx,**/*.vue,**/*.html,**/*.css,**/*.scss
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/60-frontend.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "UI components, HTML, CSS and accessibility changes"
+always_apply = false
+globs = ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.html", "**/*.css", "**/*.scss"]
+instructions = '''
 # Frontend changes
 
 - Follow the actual framework and design system already present. Do not import unrelated React, Vue, Nuxt or state-management conventions from a generic rule collection.
@@ -19,3 +15,4 @@ alwaysApply: false
 
 - `AGENTS.md`
 - `.agents/skills/frontend-change/SKILL.md`
+'''

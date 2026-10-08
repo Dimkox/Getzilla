@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_ENTRIES = frozenset(
     {
-        ".agents", ".claude", ".codex", ".coveragerc", ".gemini", ".gitattributes", ".github", ".gitignore", ".getzilla", ".grok",
+        ".agents", ".claude", ".codex", ".coveragerc", ".cursor", ".gemini", ".gitattributes", ".github", ".gitignore", ".getzilla", ".grok",
         ".qwen", ".specify", ".superpowers",
         "AGENTS.md", "CHANGELOG.md", "DARK_FACTORY_ROADMAP.md", "GROK_BUILD_HANDOFF.md",
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
@@ -369,7 +369,7 @@ class StructureTests(unittest.TestCase):
                 self.assertIn("complete report to the coordinator", content)
                 self.assertIn("out-of-band", content)
                 self.assertIn("after all reviews finish", content)
-                self.assertIn("reruns final verification", content)
+                self.assertIn("commits and freezes the candidate", content)
                 self.assertNotIn("write a report", content)
                 self.assertTrue(
                     "fingerprint before/after" in content
@@ -386,7 +386,7 @@ class StructureTests(unittest.TestCase):
                 self.assertIn("complete report to the coordinator", content)
                 self.assertIn("out-of-band", content)
                 self.assertIn("after all reviews finish", content)
-                self.assertIn("reruns final verification", content)
+                self.assertIn("one final qualifying", content)
                 self.assertTrue(
                     "fingerprint before/after" in content
                     or "fingerprint before and after" in content
@@ -1071,6 +1071,7 @@ class StructureTests(unittest.TestCase):
         for expected in (
             ".github/**",
             ".grok/**",
+            ".cursor/**",
             ".getzilla/**",
             "AGENTS.md",
             "trust-ci/**",

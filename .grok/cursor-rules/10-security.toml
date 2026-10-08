@@ -1,11 +1,7 @@
----
-description: "Authentication, authorization, secrets, untrusted data, MCP tools and network or filesystem boundaries"
-globs: **/*auth*.*,**/*security*.*,**/*mcp*.*,**/api/**,trust-ci/**,.github/workflows/**
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/10-security.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "Authentication, authorization, secrets, untrusted data, MCP tools and network or filesystem boundaries"
+always_apply = false
+globs = ["**/*auth*.*", "**/*security*.*", "**/*mcp*.*", "**/api/**", "trust-ci/**", ".github/workflows/**"]
+instructions = '''
 # Security-sensitive changes
 
 - Validate untrusted data at the receiving boundary; enforce authorization and tenant isolation on the server for each resource operation. Include denied-access and cross-tenant negative tests.
@@ -21,3 +17,4 @@ alwaysApply: false
 
 - `AGENTS.md`
 - `.agents/skills/security-sensitive-change/SKILL.md`
+'''

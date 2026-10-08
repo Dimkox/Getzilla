@@ -88,7 +88,8 @@ class HarnessHookPayloadTests(unittest.TestCase):
 
     def test_agents_cannot_rewrite_their_own_harness_hooks(self) -> None:
         with project_copy() as root:
-            for rel in ('.claude/settings.json', '.qwen/settings.json', '.codex/hooks.json'):
+            for rel in ('.claude/settings.json', '.qwen/settings.json', '.codex/hooks.json',
+                        '.cursor/rules/getzilla/00-core.mdc'):
                 data = self._pre_tool(root, 'Write', {'file_path': str(root / rel), 'content': '{}'})
                 self.assertEqual(data['decision'], 'deny', rel)
                 data = self._pre_tool(root, 'run_shell_command', {'command': f'rm {rel}'})

@@ -1,11 +1,7 @@
----
-description: "Python code and Python toolchain changes in Getzilla or an installed consumer"
-globs: **/*.py,pyproject.toml,**/pyproject.toml,ruff.toml,.coveragerc
-alwaysApply: false
----
-
-<!-- Generated from .grok/cursor-rules/20-python.toml by scripts/getzilla_harness.py --write; do not edit. -->
-
+description = "Python code and Python toolchain changes in Getzilla or an installed consumer"
+always_apply = false
+globs = ["**/*.py", "pyproject.toml", "**/pyproject.toml", "ruff.toml", ".coveragerc"]
+instructions = '''
 # Python implementation
 
 - Use the configured Python version, project layout, formatter, linter and tests. Read nearby implementations before choosing abstractions; do not impose a new framework or universal function-length limit.
@@ -19,3 +15,4 @@ alwaysApply: false
 
 - `AGENTS.md`
 - `.agents/skills/bugfix-workflow/SKILL.md`
+'''

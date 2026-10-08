@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-08 — Cursor rules are a harness target, not a second generator
+
+Cursor gets `.cursor/rules/getzilla/*.mdc` from `.grok/cursor-rules/*.toml` through the existing `harnesses.py` render/drift/write, so one drift test covers stale and extra files and one descriptor-based write path (`fsx`, no link following, mode 0644) serves every harness. TOML reuses the `.grok/agents` source shape and rejects duplicate keys for free; Cursor reads `AGENTS.md` and `.agents/skills/` natively, so rules point there instead of copying them. Globs follow cursor.com/docs/context/rules: unquoted and comma-separated, written without spaces; a pattern containing a comma, brace list, quote or space is rejected because Cursor would split or misread it.
+
 ## 2026-10-08 — Predecessor freeze digests are re-anchored to the renamed tree
 
 `factory/tests/test_landing_api.py` freezes three sets of predecessor bytes: migrations 001–018, the predecessor contracts and the SEO showcase. The rename invalidated all three digests. The migrations are byte-identical (only their package path changed), 14 contracts changed only their display `title`, and the showcase changed its footer and a CI-only Chrome retry bound (e07cfbe). None of these files is checksum-bound at runtime, so the digests are re-anchored to the current bytes instead of reverting the approved rename. Applied SQL migrations must still never change.
