@@ -63,7 +63,7 @@ DESTRUCTIVE_COMMANDS = [
     r'\brm\s+-rf\s+(?:/|~|\$HOME)\b',
     r'\bchmod\s+-R\s+777\b',
     r'\brobocopy\b[^\n]*\s/mir\b',
-    r'(?:^|[\s;&|])format(?:\.com)?\s+(?:/\S+\s+)*[a-z]:',
+    r'''(?:^|[\s;&|\\/"'])format(?:\.com|\.exe)?["']?\s+(?:/\S+\s+)*[a-z]:''',
     r'\bformat-volume\b',
     r'\bclear-disk\b',
 ]
@@ -1674,6 +1674,10 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
     return f'gh:{repository} ' + ' '.join([*positionals, *operands])
 
 
+_PS_METHOD_OPTION = re.compile(r'''(?:^|\s)-([a-z]+)(?:\s+|=|:)["']?([a-z]+)''')
+_PS_READ_METHODS = frozenset({'get', 'head', 'options', 'default'})
+
+
 def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
     lowered = command.lower()
     mutation = False
@@ -1705,8 +1709,13 @@ def _http_write_resource_text(command: str, root: Path | None = None) -> str | N
     elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
         return 'github-pr-review:unparsed'
     if not mutation and re.search(r'\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b', lowered):
-        # PowerShell web cmdlets: a non-GET -Method or a request body is a write (review S59-6).
-        mutation = bool(re.search(r'-me(?:thod)?(?:\s+|=|:)["\']?(?:post|put|patch|delete)\b', lowered)) or bool(
+        # PowerShell web cmdlets: any -Method/-CustomMethod outside the read-only allowlist
+        # (Merge, PURGE, ...) or a request body is a write (review S59-6, #64).
+        methods = [
+            value for option, value in _PS_METHOD_OPTION.findall(lowered)
+            if len(option) >= 2 and ('method'.startswith(option) or 'custommethod'.startswith(option))
+        ]
+        mutation = any(method not in _PS_READ_METHODS for method in methods) or bool(
             re.search(r'-(?:body|infile|form|contenttype)\b', lowered)
         )
     if not mutation:
