@@ -6,6 +6,7 @@
 - Executable offline local M8 policy, typed evidence/activation and per-use admission/revocation consumer: initial L1 local reads/tests, L2 ceiling, finite expiry and exact source/profile/repository bindings. External authority and empirical M7 recommendation gates remain separate.
 - Queue provenance analysis widens list-append loops and no longer charges unchanged bindings, so modules importing `architecture_diff.py` stop failing FIT-BOUNDED-WORKER-JOBS as unsupported; all analysis limits are unchanged.
 - Release assets require the exact merged tested source and separately authorized GitHub Release publication; v2.1.1 remains the latest published release in this pre-publication snapshot.
+- Repairs the main CI after the 2026-10-08 merges (#19–#23): restores the OpenGrep verifier stage lost in a merge, registers `customers.py` in the architecture model, removes a duplicated landing note, pins fastapi 0.142.4, pypdf 6.19.0 and starlette 1.7.0 in factory (the trust-ci cryptography 50.0.2 and fastapi 0.142.4 pins ship separately under FIT-TRUST-CI-SEPARATION), and clears a bandit B105 false positive. VERSION is unchanged because 2.2.0 is still an unpublished candidate.
 
 ## 2.1.1 — 2026-10-03 (published)
 
