@@ -1,0 +1,80 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_identity.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "test_no_predecessor_product_names_in_live_files passes."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_identity.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "test_landing_api digests and assertions are unchanged and pass."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-f11613",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_identity.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Changing any digest or assertion."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_identity.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "Widening the identity test allowlist."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_identity.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Only comment text changes."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #56: main python-unittest and coverage green again.",
+    "success_metric": "`verify --mode pr` passes every stage.",
+    "target": "factory/tests/test_landing_api.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
