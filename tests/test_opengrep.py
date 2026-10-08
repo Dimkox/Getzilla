@@ -86,11 +86,11 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertFalse(required_check_refused(skipped, mode='fast'))
         self.assertIn('opengrep', MANDATORY_PR_CHECKS)
 
-    def test_only_the_two_explicit_skips_are_admitted_by_the_quality_gate(self) -> None:
+    def test_only_the_rules_absent_skip_is_admitted_by_the_quality_gate(self) -> None:
         def result(summary: str) -> SimpleNamespace:
             return SimpleNamespace(name='opengrep', status='skip', summary=summary)
 
-        self.assertFalse(required_check_refused(result('opengrep not available'), mode='pr'))
+        self.assertTrue(required_check_refused(result('opengrep not available'), mode='pr'))
         self.assertFalse(required_check_refused(result('no OpenGrep rules installed'), mode='pr'))
         self.assertTrue(required_check_refused(result('opengrep timed out'), mode='pr'))
 

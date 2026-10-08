@@ -22,6 +22,7 @@ BASE_PR_CHECKS = [
     check("contract-structure"),
     check("sql-safety"),
     check("source-stability"),
+    check("opengrep"),
     check("ruff"),
     check("bandit"),
     check("python-unittest"),
@@ -35,7 +36,7 @@ class QualityGateTests(unittest.TestCase):
         for mode in ('pr', 'release'):
             for status, summary, refused in (
                 ('pass', 'ok', False), ('fail', 'actual refusal', True),
-                ('skip', 'bandit not available', False), ('skip', 'unknown reason', True),
+                ('skip', 'no non-test python paths', False), ('skip', 'unknown reason', True),
                 ('unknown', 'ok', True), ('cancelled', 'interrupted', True),
             ):
                 with self.subTest(mode=mode, status=status, summary=summary):
@@ -57,7 +58,7 @@ class QualityGateTests(unittest.TestCase):
     def test_exact_consumer_and_micro_skip_reasons_are_admitted(self) -> None:
         allowances = {
             'architecture-inputs': 'architecture authority inputs are absent; not executed',
-            'bandit': 'bandit not available',
+            'bandit': 'no non-test python paths',
             'change-spec': '0 specs checked; exempt=True',
         }
         for mode in ('pr', 'release'):
