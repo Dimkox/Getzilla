@@ -1044,6 +1044,38 @@ class StructureTests(unittest.TestCase):
                 for reference in references:
                     self.assertRegex(reference, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 
+    def test_pr_workflow_gates_quickly_and_the_windows_full_suite_runs_nightly(self) -> None:
+        # The informational module-by-module Windows suite took ~36 of the ~37 minutes every PR
+        # waited for the required `windows` check, while gating nothing (#51). It runs on a
+        # schedule instead; the PR jobs keep their names and gating steps.
+        import re
+
+        workflows = ROOT / ".github/workflows"
+        gate = (workflows / "getzilla.yml").read_text(encoding="utf-8")
+        nightly_path = workflows / "windows-full-suite.yml"
+        self.assertTrue(nightly_path.is_file())
+        nightly = nightly_path.read_text(encoding="utf-8")
+
+        self.assertIn("\n  linux:\n", gate)
+        self.assertIn("\n  windows:\n", gate)
+        for step in ("Doctor", "Windows-ported tests", "Hooks and CLI smoke", "Annotate smoke failure"):
+            self.assertIn(f"- name: {step}\n", gate)
+        self.assertNotIn("module by module", gate)
+        self.assertNotIn("continue-on-error", gate)
+
+        self.assertIn("module by module", nightly)
+        self.assertIn("runs-on: windows-latest", nightly)
+        triggers = nightly.split("\npermissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", triggers)
+        self.assertNotIn("pull_request", triggers)
+        self.assertNotIn("push:", triggers)
+        cron = re.search(r"- cron: \"(\d+) (\S+) \* \* \*\"", triggers)
+        self.assertIsNotNone(cron, triggers)
+        self.assertNotEqual(int(cron.group(1)), 0)
+        self.assertIn("permissions:\n  contents: read\n", nightly)
+        self.assertIn("persist-credentials: false", nightly)
+        self.assertEqual(set(re.findall(r"uses:\s*(\S+)", nightly)), set(re.findall(r"uses:\s*(\S+)", gate)))
+
     def test_trust_ci_control_plane_is_complete(self) -> None:
         required = (
             "trust-ci/pyproject.toml",
