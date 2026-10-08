@@ -461,7 +461,7 @@ class LandingApiTests(unittest.TestCase):
         self.assertEqual(
             # Re-anchored after the Getzilla rename (decisions.md 2026-10-08): the 18 files are
             # byte-identical; only their package path changed (the old digest reproduces
-            # with factory/src/adaptive_factory/... names).
+            # with the pre-rename package directory in the paths).
             (18, "910d106f6f99ef09a154dc2cd7c9fd848faeadf0e53df535e6beb9997113b59f"),
             aggregate(migrations),
         )

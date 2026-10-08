@@ -8,6 +8,10 @@ Root cause: I pushed the round-2 #59 fixes to `fix/hook-policy-followup` without
 
 Root cause: I added the credential-store patterns to `DEFAULT_SECRET_READ` in code and verified nothing, but `.getzilla/config/policy.json` ships its own `secret_read_paths`, and a present config override replaces the code default rather than extending it, so the new patterns had no effect until they were also appended to the config file. When a behaviour is seeded from a config file that the repo overrides, change the override too and assert the deny with the repo's own config loaded, not just the code default.
 
+## 2026-10-08 — Merged on targeted tests without the full suite
+
+A provenance comment in #43 named the pre-rename package (`adaptive_factory`), and the repository-wide identity test turned main red (#56). The PR body labelled it UNVERIFIED transport, its targeted `test_landing_api` run passed, and the queued full verify and the integration verify were stopped when the owner merged. Before a PR can merge, run at least one full `--mode pr` on it, or on an integration merge of the batch, and report the result. Even a comment-only edit in a test file is subject to the repository-wide identity scan.
+
 ## 2026-10-08 — Factory tests assumed the author's host
 
 `factory-postgres-exit` was red on main for host reasons, not code. The landing publication fixture assumed directories and files share `st_dev`, which is false on overlayfs without xino (#34). Schema tests shelled out to a `jsonschema` CLI that the factory project never declared (#26). Real-process adapter tests ran on hosts outside the only supported profile, Ubuntu 24.04 with `/usr/bin/python3.12` (#27). Tests must declare their tools, probe the host property they depend on and skip with a reason when it is absent, and run in the clean `uv run --project factory` environment that the gate uses.
