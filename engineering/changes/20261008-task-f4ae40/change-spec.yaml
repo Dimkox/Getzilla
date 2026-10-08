@@ -1,0 +1,80 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_bb_contracts.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "Without a jsonschema CLI, the bb/execution/semantic-bridge tests pass with the three CLI cross-checks reported as skipped."
+    },
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_bb_contracts.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "With the CLI installed, all 31 tests in the three modules pass."
+    },
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_bb_contracts.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "The BB parser's invalid_deadlines rejection always runs."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-f4ae40",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_bb_contracts.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Adding jsonschema to the factory lock (it would enter the offline runtime wheel inventory)."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_bb_contracts.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Schema files and factory runtime code are unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #26: factory schema tests no longer error when the external jsonschema CLI is absent.",
+    "success_metric": "factory-postgres-exit has no jsonschema FileNotFoundError.",
+    "target": "factory/tests/test_bb_contracts.py, test_execution_contracts.py, test_semantic_bridge.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
