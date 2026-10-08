@@ -237,11 +237,31 @@ def _warn_observer_failure() -> None:
         return
 
 
+# Same bound as the policy's command scan. An oversize Bash command is refused here,
+# before root_context or the policy parses it, so the verdict lands well inside the
+# harness hook timeout instead of racing it (review round 3).
+MAX_BASH_COMMAND_CHARS = 131072
+
+
+def _oversize_bash_command(current_tool: str, current_input: Any) -> bool:
+    if current_tool != 'Bash':
+        return False
+    command = current_input.get('command') if isinstance(current_input, dict) else current_input
+    size = len(command) if isinstance(command, str) else len(json.dumps(command, default=str))
+    return size > MAX_BASH_COMMAND_CHARS
+
+
 def main() -> None:
     try:
         payload = read_payload()
         current_tool = tool_name(payload)
         current_input = tool_input(payload)
+        if _oversize_bash_command(current_tool, current_input):
+            emit(permission_output(False, (
+                f'Blocked a Bash command longer than {MAX_BASH_COMMAND_CHARS} characters; '
+                'split it or write the payload to a file first.'
+            )))
+            return
         context = root_context(payload, current_input, current_tool)
         try:
             from getzilla.policy import evaluate_pre_tool, sensitive_action
