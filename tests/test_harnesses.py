@@ -265,17 +265,28 @@ class CursorRuleTests(unittest.TestCase):
         self.assertEqual(outside.read_bytes(), f'{CURSOR_MARKER}looks generated -->\n'.encode('utf-8'))
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
-    def test_symlinked_extra_in_another_generated_root_is_removed_not_followed(self) -> None:
+    def test_links_in_another_generated_root_are_drift_and_never_followed(self) -> None:
         root = self.fixture()
         write(root)
         outside = root.parent / 'outside.json'
-        outside.write_bytes(b'{}\n')
+        settings = root / '.qwen/settings.json'
+        outside.write_bytes(settings.read_bytes())
+        settings.unlink()
+        settings.symlink_to(outside)  # same bytes behind a link are still stale
         extra = root / '.qwen/extra.json'
-        extra.symlink_to(outside)
-        self.assertEqual(drift(root), ['unexpected .qwen/extra.json'])
-        self.assertEqual(write(root), ['removed .qwen/extra.json'])
-        self.assertFalse(extra.is_symlink())
-        self.assertEqual(outside.read_bytes(), b'{}\n')
+        extra.symlink_to(root.parent / 'absent.json')
+        self.assertEqual(drift(root), ['stale .qwen/settings.json', 'unexpected .qwen/extra.json'])
+        self.assertEqual(write(root), ['removed .qwen/extra.json', 'wrote .qwen/settings.json'])
+        self.assertFalse(settings.is_symlink() or extra.is_symlink())
+        self.assertEqual(outside.read_bytes(), settings.read_bytes())
+        self.assertFalse((root.parent / 'absent.json').exists())
+
+    def test_write_removes_empty_directories_left_in_a_generated_root(self) -> None:
+        root = self.fixture()
+        write(root)
+        (root / '.qwen/agents/retired').mkdir(parents=True)
+        self.assertEqual(write(root), [])
+        self.assertFalse((root / '.qwen/agents').exists())
 
     def test_edited_rule_is_stale_until_write_repairs_it(self) -> None:
         root = self.fixture()
