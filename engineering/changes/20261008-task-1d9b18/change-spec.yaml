@@ -1,0 +1,110 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_opengrep.py"
+        },
+        {
+          "test": "tests/test_quality_gates.py"
+        },
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "OpenGrep stage restored: tests/test_opengrep.py, tests/test_quality_gates.py, tests/test_known_vulns.py pass and the opengrep stage runs after known-vulnerabilities."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_model.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "architecture drift, validate and diagram --check pass with customers.py registered."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_getzilla_landing.py"
+        },
+        {
+          "test": "tests/test_getzilla_identity.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "Landing copy digest matches the deduplicated text; landing, identity and structure tests pass."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-004",
+      "statement": "factory pins close the pypdf and starlette advisories. scripts/getzilla_vulns.py --online passes once the companion trust-ci pin PR (cryptography 50.0.2, fastapi 0.142.4) is also merged."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-005",
+      "statement": "bandit over the verifier quality paths reports zero issues."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-1d9b18",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Silencing the OSV check or accepting vulnerabilities instead of upgrading."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "known-vulnerabilities behaviour is unchanged; both conflict sides from merge 4ae0447 are kept."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Make the Getzilla main CI green again after the 2026-10-08 merges: restore the lost OpenGrep stage, register customers.py, deduplicate the landing note, close the factory vulnerabilities (trust-ci pins in a separate PR), fix bandit B105.",
+    "success_metric": "The five failing checks reported in issues #19-#23 pass locally with the same commands CI runs.",
+    "target": "verification.py, quality_gates.py, architecture/system.yaml, landing, pinned dependencies, getzilla_vulns.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
