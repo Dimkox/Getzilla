@@ -12,19 +12,9 @@ The checked-in `config/policy.example.json` is configuration shape documentation
 
 The suffix is a policy epoch. A green check produced under an older policy or holdout digest cannot satisfy the current protected-branch requirement.
 
-## Known-vulnerability mirror
+## Paid access
 
-The runner has no network, so Getzilla's `known-vulnerabilities` check reads an offline OSV mirror. Refresh it on the CI host (which has network) and point the sandbox at it:
-
-```bash
-python3 scripts/getzilla_vulns.py --download-db /var/lib/adaptive-trust-ci/osv   # from a reviewed Getzilla checkout; daily is enough
-```
-
-```json
-"sandbox": {"...": "...", "vulnerability_db_host_path": "/var/lib/adaptive-trust-ci/osv"}
-```
-
-The directory is mounted read-only at `/vulndb` and `GETZILLA_OSV_DB=/vulndb` is set in the container. The field is part of the policy digest, so enabling it rotates every profile's check name once; refreshing the mirror's contents does not. Without the field the check reports `skip`.
+Trust CI runs on owned hardware and is offered as a paid service for private repositories; public repositories use the free GitHub Actions gate that `scripts/getzilla_ci.py --write` renders. Access is granted per GitHub account, by hand after an invoice is paid: `python -m adaptive_trust_ci.customers add|remove|list` plans the owner profile change against the deployed policy without touching it (see `engineering/runbooks/getzilla-trust-ci-onboarding.md`, step 7). Accounts without a profile are rejected before enqueue, so nothing of theirs runs on the CI host.
 
 ## Repository-scoped policy profiles
 

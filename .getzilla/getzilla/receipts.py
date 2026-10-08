@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
+from . import fsx
 from .architecture import (
     ArchitectureError,
     RULES_PATH,
@@ -58,10 +60,58 @@ MAX_VERIFICATION_REPORT_BYTES = 8_388_608
 VERIFICATION_REPORT_CONTRACT = 'adaptive-grok.verification-report/v1'
 
 
-def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) -> int:
+def _open_receipt_directory_windows(root: Path, route_id: str, *, create: bool) -> fsx.DirHandle:
+    """Windows has no directory descriptors: walk lstat-checked paths, refusing links/junctions."""
+    handle = fsx.open_dir(root.resolve(strict=True))
+    chain = [handle]
+    for component in ('.getzilla', 'runtime', 'receipts', route_id):
+        if create:
+            try:
+                fsx.mkdir_at(handle, component, 0o700)
+            except FileExistsError:
+                pass
+        handle = fsx.open_dir_at(handle, component)
+        chain.append(handle)
+    _windows_confirm_directories(chain)
+    return handle
+
+
+def _windows_confirm_directories(handles: list[fsx.DirHandle]) -> None:
+    """Re-check pinned Windows directories; a swapped or relinked one fails closed."""
+    for handle in handles:
+        current = fsx.fstat_dir(handle)
+        if (current.st_dev, current.st_ino) != (handle.info.st_dev, handle.info.st_ino):
+            raise OSError(errno.ENOTDIR, 'directory identity changed', fsx.path_of(handle))
+
+
+def _windows_open_regular(directory: fsx.DirHandle, name: str, flags: int) -> int | None:
+    """Windows stand-in for an ``O_NOFOLLOW`` open: refuse links, then pin the opened identity.
+
+    ``None`` marks an existing entry that is neither a link nor a regular file;
+    POSIX opens it and the caller's ``S_ISREG`` check rejects it.
+    """
+    expected = fsx.lstat_at(directory, name)
+    if fsx.is_link(expected):
+        raise OSError(errno.ELOOP, 'refusing to follow a link or reparse point', name)
+    if not stat.S_ISREG(expected.st_mode):
+        return None
+    descriptor = fsx.open_at(directory, name, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+            raise OSError(errno.ELOOP, 'entry changed between inspection and open', name)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) -> fsx.DirHandle:
     """Pin the route directory; never traverse a runtime symlink."""
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', route_id):
         raise RuntimeError('receipt route is outside the closed set')
+    if fsx.WINDOWS:
+        return _open_receipt_directory_windows(root, route_id, create=create)
     required_flags = ('O_DIRECTORY', 'O_NOFOLLOW', 'O_CLOEXEC', 'O_NONBLOCK')
     if any(not hasattr(os, name) for name in required_flags) or os.open not in getattr(os, 'supports_dir_fd', set()):
         raise RuntimeError('descriptor-safe receipt reads are unavailable')
@@ -84,9 +134,15 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
-def _read_bounded_json(directory_fd: int, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-    descriptor = os.open(name, flags, dir_fd=directory_fd)
+def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
+    if fsx.WINDOWS:
+        opened = _windows_open_regular(directory_fd, name, os.O_RDONLY)
+        if opened is None:
+            raise RuntimeError(f'{label} is not a bounded regular file')
+        descriptor = opened
+    else:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        descriptor = os.open(name, flags, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
@@ -104,6 +160,8 @@ def _read_bounded_json(directory_fd: int, name: str, limit: int, label: str) -> 
         after = os.fstat(descriptor)
         if (_metadata_identity(before), before.st_size) != (_metadata_identity(after), after.st_size):
             raise RuntimeError(f'{label} changed while being read')
+        if fsx.WINDOWS:
+            _windows_confirm_directories([directory_fd])
 
         def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
             value: dict[str, Any] = {}
@@ -131,13 +189,13 @@ def _verification_report_binding(receipt: dict[str, Any]) -> dict[str, Any]:
 @dataclass
 class _PublishedVerificationReport:
     reference: dict[str, Any]
-    route_fd: int
-    reports_fd: int
+    route_fd: fsx.DirHandle
+    reports_fd: fsx.DirHandle
     owned_file_identity: tuple[int, int] | None = None
 
     def close(self) -> None:
-        os.close(self.reports_fd)
-        os.close(self.route_fd)
+        fsx.close_dir(self.reports_fd)
+        fsx.close_dir(self.route_fd)
 
 
 def _cleanup_verification_report(publication: _PublishedVerificationReport) -> None:
@@ -152,7 +210,7 @@ def _cleanup_verification_report(publication: _PublishedVerificationReport) -> N
         if envelope.get('details') == {'_verification_report': publication.reference}:
             return
         filename = f'{publication.reference["sha256"]}.json'
-        metadata = os.stat(filename, dir_fd=publication.reports_fd, follow_symlinks=False)
+        metadata = fsx.lstat_at(publication.reports_fd, filename)
         if not stat.S_ISREG(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != publication.owned_file_identity:
             return
         # Own link/unlink may change ctime; qualify bytes against the staged digest,
@@ -160,10 +218,10 @@ def _cleanup_verification_report(publication: _PublishedVerificationReport) -> N
         _, content = _read_bounded_json(publication.reports_fd, filename, MAX_VERIFICATION_REPORT_BYTES, 'verification report')
         if len(content) != publication.reference['bytes'] or hashlib.sha256(content).hexdigest() != publication.reference['sha256']:
             return
-        after = os.stat(filename, dir_fd=publication.reports_fd, follow_symlinks=False)
+        after = fsx.lstat_at(publication.reports_fd, filename)
         if (_metadata_identity(metadata), metadata.st_size) == (_metadata_identity(after), after.st_size):
-            os.unlink(filename, dir_fd=publication.reports_fd)
-            os.fsync(publication.reports_fd)
+            fsx.unlink_at(publication.reports_fd, filename)
+            fsx.fsync_dir(publication.reports_fd)
     except (OSError, RuntimeError, ValueError):
         # Unsafe/changed evidence is not ours to delete; preserve the original fault.
         pass
@@ -185,13 +243,13 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
     completed = False
     try:
         try:
-            os.mkdir('reports', mode=0o700, dir_fd=route_fd)
+            fsx.mkdir_at(route_fd, 'reports', 0o700)
         except FileExistsError:
             pass
-        os.fsync(route_fd)
-        reports_fd = os.open('reports', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=route_fd)
+        fsx.fsync_dir(route_fd)
+        reports_fd = fsx.open_dir_at(route_fd, 'reports', flags=fsx.O_CLOEXEC)
         temporary = f'.{digest}.{secrets.token_hex(16)}.tmp'
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=reports_fd)
+        descriptor = fsx.open_at(reports_fd, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
         with os.fdopen(descriptor, 'w', encoding='utf-8', newline='\n') as handle:
             _write_receipt_bytes(handle, content)
             staged_metadata = os.fstat(handle.fileno())
@@ -203,23 +261,24 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
         publication.owned_file_identity = (staged_metadata.st_dev, staged_metadata.st_ino)
         try:
             # Atomic no-clobber publication: an existing digest is reused, never replaced.
-            os.link(temporary, filename, src_dir_fd=reports_fd, dst_dir_fd=reports_fd, follow_symlinks=False)
+            # Windows: an NTFS hard link has the same contract (fails if the name exists).
+            fsx.link_at(reports_fd, temporary, reports_fd, filename)
         except FileExistsError:
             publication.owned_file_identity = None
             _, existing = _read_bounded_json(reports_fd, filename, MAX_VERIFICATION_REPORT_BYTES, 'verification report')
             if existing != payload:
                 raise RuntimeError('existing verification report differs from its digest')
         else:
-            metadata = os.stat(filename, dir_fd=reports_fd, follow_symlinks=False)
+            metadata = fsx.lstat_at(reports_fd, filename)
             if (metadata.st_dev, metadata.st_ino) != (staged_metadata.st_dev, staged_metadata.st_ino):
                 raise RuntimeError('published verification report identity changed')
-        os.unlink(temporary, dir_fd=reports_fd)
+        fsx.unlink_at(reports_fd, temporary)
         temporary = None
         if publication.owned_file_identity is not None:
-            metadata = os.stat(filename, dir_fd=reports_fd, follow_symlinks=False)
+            metadata = fsx.lstat_at(reports_fd, filename)
             if (metadata.st_dev, metadata.st_ino) != (staged_metadata.st_dev, staged_metadata.st_ino):
                 raise RuntimeError('published verification report identity changed')
-        os.fsync(reports_fd)
+        fsx.fsync_dir(reports_fd)
         if interrupt_check:
             interrupt_check()
         completed = True
@@ -232,17 +291,17 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
         try:
             if temporary is not None:
                 try:
-                    os.unlink(temporary, dir_fd=reports_fd)
+                    fsx.unlink_at(reports_fd, temporary)
                 except FileNotFoundError:
                     pass
         finally:
             if not completed:
                 if reports_fd is not None:
-                    os.close(reports_fd)
-                os.close(route_fd)
+                    fsx.close_dir(reports_fd)
+                fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: int, route_id: str, receipt: dict[str, Any]) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any]) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -258,13 +317,13 @@ def _hydrate_verification_report(directory_fd: int, route_id: str, receipt: dict
         raise RuntimeError('verification report reference is outside the closed contract')
     reports_fd = None
     try:
-        reports_fd = os.open('reports', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+        reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
         artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
         if reports_fd is not None:
-            os.close(reports_fd)
+            fsx.close_dir(reports_fd)
     if len(content) != size or hashlib.sha256(content).hexdigest() != digest:
         raise RuntimeError('verification report digest or byte count does not match')
     if (set(artifact) != {'schema_version', 'binding', 'details'} or type(artifact['schema_version']) is not int
@@ -320,7 +379,8 @@ def _authority_presence(root: Path, *, root_fd: int | None = None) -> _Authority
             raise ArchitectureError(
                 "architecture authority appeared during absence inspection", code="io"
             )
-        if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        # fsx.is_link is S_ISLNK on POSIX and also catches junctions/reparse points on Windows.
+        if not stat.S_ISDIR(before.st_mode) or fsx.is_link(before):
             raise ArchitectureError("architecture authority directory is unsafe", code="io")
         present: list[bool] = []
         for path in (ADOPTION_PATH, SYSTEM_PATH, RULES_PATH):
@@ -579,9 +639,7 @@ def _governance_is_configured(root: Path) -> bool:
             _require_legacy_governance_absence(root)
             return False
         raise RuntimeError("governance authority appeared during absence inspection")
-    if not stat.S_ISDIR(authority_before.st_mode) or stat.S_ISLNK(
-        authority_before.st_mode
-    ):
+    if not stat.S_ISDIR(authority_before.st_mode) or fsx.is_link(authority_before):
         raise RuntimeError("governance authority directory is unsafe")
 
     present: list[bool] = []
@@ -595,9 +653,7 @@ def _governance_is_configured(root: Path) -> bool:
             continue
         except OSError as exc:
             raise RuntimeError(f"governance authority cannot be inspected: {exc}") from exc
-        if not stat.S_ISDIR(directory_before.st_mode) or stat.S_ISLNK(
-            directory_before.st_mode
-        ):
+        if not stat.S_ISDIR(directory_before.st_mode) or fsx.is_link(directory_before):
             raise RuntimeError(f"governance directory is unsafe: {relative.parent}")
         directory_identities.append((directory, _metadata_identity(directory_before)))
         try:
@@ -741,17 +797,19 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
         if interrupt_check:
             interrupt_check()
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-        os.fsync(directory)
+        if not fsx.WINDOWS:  # Windows cannot open or fsync a directory; the rename is the durability point.
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            os.fsync(directory)
         if interrupt_check:
             interrupt_check()
     except BaseException:
         # A prior pass, or a rename whose directory durability failed, cannot qualify.
         try:
             path.unlink(missing_ok=True)
-            if directory is None:
-                directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-            os.fsync(directory)
+            if not fsx.WINDOWS:
+                if directory is None:
+                    directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                os.fsync(directory)
         except OSError:
             pass
         raise
@@ -853,13 +911,13 @@ def write_receipt(
             directory_fd = None
             try:
                 directory_fd = _open_receipt_directory(root, route['route_id'])
-                os.unlink(f'{kind}.json', dir_fd=directory_fd)
-                os.fsync(directory_fd)
+                fsx.unlink_at(directory_fd, f'{kind}.json')
+                fsx.fsync_dir(directory_fd)
             except OSError:
                 pass
             finally:
                 if directory_fd is not None:
-                    os.close(directory_fd)
+                    fsx.close_dir(directory_fd)
         if publication is not None:
             _cleanup_verification_report(publication)
         raise
@@ -872,7 +930,7 @@ def write_receipt(
 def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
-    directory_fd: int | None = None
+    directory_fd: fsx.DirHandle | None = None
     try:
         directory_fd = _open_receipt_directory(root, route_id)
         data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
@@ -887,7 +945,7 @@ def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
         raise RuntimeError(f"receipt cannot be read safely: {exc}") from exc
     finally:
         if directory_fd is not None:
-            os.close(directory_fd)
+            fsx.close_dir(directory_fd)
 
 
 def validate_evidence(

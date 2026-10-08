@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 
+from . import fsx
 from ._cpu_capacity import linux_quota_capacity
 
 
@@ -160,7 +161,12 @@ def _stop(process: subprocess.Popen) -> None:
             except ProcessLookupError:
                 pass
     elif process.poll() is None:
-        process.kill()
+        if fsx.WINDOWS:
+            # taskkill /T ends the live tree; without a Job Object, descendants that
+            # outlive an already-exited child are not reachable (no group kill).
+            fsx.kill_process_tree(process.pid)
+        if process.poll() is None:
+            process.kill()
     try:
         process.wait(timeout=_KILL_REAP_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -237,7 +243,7 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         try:
             process = subprocess.Popen(
                 command, cwd=root, env=environment, stdout=stdout, stderr=stderr,
-                start_new_session=os.name == 'posix',
+                **fsx.process_group_kwargs(),
             )
         except OSError as exc:
             result = ProcessResult(command, 127, stderr=str(exc))
@@ -417,7 +423,7 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                             env={**environment, '_GETZILLA_TEST_CHILD': '1'},
                             stdout=out_handle,
                             stderr=err_handle,
-                            start_new_session=True,
+                            **fsx.process_group_kwargs(),
                         )
                     except OSError as exc:
                         out_handle.close()

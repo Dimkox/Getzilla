@@ -8,12 +8,16 @@ import json
 import os
 import re
 import stat
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".getzilla"))
+
+from getzilla import fsx
 
 MANAGED_DIRS = (
     ".grok",
@@ -196,8 +200,23 @@ class InstallEntry:
         }
 
 
+def _mode_key(mode: int) -> int:
+    if fsx.WINDOWS:
+        # Windows derives permission bits from a name's extension, which a
+        # descriptor stat cannot see; only the type and read-only bit are real.
+        return stat.S_IFMT(mode) | (mode & stat.S_IWRITE)
+    return mode
+
+
+def _mode_matches(mode: int, expected: int) -> bool:
+    if fsx.WINDOWS:
+        # Windows keeps one read-only attribute, not POSIX permission bits.
+        return bool(mode & stat.S_IWRITE) == bool(expected & stat.S_IWUSR)
+    return stat.S_IMODE(mode) == expected
+
+
 def _identity(value: os.stat_result) -> tuple[int, int, int]:
-    return value.st_dev, value.st_ino, value.st_mode
+    return value.st_dev, value.st_ino, _mode_key(value.st_mode)
 
 
 def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
@@ -207,46 +226,73 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]
         value.st_size,
         value.st_mtime_ns,
         value.st_ctime_ns,
-        value.st_mode,
+        _mode_key(value.st_mode),
     )
+
+
+def _is_volume_root(path: str) -> bool:
+    return os.path.dirname(path) == path
+
+
+def _volume_root_info(path: str) -> os.stat_result:
+    # The volume root anchors every no-follow component walk below it; Wine
+    # reports its Z: drive mapping as a reparse point, so only its type counts.
+    metadata = os.lstat(path)
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise OSError(errno.ENOTDIR, "volume root is not a directory", path)
+    return metadata
+
+
+def _fstat_directory(handle: fsx.DirHandle) -> os.stat_result:
+    if isinstance(handle, fsx.WindowsDirectory) and _is_volume_root(handle.path):
+        return _volume_root_info(handle.path)
+    return fsx.fstat_dir(handle)
+
+
+def _dup_directory(handle: fsx.DirHandle) -> fsx.DirHandle:
+    if isinstance(handle, fsx.WindowsDirectory):
+        return fsx.WindowsDirectory(handle.path, handle.info)
+    return os.dup(handle)
+
+
+def _fchmod_directory(handle: fsx.DirHandle, mode: int) -> None:
+    if isinstance(handle, fsx.WindowsDirectory):
+        return  # Windows directories have no descriptor and no POSIX mode.
+    os.fchmod(handle, mode)
 
 
 @dataclass
 class _DirectoryBinding:
-    root_fd: int
-    descriptor: int
+    root_fd: fsx.DirHandle
+    descriptor: fsx.DirHandle
     root_identity: tuple[int, int, int]
     components: tuple[tuple[str, tuple[int, int, int]], ...]
 
     def close(self) -> None:
-        os.close(self.descriptor)
-        os.close(self.root_fd)
+        fsx.close_dir(self.descriptor)
+        fsx.close_dir(self.root_fd)
 
 
 def _open_child_directory(
-    parent: int,
+    parent: fsx.DirHandle,
     component: str,
     expected: tuple[int, int, int] | None = None,
-) -> tuple[int, tuple[int, int, int]]:
-    nofollow, directory = _require_descriptor_primitives()
-    metadata = os.stat(component, dir_fd=parent, follow_symlinks=False)
+) -> tuple[fsx.DirHandle, tuple[int, int, int]]:
+    _require_descriptor_primitives()
+    metadata = fsx.lstat_at(parent, component)
     identity = _identity(metadata)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or stat.S_ISLNK(metadata.st_mode)
+        or fsx.is_link(metadata)
         or expected is not None and identity != expected
     ):
         raise UnsafeInstallTarget(f"directory component is unsafe: {component}")
-    child = os.open(
-        component,
-        os.O_RDONLY | directory | nofollow,
-        dir_fd=parent,
-    )
+    child = fsx.open_dir_at(parent, component)
     try:
-        if _identity(os.fstat(child)) != identity:
+        if _identity(_fstat_directory(child)) != identity:
             raise UnsafeInstallTarget(f"directory component changed: {component}")
     except BaseException:
-        os.close(child)
+        fsx.close_dir(child)
         raise
     return child, identity
 
@@ -257,16 +303,21 @@ def _open_directory_binding(path: Path) -> _DirectoryBinding:
     if not absolute.is_absolute():
         raise UnsafeInstallTarget("directory binding requires an absolute path")
     try:
-        root_fd = os.open(os.path.sep, os.O_RDONLY | directory | nofollow)
+        if fsx.WINDOWS:
+            root_fd: fsx.DirHandle = fsx.WindowsDirectory(
+                absolute.anchor, _volume_root_info(absolute.anchor)
+            )
+        else:
+            root_fd = os.open(os.path.sep, os.O_RDONLY | directory | nofollow)
     except OSError as exc:
         raise UnsafeInstallTarget(f"cannot bind filesystem root: {exc}") from exc
-    root_identity = _identity(os.fstat(root_fd))
-    current = os.dup(root_fd)
+    root_identity = _identity(_fstat_directory(root_fd))
+    current = _dup_directory(root_fd)
     components: list[tuple[str, tuple[int, int, int]]] = []
     try:
         for component in absolute.parts[1:]:
             child, identity = _open_child_directory(current, component)
-            os.close(current)
+            fsx.close_dir(current)
             current = child
             components.append((component, identity))
         binding = _DirectoryBinding(
@@ -278,34 +329,36 @@ def _open_directory_binding(path: Path) -> _DirectoryBinding:
         _check_directory_binding(binding)
         return binding
     except UnsafeInstallTarget:
-        os.close(current)
-        os.close(root_fd)
+        fsx.close_dir(current)
+        fsx.close_dir(root_fd)
         raise
     except OSError as exc:
-        os.close(current)
-        os.close(root_fd)
+        fsx.close_dir(current)
+        fsx.close_dir(root_fd)
         raise UnsafeInstallTarget(f"cannot bind directory ancestry: {exc}") from exc
 
 
 def _check_directory_binding(binding: _DirectoryBinding) -> None:
-    if _identity(os.fstat(binding.root_fd)) != binding.root_identity:
+    if _identity(_fstat_directory(binding.root_fd)) != binding.root_identity:
         raise UnsafeInstallTarget("filesystem root identity changed")
-    current = os.dup(binding.root_fd)
+    current = _dup_directory(binding.root_fd)
     try:
         for component, expected in binding.components:
             child, _identity_value = _open_child_directory(
                 current, component, expected
             )
-            os.close(current)
+            fsx.close_dir(current)
             current = child
-        if _identity(os.fstat(current)) != _identity(os.fstat(binding.descriptor)):
+        if _identity(_fstat_directory(current)) != _identity(
+            _fstat_directory(binding.descriptor)
+        ):
             raise UnsafeInstallTarget("bound directory no longer matches its ancestry")
     except UnsafeInstallTarget:
         raise
     except OSError as exc:
         raise UnsafeInstallTarget(f"cannot recheck directory ancestry: {exc}") from exc
     finally:
-        os.close(current)
+        fsx.close_dir(current)
 
 
 class _SourceTree:
@@ -334,7 +387,7 @@ class _SourceTree:
         relative: str,
     ) -> tuple[tuple[str, tuple[int, int, int]], ...] | None:
         parts = _path_parts(relative)
-        current = os.dup(self.binding.descriptor)
+        current = _dup_directory(self.binding.descriptor)
         components: list[tuple[str, tuple[int, int, int]]] = []
         try:
             for component in parts:
@@ -342,7 +395,7 @@ class _SourceTree:
                     child, identity = _open_child_directory(current, component)
                 except FileNotFoundError:
                     return None
-                os.close(current)
+                fsx.close_dir(current)
                 current = child
                 components.append((component, identity))
             return tuple(components)
@@ -353,15 +406,15 @@ class _SourceTree:
                 f"cannot bind managed source root {relative}: {exc}"
             ) from exc
         finally:
-            os.close(current)
+            fsx.close_dir(current)
 
     def _open_managed_directory(
         self,
         relative: str,
         expected: tuple[tuple[str, tuple[int, int, int]], ...] | None,
-    ) -> int | None:
+    ) -> fsx.DirHandle | None:
         parts = _path_parts(relative)
-        current = os.dup(self.binding.descriptor)
+        current = _dup_directory(self.binding.descriptor)
         try:
             for index, component in enumerate(parts):
                 try:
@@ -375,12 +428,12 @@ class _SourceTree:
                     )
                 except FileNotFoundError:
                     if expected is None:
-                        os.close(current)
+                        fsx.close_dir(current)
                         return None
                     raise UnsafeInstallTarget(
                         f"managed source root disappeared: {relative}"
                     )
-                os.close(current)
+                fsx.close_dir(current)
                 current = child
             if expected is None:
                 raise UnsafeInstallTarget(
@@ -388,17 +441,17 @@ class _SourceTree:
                 )
             return current
         except UnsafeInstallTarget:
-            os.close(current)
+            fsx.close_dir(current)
             raise
         except OSError as exc:
-            os.close(current)
+            fsx.close_dir(current)
             raise UnsafeInstallTarget(
                 f"cannot open managed source root {relative}: {exc}"
             ) from exc
 
     def _walk_managed_directory(
         self,
-        descriptor: int,
+        descriptor: fsx.DirHandle,
         prefix: str,
         *,
         depth: int,
@@ -407,9 +460,9 @@ class _SourceTree:
     ) -> None:
         if depth > MAX_MANAGED_SOURCE_DEPTH:
             raise UnsafeInstallTarget("managed source directory depth limit exceeded")
-        bound_identity = _identity(os.fstat(descriptor))
+        bound_identity = _identity(_fstat_directory(descriptor))
         try:
-            names = sorted(os.listdir(descriptor), key=lambda name: name.encode("utf-8"))
+            names = sorted(fsx.listdir(descriptor), key=lambda name: name.encode("utf-8"))
         except OSError as exc:
             raise UnsafeInstallTarget(
                 f"cannot enumerate managed source directory {prefix}: {exc}"
@@ -421,12 +474,12 @@ class _SourceTree:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
             try:
-                metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                metadata = fsx.lstat_at(descriptor, name)
             except OSError as exc:
                 raise UnsafeInstallTarget(
                     f"managed source changed during enumeration: {relative}"
                 ) from exc
-            if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+            if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name == "__pycache__":
                     continue
                 child, _identity_value = _open_child_directory(
@@ -440,13 +493,13 @@ class _SourceTree:
                         entries_seen=entries_seen,
                         inventory=inventory,
                     )
-                    current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                    current = fsx.lstat_at(descriptor, name)
                     if _identity(current) != _identity(metadata):
                         raise UnsafeInstallTarget(
                             f"managed source directory changed after enumeration: {relative}"
                         )
                 finally:
-                    os.close(child)
+                    fsx.close_dir(child)
                 continue
             if any(
                 relative.startswith(skip) and not relative.endswith(".gitkeep")
@@ -455,12 +508,12 @@ class _SourceTree:
                 continue
             if relative.endswith(".pyc"):
                 continue
-            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            if not stat.S_ISREG(metadata.st_mode) or fsx.is_link(metadata):
                 raise UnsafeInstallTarget(
                     f"managed source is not a regular file: {relative}"
                 )
             inventory.append((relative, _file_identity(metadata)))
-        if _identity(os.fstat(descriptor)) != bound_identity:
+        if _identity(_fstat_directory(descriptor)) != bound_identity:
             raise UnsafeInstallTarget(
                 f"managed source directory identity changed: {prefix}"
             )
@@ -487,7 +540,7 @@ class _SourceTree:
                     inventory=inventory,
                 )
             finally:
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
             current = self._snapshot_directory(relative)
             if current != expected:
                 raise UnsafeInstallTarget(
@@ -506,14 +559,14 @@ class _SourceTree:
         _check_directory_binding(self.binding)
         nofollow, _directory = _require_descriptor_primitives()
         parts = _path_parts(relative)
-        parent = os.dup(self.binding.descriptor)
+        parent = _dup_directory(self.binding.descriptor)
         try:
             for component in parts[:-1]:
                 child, _identity_value = _open_child_directory(parent, component)
-                os.close(parent)
+                fsx.close_dir(parent)
                 parent = child
-            before = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
-            if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
+            before = fsx.lstat_at(parent, parts[-1])
+            if not stat.S_ISREG(before.st_mode) or fsx.is_link(before):
                 raise UnsafeInstallTarget(
                     f"managed source is not a regular file: {relative}"
                 )
@@ -521,11 +574,7 @@ class _SourceTree:
                 raise UnsafeInstallTarget(
                     f"managed source changed after inventory: {relative}"
                 )
-            descriptor = os.open(
-                parts[-1],
-                os.O_RDONLY | nofollow,
-                dir_fd=parent,
-            )
+            descriptor = fsx.open_at(parent, parts[-1], os.O_RDONLY | nofollow)
             try:
                 opened = os.fstat(descriptor)
                 if _file_identity(opened) != _file_identity(before):
@@ -550,7 +599,7 @@ class _SourceTree:
         except OSError as exc:
             raise UnsafeInstallTarget(f"cannot read managed source {relative}: {exc}") from exc
         finally:
-            os.close(parent)
+            fsx.close_dir(parent)
 
 
 def _read_limit_plus_one(descriptor: int, limit: int) -> bytes:
@@ -727,34 +776,32 @@ def _read_target_relative(target: Path, relative: str, *, limit: int) -> bytes |
     directory or file is absence, not an error.
     """
     parts = _path_parts(relative)
-    nofollow, directory_flag = _require_descriptor_primitives()
+    nofollow, _directory_flag = _require_descriptor_primitives()
     binding = _open_directory_binding(target)
-    descriptors: list[int] = []
+    descriptors: list[fsx.DirHandle] = []
     try:
         for part in parts[:-1]:
             try:
-                intermediate = os.stat(part, dir_fd=descriptors[-1] if descriptors else binding.descriptor,
-                                      follow_symlinks=False)
-                descriptors.append(os.open(part, os.O_RDONLY | directory_flag | nofollow,
-                                           dir_fd=descriptors[-1] if descriptors else binding.descriptor))
+                intermediate = fsx.lstat_at(descriptors[-1] if descriptors else binding.descriptor, part)
+                descriptors.append(fsx.open_dir_at(descriptors[-1] if descriptors else binding.descriptor, part))
             except FileNotFoundError:
                 return None
             if not stat.S_ISDIR(intermediate.st_mode):
                 raise UnsafeInstallTarget(f"kept path traverses a non-directory: {relative}")
         parent_fd = descriptors[-1] if descriptors else binding.descriptor
         try:
-            pre = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+            pre = fsx.lstat_at(parent_fd, parts[-1])
         except FileNotFoundError:
             return None
-        if not stat.S_ISREG(pre.st_mode):
+        if not stat.S_ISREG(pre.st_mode) or fsx.is_link(pre):
             raise UnsafeInstallTarget(f"kept path is not a regular file: {relative}")
         if pre.st_size > limit:
             raise UnsafeInstallTarget(f"kept path exceeds {limit} bytes: {relative}")
-        final = os.open(parts[-1], os.O_RDONLY | nofollow, dir_fd=parent_fd)
+        final = fsx.open_at(parent_fd, parts[-1], os.O_RDONLY | nofollow)
         descriptors.append(final)
         post = os.fstat(final)
-        if (post.st_dev, post.st_ino, post.st_mode, post.st_size) != (
-            pre.st_dev, pre.st_ino, pre.st_mode, pre.st_size
+        if (post.st_dev, post.st_ino, _mode_key(post.st_mode), post.st_size) != (
+            pre.st_dev, pre.st_ino, _mode_key(pre.st_mode), pre.st_size
         ) or not stat.S_ISREG(post.st_mode) or post.st_size > limit:
             raise UnsafeInstallTarget(f"kept path changed during verification: {relative}")
         data = _read_limit_plus_one(final, limit)
@@ -768,7 +815,7 @@ def _read_target_relative(target: Path, relative: str, *, limit: int) -> bytes |
     finally:
         for descriptor in reversed(descriptors):
             try:
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
             except OSError:
                 pass
         binding.close()
@@ -844,30 +891,42 @@ def _kept_local_digests(target: Path) -> dict[str, str]:
     return digests
 
 
+def _is_link_path(path: Path) -> bool:
+    """``Path.is_symlink`` that also counts Windows junctions and reparse points."""
+    if path.is_symlink():
+        return True
+    if not fsx.WINDOWS:
+        return False
+    try:
+        return fsx.is_link(os.lstat(path))
+    except OSError:
+        return False
+
+
 def _legacy_migration(target: Path) -> list[dict[str, str]]:
     """Report pre-rename stack files in target; the planner never removes them itself."""
     absolute = Path(os.path.abspath(target))
     found: list[str] = []
     for managed in LEGACY_MANAGED_DIRS:
         stack = absolute / managed
-        if not stack.is_dir() or stack.is_symlink() or any(
-            (absolute / Path(*Path(managed).parts[:depth])).is_symlink()
+        if not stack.is_dir() or _is_link_path(stack) or any(
+            _is_link_path(absolute / Path(*Path(managed).parts[:depth]))
             for depth in range(1, len(Path(managed).parts))
         ):
             continue
         for directory, subdirectories, files in os.walk(stack, followlinks=False):
             subdirectories[:] = sorted(
                 name for name in subdirectories
-                if not (Path(directory) / name).is_symlink() and name != "__pycache__"
+                if not _is_link_path(Path(directory) / name) and name != "__pycache__"
             )
             for name in sorted(files):
                 found.append((Path(directory) / name).relative_to(absolute).as_posix())
                 if len(found) > MAX_LEGACY_REPORT_ENTRIES:
                     raise UnsafeInstallTarget("legacy stack has too many files to report safely")
     scripts = absolute / "scripts"
-    if scripts.is_dir() and not scripts.is_symlink():
+    if scripts.is_dir() and not _is_link_path(scripts):
         for name in sorted(os.listdir(scripts)):
-            if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not (scripts / name).is_symlink():
+            if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not _is_link_path(scripts / name):
                 found.append(f"scripts/{name}")
     return [
         {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
@@ -886,16 +945,12 @@ def _target_state(target: Path) -> str:
         return "unsafe"
     try:
         try:
-            metadata = os.stat(
-                absolute.name,
-                dir_fd=parent.descriptor,
-                follow_symlinks=False,
-            )
+            metadata = fsx.lstat_at(parent.descriptor, absolute.name)
         except FileNotFoundError:
             return "absent"
         except OSError:
             return "unsafe"
-        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
             return "directory"
         return "unsafe"
     finally:
@@ -969,6 +1024,10 @@ def plan_install(source: Path, target: Path) -> dict[str, object]:
 
 
 def _require_descriptor_primitives() -> tuple[int, int]:
+    if fsx.WINDOWS:
+        # Windows has no descriptor-relative opens: fsx refuses links and
+        # reparse points by lstat, and every caller rechecks identities.
+        return fsx.O_NOFOLLOW, fsx.O_DIRECTORY
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     directory = getattr(os, "O_DIRECTORY", 0)
     if not nofollow or not directory:
@@ -993,7 +1052,15 @@ def _renameat2() -> Any:
     return function
 
 
-def _rename_noreplace(parent_fd: int, stage_name: str, target_name: str) -> None:
+def _rename_noreplace(parent_fd: fsx.DirHandle, stage_name: str, target_name: str) -> None:
+    if isinstance(parent_fd, fsx.WindowsDirectory):
+        # MoveFileEx without MOVEFILE_REPLACE_EXISTING has the RENAME_NOREPLACE
+        # contract for directories too: it fails when the target exists.
+        try:
+            fsx.rename_noreplace_at(parent_fd, stage_name, parent_fd, target_name)
+        except FileExistsError as exc:
+            raise UnsafeInstallTarget("installation target appeared before publication") from exc
+        return
     function = _renameat2()
     result = function(
         parent_fd,
@@ -1035,9 +1102,9 @@ def _read_all(descriptor: int, expected_size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _stat_absent(parent_fd: int, name: str) -> None:
+def _stat_absent(parent_fd: fsx.DirHandle, name: str) -> None:
     try:
-        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        fsx.lstat_at(parent_fd, name)
     except FileNotFoundError:
         return
     raise UnsafeInstallTarget("materialization requires an absent target")
@@ -1049,7 +1116,7 @@ class _ParentBinding:
     target_name: str
 
     @property
-    def descriptor(self) -> int:
+    def descriptor(self) -> fsx.DirHandle:
         return self.directory.descriptor
 
     def close(self) -> None:
@@ -1075,27 +1142,42 @@ def _check_parent(parent: _ParentBinding) -> None:
     _check_directory_binding(parent.directory)
 
 
-def _allocate_stage(parent_fd: int) -> tuple[str, int, tuple[int, int, int]]:
-    nofollow, directory = _require_descriptor_primitives()
+def _check_published(parent: _ParentBinding, stage_identity: tuple[int, int, int]) -> None:
+    # Windows renames by path, not through a held directory descriptor, so a
+    # parent swapped just before MoveFileEx is detected here, never repaired.
+    try:
+        _check_parent(parent)
+        metadata = fsx.lstat_at(parent.descriptor, parent.target_name)
+    except OSError as exc:
+        raise UnsafeInstallTarget(f"published target cannot be verified: {exc}") from exc
+    if (
+        _identity(metadata) != stage_identity
+        or not stat.S_ISDIR(metadata.st_mode)
+        or fsx.is_link(metadata)
+    ):
+        raise UnsafeInstallTarget("published target is not the verified installer stage")
+
+
+def _allocate_stage(
+    parent_fd: fsx.DirHandle,
+) -> tuple[str, fsx.DirHandle, tuple[int, int, int]]:
+    _require_descriptor_primitives()
     for _attempt in range(32):
         name = f".adaptive-install-{uuid.uuid4().hex}"
         try:
-            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            # Windows ignores the mode: the stage inherits the parent's ACL.
+            fsx.mkdir_at(parent_fd, name, 0o700)
         except FileExistsError:
             continue
         stage_identity: tuple[int, int, int] | None = None
-        descriptor = -1
+        descriptor: fsx.DirHandle | None = None
         try:
-            descriptor = os.open(
-                name,
-                os.O_RDONLY | directory | nofollow,
-                dir_fd=parent_fd,
-            )
+            descriptor = fsx.open_dir_at(parent_fd, name)
             try:
-                metadata = os.fstat(descriptor)
+                metadata = _fstat_directory(descriptor)
             except BaseException as failure:
                 try:
-                    metadata = os.fstat(descriptor)
+                    metadata = _fstat_directory(descriptor)
                 except BaseException as retry_failure:
                     raise UnsafeInstallTarget(
                         f"{MANUAL_CLEANUP_PREFIX}: stage {name}"
@@ -1103,12 +1185,12 @@ def _allocate_stage(parent_fd: int) -> tuple[str, int, tuple[int, int, int]]:
                 stage_identity = _identity(metadata)
                 raise failure
             stage_identity = _identity(metadata)
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            if not stat.S_ISDIR(metadata.st_mode) or fsx.is_link(metadata):
                 raise UnsafeInstallTarget("installer stage is not a real directory")
             return name, descriptor, stage_identity
         except BaseException as failure:
-            if descriptor >= 0:
-                os.close(descriptor)
+            if descriptor is not None:
+                fsx.close_dir(descriptor)
             if stage_identity is None:
                 if isinstance(failure, UnsafeInstallTarget) and str(failure).startswith(
                     MANUAL_CLEANUP_PREFIX
@@ -1118,14 +1200,14 @@ def _allocate_stage(parent_fd: int) -> tuple[str, int, tuple[int, int, int]]:
                     f"{MANUAL_CLEANUP_PREFIX}: stage {name}"
                 ) from failure
             try:
-                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                current = fsx.lstat_at(parent_fd, name)
                 if _identity(current) != stage_identity or not stat.S_ISDIR(
                     current.st_mode
                 ):
                     raise UnsafeInstallTarget(
                         f"{MANUAL_CLEANUP_PREFIX}: stage {name}"
                     )
-                os.rmdir(name, dir_fd=parent_fd)
+                fsx.rmdir_at(parent_fd, name)
             except BaseException as cleanup_failure:
                 if isinstance(
                     cleanup_failure, UnsafeInstallTarget
@@ -1152,37 +1234,33 @@ def _directory_paths(payload: tuple[InstallEntry, ...]) -> list[str]:
 
 
 def _create_stage(
-    stage_fd: int,
+    stage_fd: fsx.DirHandle,
     stage_identity: tuple[int, int, int],
     payload: tuple[InstallEntry, ...],
-    directory_fds: dict[str, int],
+    directory_fds: dict[str, fsx.DirHandle],
     directory_identities: dict[str, tuple[int, int, int]],
     file_identities: dict[str, tuple[int, int, int]],
     created_directories: set[str],
     created_files: set[str],
 ) -> None:
-    nofollow, directory = _require_descriptor_primitives()
+    nofollow, _directory = _require_descriptor_primitives()
     directory_fds[""] = stage_fd
     directory_identities[""] = stage_identity
     for relative in _directory_paths(payload):
         parts = _path_parts(relative)
         parent_name = PurePosixPath(*parts[:-1]).as_posix() if len(parts) > 1 else ""
         parent_fd = directory_fds[parent_name]
-        os.mkdir(parts[-1], mode=0o755, dir_fd=parent_fd)
+        fsx.mkdir_at(parent_fd, parts[-1], 0o755)
         created_directories.add(relative)
-        descriptor = -1
+        descriptor: fsx.DirHandle | None = None
         retained = False
         try:
-            descriptor = os.open(
-                parts[-1],
-                os.O_RDONLY | directory | nofollow,
-                dir_fd=parent_fd,
-            )
+            descriptor = fsx.open_dir_at(parent_fd, parts[-1])
             try:
-                opened = os.fstat(descriptor)
+                opened = _fstat_directory(descriptor)
             except BaseException as failure:
                 try:
-                    opened = os.fstat(descriptor)
+                    opened = _fstat_directory(descriptor)
                 except BaseException as retry_failure:
                     raise UnsafeInstallTarget(
                         f"{MANUAL_CLEANUP_PREFIX}: directory {relative}"
@@ -1200,51 +1278,51 @@ def _create_stage(
             directory_fds[relative] = descriptor
             retained = True
             directory_identities[relative] = _identity(opened)
-            os.fchmod(descriptor, 0o755)  # nosec B103
-            after = os.fstat(descriptor)
+            _fchmod_directory(descriptor, 0o755)  # nosec B103
+            after = _fstat_directory(descriptor)
             if (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino):
                 raise UnsafeInstallTarget(f"staged directory changed: {relative}")
             directory_identities[relative] = _identity(after)
         except BaseException as failure:
-            if descriptor < 0:
+            if descriptor is None:
                 raise UnsafeInstallTarget(
                     f"{MANUAL_CLEANUP_PREFIX}: directory {relative}"
                 ) from failure
             if not retained:
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
             raise
     for entry in payload:
         parts = _path_parts(entry.path)
         parent_name = PurePosixPath(*parts[:-1]).as_posix() if len(parts) > 1 else ""
         parent_fd = directory_fds[parent_name]
-        descriptor = os.open(
+        file_descriptor = fsx.open_at(
+            parent_fd,
             parts[-1],
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
             entry.mode,
-            dir_fd=parent_fd,
         )
         created_files.add(entry.path)
         try:
             try:
-                metadata = os.fstat(descriptor)
+                metadata = os.fstat(file_descriptor)
             except BaseException:
                 # The exclusive create already transferred ownership of this name.
                 # Bind its identity before closing so cleanup never guesses.
-                file_identities[entry.path] = _identity(os.fstat(descriptor))
+                file_identities[entry.path] = _identity(os.fstat(file_descriptor))
                 raise
             if not stat.S_ISREG(metadata.st_mode):
                 raise UnsafeInstallTarget(f"staged file is unsafe: {entry.path}")
             file_identities[entry.path] = _identity(metadata)
-            os.fchmod(descriptor, entry.mode)
-            file_identities[entry.path] = _identity(os.fstat(descriptor))
-            _write_all(descriptor, entry.content)
-            os.fsync(descriptor)
+            fsx.fchmod(file_descriptor, entry.mode)
+            file_identities[entry.path] = _identity(os.fstat(file_descriptor))
+            _write_all(file_descriptor, entry.content)
+            os.fsync(file_descriptor)
         finally:
-            os.close(descriptor)
+            os.close(file_descriptor)
 
 
 def _verify_stage(
-    directory_fds: dict[str, int],
+    directory_fds: dict[str, fsx.DirHandle],
     directory_identities: dict[str, tuple[int, int, int]],
     file_identities: dict[str, tuple[int, int, int]],
     payload: tuple[InstallEntry, ...],
@@ -1262,15 +1340,15 @@ def _verify_stage(
         parent_name = PurePosixPath(*parts[:-1]).as_posix() if len(parts) > 1 else ""
         expected_children[parent_name].add(parts[-1])
         parent_fd = directory_fds[parent_name]
-        metadata = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        metadata = fsx.lstat_at(parent_fd, parts[-1])
         if (
             _identity(metadata) != file_identities[entry.path]
             or not stat.S_ISREG(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) != entry.mode
+            or not _mode_matches(metadata.st_mode, entry.mode)
             or metadata.st_size != entry.size
         ):
             raise UnsafeInstallTarget(f"staged manifest mismatch: {entry.path}")
-        descriptor = os.open(parts[-1], os.O_RDONLY | nofollow, dir_fd=parent_fd)
+        descriptor = fsx.open_at(parent_fd, parts[-1], os.O_RDONLY | nofollow)
         try:
             opened = os.fstat(descriptor)
             content = _read_all(descriptor, entry.size)
@@ -1283,34 +1361,34 @@ def _verify_stage(
             or hashlib.sha256(content).hexdigest() != entry.sha256
         ):
             raise UnsafeInstallTarget(f"staged content mismatch: {entry.path}")
-    for relative, descriptor in directory_fds.items():
-        if _identity(os.fstat(descriptor)) != directory_identities[relative]:
+    for relative, directory in directory_fds.items():
+        if _identity(_fstat_directory(directory)) != directory_identities[relative]:
             raise UnsafeInstallTarget(f"staged directory changed: {relative or '.'}")
-        if set(os.listdir(descriptor)) != expected_children[relative]:
+        if set(fsx.listdir(directory)) != expected_children[relative]:
             raise UnsafeInstallTarget(f"staged inventory mismatch: {relative or '.'}")
 
 
 def _check_stage(
-    parent_fd: int,
+    parent_fd: fsx.DirHandle,
     stage_name: str,
-    stage_fd: int,
+    stage_fd: fsx.DirHandle,
     stage_identity: tuple[int, int, int],
 ) -> None:
-    metadata = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+    metadata = fsx.lstat_at(parent_fd, stage_name)
     if (
         _identity(metadata) != stage_identity
-        or _identity(os.fstat(stage_fd)) != stage_identity
+        or _identity(_fstat_directory(stage_fd)) != stage_identity
         or not stat.S_ISDIR(metadata.st_mode)
     ):
         raise UnsafeInstallTarget("installer stage identity changed")
 
 
 def _cleanup_stage(
-    parent_fd: int,
+    parent_fd: fsx.DirHandle,
     stage_name: str,
-    stage_fd: int,
+    stage_fd: fsx.DirHandle,
     stage_identity: tuple[int, int, int],
-    directory_fds: dict[str, int],
+    directory_fds: dict[str, fsx.DirHandle],
     directory_identities: dict[str, tuple[int, int, int]],
     file_identities: dict[str, tuple[int, int, int]],
     created_directories: set[str],
@@ -1330,10 +1408,10 @@ def _cleanup_stage(
             raise UnsafeInstallTarget(
                 f"{MANUAL_CLEANUP_PREFIX}: file {relative}"
             )
-        metadata = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        metadata = fsx.lstat_at(parent, parts[-1])
         if _identity(metadata) != expected or not stat.S_ISREG(metadata.st_mode):
             raise UnsafeInstallTarget(f"staged file changed before cleanup: {relative}")
-        os.unlink(parts[-1], dir_fd=parent)
+        fsx.unlink_at(parent, parts[-1])
     nested = sorted(
         created_directories,
         key=lambda path: (len(_path_parts(path)), path.encode("utf-8")),
@@ -1345,34 +1423,34 @@ def _cleanup_stage(
         parent = directory_fds[parent_name]
         descriptor = directory_fds.pop(relative, None)
         if descriptor is not None:
-            os.close(descriptor)
+            fsx.close_dir(descriptor)
         expected = directory_identities.get(relative)
         if expected is None:
             raise UnsafeInstallTarget(
                 f"{MANUAL_CLEANUP_PREFIX}: directory {relative}"
             )
-        metadata = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        metadata = fsx.lstat_at(parent, parts[-1])
         if (
             _identity(metadata) != expected
             or not stat.S_ISDIR(metadata.st_mode)
         ):
             raise UnsafeInstallTarget(f"staged directory changed before cleanup: {relative}")
-        os.rmdir(parts[-1], dir_fd=parent)
-    metadata = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+        fsx.rmdir_at(parent, parts[-1])
+    metadata = fsx.lstat_at(parent_fd, stage_name)
     if _identity(metadata) != stage_identity or not stat.S_ISDIR(metadata.st_mode):
         raise UnsafeInstallTarget("installer stage changed before final cleanup")
-    os.close(stage_fd)
+    fsx.close_dir(stage_fd)
     directory_fds.pop("", None)
-    os.rmdir(stage_name, dir_fd=parent_fd)
+    fsx.rmdir_at(parent_fd, stage_name)
 
 
-def _close_directories(directory_fds: dict[str, int]) -> None:
-    seen: set[int] = set()
+def _close_directories(directory_fds: dict[str, fsx.DirHandle]) -> None:
+    seen: set[fsx.DirHandle] = set()
     for descriptor in directory_fds.values():
         if descriptor not in seen:
             seen.add(descriptor)
             try:
-                os.close(descriptor)
+                fsx.close_dir(descriptor)
             except OSError:
                 pass
     directory_fds.clear()
@@ -1395,13 +1473,14 @@ def _materialize_new(
     )
     if plan["target_state"] != "absent":
         raise UnsafeInstallTarget("materialization requires an absent target")
-    _renameat2()
+    if not fsx.WINDOWS:
+        _renameat2()
     parent = _open_parent(target)
     parent_fd = parent.descriptor
     stage_name = ""
-    stage_fd = -1
+    stage_fd: fsx.DirHandle = -1
     stage_identity = (0, 0, 0)
-    directory_fds: dict[str, int] = {}
+    directory_fds: dict[str, fsx.DirHandle] = {}
     directory_identities: dict[str, tuple[int, int, int]] = {}
     file_identities: dict[str, tuple[int, int, int]] = {}
     created_directories: set[str] = set()
@@ -1425,14 +1504,16 @@ def _materialize_new(
             key=lambda path: (len(_path_parts(path)) if path else 0, path.encode("utf-8")),
             reverse=True,
         ):
-            os.fsync(directory_fds[relative])
+            fsx.fsync_dir(directory_fds[relative])
         _check_parent(parent)
-        os.fsync(parent_fd)
+        fsx.fsync_dir(parent_fd)
         _check_stage(parent_fd, stage_name, stage_fd, stage_identity)
         _stat_absent(parent_fd, parent.target_name)
         _rename_noreplace(parent_fd, stage_name, parent.target_name)
         published = True
-        os.fsync(parent_fd)
+        if fsx.WINDOWS:
+            _check_published(parent, stage_identity)
+        fsx.fsync_dir(parent_fd)
         return plan
     except BaseException as failure:
         if stage_name and not published:

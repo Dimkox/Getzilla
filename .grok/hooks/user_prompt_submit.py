@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, session_id
-from getzilla.router import build_route, can_reuse_active_route, route_context
-from getzilla.state import get_active_route, set_active_route
+import os
+import sys
+
+try:
+    from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
+    from getzilla.router import build_route, can_reuse_active_route, route_context
+    from getzilla.state import get_active_route, set_active_route
+except Exception:
+    if os.name != 'nt':
+        raise
+    # Windows commandWindows has no `|| python3 -c "print('{}')"` fallback chain.
+    import traceback
+    traceback.print_exc()
+    sys.stdout.write('{}\n')
+    raise SystemExit(0)
 
 
 def main() -> None:
@@ -26,4 +38,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    run_hook(main, {})

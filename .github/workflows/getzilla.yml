@@ -4,8 +4,10 @@
 # repository is gated by GitHub Actions, a private repository by the
 # self-hosted Trust CI GitHub App (adaptive-trust-ci, code in trust-ci/).
 # Getzilla is public, so this workflow is its gate. Consumer repositories get
-# their own workflow from `python3 scripts/getzilla_ci.py --write`. A Windows
-# job joins once the native Windows port lands.
+# their own workflow from `python3 scripts/getzilla_ci.py --write`. The
+# windows job runs the native Windows port: doctor, the ported test modules
+# and a smoke of the hooks and CLIs; the full core suite also runs there as
+# an informational step until every module's tests are platform-neutral.
 name: getzilla
 
 on:
@@ -45,6 +47,12 @@ jobs:
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
       - name: Known vulnerabilities in pinned dependencies (OSV)
         run: python scripts/getzilla_vulns.py --online
+      - name: Static checks as the verifier runs them
+        shell: bash
+        run: |
+          paths=$(python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import QUALITY_PY_PATHS; print(' '.join(p for p in QUALITY_PY_PATHS if Path(p).exists()))")
+          ruff check --output-format github $paths
+          bandit -c bandit.yaml -q -r $(printf '%s\n' $paths | grep -v '^tests') -f custom --msg-template '::error file={relpath},line={line}::{test_id} {msg}'
       - name: Core tests
         if: success() || failure()
         shell: bash
@@ -77,3 +85,104 @@ jobs:
                   title = lines[0][:200]
                   detail = " | ".join(line.strip() for line in lines[-25:])[:6000]
                   print(f"::error title={log}::{title} -- {detail}".replace("\n", " "))
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep checkout bytes and executable bits as committed
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+      - name: Check out the exact commit with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Doctor
+        run: python scripts/getzilla_doctor.py
+      - name: Windows-ported tests
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate
+      - name: Hooks and CLI smoke
+        run: |
+          set -euo pipefail
+          exec > >(tee "$RUNNER_TEMP/smoke.log") 2>&1
+          set -x
+          workspace="$RUNNER_TEMP/smoke"
+          git clone --quiet . "$workspace"
+          cd "$workspace"
+          git config user.name smoke
+          git config user.email smoke@example.invalid
+          prompt='{"prompt":"Add a health endpoint to the API","session_id":"ci","hook_event_name":"UserPromptSubmit"}'
+          echo "$prompt" | python .grok/hooks/session_start.py
+          echo "$prompt" | python .grok/hooks/user_prompt_submit.py
+          echo '{"session_id":"ci","tool_name":"Bash","tool_input":{"command":"git push origin main"},"hook_event_name":"PreToolUse"}' \
+            | python .grok/hooks/pre_tool_use.py | tee "$RUNNER_TEMP/pre.json"
+          grep -q '"deny"' "$RUNNER_TEMP/pre.json"
+          for hook in post_tool_use pre_compact stop_gate subagent_start subagent_stop session_end; do
+            echo '{"session_id":"ci","hook_event_name":"Smoke"}' | python ".grok/hooks/$hook.py"
+          done
+          python scripts/getzilla_route.py --show
+          python scripts/getzilla_change.py start --title "Health endpoint"
+          python scripts/getzilla_status.py > /dev/null
+          python scripts/getzilla_architecture.py validate
+          python scripts/getzilla_architecture.py drift
+          python scripts/getzilla_architecture.py diagram --check
+          python scripts/getzilla_governance.py validate
+          python scripts/generate_manifest.py
+          python scripts/verify_manifest.py
+          python scripts/getzilla_ci.py --plan --visibility public
+          python scripts/install_into.py --plan "$RUNNER_TEMP/plan-target" > /dev/null
+          python scripts/install_into.py --materialize-new "$RUNNER_TEMP/new-target" > /dev/null
+          cd "$RUNNER_TEMP/new-target"
+          python scripts/getzilla_doctor.py
+      - name: Annotate smoke failure
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import pathlib
+
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "smoke.log"
+          if path.is_file():
+              lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+              print("::error title=windows-smoke::" + " | ".join(line.strip() for line in lines[-40:])[:8000])
+      - name: Core suite on Windows, module by module (informational)
+        if: success() || failure()
+        continue-on-error: true
+        timeout-minutes: 40
+        shell: python
+        run: |
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import time
+
+          results = []
+          for path in sorted(pathlib.Path("tests").glob("test_*.py")):
+              module = f"tests.{path.stem}"
+              started = time.monotonic()
+              try:
+                  run = subprocess.run([sys.executable, "-m", "unittest", module], capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace", timeout=240)
+                  tail = run.stderr.strip().splitlines()[-1:] or ["?"]
+                  ran = re.search(r"Ran (\d+) test", run.stderr)
+                  outcome = "ok" if run.returncode == 0 else "fail"
+                  detail = f"{ran.group(1) if ran else '?'} tests, {tail[0]}"
+                  if run.returncode != 0:
+                      failures = [line for line in run.stderr.splitlines() if line.startswith(("FAIL:", "ERROR:"))]
+                      print(f"::warning title=windows-module {path.stem}::" + " | ".join(failures[:12])[:3000])
+              except subprocess.TimeoutExpired:
+                  outcome, detail = "timeout", "over 240 s"
+              results.append(f"{path.stem}: {outcome} ({detail}, {time.monotonic() - started:.0f} s)")
+              print(results[-1], flush=True)
+          passed = sum(1 for line in results if ": ok " in line)
+          print(f"::notice title=windows-modules {passed}/{len(results)} pass::" + " | ".join(results)[:20000])

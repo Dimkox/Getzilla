@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-import fcntl
+import errno
 import hashlib
 import os
 import re
@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from . import fsx
 from .state import agent_state_path, get_active_route, get_agent_state, runtime_lock
 from .util import dump_json, runtime_dir
 
@@ -23,24 +24,43 @@ IDENTITY = re.compile(r'[A-Za-z0-9_.:/-]{1,128}\Z')
 TASK_SOURCE_IDENTITY = re.compile(r'[\w.:/-]{1,128}\Z')
 
 
+def _lock_contended(exc: OSError) -> bool:
+    """A non-blocking lock attempt failed only because another holder has it."""
+    if isinstance(exc, BlockingIOError):
+        return True
+    # msvcrt.locking(LK_NBLCK) reports a held region as EACCES or EDEADLOCK.
+    return fsx.WINDOWS and exc.errno in {errno.EACCES, errno.EDEADLK}
+
+
 @contextmanager
 def _locked(root: Path):
     # A stable kernel lock closes the PID-file create/write and stale-unlink
     # races between simultaneous lifecycle callers; retain the legacy lock too.
-    descriptor = os.open(runtime_dir(root) / '.agents.guard', os.O_CREAT | os.O_RDWR, 0o600)
+    descriptor = os.open(runtime_dir(root) / '.agents.guard', os.O_CREAT | os.O_RDWR | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
     deadline = time.monotonic() + 5
+    locked = False
     try:
         while True:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fsx.lock_file(descriptor, exclusive=True, blocking=False)
+                locked = True
                 break
-            except BlockingIOError:
+            except OSError as exc:
+                if not _lock_contended(exc):
+                    raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError('agent-lock-timeout')
                 time.sleep(0.05)
         with runtime_lock(root, 'agents'):
             yield
     finally:
+        if locked and fsx.WINDOWS:
+            # Closing releases a POSIX flock at once; Windows documents byte-range
+            # locks left at close as released only "eventually".
+            try:
+                fsx.unlock_file(descriptor)
+            except OSError:
+                pass
         os.close(descriptor)
 
 

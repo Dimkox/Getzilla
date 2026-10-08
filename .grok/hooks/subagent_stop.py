@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from _lib import agent_generation, agent_id, agent_type, emit, read_payload, root_from
-from getzilla.state import record_agent_stop
+import os
+import sys
+
+try:
+    from _lib import agent_generation, agent_id, agent_type, emit, read_payload, root_from, run_hook
+    from getzilla.state import record_agent_stop
+except Exception:
+    if os.name != 'nt':
+        raise
+    # Windows commandWindows has no `|| python3 -c "print('{}')"` fallback chain.
+    import traceback
+    traceback.print_exc()
+    sys.stdout.write('{}\n')
+    raise SystemExit(0)
 
 
 def main() -> None:
@@ -14,4 +26,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    run_hook(main, {})

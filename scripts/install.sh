@@ -43,7 +43,8 @@ main() {
   fetch_getzilla "$repo" "$ref" "$home"
 
   say "Checking this machine..."
-  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || true
+  local doctor_status=0
+  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
 
   if [ -n "${GETZILLA_NEW_PROJECT:-}" ]; then
     say "Creating a new project at $GETZILLA_NEW_PROJECT ..."
@@ -53,9 +54,12 @@ main() {
     (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
   fi
 
+  if [ "$doctor_status" -eq 0 ]; then
+    printf '\nGetzilla is ready in %s\n' "$home"
+  else
+    printf '\nGetzilla is installed in %s, but the health check reported problems (FAIL lines above).\n' "$home"
+  fi
   cat <<EOF
-
-Getzilla is ready in $home
 
 Next:
   1. New project:      cd "$home" && $python scripts/install_into.py --materialize-new /path/to/new/project
@@ -141,7 +145,8 @@ ensure_grok() {
   say "Installing the Grok Build CLI..."
   local script
   script="$(mktemp)"
-  if curl -fsSL https://x.ai/cli/install.sh -o "$script" && bash "$script" </dev/null; then
+  if curl -fsSL https://x.ai/cli/install.sh -o "$script" \
+    && bash "$script" </dev/null 2>&1 | tr '\r' '\n' | { grep -Ev '^[[:space:]]*$|^[[:space:]#=>-]*[0-9]{1,3}(\.[0-9]+)?[[:space:]]*%' || true; }; then
     rm -f "$script"
     export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"
     hash -r
