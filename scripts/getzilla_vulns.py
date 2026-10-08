@@ -60,4 +60,5 @@ else:
             print(f"::error file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{target}. {ids}")
     for item in report['accepted']:
         print(f"  accepted until {item['accepted_until']}: {item['package']} {item['version']} {item['id']}")
-raise SystemExit({'pass': 0, 'skip': 0, 'fail': 1}.get(report['status'], 2))
+status = report['status']
+raise SystemExit(0 if status in {'pass', 'skip'} else 1 if status == 'fail' else 2)
