@@ -37,7 +37,8 @@ def run_doctor(root: Path) -> list[DoctorItem]:
         except Exception as exc:
             items.append(DoctorItem('fail', f'toml:{rel}', str(exc)))
 
-    for rel in ('.grok/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json'):
+    for rel in ('.grok/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json',
+                '.gemini/settings.json', '.github/hooks/getzilla.json'):
         if rel != '.grok/hooks.json' and not (root / rel).exists():
             items.append(DoctorItem('info', f'json:{rel}', 'harness not installed'))
             continue

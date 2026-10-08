@@ -17,8 +17,8 @@ WRITE_ROLES = {
 }
 
 DEFAULT_CONTROL_PLANE = [
-    '.agents/**', '.grok/**', '.qwen/**', '.claude/**', '.codex/**', '.getzilla/**', '.github/**', 'trust-ci/**',
-    '**/.grok/**', '**/.qwen/**', '**/.claude/**', '**/.codex/**', '_lib.py',
+    '.agents/**', '.grok/**', '.qwen/**', '.claude/**', '.codex/**', '.gemini/**', '.getzilla/**', '.github/**', 'trust-ci/**',
+    '**/.grok/**', '**/.qwen/**', '**/.claude/**', '**/.codex/**', '**/.gemini/**', '_lib.py',
     '.gitignore', 'AGENTS.md', 'README.md', 'CHANGELOG.md', 'VERSION',
     'decisions.md', 'mistakes.md', 'Makefile', 'ruff.toml', 'bandit.yaml', '.coveragerc',
     'scripts/getzilla_*.py', 'scripts/install_into.py', 'scripts/package_stack.py',

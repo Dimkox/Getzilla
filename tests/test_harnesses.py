@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.harnesses import CODEX_HOOK_EVENTS, drift, render
+from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, GEMINI_EVENTS, drift, render
 
 
 class HarnessTests(unittest.TestCase):
@@ -38,6 +38,22 @@ class HarnessTests(unittest.TestCase):
                 self.assertIn(script.split('/')[-1], command, (rel, event))
                 self.assertTrue((ROOT / script).is_file(), script)
 
+    def test_gemini_and_copilot_hooks_use_their_own_event_names(self) -> None:
+        grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
+        gemini = json.loads((ROOT / '.gemini/settings.json').read_text(encoding='utf-8'))
+        self.assertEqual(gemini['context']['fileName'], ['AGENTS.md'])
+        self.assertEqual(set(gemini['hooks']), {GEMINI_EVENTS[event] for event in grok if event in GEMINI_EVENTS})
+        self.assertEqual(gemini['hooks']['BeforeTool'][0]['hooks'][0]['timeout'],
+                         grok['PreToolUse'][0]['hooks'][0]['timeout'] * 1000)
+        self.assertIn("'--harness','gemini'", gemini['hooks']['BeforeTool'][0]['hooks'][0]['command'])
+        copilot = json.loads((ROOT / '.github/hooks/getzilla.json').read_text(encoding='utf-8'))
+        self.assertEqual(copilot['version'], 1)
+        self.assertEqual(set(copilot['hooks']), {COPILOT_EVENTS[event] for event in grok if event in COPILOT_EVENTS})
+        pre = copilot['hooks']['preToolUse'][0]
+        self.assertEqual(pre['bash'], pre['powershell'])
+        self.assertIn("'--harness','copilot'", pre['bash'])
+        self.assertEqual(pre['timeoutSec'], grok['PreToolUse'][0]['hooks'][0]['timeout'])
+
     def test_qwen_timeouts_are_milliseconds_and_others_seconds(self) -> None:
         grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
         qwen = json.loads((ROOT / '.qwen/settings.json').read_text(encoding='utf-8'))['hooks']
@@ -52,6 +68,12 @@ class HarnessTests(unittest.TestCase):
             qwen = (ROOT / '.qwen/agents' / f'{path.stem}.md').read_text(encoding='utf-8')
             claude = (ROOT / '.claude/agents' / f'{path.stem}.md').read_text(encoding='utf-8')
             codex = tomllib.loads((ROOT / '.codex/agents' / path.name).read_text(encoding='utf-8'))
+            copilot = (ROOT / '.github/agents' / f'{path.stem}.agent.md').read_text(encoding='utf-8').split('---', 2)[1]
+            self.assertTrue((ROOT / '.gemini/agents' / f'{path.stem}.md').is_file())
+            if data['sandbox_mode'] == 'read-only':
+                self.assertIn('tools: ["read", "search", "shell"]', copilot)
+            else:
+                self.assertNotIn('tools:', copilot)
             self.assertEqual(codex['sandbox_mode'], data['sandbox_mode'])
             head = qwen.split('---', 2)[1]
             claude_head = claude.split('---', 2)[1]

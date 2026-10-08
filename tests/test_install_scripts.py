@@ -81,7 +81,8 @@ class InstallScriptContractTests(unittest.TestCase):
             for name in ('GETZILLA_AGENT', 'GETZILLA_PROVIDER', 'GETZILLA_MODEL', 'OPENROUTER_API_KEY',
                          'GETZILLA_SKIP_AGENT', 'GETZILLA_NONINTERACTIVE', 'getzilla_setup_agent.py', '--key-stdin',
                          '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
-                         'qwen, codex, claude or grok'):
+                         '@google/gemini-cli@latest', '@github/copilot@latest', 'GEMINI_API_KEY',
+                         'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok'):
                 self.assertIn(name, text)
         self.assertIn('https://claude.ai/install.sh', shell)
         self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
@@ -159,7 +160,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             home = Path(tmp) / 'Getzilla'
             result = self._run(home, GETZILLA_AGENT='cursor')
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn('GETZILLA_AGENT must be qwen, codex, claude or grok', result.stderr)
+            self.assertIn('GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok', result.stderr)
             self.assertFalse(home.exists())
 
     def test_defaults_to_qwen_with_openrouter_and_configures_from_the_key(self) -> None:

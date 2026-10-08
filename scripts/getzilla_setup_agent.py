@@ -9,14 +9,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.agent_setup import AGENTS, DEFAULT_AGENT, DEFAULT_PROVIDER, KEY_ENV, PROVIDERS, configure, forget_key, read_key
+from getzilla.agent_setup import (
+    AGENT_KEY_ENV,
+    AGENTS,
+    DEFAULT_AGENT,
+    DEFAULT_PROVIDER,
+    KEY_ENV,
+    NATIVE_ONLY,
+    PROVIDERS,
+    configure,
+    forget_key,
+    read_key,
+)
 
 parser = argparse.ArgumentParser(
     description=(
-        'Point a coding agent (Qwen Code, Codex, Claude Code or Grok Build) at its models. '
+        'Point a coding agent (Qwen Code, Codex, Claude Code, Gemini CLI, Copilot CLI or Grok Build) at its models. '
         'With --provider openrouter the OpenRouter key is read from OPENROUTER_API_KEY, from stdin '
         'with --key-stdin, or asked for. It is kept as a user environment variable (OPENROUTER_API_KEY) that every '
-        'agent reads, never in a project.'
+        'agent reads, never in a project. Gemini CLI and Copilot CLI use their own accounts; an optional '
+        'GEMINI_API_KEY or COPILOT_GITHUB_TOKEN is kept the same way.'
     ),
 )
 parser.add_argument('--agent', choices=AGENTS, default=DEFAULT_AGENT)
@@ -31,14 +43,17 @@ if args.forget_key:
         print(f'removed: {item}')
     raise SystemExit(0)
 
+key_env = AGENT_KEY_ENV.get(args.agent, KEY_ENV)
+wants_key = (args.agent not in NATIVE_ONLY and args.provider == 'openrouter') or args.agent in AGENT_KEY_ENV
 key = None
-if args.agent != 'grok' and args.provider == 'openrouter':
+if wants_key:
     if args.key_stdin:
         key = read_key()
     else:
-        key = os.environ.get(KEY_ENV) or None
+        key = os.environ.get(key_env) or None
         if key is None and sys.stdin.isatty():
-            key = getpass.getpass('OpenRouter API key (https://openrouter.ai/keys, Enter to skip): ').strip() or None
+            hint = 'https://openrouter.ai/keys' if key_env == KEY_ENV else 'optional'
+            key = getpass.getpass(f'{key_env} ({hint}, Enter to skip): ').strip() or None
 
 try:
     result = configure(args.agent, args.provider, Path.home(), key=key, model=args.model)

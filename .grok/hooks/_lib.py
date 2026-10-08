@@ -95,6 +95,11 @@ TOOL_ALIASES = {
     'MultiEdit': 'Edit',
     'NotebookEdit': 'Edit',
     'agent': 'Agent',
+    'bash': 'Bash',
+    'powershell': 'Bash',
+    'create': 'Write',
+    'view': 'Read',
+    'str_replace': 'Edit',
 }
 
 
@@ -131,20 +136,28 @@ def permission_output(allowed: bool, reason: str | None = None) -> dict[str, Any
 
     Grok Build accepts the combined legacy shape. Claude Code, Codex and Qwen Code
     reject a top-level ``decision`` of allow/deny, so they get only
-    ``hookSpecificOutput`` on denial and no output on allow, which keeps their own
-    permission prompts in force.
+    ``hookSpecificOutput`` on denial. Copilot CLI reads a top-level
+    ``permissionDecision`` and Gemini CLI a top-level ``decision``. Every agent but
+    Grok gets no output on allow, which keeps its own permission prompts in force.
     """
     verdict = 'allow' if allowed else 'deny'
     specific: dict[str, Any] = {'hookEventName': 'PreToolUse', 'permissionDecision': verdict}
     if not allowed:
         specific['permissionDecisionReason'] = reason or ''
-    if harness() == 'grok':
+    agent = harness()
+    if agent == 'grok':
         data: dict[str, Any] = {'decision': verdict}
         if not allowed:
             data['reason'] = reason or ''
         data['hookSpecificOutput'] = specific
         return data
-    return {} if allowed else {'hookSpecificOutput': specific}
+    if allowed:
+        return {}
+    if agent == 'copilot':
+        return {'permissionDecision': 'deny', 'permissionDecisionReason': reason or ''}
+    if agent == 'gemini':
+        return {'decision': 'deny', 'reason': reason or ''}
+    return {'hookSpecificOutput': specific}
 
 
 def first(*values: Any) -> Any:
@@ -519,6 +532,13 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
     value = payload.get('tool_input')
     if value is None:
         value = payload.get('toolInput')
+    if value is None and isinstance(payload.get('toolArgs'), str):
+        try:
+            value = json.loads(payload['toolArgs'])
+        except json.JSONDecodeError:
+            value = {'command': payload['toolArgs']}
+    elif value is None:
+        value = payload.get('toolArgs')
     if not isinstance(value, dict):
         return {}
     mapped = dict(value)

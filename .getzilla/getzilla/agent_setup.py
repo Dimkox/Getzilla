@@ -10,7 +10,9 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-AGENTS = ('qwen', 'codex', 'claude', 'grok')
+AGENTS = ('qwen', 'codex', 'claude', 'gemini', 'copilot', 'grok')
+NATIVE_ONLY = frozenset({'gemini', 'copilot', 'grok'})
+AGENT_KEY_ENV = {'gemini': 'GEMINI_API_KEY', 'copilot': 'COPILOT_GITHUB_TOKEN'}
 PROVIDERS = ('openrouter', 'native')
 DEFAULT_AGENT = 'qwen'
 DEFAULT_PROVIDER = 'openrouter'
@@ -25,6 +27,8 @@ NATIVE_LOGIN = {
     'qwen': "run 'qwen' and pick Qwen OAuth (or another provider) at the first prompt",
     'codex': "run 'codex login' and sign in with your ChatGPT account",
     'claude': "run 'claude' and sign in with your Anthropic account",
+    'gemini': "run 'gemini' and sign in with Google (or set GEMINI_API_KEY)",
+    'copilot': "run 'copilot' and type /login to sign in with GitHub (or set COPILOT_GITHUB_TOKEN)",
     'grok': "run 'grok' and sign in with your xAI account",
 }
 PROFILE_MARKER = '# Getzilla: model keys for coding agents'
@@ -40,10 +44,10 @@ class SetupResult:
     next_steps: tuple[str, ...]
 
 
-def validate_key(key: str) -> str:
+def validate_key(key: str, *, label: str = 'the OpenRouter key') -> str:
     key = key.strip()
     if not _KEY_SHAPE.match(key):
-        raise ValueError('the OpenRouter key must be 16-512 letters, digits, dots, dashes or underscores')
+        raise ValueError(f'{label} must be 16-512 letters, digits, dots, dashes or underscores')
     return key
 
 
@@ -342,7 +346,8 @@ def _remove_profiles(home: Path) -> list[str]:
 
 
 def forget_key(home: Path) -> SetupResult:
-    return SetupResult(tuple(_store_env(home, {}, remove=(KEY_ENV, CLAUDE_TOKEN_ENV))), ())
+    names = (KEY_ENV, CLAUDE_TOKEN_ENV, *AGENT_KEY_ENV.values())
+    return SetupResult(tuple(_store_env(home, {}, remove=names)), ())
 
 
 def _unconfigure_codex(home: Path) -> list[str]:
@@ -392,7 +397,11 @@ def configure(agent: str, provider: str, home: Path, *, key: str | None, model: 
         raise ValueError(f'unknown agent {agent!r}; choose one of {", ".join(AGENTS)}')
     if provider not in PROVIDERS:
         raise ValueError(f'unknown provider {provider!r}; choose one of {", ".join(PROVIDERS)}')
-    if agent == 'grok':
+    if agent in NATIVE_ONLY:
+        if agent in AGENT_KEY_ENV and key:
+            written = _store_env(home, {AGENT_KEY_ENV[agent]: validate_key(key, label=AGENT_KEY_ENV[agent])})
+            return SetupResult(tuple(written), (f'open a new terminal so the agent sees {AGENT_KEY_ENV[agent]}',
+                                                f"run '{agent}' in your project"))
         return SetupResult((), (NATIVE_LOGIN[agent],))
     if provider == 'native':
         undo = {'qwen': _unconfigure_qwen, 'claude': _unconfigure_claude, 'codex': _unconfigure_codex}[agent]

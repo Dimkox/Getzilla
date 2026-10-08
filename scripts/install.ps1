@@ -17,7 +17,8 @@
 #   $env:GETZILLA_REPO = 'https://...'          Git URL to install from
 #   $env:GETZILLA_PROJECT = 'C:\code\my-app'    existing project: print the read-only install plan
 #   $env:GETZILLA_NEW_PROJECT = 'C:\code\new'   create a new project there (the folder must not exist)
-#   $env:GETZILLA_AGENT = 'qwen'                qwen | codex | claude | grok (default: ask, else qwen)
+#   $env:GETZILLA_AGENT = 'qwen'                qwen | codex | claude | gemini | copilot | grok (default: ask, else qwen)
+#   $env:GEMINI_API_KEY / $env:COPILOT_GITHUB_TOKEN  optional keys for Gemini CLI / Copilot CLI
 #   $env:GETZILLA_PROVIDER = 'openrouter'       openrouter | native sign-in (default: ask, else openrouter)
 #   $env:GETZILLA_MODEL = 'qwen/qwen3-coder'    OpenRouter model id for Qwen Code or Codex
 #   $env:OPENROUTER_API_KEY = '...'             your OpenRouter key (otherwise asked for, never echoed)
@@ -271,21 +272,23 @@ function Read-Choice([string]$Prompt, [string]$Default) {
 function Select-Agent {
     $agent = $env:GETZILLA_AGENT
     if (-not $agent) {
-        switch (Read-Choice 'Coding agent: 1) Qwen Code  2) Codex  3) Claude Code  4) Grok Build  [1]' '1') {
+        switch (Read-Choice 'Coding agent: 1) Qwen Code  2) Codex  3) Claude Code  4) Gemini CLI  5) Copilot CLI  6) Grok Build  [1]' '1') {
             { $_ -in @('2', 'codex') } { $agent = 'codex'; break }
             { $_ -in @('3', 'claude') } { $agent = 'claude'; break }
-            { $_ -in @('4', 'grok') } { $agent = 'grok'; break }
+            { $_ -in @('4', 'gemini') } { $agent = 'gemini'; break }
+            { $_ -in @('5', 'copilot') } { $agent = 'copilot'; break }
+            { $_ -in @('6', 'grok') } { $agent = 'grok'; break }
             default { $agent = 'qwen' }
         }
     }
-    if ($agent -notin @('qwen', 'codex', 'claude', 'grok')) {
-        throw "GETZILLA_AGENT must be qwen, codex, claude or grok (got '$agent')."
+    if ($agent -notin @('qwen', 'codex', 'claude', 'gemini', 'copilot', 'grok')) {
+        throw "GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok (got '$agent')."
     }
     return $agent
 }
 
 function Select-Provider([string]$Agent) {
-    if ($Agent -eq 'grok') { return 'native' }
+    if ($Agent -in @('grok', 'gemini', 'copilot')) { return 'native' }
     $provider = $env:GETZILLA_PROVIDER
     if (-not $provider) {
         switch (Read-Choice "Models: 1) OpenRouter with your own key  2) the agent's own sign-in  [1]" '1') {
@@ -303,6 +306,8 @@ function Get-AgentCommand([string]$Agent) {
     switch ($Agent) {
         'codex' { return 'codex   (trust the project when asked)' }
         'claude' { return 'claude   (trust the project folder when asked)' }
+        'gemini' { return 'gemini   (trust the folder when asked)' }
+        'copilot' { return 'copilot   (first time: /login, and trust the folder)' }
         'grok' { return 'grok   (first time: sign in, then type /hooks-trust)' }
         default { return 'qwen' }
     }
@@ -312,6 +317,8 @@ function Install-Agent([string]$Agent) {
     switch ($Agent) {
         'qwen' { Install-NpmAgent 'qwen' '@qwen-code/qwen-code@latest' 'Qwen Code' }
         'codex' { Install-NpmAgent 'codex' '@openai/codex@latest' 'Codex CLI' }
+        'gemini' { Install-NpmAgent 'gemini' '@google/gemini-cli@latest' 'Gemini CLI' }
+        'copilot' { Install-NpmAgent 'copilot' '@github/copilot@latest' 'Copilot CLI' 22 }
         'claude' { Install-Claude }
         'grok' {
             if ($env:GETZILLA_SKIP_GROK -eq '1') {
@@ -323,27 +330,27 @@ function Install-Agent([string]$Agent) {
     }
 }
 
-function Test-Node {
+function Test-Node([int]$Minimum = 20) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
     $major = (& node -e 'console.log(process.versions.node.split(".")[0])' 2>$null)
-    return ([int]"$major" -ge 20)
+    return ([int]"$major" -ge $Minimum)
 }
 
-function Install-Node {
-    if (Test-Node) { return $true }
-    Write-Step 'Installing Node.js LTS (20 or newer is needed)...'
+function Install-Node([int]$Minimum = 20) {
+    if (Test-Node $Minimum) { return $true }
+    Write-Step "Installing Node.js LTS ($Minimum or newer is needed)..."
     if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
-    if (Test-Node) { return $true }
-    Write-Step 'Node.js 20 or newer is still missing. Install it from https://nodejs.org and run this installer again.'
+    if (Test-Node $Minimum) { return $true }
+    Write-Step "Node.js $Minimum or newer is still missing. Install it from https://nodejs.org and run this installer again."
     return $false
 }
 
-function Install-NpmAgent([string]$Command, [string]$Package, [string]$Label) {
+function Install-NpmAgent([string]$Command, [string]$Package, [string]$Label, [int]$NodeMinimum = 20) {
     if (Get-Command $Command -ErrorAction SilentlyContinue) {
         Write-Step "${Label}: already installed."
         return
     }
-    if (-not (Install-Node)) { return }
+    if (-not (Install-Node $NodeMinimum)) { return }
     Write-Step "Installing $Label..."
     & npm install -g $Package | Out-Null
     Update-SessionPath
@@ -373,10 +380,24 @@ function Install-Claude {
 function Set-AgentConfiguration([string[]]$Python, [string]$Agent, [string]$Provider) {
     $arguments = @('scripts/getzilla_setup_agent.py', '--agent', $Agent, '--provider', $Provider)
     if ($env:GETZILLA_MODEL) { $arguments += @('--model', $env:GETZILLA_MODEL) }
-    $key = $env:OPENROUTER_API_KEY
-    if ($Provider -eq 'openrouter' -and $Agent -ne 'grok' -and -not $key -and (Test-CanAsk)) {
+    $keyName = $null
+    $prompt = $null
+    switch ($Agent) {
+        'gemini' { $keyName = 'GEMINI_API_KEY'; $prompt = 'Gemini API key (optional, Enter to sign in with Google instead)' }
+        'copilot' { $keyName = 'COPILOT_GITHUB_TOKEN'; $prompt = 'GitHub token for Copilot (optional, Enter to use /login instead)' }
+        'grok' { }
+        default {
+            if ($Provider -eq 'openrouter') {
+                $keyName = 'OPENROUTER_API_KEY'
+                $prompt = 'OpenRouter API key (create one at https://openrouter.ai/keys, Enter to skip)'
+            }
+        }
+    }
+    $key = $null
+    if ($keyName) { $key = [Environment]::GetEnvironmentVariable($keyName) }
+    if ($keyName -and -not $key -and (Test-CanAsk)) {
         try {
-            $secure = Read-Host 'OpenRouter API key (create one at https://openrouter.ai/keys, Enter to skip)' -AsSecureString
+            $secure = Read-Host $prompt -AsSecureString
             $key = [System.Net.NetworkCredential]::new('', $secure).Password
         } catch {
             $key = $null
@@ -389,12 +410,16 @@ function Set-AgentConfiguration([string[]]$Python, [string]$Agent, [string]$Prov
     if ($key) {
         $key | & $exe @prefix @arguments '--key-stdin'
     } else {
-        $saved = $env:OPENROUTER_API_KEY
-        $env:OPENROUTER_API_KEY = $null
+        $names = @('OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'COPILOT_GITHUB_TOKEN')
+        $saved = @{}
+        foreach ($name in $names) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $null)
+        }
         try {
             $null | & $exe @prefix @arguments
         } finally {
-            $env:OPENROUTER_API_KEY = $saved
+            foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
         }
     }
     if ($LASTEXITCODE -ne 0) {

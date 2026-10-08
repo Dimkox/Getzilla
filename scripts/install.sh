@@ -11,6 +11,8 @@
 #   qwen    Qwen Code    (npm @qwen-code/qwen-code, needs Node.js 20+)
 #   codex   Codex CLI    (npm @openai/codex, needs Node.js 20+)
 #   claude  Claude Code  (official installer from claude.ai)
+#   gemini  Gemini CLI   (npm @google/gemini-cli, Google account or GEMINI_API_KEY)
+#   copilot Copilot CLI  (npm @github/copilot, needs Node.js 22+, GitHub Copilot account)
 #   grok    Grok Build   (official installer from x.ai, xAI account only)
 # Models come from OpenRouter with your own key (https://openrouter.ai/keys) unless
 # you pick the agent's own sign-in. The key is stored only in your user settings.
@@ -21,7 +23,8 @@
 #   GETZILLA_REPO         Git URL to install from (default: the GitHub repository)
 #   GETZILLA_PROJECT      existing project: print the read-only install plan for it
 #   GETZILLA_NEW_PROJECT  absent path: create a new project with Getzilla in it (Linux)
-#   GETZILLA_AGENT        qwen | codex | claude | grok (default: ask, else qwen)
+#   GETZILLA_AGENT        qwen | codex | claude | gemini | copilot | grok (default: ask, else qwen)
+#   GEMINI_API_KEY        optional Gemini key; COPILOT_GITHUB_TOKEN optional Copilot token
 #   GETZILLA_PROVIDER     openrouter | native (default: ask, else openrouter)
 #   GETZILLA_MODEL        OpenRouter model id for Qwen Code or Codex
 #   OPENROUTER_API_KEY    your OpenRouter key (otherwise asked for, never echoed)
@@ -199,22 +202,24 @@ ask() {
 choose_agent() {
   local agent="${GETZILLA_AGENT:-}"
   if [ -z "$agent" ]; then
-    case "$(ask $'Coding agent: 1) Qwen Code  2) Codex  3) Claude Code  4) Grok Build  [1]: ' 1)" in
+    case "$(ask $'Coding agent: 1) Qwen Code  2) Codex  3) Claude Code  4) Gemini CLI  5) Copilot CLI  6) Grok Build  [1]: ' 1)" in
       2|codex) agent=codex ;;
       3|claude) agent=claude ;;
-      4|grok) agent=grok ;;
+      4|gemini) agent=gemini ;;
+      5|copilot) agent=copilot ;;
+      6|grok) agent=grok ;;
       *) agent=qwen ;;
     esac
   fi
   case "$agent" in
-    qwen|codex|claude|grok) printf '%s' "$agent" ;;
-    *) fail "GETZILLA_AGENT must be qwen, codex, claude or grok (got '$agent')." ;;
+    qwen|codex|claude|gemini|copilot|grok) printf '%s' "$agent" ;;
+    *) fail "GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok (got '$agent')." ;;
   esac
 }
 
 choose_provider() {
   local agent="$1" provider="${GETZILLA_PROVIDER:-}"
-  if [ "$agent" = "grok" ]; then
+  if [ "$agent" = "grok" ] || [ "$agent" = "gemini" ] || [ "$agent" = "copilot" ]; then
     printf 'native'
     return 0
   fi
@@ -235,17 +240,20 @@ agent_command() {
     qwen) printf 'qwen' ;;
     codex) printf 'codex   (trust the project when asked)' ;;
     claude) printf 'claude   (trust the project folder when asked)' ;;
+    gemini) printf 'gemini   (trust the folder when asked)' ;;
+    copilot) printf 'copilot   (first time: /login, and trust the folder)' ;;
     grok) printf 'grok   (first time: sign in, then type /hooks-trust)' ;;
   esac
 }
 
 node_ok() {
-  have node && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' >/dev/null 2>&1
+  have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= ${1:-20} ? 0 : 1)" >/dev/null 2>&1
 }
 
 ensure_node() {
-  node_ok && return 0
-  say "Installing Node.js (20 or newer is needed)..."
+  local minimum="${1:-20}"
+  node_ok "$minimum" && return 0
+  say "Installing Node.js ($minimum or newer is needed)..."
   if [ "$(uname -s)" = "Darwin" ] && have brew; then
     brew install node || true
   elif have apt-get; then
@@ -260,8 +268,8 @@ ensure_node() {
     as_root apk add --no-cache nodejs npm </dev/null || true
   fi
   hash -r
-  node_ok && return 0
-  say "Node.js 20 or newer is still missing. Install it from https://nodejs.org and run this installer again."
+  node_ok "$minimum" && return 0
+  say "Node.js $minimum or newer is still missing. Install it from https://nodejs.org and run this installer again."
   return 1
 }
 
@@ -284,6 +292,8 @@ install_agent() {
   case "$1" in
     qwen) install_npm_agent qwen @qwen-code/qwen-code@latest "Qwen Code" ;;
     codex) install_npm_agent codex @openai/codex@latest "Codex CLI" ;;
+    gemini) install_npm_agent gemini @google/gemini-cli@latest "Gemini CLI" ;;
+    copilot) install_npm_agent copilot @github/copilot@latest "Copilot CLI" 22 ;;
     claude) ensure_claude ;;
     grok)
       if [ "${GETZILLA_SKIP_GROK:-0}" = "1" ]; then
@@ -296,12 +306,12 @@ install_agent() {
 }
 
 install_npm_agent() {
-  local command="$1" package="$2" label="$3"
+  local command="$1" package="$2" label="$3" node_minimum="${4:-20}"
   if have "$command"; then
     say "$label: already installed."
     return 0
   fi
-  ensure_node || return 0
+  ensure_node "$node_minimum" || return 0
   say "Installing $label..."
   if npm_global "$package" "$command"; then
     say "$label installed."
@@ -330,11 +340,23 @@ ensure_claude() {
 }
 
 configure_agent() {
-  local home="$1" python="$2" agent="$3" provider="$4" key="${OPENROUTER_API_KEY:-}"
+  local home="$1" python="$2" agent="$3" provider="$4" key_name="" prompt="" key=""
+  case "$agent" in
+    gemini) key_name=GEMINI_API_KEY; prompt='Gemini API key (optional, Enter to sign in with Google instead): ' ;;
+    copilot) key_name=COPILOT_GITHUB_TOKEN; prompt='GitHub token for Copilot (optional, Enter to use /login instead): ' ;;
+    grok) ;;
+    *)
+      if [ "$provider" = "openrouter" ]; then
+        key_name=OPENROUTER_API_KEY
+        prompt='OpenRouter API key (create one at https://openrouter.ai/keys, Enter to skip): '
+      fi
+      ;;
+  esac
+  [ -n "$key_name" ] && key="${!key_name:-}"
   local args=(--agent "$agent" --provider "$provider")
   [ -n "${GETZILLA_MODEL:-}" ] && args+=(--model "$GETZILLA_MODEL")
-  if [ "$provider" = "openrouter" ] && [ "$agent" != "grok" ] && [ -z "$key" ] && can_ask; then
-    printf 'OpenRouter API key (create one at https://openrouter.ai/keys, Enter to skip): ' >/dev/tty
+  if [ -n "$key_name" ] && [ -z "$key" ] && can_ask; then
+    printf '%s' "$prompt" >/dev/tty
     IFS= read -rs key </dev/tty || key=""
     printf '\n' >/dev/tty
   fi
@@ -343,7 +365,7 @@ configure_agent() {
     printf '%s\n' "$key" | (cd "$home" && "$python" scripts/getzilla_setup_agent.py "${args[@]}" --key-stdin) \
       || say "Agent configuration failed (see the message above); run it again later with scripts/getzilla_setup_agent.py."
   else
-    (cd "$home" && OPENROUTER_API_KEY= "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null) || true
+    (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null) || true
   fi
 }
 

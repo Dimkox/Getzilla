@@ -40,7 +40,7 @@ def _exported(home: Path) -> dict[str, str]:
     script = '. "$HOME/.bashrc" >/dev/null 2>&1; env'
     output = subprocess.run(['bash', '--norc', '-c', script], env={'HOME': str(home), 'PATH': os.environ['PATH']},
                             capture_output=True, text=True, check=True).stdout
-    names = ('OPENROUTER_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+    names = ('OPENROUTER_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'COPILOT_GITHUB_TOKEN')
     return {line.split('=', 1)[0]: line.split('=', 1)[1] for line in output.splitlines()
             if line.split('=', 1)[0] in names}
 
@@ -211,6 +211,21 @@ class AgentSetupTests(unittest.TestCase):
         self.assertTrue((self.home / '.claude/settings.json').is_symlink())
         self.assertEqual(json.loads(real.read_text())['theme'], 'dark')
         self.assertEqual([p.name for p in real.parent.iterdir()], ['claude.json'])
+
+    def test_gemini_and_copilot_keys_become_environment_variables(self) -> None:
+        result = configure('gemini', 'openrouter', self.home, key='AIzaSyA-0123456789abcdefghijklmnopqrstu')
+        self.assertIn('open a new terminal so the agent sees GEMINI_API_KEY', result.next_steps)
+        configure('copilot', 'native', self.home, key='github_pat_0123456789abcdefABCDEF')
+        self.assertEqual(_exported(self.home), {
+            'GEMINI_API_KEY': 'AIzaSyA-0123456789abcdefghijklmnopqrstu',
+            'COPILOT_GITHUB_TOKEN': 'github_pat_0123456789abcdefABCDEF',
+        })
+        agent_setup.forget_key(self.home)
+        self.assertEqual(_exported(self.home), {})
+        for agent in ('gemini', 'copilot'):
+            result = configure(agent, 'native', self.home, key=None)
+            self.assertEqual(result.written, ())
+            self.assertIn(agent, result.next_steps[0])
 
     def test_native_login_and_grok_write_nothing(self) -> None:
         for agent, provider in (('grok', 'openrouter'), ('codex', 'native'), ('claude', 'native')):

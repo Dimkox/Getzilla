@@ -37,6 +37,21 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 data = self._pre_tool(root, tool, {'command': 'printf x >> AGENTS.md'})
                 self.assertEqual(data['decision'], 'deny', tool)
 
+    def test_copilot_payloads_are_policy_checked(self) -> None:
+        with project_copy() as root:
+            for tool, args in (
+                ('bash', {'command': 'terraform destroy'}),
+                ('powershell', {'command': 'printf x >> AGENTS.md'}),
+                ('create', {'path': str(root / 'AGENTS.md'), 'file_text': 'x'}),
+                ('edit', {'path': str(root / '.github/hooks/getzilla.json'), 'old_str': 'a', 'new_str': 'b'}),
+                ('view', {'path': str(root / '.env')}),
+            ):
+                code, data, stderr = run_hook(root, 'pre_tool_use.py', {
+                    'timestamp': 1, 'cwd': str(root), 'toolName': tool, 'toolArgs': json.dumps(args),
+                })
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(data['decision'], 'deny', tool)
+
     def test_codex_list_commands_and_patch_inputs_are_policy_checked(self) -> None:
         with project_copy() as root:
             data = self._pre_tool(root, 'shell', {'command': ['bash', '-lc', 'printf x >> AGENTS.md']})
@@ -95,7 +110,12 @@ class GeneratedHookCommandTests(unittest.TestCase):
 
     def _run(self, root: Path, settings: str, payload: dict) -> tuple[int, str]:
         hooks = json.loads((root / settings).read_text(encoding='utf-8'))['hooks']
-        command = hooks['PreToolUse'][0]['hooks'][0]['command']
+        if 'preToolUse' in hooks:
+            command = hooks['preToolUse'][0]['bash']
+        elif 'BeforeTool' in hooks:
+            command = hooks['BeforeTool'][0]['hooks'][0]['command']
+        else:
+            command = hooks['PreToolUse'][0]['hooks'][0]['command']
         sub = root / 'src' / 'deep'
         sub.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(['bash', '-c', command], cwd=sub, input=json.dumps(payload), text=True,
@@ -121,6 +141,35 @@ class GeneratedHookCommandTests(unittest.TestCase):
                     'tool_input': {'command': 'ls'},
                 })
                 self.assertEqual(code, 0, settings)
+                self.assertIn(out, ('', '{}'), settings)
+
+    def test_gemini_and_copilot_get_their_own_verdict_shape(self) -> None:
+        with project_copy() as root:
+            shutil.copytree(PROJECT / '.gemini', root / '.gemini')
+            (root / '.github').mkdir()
+            shutil.copytree(PROJECT / '.github/hooks', root / '.github/hooks')
+            code, out = self._run(root, '.gemini/settings.json', {
+                'cwd': str(root), 'hook_event_name': 'BeforeTool', 'tool_name': 'run_shell_command',
+                'tool_input': {'command': 'terraform destroy'},
+            })
+            self.assertEqual(code, 0)
+            data = json.loads(out)
+            self.assertEqual(data['decision'], 'deny')
+            self.assertTrue(data['reason'])
+            self.assertNotIn('hookSpecificOutput', data)
+            code, out = self._run(root, '.github/hooks/getzilla.json', {
+                'timestamp': 1, 'cwd': str(root), 'toolName': 'bash',
+                'toolArgs': json.dumps({'command': 'terraform destroy'}),
+            })
+            self.assertEqual(code, 0)
+            data = json.loads(out)
+            self.assertEqual(data['permissionDecision'], 'deny')
+            self.assertTrue(data['permissionDecisionReason'])
+            for settings in ('.gemini/settings.json', '.github/hooks/getzilla.json'):
+                code, out = self._run(root, settings, {
+                    'cwd': str(root), 'toolName': 'bash', 'toolArgs': json.dumps({'command': 'ls'}),
+                    'tool_name': 'run_shell_command', 'tool_input': {'command': 'ls'},
+                })
                 self.assertIn(out, ('', '{}'), settings)
 
     def test_a_hook_planted_in_a_subdirectory_is_never_run(self) -> None:

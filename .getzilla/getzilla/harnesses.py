@@ -5,13 +5,31 @@ import re
 import tomllib
 from pathlib import Path
 
-HARNESSES = ('qwen', 'claude', 'codex', 'grok')
-GENERATED_ROOTS = ('.qwen', '.claude', '.codex')
+HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
+GENERATED_ROOTS = ('.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents')
 HOOK_SOURCE = '.grok/hooks.json'
 AGENT_SOURCE = '.grok/agents'
 SKILL_SOURCE = '.agents/skills'
 CODEX_HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop')
+GEMINI_EVENTS = {
+    'SessionStart': 'SessionStart',
+    'UserPromptSubmit': 'BeforeAgent',
+    'PreToolUse': 'BeforeTool',
+    'PostToolUse': 'AfterTool',
+    'PreCompact': 'PreCompress',
+    'Stop': 'AfterAgent',
+    'SessionEnd': 'SessionEnd',
+}
+COPILOT_EVENTS = {
+    'SessionStart': 'sessionStart',
+    'UserPromptSubmit': 'userPromptSubmitted',
+    'PreToolUse': 'preToolUse',
+    'PostToolUse': 'postToolUse',
+    'SessionEnd': 'sessionEnd',
+}
+COPILOT_HOOKS = '.github/hooks/getzilla.json'
 QWEN_READ_ONLY_BLOCK = ('write_file', 'edit')
+COPILOT_READ_ONLY_TOOLS = ('read', 'search', 'shell')
 CLAUDE_READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch')
 LOCAL_FILES = frozenset({'settings.local.json', 'CLAUDE.local.md', '.env'})
 _SCRIPT = re.compile(r'\.grok/hooks/([A-Za-z0-9_]+\.py)')
@@ -70,6 +88,33 @@ def _hooks_block(events: list[tuple[str, str, int]], *, harness: str, millisecon
     return block
 
 
+def _renamed_hooks_block(events: list[tuple[str, str, int]], *, harness: str, names: dict[str, str]) -> dict:
+    block: dict[str, list] = {}
+    for event, script, timeout in events:
+        if event in names:
+            block.setdefault(names[event], []).append({'hooks': [{
+                'type': 'command',
+                'command': _command(script, harness),
+                'timeout': timeout * 1000,
+            }]})
+    return block
+
+
+def _copilot_hooks(events: list[tuple[str, str, int]]) -> dict:
+    block: dict[str, list] = {}
+    for event, script, timeout in events:
+        if event in COPILOT_EVENTS:
+            command = _command(script, 'copilot')
+            block.setdefault(COPILOT_EVENTS[event], []).append({
+                'type': 'command',
+                'bash': command,
+                'powershell': command,
+                'cwd': '.',
+                'timeoutSec': timeout,
+            })
+    return {'version': 1, 'hooks': block}
+
+
 def _json(data: dict) -> bytes:
     return (json.dumps(data, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
 
@@ -119,6 +164,11 @@ def render(root: Path) -> dict[str, bytes]:
         'hooks': _hooks_block(events, harness='codex', milliseconds=False, only=CODEX_HOOK_EVENTS),
     })
     out['.codex/config.toml'] = b'[features]\ncodex_hooks = true\n'
+    out['.gemini/settings.json'] = _json({
+        'context': {'fileName': ['AGENTS.md']},
+        'hooks': _renamed_hooks_block(events, harness='gemini', names=GEMINI_EVENTS),
+    })
+    out[COPILOT_HOOKS] = _json(_copilot_hooks(events))
 
     for name, data in agents:
         read_only = data.get('sandbox_mode') == 'read-only'
@@ -127,10 +177,14 @@ def render(root: Path) -> dict[str, bytes]:
         out[f'.qwen/agents/{name}.md'] = _agent_markdown(name, data, extra=qwen_extra)
         out[f'.claude/agents/{name}.md'] = _agent_markdown(name, data, extra=claude_extra)
         out[f'.codex/agents/{name}.toml'] = (root / AGENT_SOURCE / f'{name}.toml').read_bytes()
+        out[f'.gemini/agents/{name}.md'] = _agent_markdown(name, data, extra=[])
+        copilot_extra = [f'tools: {json.dumps(list(COPILOT_READ_ONLY_TOOLS))}'] if read_only else []
+        out[f'.github/agents/{name}.agent.md'] = _agent_markdown(name, data, extra=copilot_extra)
 
     for rel, content in skills.items():
         out[f'.qwen/skills/{rel}'] = content
         out[f'.claude/skills/{rel}'] = content
+        out[f'.gemini/skills/{rel}'] = content
     return out
 
 

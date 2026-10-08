@@ -1981,6 +1981,7 @@
       "repository_paths": [
         ".claude",
         ".codex",
+        ".gemini",
         ".getzilla/getzilla",
         ".getzilla/templates",
         ".grok",
