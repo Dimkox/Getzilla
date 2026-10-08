@@ -1105,3 +1105,7 @@ The user prefers one product PR, and the external refusal already invalidated qu
 ## 2026-10-05 — Freeze fixture commits before qualifying Git-bound matrices
 
 Prepare every disposable fixture head before evaluating exact-base/head diffs, because intervening commits change Git registration identity and invalidate the immutable baseline cache. Retain public-API snapshots per head and assert their architecture digest against the actual diff before calling the unchanged fitness predicate; all real model/contracts and negative cases remain. A private positive/owner-negative profile improved from7.574s to5.522s without a production/cache patch, but this is not proof of meeting the external serial timeout.
+
+## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
+
+Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).

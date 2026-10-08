@@ -2,6 +2,7 @@
 
 ## 2.2.0 — 2026-10-05 (source candidate)
 
+- Security (#36, #37): hook policy denies secret reads through Bash and root-level secret files, normalizes gh/git/docker/npm global options and sibling subcommands before classifying merge/push/publish, treats every non-GET `gh api` spelling and `gh pr review` as external writes, and blocks every recursive `rm` spelling on `/`, absolute paths, `~`, `$HOME`, `.` or `*`.
 - Owner-approved minimum of one accepted task, with the completed factory-built Liqvera case and owner-confirmed accounting/human readiness; unknown numeric telemetry remains null.
 - Executable offline local M8 policy, typed evidence/activation and per-use admission/revocation consumer: initial L1 local reads/tests, L2 ceiling, finite expiry and exact source/profile/repository bindings. External authority and empirical M7 recommendation gates remain separate.
 - Queue provenance analysis widens list-append loops and no longer charges unchanged bindings, so modules importing `architecture_diff.py` stop failing FIT-BOUNDED-WORKER-JOBS as unsupported; all analysis limits are unchanged.
