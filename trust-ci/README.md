@@ -247,7 +247,7 @@ TRUST_CI_OPERATOR_DIR=/absolute/human-controlled/path/outside-the-checkout
 TRUST_CI_OPERATOR_VENV="$TRUST_CI_OPERATOR_DIR/venv"
 install -d -m 700 "$TRUST_CI_OPERATOR_DIR"
 python3 -m venv "$TRUST_CI_OPERATOR_VENV"
-"$TRUST_CI_OPERATOR_VENV/bin/python" -m pip install 'cryptography==46.0.4'
+"$TRUST_CI_OPERATOR_VENV/bin/python" -m pip install 'cryptography==50.0.2'
 
 cd "$TRUST_CI_CHECKOUT"
 PYTHONPATH="$TRUST_CI_CHECKOUT/trust-ci/src" \
