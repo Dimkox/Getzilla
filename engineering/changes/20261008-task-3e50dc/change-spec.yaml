@@ -1,0 +1,116 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "update_opengrep downloads only the pinned release asset URL and never queries releases/latest.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "A downloaded asset whose SHA-256 differs from the pinned digest is not written, and a previous binary stays untouched.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "The pinned version and linux/x86_64 digest equal trust-ci/runner.Dockerfile; every digest is 64 hex characters.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "OSV archives with bad CRCs or truncated content are refused and the previous mirror is kept.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Full PR verification, independent reviews and the exact-head external check precede merge.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "security"
+    ]
+  },
+  "change_id": "20261008-task-3e50dc",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "An unverified or unpinned executable is written to ~/.getzilla/bin.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Updates still run only when a person starts them; agent CLI and source updates are unchanged.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "The updater installs OpenGrep only from a pinned release after SHA-256 verification and refuses corrupt OSV archives.",
+    "success_metric": "tampered_or_unpinned_binary_never_installed",
+    "target": ".getzilla/getzilla/updater.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
