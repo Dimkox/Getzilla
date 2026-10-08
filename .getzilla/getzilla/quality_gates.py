@@ -77,9 +77,7 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
     if name == "coverage":
         return summary == "pytest runner owns tests; measure unittest trees only"
     if name == "known-vulnerabilities":
-        return summary == "no pinned dependencies in lockfiles or requirements" or (
-            summary.endswith("pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1")
-        )
+        return summary == "no pinned dependencies in lockfiles or requirements"
     if name == "opengrep":
         return summary in {"opengrep not available", "no OpenGrep rules installed"}
     if name == "factory-postgres-exit":

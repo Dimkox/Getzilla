@@ -243,7 +243,7 @@ class VerifierDetailTests(unittest.TestCase):
 
 
 class QualityGateTests(unittest.TestCase):
-    def test_only_the_two_explicit_skip_reasons_are_admitted(self) -> None:
+    def test_only_the_no_pins_skip_reason_is_admitted(self) -> None:
         from types import SimpleNamespace
 
         from getzilla.quality_gates import required_check_refused
@@ -251,12 +251,35 @@ class QualityGateTests(unittest.TestCase):
         def result(status: str, summary: str) -> SimpleNamespace:
             return SimpleNamespace(name='known-vulnerabilities', status=status, summary=summary)
 
-        for summary in ('no pinned dependencies in lockfiles or requirements',
-                        '34 pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1'):
-            self.assertFalse(required_check_refused(result('skip', summary), mode='pr'))
+        self.assertFalse(required_check_refused(
+            result('skip', 'no pinned dependencies in lockfiles or requirements'), mode='pr'))
+        self.assertTrue(required_check_refused(
+            result('skip', '34 pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1'), mode='pr'))
         self.assertTrue(required_check_refused(result('skip', 'OSV unavailable'), mode='pr'))
         self.assertTrue(required_check_refused(result('fail', '1 known vulnerabilities'), mode='pr'))
         self.assertFalse(required_check_refused(result('fail', '1 known vulnerabilities'), mode='fast'))
+
+
+class OfflineSkipGateTests(unittest.TestCase):
+    def test_unchecked_pinned_dependencies_refuse_pr_and_release(self) -> None:
+        # Without GETZILLA_OSV_DB/GETZILLA_OSV_ONLINE the scan is a no-op; a pr/release gate
+        # must not pass on it (#32). Repositories without pins stay admitted.
+        from types import SimpleNamespace
+
+        from getzilla.quality_gates import required_check_refused
+
+        tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
+        with tmp:
+            report = KV.scan(root, environ={})
+        unchecked = SimpleNamespace(name='known-vulnerabilities', status=report['status'], summary=report['summary'])
+        self.assertEqual(unchecked.status, 'skip')
+        for mode in ('pr', 'release'):
+            with self.subTest(mode=mode):
+                self.assertTrue(required_check_refused(unchecked, mode=mode))
+        self.assertFalse(required_check_refused(unchecked, mode='fast'))
+        empty = SimpleNamespace(name='known-vulnerabilities', status='skip',
+                                summary='no pinned dependencies in lockfiles or requirements')
+        self.assertFalse(required_check_refused(empty, mode='pr'))
 
 
 class DownloadTests(unittest.TestCase):
