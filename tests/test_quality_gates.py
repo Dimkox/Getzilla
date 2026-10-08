@@ -42,6 +42,18 @@ class QualityGateTests(unittest.TestCase):
                     self.assertEqual(required_check_refused(check('bandit', status, summary), mode=mode), refused)
         self.assertFalse(required_check_refused(check('ruff', 'skip', 'not available'), mode='fast'))
 
+    def test_missing_bandit_binary_is_refused_in_pr_and_release(self) -> None:
+        # Like ruff, a missing scanner must not let a PR/release gate pass (#33).
+        from getzilla.quality_gates import required_check_refused
+        checks = [item for item in BASE_PR_CHECKS if item.name != 'bandit']
+        for mode in ('pr', 'release'):
+            with self.subTest(mode=mode):
+                self.assertTrue(required_check_refused(check('bandit', 'skip', 'bandit not available'), mode=mode))
+                self.assertFalse(required_check_refused(check('bandit', 'skip', 'no non-test python paths'), mode=mode))
+                gate = evaluate_quality_gate(mode=mode, checks=[*checks, check('bandit', 'skip', 'bandit not available')])
+                self.assertEqual(gate.status, 'fail')
+        self.assertFalse(required_check_refused(check('bandit', 'skip', 'bandit not available'), mode='fast'))
+
     def test_exact_consumer_and_micro_skip_reasons_are_admitted(self) -> None:
         allowances = {
             'architecture-inputs': 'architecture authority inputs are absent; not executed',
