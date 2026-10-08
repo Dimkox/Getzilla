@@ -42,4 +42,6 @@ Trust the content digest, not the name on PATH; quarantine rather than delete so
 
 ## Risks and mitigations
 
-A developer with a different local opengrep build now fails pr/release verify; the message names the reinstall command. TOCTOU between hash and exec remains (same user owns both).
+A developer with a different local opengrep build now fails pr/release verify; the message names the reinstall command.
+
+Residual LOW — TOCTOU hash-then-exec (review LOW-1): `_unpinned_opengrep` hashes the PATH binary resolved by `shutil.which('opengrep')` and then `run` executes that same path. An attacker who can write to the directory that supplied the binary could swap the file between the digest check and the exec. The window requires an attacker who already has write access to a directory on the verifier's PATH, in which case they could also replace the binary before the check; the exposure this adds over that baseline is small, so it is accepted here rather than fixed. If we tighten this later, the cheap mitigation is to copy the digest-verified binary into a freshly created 0700 temp directory and execute the copy, so the verified bytes cannot be swapped after the check; a regression would assert the executed path is the private copy, not the PATH entry.
