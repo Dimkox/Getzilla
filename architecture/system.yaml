@@ -2163,6 +2163,7 @@
         "trust-ci/compose.yaml",
         "trust-ci/src/adaptive_trust_ci/__init__.py",
         "trust-ci/src/adaptive_trust_ci/cli.py",
+        "trust-ci/src/adaptive_trust_ci/customers.py",
         "trust-ci/src/adaptive_trust_ci/github.py",
         "trust-ci/src/adaptive_trust_ci/github_app.py",
         "trust-ci/src/adaptive_trust_ci/lookup.py",
