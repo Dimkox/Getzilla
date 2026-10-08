@@ -1,0 +1,67 @@
+{
+  "change_id": "20261008-task-d259e6",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/queue-analysis-loop-widening",
+      "change_id": "20261008-task-d259e6",
+      "detached": false,
+      "dirty_product_paths": [
+        ".getzilla/getzilla/queue_provenance.py",
+        "tests/test_architecture_fitness.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [
+        "uncommitted_product_zero_ahead"
+      ],
+      "head": "477948acae62b81bcb8e17fd4d48dbbf87498550",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-08T14:29:24+00:00",
+      "route_id": "d259e6783bae"
+    }
+  ],
+  "created_at": "2026-10-08T14:29:24+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-08T14:29:24+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "f78671c1c27b2f44ab2e76751b65e1cc6d68c40b08275ecc5bb369f3c7aa91cc",
+  "route_id": "d259e6783bae",
+  "schema_version": 1,
+  "status": "draft",
+  "title": "Queue provenance analysis converges on list-append loops",
+  "updated_at": "2026-10-08T14:29:24+00:00"
+}
