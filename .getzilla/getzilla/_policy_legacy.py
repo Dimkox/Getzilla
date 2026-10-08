@@ -11,7 +11,7 @@ from typing import Any
 
 from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
-from .util import load_json, safe_relative_path
+from .util import git_output, load_json, safe_relative_path
 
 WRITE_ROLES = {
     'general_implementer', 'php_implementer', 'bitrix_implementer', 'frontend_implementer',
@@ -589,6 +589,10 @@ def _production_action(argv: list[str]) -> str | None:
         command = _gh_command(argv)
         if command == ('pr', 'merge'):
             return 'pull-request-merge'
+        if command[:1] == ('api',):
+            request = _gh_api_request(argv[_positionals(argv, _GH_VALUE_OPTIONS, 1)[1][0] + 1:])
+            if request and request[0] == 'PUT' and _GITHUB_PULL_MERGE.search(request[2]):
+                return 'pull-request-merge'
         if command == ('workflow', 'run'):
             return 'workflow-dispatch'
         if len(command) == 2 and command[0] == 'release' and command[1] in {'create', 'upload', 'edit'}:
@@ -864,49 +868,106 @@ def is_production_invocation(command: str) -> bool:
     return production_action(command) is not None
 
 
-def _http_write_resource(command: str) -> str | None:
-    resource = _http_write_resource_text(command)
+def _http_write_resource(command: str, root: Path | None = None) -> str | None:
+    resource = _http_write_resource_text(command, root)
     if resource is None and fsx.WINDOWS:
         variant = _windows_command_variant(command)
         if variant != command:
-            resource = _http_write_resource_text(variant)
+            resource = _http_write_resource_text(variant, root)
     return resource
 
 
 _GH_API_FIELD_OPTIONS = frozenset({'-f', '-F', '--field', '--raw-field', '--input'})
+_GH_API_VALUE_OPTIONS = frozenset({
+    '-X', '--method', '-H', '--header', '-q', '--jq', '-t', '--template', '--hostname', '-p', '--preview', '--cache',
+    *_GH_API_FIELD_OPTIONS,
+})
 _GH_API_READ_METHODS = frozenset({'GET', 'HEAD'})
-_GH_PULL_REQUEST_REVIEW = 'github-pull-request-review'
+_GITHUB_PULL_MERGE = re.compile(r'(?:^|/)repos/([^/]+/[^/]+)/pulls/(\d+)/merge/?$', re.IGNORECASE)
+_GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IGNORECASE)
+PROTECTED_BRANCHES = frozenset({'main', 'master'})
 
 
-def _gh_api_mutation(arguments: list[str]) -> bool:
-    """Whether ``gh api <arguments>`` writes: any non-GET method, or request fields/body."""
+def _gh_api_request(arguments: list[str]) -> tuple[str, str, str] | None:
+    """``(METHOD, host, endpoint)`` of ``gh api <arguments>`` when it writes, else ``None``.
+
+    A write is any non-GET method, or request fields/body (gh then defaults to POST).
+    """
     method: str | None = None
     fields = False
+    host = 'api.github.com'
+    endpoint = ''
     index = 0
     while index < len(arguments):
         token = arguments[index]
-        value: str | None = None
-        if token in {'-X', '--method'}:
+        # Classification may see lower-cased argv: gh api has no '-x'/'-h' of its own.
+        token = {'-x': '-X', '-h': '-H'}.get(token, token)
+        name, _, attached = token.partition('=') if token.startswith('--') else (token, '', '')
+        value: str | None = attached if attached else None
+        if name in _GH_API_VALUE_OPTIONS and not attached:
             value = arguments[index + 1] if index + 1 < len(arguments) else ''
             index += 1
-        elif token.startswith('--method='):
-            value = token.split('=', 1)[1]
-        elif token.startswith('-X') and len(token) > 2:
-            value = token[2:].lstrip('=')
-        elif token in _GH_API_FIELD_OPTIONS or token.startswith(('--field=', '--raw-field=', '--input=')):
-            fields = True
+        elif token[:2] in {'-X', '-x'} and len(token) > 2:
+            name, value = '-X', token[2:].lstrip('=')
         elif re.match(r'^-[fF]\S', token):
+            name = '-f'
+        if name in {'-X', '--method'}:
+            method = (value or '').strip().upper()
+        elif name in _GH_API_FIELD_OPTIONS:
             fields = True
-        if value is not None:
-            method = value.strip().upper()
+        elif name == '--hostname':
+            host = (value or host).lower()
+        elif not token.startswith('-') and not endpoint:
+            endpoint = token
         index += 1
-    if method is not None and method not in _GH_API_READ_METHODS:
-        return True
-    return fields
+    method = method or ('POST' if fields else 'GET')
+    if method in _GH_API_READ_METHODS:
+        return None
+    url = re.match(r'^https?://([^/]+)/(.*)$', endpoint)
+    if url:
+        host, endpoint = url.group(1).lower(), url.group(2)
+    return method, host, endpoint.lstrip('/')
 
 
-def _gh_external_write(command: str) -> str | None:
-    """Resource of a gh API mutation or PR review, after normalizing global options and quoting."""
+def _gh_repository(argv: list[str], root: Path | None) -> str:
+    """``owner/repo`` (lower-cased) a gh command targets: ``-R``/``--repo`` or the root's origin."""
+    for index, token in enumerate(argv):
+        if token in {'-R', '--repo'} and index + 1 < len(argv):
+            return argv[index + 1].lower()
+        if token.startswith('--repo='):
+            return token.split('=', 1)[1].lower()
+        if token.startswith('-R') and len(token) > 2:
+            return token[2:].lower()
+    if root is not None:
+        from .state import _repository_identity
+
+        try:
+            return _repository_identity(root).lower()
+        except RuntimeError:
+            return '.'
+    return '.'
+
+
+def _gh_pull_request(argv: list[str], index: int, root: Path | None) -> str | None:
+    """``owner/repo#N`` for the PR a ``gh pr <command>`` names after ``argv[index]``, or ``None``."""
+    selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
+        '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
+    }), 1)
+    if not selectors:
+        return None
+    url = _GITHUB_PULL_URL.match(selectors[0])
+    if url:
+        return f'{url.group(1).lower()}#{url.group(2)}'
+    return f'{_gh_repository(argv, root)}#{selectors[0]}'
+
+
+def _gh_external_write(command: str, root: Path | None = None) -> str | None:
+    """Exact resource of a gh API mutation or PR review: the grant must name this target.
+
+    ``github-api:<METHOD> <host>/<endpoint>`` or ``github-pr-review:<owner>/<repo>#<n>``;
+    a review whose PR cannot be named statically yields ``github-pr-review:<owner>/<repo>#``,
+    which no grant can match.
+    """
     for tokens in _shell_pieces(command):
         if tokens is None:
             continue
@@ -916,17 +977,117 @@ def _gh_external_write(command: str) -> str | None:
         argv = ['gh', *tokens[index + 1:]]
         lowered = ['gh', *[token.lower() for token in argv[1:]]]
         positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
-        if positionals[:1] == ['api'] and _gh_api_mutation(argv[indexes[0] + 1:]):
-            return 'github-api'
+        if positionals[:1] == ['api']:
+            request = _gh_api_request(argv[indexes[0] + 1:])
+            if request:
+                return f'github-api:{request[0]} {request[1]}/{request[2]}'
         if positionals == ['pr', 'review']:
-            return _GH_PULL_REQUEST_REVIEW
+            target = _gh_pull_request(argv, indexes[1], root)
+            return f'github-pr-review:{target or _gh_repository(argv, root) + "#"}'
     return None
 
 
-def _http_write_resource_text(command: str) -> str | None:
+def _git_push_targets(arguments: list[str], root: Path | None) -> list[str | None]:
+    """Branches/tags a ``git push <arguments>`` updates; ``None`` when one cannot be named.
+
+    A non-``origin`` remote prefixes the ref (``<remote> <ref>``), deletions become
+    ``delete:<ref>`` and ``--all``/``--mirror``/``--tags`` stay literal, so a grant
+    for one branch never matches them.
+    """
+    value_options = {'--repo', '-o', '--push-option', '--receive-pack', '--exec'}
+    positionals: list[str] = []
+    remote: str | None = None
+    delete = False
+    bulk: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in value_options:
+            remote = arguments[index + 1] if token == '--repo' and index + 1 < len(arguments) else remote  # nosec B105
+            index += 2
+            continue
+        if token.startswith('--repo='):
+            remote = token.split('=', 1)[1]
+        elif token in {'-d', '--delete'}:
+            delete = True
+        elif token in {'--all', '--branches', '--mirror', '--tags'}:
+            bulk.append(token)
+        elif not token.startswith('-'):
+            positionals.append(token)
+        index += 1
+    if positionals and remote is None:
+        remote, positionals = positionals[0], positionals[1:]
+    current = git_output(root, 'symbolic-ref', '--quiet', '--short', 'HEAD') if root is not None else None
+    targets: list[str | None] = list(bulk)
+    for spec in positionals or ([] if bulk else ['HEAD']):
+        source, colon, destination = spec.lstrip('+').partition(':')
+        name = destination if colon else source
+        if colon and not source:
+            name, delete_one = destination, True
+        else:
+            delete_one = delete
+        if name in {'HEAD', '@'}:
+            name = (current or '').strip()
+        name = name.removeprefix('refs/heads/').removeprefix('refs/tags/')
+        if not name:
+            targets.append(None)
+            continue
+        name = f'delete:{name}' if delete_one else name
+        targets.append(name if remote in {None, 'origin'} else f'{remote} {name}')
+    return targets
+
+
+def production_targets(root: Path | None, command: str) -> list[tuple[str, str | None]]:
+    """``(action, exact resource)`` for every production action in ``command``.
+
+    The resource is what a production grant must name: a branch or tag for git push,
+    ``owner/repo#N`` for a merge, ``owner/repo@tag`` for a release, the image for
+    docker push and ``name@version`` for npm publish. ``None`` means the target cannot
+    be determined statically, which no grant satisfies.
+    """
+    targets: list[tuple[str, str | None]] = []
+    payload = _exact_outer_shell_payload(command)
+    for tokens in _shell_pieces(command if payload is None else payload):
+        if tokens is None:
+            continue
+        index = next((i for i, token in enumerate(tokens) if _executable_name(token) in _AUTHORITY_EXECUTABLES), None)
+        if index is None:
+            continue
+        argv = [_executable_name(tokens[index]), *tokens[index + 1:]]
+        lowered = [argv[0], *[token.lower() for token in argv[1:]]]
+        action = _production_action(lowered)
+        if not action:
+            continue
+        if argv[0] == 'git':
+            _, sub = _git_subcommand(lowered)
+            targets.extend((action, target) for target in _git_push_targets(argv[sub + 1:], root))
+            continue
+        positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS if argv[0] == 'gh' else frozenset(), 3)
+        resource: str | None = None
+        if action == 'pull-request-merge' and positionals[:1] == ['api']:
+            request = _gh_api_request(argv[indexes[0] + 1:])
+            merge = _GITHUB_PULL_MERGE.search(request[2]) if request else None
+            resource = f'{merge.group(1).lower()}#{merge.group(2)}' if merge else None
+        elif action == 'pull-request-merge':
+            resource = _gh_pull_request(argv, indexes[1], root)
+        elif action == 'github-release' and len(positionals) > 2:
+            resource = f'{_gh_repository(argv, root)}@{argv[indexes[2]]}'
+        elif action == 'docker-push':
+            pushed = [argv[i] for p, i in zip(positionals, indexes) if p not in {'push', 'image', 'manifest'}]
+            tags = [argv[i + 1] for i, token in enumerate(argv[:-1]) if token in {'-t', '--tag'}]
+            resource = (pushed or tags or [None])[0]
+        elif action == 'npm-publish' and root is not None:
+            package = load_json(root / 'package.json', None)
+            if isinstance(package, dict) and package.get('name') and package.get('version'):
+                resource = f'{package["name"]}@{package["version"]}'
+        targets.append((action, resource))
+    return targets
+
+
+def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
     lowered = command.lower()
     mutation = False
-    gh_resource = _gh_external_write(command)
+    gh_resource = _gh_external_write(command, root)
     if gh_resource:
         return gh_resource
     if re.search(r'\bcurl\b', lowered):
@@ -940,9 +1101,9 @@ def _http_write_resource_text(command: str) -> str | None:
             re.search(r'(?:^|\s)(?:-f|--field|--raw-field|--input)(?:\s|=)', lowered)
         )
         if mutation:
-            return 'github-api'
+            return 'github-api:unparsed'
     elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
-        return _GH_PULL_REQUEST_REVIEW
+        return 'github-pr-review:unparsed'
     if not mutation:
         return None
     match = _HTTP_URL.search(command)
@@ -1058,12 +1219,24 @@ def evaluate_pre_tool(
                 return False, 'GitHub Actions workflow dispatch is forbidden for this repository.'
             from .human_gates import gate_block_reason
 
-            gate_reason = gate_block_reason(root, 'production', action)
-            if gate_reason:
-                return False, gate_reason
-            if not has_valid_approval(root, 'production', action=action):
-                return False, f'Production action {action} requires an exact delegated local grant bound to the current SHA.'
-        http_resource = _http_write_resource(command)
+            for target_action, resource in production_targets(root, command) or [(action, None)]:
+                gate_reason = gate_block_reason(root, 'production', target_action)
+                if gate_reason:
+                    return False, gate_reason
+                ref = (resource or '').removeprefix('delete:')
+                if target_action.startswith('git-push') and (ref in PROTECTED_BRANCHES or ref in {'--all', '--branches', '--mirror'}):
+                    return False, f'Push to protected branch {resource} is forbidden for agents, with or without a grant.'
+                if resource is None:
+                    return False, (
+                        f'Production action {target_action} requires an exact delegated local grant bound to the current SHA '
+                        'for a named target (branch, tag, owner/repo#N, image or package); none could be determined.'
+                    )
+                if not has_valid_approval(root, 'production', action=target_action, resource=resource):
+                    return False, (
+                        f'Production action {target_action} on {resource} requires an exact delegated local grant '
+                        'bound to the current SHA.'
+                    )
+        http_resource = _http_write_resource(command, root)
         if http_resource:
             from .human_gates import gate_block_reason
 

@@ -220,33 +220,51 @@ def _active_change_id(root: Path) -> str | None:
     return str(value) if value else None
 
 
-_GRANT_PATTERN_CHARACTERS = re.compile(r'[*?\[\]]')
+_GRANT_PATTERN_CHARACTERS = re.compile(r'[*?\[\]{}]')
+# Category names the policy used to emit: one grant for them authorized every target (#53 review).
+_CATEGORY_RESOURCES = frozenset({
+    'github-api', 'github-pull-request-review', 'github-pr-review', 'direct-http-write',
+    'github-api:unparsed', 'github-pr-review:unparsed',
+})
+_GITHUB_TARGET = re.compile(r'^(github-pr-review:)?([\w.-]+/[\w.-]+)(#\S+)$')
 
 
 def _normalize_grant_resource(scope: str, raw: str) -> str:
     """One exact grant resource; wildcard patterns are forbidden by AGENTS.md (issue #38).
 
-    Protected paths must be repository-relative without ``..``; external resources
-    are exact URLs, MCP tool names or the policy's fixed resource names.
+    Protected paths must be plain repository-relative file paths. External and
+    production resources name one exact target: a URL (``?`` query allowed), an MCP
+    tool, ``github-api:<METHOD> <host>/<endpoint>``, ``github-pr-review:<owner>/<repo>#<n>``,
+    a branch or tag, ``<owner>/<repo>#<n>`` for a merge, or an image/package reference.
     """
     resource = raw.replace('\\', '/').strip()
-    if _GRANT_PATTERN_CHARACTERS.search(resource):
+    patterns = _GRANT_PATTERN_CHARACTERS if scope == 'protected-path' else re.compile(r'[*\[\]]')
+    if patterns.search(resource) or any(ord(char) < 32 or ord(char) == 127 for char in resource):
         raise ValueError(
             f'{scope} grants require exact resources; wildcard pattern {resource!r} is forbidden'
         )
+    if resource in _CATEGORY_RESOURCES or resource.endswith((':', '#')):
+        raise ValueError(f'{scope} grants require an exact target, not the category {resource!r}')
     if scope == 'protected-path':
         while resource.startswith('./'):
             resource = resource[2:]
         parts = resource.split('/')
         if (
             not resource
-            or resource.startswith('/')
-            or re.match(r'^[A-Za-z]:', resource)
-            or any(part in {'', '.', '..'} for part in parts)
+            or resource.startswith(('/', '~'))
+            or ':' in resource
+            or any(part in {'', '.', '..'} or part.endswith(('.', ' ')) for part in parts)
         ):
             raise ValueError(
                 f'protected-path grants require an exact repository-relative file path, not {raw!r}'
             )
+        return resource
+    match = _GITHUB_TARGET.match(resource)
+    if match:
+        # GitHub owner/repository names are case-insensitive; the policy compares them lower-cased.
+        return f'{match.group(1) or ""}{match.group(2).lower()}{match.group(3)}'
+    if scope == 'production':
+        return resource.removeprefix('refs/heads/').removeprefix('refs/tags/')
     return resource
 
 
@@ -341,7 +359,8 @@ def has_valid_approval(
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
-        if gate_block_reason(root, scope, action, resource):
+        # Production human gates decide per action; the grant itself binds the exact target.
+        if gate_block_reason(root, scope, action, resource if scope == 'external-write' else None):
             return False
     approvals = load_json(approvals_path(root), [])
     if not isinstance(approvals, list):

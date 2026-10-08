@@ -9,12 +9,13 @@ Use a normal structured `Edit`, `Write`, or `apply_patch` call for a single cohe
 ```bash
 python3 scripts/getzilla_approve.py protected-path \
   --action protected-path-write \
-  --resource '.grok/agents/*.md' \
+  --resource '.grok/agents/architect.md' \
+  --resource '.grok/agents/general_implementer.md' \
   --resource '.getzilla/config/routing.json' \
   --reason 'Apply reviewed agent reasoning policy'
 ```
 
-The grant is bound to the current repository, route/change, Git HEAD, tree fingerprint, target patterns, and TTL. Create the manifest only after the grant, outside the repository, so it does not invalidate the tree binding.
+The grant is bound to the current repository, route/change, Git HEAD, tree fingerprint, the exact target paths, and TTL. Name every file the manifest writes with its own `--resource`; wildcard patterns, absolute paths, `..` and drive letters are refused. Create the manifest only after the grant, outside the repository, so it does not invalidate the tree binding.
 
 ## 2. Build a manifest outside the repository
 
