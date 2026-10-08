@@ -1110,9 +1110,23 @@ The user prefers one product PR, and the external refusal already invalidated qu
 
 Prepare every disposable fixture head before evaluating exact-base/head diffs, because intervening commits change Git registration identity and invalidate the immutable baseline cache. Retain public-API snapshots per head and assert their architecture digest against the actual diff before calling the unchanged fitness predicate; all real model/contracts and negative cases remain. A private positive/owner-negative profile improved from7.574s to5.522s without a production/cache patch, but this is not proof of meeting the external serial timeout.
 
+## 2026-10-08 — Validate grant resources exactly at both creation and use
+
+`add_approval` refuses any resource with glob characters (and protected-path resources that are absolute or contain `..`), and `has_valid_approval` compares resources by exact equality. Checking at use time as well keeps a hand-edited or legacy `approvals.json` pattern inert, so the "wildcard scope is forbidden" rule no longer depends on one validation site (#38).
+
 ## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
 
 Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).
+
+## 2026-10-08 — A grant names the exact target the command acts on
+
+Delegated grants are compared with the target the policy derives from the command itself: `github-api:<METHOD> <host>/<endpoint>`, `github-pr-review:<owner>/<repo>#<n>`, the pushed branch or tag, `owner/repo#N` for a merge. Deriving the resource from parsed argv and comparing by equality makes a grant cover one operation, and an undeterminable target simply matches no grant (fail closed) instead of falling back to a category (#38).
+
+## 2026-10-08 — Resolve gh env prefixes and refuse command-smuggling push/merge options (#38)
+
+A grant binds the target the policy derives from the command, so the derivation must see everything that redirects the command. `GH_REPO`/`GH_HOST` (and `--hostname`) now feed `_gh_repository`, and a non-default host binds as `host/owner/repo`, so a bare assignment prefix cannot point a merge, review, or api call at another repository or GitHub host while matching the original grant; leading assignments are captured per simple command and propagated into `sh -c` payloads. `git push --receive-pack`/`--exec` make the target unresolvable (they run a server- or local-side command a branch grant never authorized), and `gh pr merge --admin` resolves to a distinct `owner/repo#N!admin` resource so bypassing branch protection requires an explicit grant. Protected-path grants also refuse percent-encoded paths and bare control-plane directories (review S53-1/S53-2/P53-5).
+
+Re-applied on top of the merged #59 tokenizer rewrite (merge order: #59 first, then this PR): main's `_words`/`_strip_wrappers`/`_simple_commands` tokenizer is kept and #53's env-aware `_shell_commands` is kept beside it, because the grant binding needs the env assignments the wrapper stripper drops. The binding also reads `GH_REPO`/`GH_HOST` from `env VAR=…`, `export VAR=…`, and bare `VAR=…` pieces, not only a leading prefix, and main's generic `gh` write resource (`gh issue create` and the rest of the non-read allowlist) now resolves the repository from `-R` then `GH_REPO` and qualifies a non-default `GH_HOST`, so an env override never matches a default grant there either.
 
 ## 2026-10-08 — Tokenize commands and bind each grant to the exact operation (PR #54 follow-up)
 

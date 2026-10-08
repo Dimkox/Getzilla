@@ -1856,9 +1856,21 @@ Root cause: two fake local-dispatch controls inherited `GROK_VERIFY_CAPABILITY=r
 
 Root cause: an analysis inferred alias source-file existence from managed inventory membership without reading the inventory producer and alias rendering branch. `_SourceTree.inventory()` inserts virtual managed names and `build_payload()` skips their source reads, so the warning was corrected before runtime edits; inspect both sides of this seam before changing the installer.
 
+## 2026-10-08 — Grant resources were documented as fnmatch patterns
+
+Root cause: the approve CLI advertised `--resource` as an "fnmatch pattern" and `has_valid_approval` matched with `fnmatch`, while pattern refusal existed only for external writes under one route gate; nothing tied the implementation to the AGENTS.md rule that the wildcard scope is forbidden. A governance rule needs an executable check at every site that enforces it, plus a regression test that tries the forbidden input (#38).
+
 ## 2026-10-08 — Hook guards matched literal spellings, not the operation
 
 Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).
+
+## 2026-10-08 — Exact-looking category names were wildcards
+
+Root cause: the #38 fix forbade glob characters but kept the policy's category resources (`github-api`, `github-pull-request-review`) and production grants whose `--resource` was never compared, so one grant still authorized every endpoint, PR or branch. "No wildcard" has to mean "the grant is compared with the concrete target of the action", not "the string contains no `*`".
+
+## 2026-10-08 — Grant target derivation ignored env prefixes and command-smuggling options
+
+Root cause: the simple-command tokenizer dropped leading `VAR=value` assignments before target derivation, so `GH_REPO=other/x gh pr merge 5` resolved to the origin repo and matched a grant for it; `git push --receive-pack=`/`--exec=` were consumed as inert value options; and `gh pr merge --admin` resolved to the same resource as a plain merge. The target binding must account for every input that changes what a command acts on — env prefixes, host overrides, and options that smuggle a command or bypass branch protection — or an exact-target grant is not exact (review S53).
 
 ## 2026-10-08 — A guard that split on one shell operator missed helpers, abbreviations and expansions
 
