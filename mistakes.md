@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-08 — A stdlib import turned on an analyser that could not converge
+
+`ccaab18` added `import queue` (stdlib, for the Windows pipe pump) to `architecture_diff.py`. That made the queue provenance analyser interpret the module for the first time. Its list-append loops never reached a fixpoint, and its merge charges overran the value budget. Every later edit to a module importing `architecture_diff` (for example `verification.py`) failed architecture fitness as FIT-BOUNDED-WORKER-JOBS unsupported, with no override. The analyser only had tests on small snippets. When adding a queue-library import (stdlib included) to a Getzilla module, check that `analyze_queue_tree` still accepts it; `tests/test_architecture_fitness.py` now pins `architecture_diff.py` within the default limits.
+
 ## 2026-10-05 — Fixture commits invalidated reusable exact-base materialization
 
 Interleaving commits and checks changed the registered Git-directory identity and rebuilt the same immutable baseline for every matrix case, causing unnecessary subprocess work while the external root suite timed out. Prepare all exact case heads before qualification, retain and validate each captured snapshot against its requested SHA, and preserve every acceptance/rejection case; a measured focused speedup is not proof of external timeout recovery. Reviewer scratch must use the explicit project-root absolute parent: one data-review copy escaped to a home scratch directory and was moved back recoverably after STOP, without deleting data or altering the candidate.
