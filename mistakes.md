@@ -1889,3 +1889,6 @@ Root cause: the tool updater was written as "follow upstream latest" for every c
 ## 2026-10-08 — A long-standing network client was never declared in the architecture model
 
 Root cause: `updater.py`'s https client predates the architecture fitness model, and because fitness only applies to changed owned source, the undeclared boundary stayed invisible on `main` until the OpenGrep-pin change touched `updater.py`. An existing network client must be declared when its owner node is first modeled, not only when a diff happens to re-expose it; the fix adds the edge on a dedicated `NODE-LOCAL-SUPPLY-CHAIN-UPDATER` (keeping the hooks/policy node at `network: none`) and a regression test asserting the declaration stays scoped and present (#39).
+## 2026-10-08 — A pinned download was treated as proof of what later runs
+
+Root cause: the #39 fix verified OpenGrep only on the download path and its test required an unverified previous binary to be kept on failure, while the verifier still executed whatever `opengrep` PATH resolved to. Integrity has to be checked where the executable is run, and a fail-closed update must not preserve the untrusted artifact it failed to replace.
