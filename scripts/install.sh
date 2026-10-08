@@ -32,6 +32,11 @@
 #   GETZILLA_SKIP_GROK=1  do not install the Grok Build CLI (when the agent is grok)
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
+# At the end of every run (first install or re-run) the installer offers to update
+# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec
+# Kit, vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only
+# after you answer yes. Without a terminal it only prints that command.
+#
 # Everything runs inside main(), so a partially downloaded script does nothing.
 
 main() {
@@ -78,6 +83,8 @@ main() {
     say "Install plan for $GETZILLA_PROJECT (read-only, nothing is written):"
     (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
   fi
+
+  offer_tool_update "$home" "$python"
 
   if [ "$doctor_status" -eq 0 ]; then
     printf '\nGetzilla is ready in %s\n' "$home"
@@ -367,6 +374,23 @@ configure_agent() {
   else
     (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null) || true
   fi
+}
+
+offer_tool_update() {
+  local home="$1" python="$2" answer=""
+  if can_ask; then
+    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]: ' n)"
+  fi
+  case "$answer" in
+    y|Y|yes|YES|Yes)
+      say "Updating third-party tools..."
+      (cd "$home" && "$python" scripts/getzilla_update.py) \
+        || say "Some updates failed (FAIL lines above); run the same command again later."
+      ;;
+    *)
+      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py"
+      ;;
+  esac
 }
 
 fetch_getzilla() {

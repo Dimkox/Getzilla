@@ -27,6 +27,11 @@
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
+# At the end of every run (first install or re-run) the installer offers to update
+# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec Kit,
+# vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only after you
+# answer yes. Without an interactive console it only prints that command.
+#
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
 # downloads Git, Python, PowerShell 7 and Node.js directly and installs them for the
@@ -103,6 +108,8 @@ function Install-Getzilla {
     } finally {
         Pop-Location
     }
+
+    Request-ToolUpdate $Python $GetzillaHome
 
     $PythonText = $Python -join ' '
     Write-Host ''
@@ -360,6 +367,25 @@ function Install-PowerShell7 {
         Write-Step ("PowerShell: " + $pwsh.Version)
     } else {
         Write-Step "PowerShell $MinimumPowerShell or newer is still missing. Install it from https://aka.ms/powershell-release?tag=lts and open agents from a PowerShell 7 window."
+    }
+}
+
+function Request-ToolUpdate([string[]]$Python, [string]$GetzillaHome) {
+    $answer = 'n'
+    if (Test-CanAsk) {
+        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]' 'n'
+    }
+    if ($answer -in @('y', 'Y', 'yes', 'Yes', 'YES')) {
+        Write-Step 'Updating third-party tools...'
+        Push-Location $GetzillaHome
+        try {
+            Invoke-Python $Python @('scripts/getzilla_update.py')
+            if ($LASTEXITCODE -ne 0) { Write-Step 'Some updates failed (FAIL lines above); run the same command again later.' }
+        } finally {
+            Pop-Location
+        }
+    } else {
+        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py')
     }
 }
 
