@@ -18,6 +18,19 @@ Only `.getzilla/getzilla/updater.py` (plus docs); `scripts/getzilla_update.py` a
 
 GitHub release asset -> memory -> SHA-256 check -> `~/.getzilla/bin/opengrep`.
 
+## Network boundary
+
+`updater.py` imports `urllib.request` to fetch pinned supply-chain artifacts (the
+OpenGrep release binary and the OSV database). Its owner node
+`NODE-LOCAL-ROUTE-POLICY` (`.getzilla/getzilla`) therefore declares an explicit
+https egress in `architecture/system.yaml`: a new external node
+`NODE-SUPPLY-CHAIN-REGISTRY` (external artifact registries, TD-EXTERNAL-PLATFORM)
+and an allowlisted-egress edge `EDGE-LOCAL-SUPPLY-CHAIN-FETCH`
+(`NODE-LOCAL-ROUTE-POLICY` -> `NODE-SUPPLY-CHAIN-REGISTRY`, protocol https,
+fail-closed, 300s timeout). This satisfies FIT-DECLARED-NETWORK-ONLY by declaring
+the real boundary rather than loosening the rule; the node's `runtime.network`
+moves from `none` to `declared_egress` and the generated diagrams are regenerated.
+
 ## API and event contracts
 
 None changed.
