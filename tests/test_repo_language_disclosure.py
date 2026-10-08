@@ -230,6 +230,21 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertTrue(self.scan(profile)['truncated'])
         self.assertIn('files:2', self.scan(profile)['incomplete_reasons'])
 
+    def test_contract_domains_survive_file_budget_exhausted_by_earlier_paths(self) -> None:
+        # Unrelated files that sort before engineering/contracts (for example
+        # change packages) must not decide whether contract domains exist.
+        for index in range(3):
+            self.write(f'engineering/changes/pkg-{index}/notes.md', 'docs')
+        self.write('engineering/contracts/openapi/service.v1.json', '{}')
+        self.write('engineering/contracts/asyncapi/events.v1.yaml', 'asyncapi: 3.0.0')
+        with patch.object(repo, 'SOURCE_SCAN_MAX_FILES', 2, create=True):
+            profile = repo.detect_repo(self.root)
+        self.assertEqual(profile.domains, ['api', 'event'])
+        self.assertIn('contract:engineering/contracts/openapi', profile.signals)
+        self.assertIn('contract:engineering/contracts/asyncapi', profile.signals)
+        self.assertTrue(self.scan(profile)['truncated'])
+        self.assertEqual(self.scan(profile)['files'], 2)
+
     def test_byte_budget_caps_reads_and_retains_unread_language_signal(self) -> None:
         self.write('a.py', '1234')
         self.write('b.swift', '1234')
