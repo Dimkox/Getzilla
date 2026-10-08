@@ -1,0 +1,72 @@
+# Informational: Getzilla's core suite on native Windows, module by module.
+#
+# It never gates anything (continue-on-error) and took ~36 minutes, so it runs
+# nightly and on manual dispatch by the owner instead of on every PR (#51). The
+# required PR checks stay `linux` and `windows` in getzilla.yml. Agents never
+# dispatch workflows.
+name: windows-full-suite
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  windows-full-suite:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep checkout bytes and executable bits as committed
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+      - name: Check out the exact commit with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Core suite on Windows, module by module (informational)
+        continue-on-error: true
+        timeout-minutes: 40
+        shell: python
+        run: |
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import time
+
+          results = []
+          for path in sorted(pathlib.Path("tests").glob("test_*.py")):
+              module = f"tests.{path.stem}"
+              started = time.monotonic()
+              try:
+                  run = subprocess.run([sys.executable, "-m", "unittest", module], capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace", timeout=240)
+                  tail = run.stderr.strip().splitlines()[-1:] or ["?"]
+                  ran = re.search(r"Ran (\d+) test", run.stderr)
+                  outcome = "ok" if run.returncode == 0 else "fail"
+                  detail = f"{ran.group(1) if ran else '?'} tests, {tail[0]}"
+                  if run.returncode != 0:
+                      failures = [line for line in run.stderr.splitlines() if line.startswith(("FAIL:", "ERROR:"))]
+                      print(f"::warning title=windows-module {path.stem}::" + " | ".join(failures[:12])[:3000])
+              except subprocess.TimeoutExpired:
+                  outcome, detail = "timeout", "over 240 s"
+              results.append(f"{path.stem}: {outcome} ({detail}, {time.monotonic() - started:.0f} s)")
+              print(results[-1], flush=True)
+          passed = sum(1 for line in results if ": ok " in line)
+          print(f"::notice title=windows-modules {passed}/{len(results)} pass::" + " | ".join(results)[:20000])

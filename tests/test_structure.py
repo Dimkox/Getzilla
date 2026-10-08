@@ -1027,17 +1027,27 @@ class StructureTests(unittest.TestCase):
 
         sources = {
             ".github/workflows/getzilla.yml": (ROOT / ".github/workflows/getzilla.yml").read_text(encoding="utf-8"),
+            ".github/workflows/windows-full-suite.yml": (
+                ROOT / ".github/workflows/windows-full-suite.yml"
+            ).read_text(encoding="utf-8"),
             ".getzilla/templates/ci/github-actions-verify.yml": (
                 ROOT / ".getzilla/templates/ci/github-actions-verify.yml"
             ).read_text(encoding="utf-8"),
         }
-        self.assertEqual(sorted(path.name for path in (ROOT / ".github/workflows").iterdir()), ["getzilla.yml"])
+        self.assertEqual(
+            sorted(path.name for path in (ROOT / ".github/workflows").iterdir()),
+            ["getzilla.yml", "windows-full-suite.yml"],
+        )
         self.assertFalse((ROOT / ".github/dependabot.yml").exists())
         for rel, source in sources.items():
             with self.subTest(workflow=rel):
                 self.assertIn("permissions:\n  contents: read\n", source)
                 self.assertIn("persist-credentials: false", source)
                 for forbidden in ("pull_request_target", "workflow_dispatch", "secrets.", ": write"):
+                    if forbidden == "workflow_dispatch" and rel.endswith("windows-full-suite.yml"):
+                        # Owner-only manual run of the informational suite (#51): no inputs.
+                        self.assertNotIn("inputs:", source)
+                        continue
                     self.assertNotIn(forbidden, source)
                 references = re.findall(r"uses:\s*(\S+)", source)
                 self.assertTrue(references)

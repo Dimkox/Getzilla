@@ -6,8 +6,8 @@
 # Getzilla is public, so this workflow is its gate. Consumer repositories get
 # their own workflow from `python3 scripts/getzilla_ci.py --write`. The
 # windows job runs the native Windows port: doctor, the ported test modules
-# and a smoke of the hooks and CLIs; the full core suite also runs there as
-# an informational step until every module's tests are platform-neutral.
+# and a smoke of the hooks and CLIs. The informational module-by-module core
+# suite on Windows runs nightly in windows-full-suite.yml, not on PRs.
 name: getzilla
 
 on:
@@ -168,35 +168,3 @@ jobs:
           if path.is_file():
               lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
               print("::error title=windows-smoke::" + " | ".join(line.strip() for line in lines[-40:])[:8000])
-      - name: Core suite on Windows, module by module (informational)
-        if: success() || failure()
-        continue-on-error: true
-        timeout-minutes: 40
-        shell: python
-        run: |
-          import pathlib
-          import re
-          import subprocess
-          import sys
-          import time
-
-          results = []
-          for path in sorted(pathlib.Path("tests").glob("test_*.py")):
-              module = f"tests.{path.stem}"
-              started = time.monotonic()
-              try:
-                  run = subprocess.run([sys.executable, "-m", "unittest", module], capture_output=True, text=True,
-                                       encoding="utf-8", errors="replace", timeout=240)
-                  tail = run.stderr.strip().splitlines()[-1:] or ["?"]
-                  ran = re.search(r"Ran (\d+) test", run.stderr)
-                  outcome = "ok" if run.returncode == 0 else "fail"
-                  detail = f"{ran.group(1) if ran else '?'} tests, {tail[0]}"
-                  if run.returncode != 0:
-                      failures = [line for line in run.stderr.splitlines() if line.startswith(("FAIL:", "ERROR:"))]
-                      print(f"::warning title=windows-module {path.stem}::" + " | ".join(failures[:12])[:3000])
-              except subprocess.TimeoutExpired:
-                  outcome, detail = "timeout", "over 240 s"
-              results.append(f"{path.stem}: {outcome} ({detail}, {time.monotonic() - started:.0f} s)")
-              print(results[-1], flush=True)
-          passed = sum(1 for line in results if ": ok " in line)
-          print(f"::notice title=windows-modules {passed}/{len(results)} pass::" + " | ".join(results)[:20000])
