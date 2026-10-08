@@ -1,0 +1,89 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "getzilla.yml has no module-by-module step and no continue-on-error, and keeps the linux/windows jobs with Doctor, Windows-ported tests, Hooks and CLI smoke and Annotate smoke failure."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "windows-full-suite.yml runs that step on schedule only (minute not 0), no workflow_dispatch, with no pull_request/push, contents: read, persist-credentials: false and the same pinned actions."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-4b79a6",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Changing branch protection."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "Changing the gating Windows or linux steps."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "FORBID-003",
+      "statement": "Secrets, pull_request_target or write permissions."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "The required check names `linux` and `windows` and their gating steps are unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #51: PRs stop waiting ~37 min for an informational step.",
+    "success_metric": "PR CI wall time is ~6 min (bounded by linux) instead of ~37 min.",
+    "target": ".github/workflows/getzilla.yml"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
