@@ -26,16 +26,20 @@ Local observation only; not verification or publication evidence.
 ```json
 {
   "kind": "initial",
-  "change_id": "20261008-task-3e50dc",
-  "route_id": "3e50dcf6f57f",
-  "observed_at": "2026-10-08T14:55:58+00:00",
-  "branch": "fix/updater-supply-chain",
-  "head": "a8f9338a298c4717953a0acd9c23339b8f85c637",
-  "detached": false,
+  "change_id": "20261008-task-de4956",
+  "route_id": "de49564aff76",
+  "observed_at": "2026-10-08T15:34:47+00:00",
+  "branch": null,
+  "head": "07b461ca69b4afe4e31b6e622e02f030ba25445c",
+  "detached": true,
   "git_available": true,
-  "git_findings": [],
-  "dirty_product_state": "clean",
-  "dirty_product_paths": [],
+  "git_findings": [
+    "uncommitted_product_zero_ahead"
+  ],
+  "dirty_product_state": "dirty",
+  "dirty_product_paths": [
+    "CHANGELOG.md"
+  ],
   "note": "draft; implementation not started"
 }
 ```
