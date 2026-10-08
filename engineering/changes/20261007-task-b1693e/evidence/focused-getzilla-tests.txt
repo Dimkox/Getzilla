@@ -1,0 +1,30 @@
+test_canonical_social_and_factual_schema (tests.test_getzilla_landing.GetzillaLandingTests.test_canonical_social_and_factual_schema) ... ok
+test_controls_execute_click_and_keyboard_contract (tests.test_getzilla_landing.GetzillaLandingTests.test_controls_execute_click_and_keyboard_contract) ... ok
+test_crawl_files_have_only_canonical_root (tests.test_getzilla_landing.GetzillaLandingTests.test_crawl_files_have_only_canonical_root) ... ok
+test_current_pricing_and_request_link_retained (tests.test_getzilla_landing.GetzillaLandingTests.test_current_pricing_and_request_link_retained) ... ok
+test_deployment_inventory_and_rollback (tests.test_getzilla_landing.GetzillaLandingTests.test_deployment_inventory_and_rollback) ... ok
+test_existing_main_copy_and_photo_alts_are_frozen (tests.test_getzilla_landing.GetzillaLandingTests.test_existing_main_copy_and_photo_alts_are_frozen) ... ok
+test_heading_ids_fragments_and_no_js_accessibility (tests.test_getzilla_landing.GetzillaLandingTests.test_heading_ids_fragments_and_no_js_accessibility) ... ok
+test_local_fonts_and_licenses (tests.test_getzilla_landing.GetzillaLandingTests.test_local_fonts_and_licenses) ... ok
+test_local_photos_keep_provenance_dimensions_and_loading (tests.test_getzilla_landing.GetzillaLandingTests.test_local_photos_keep_provenance_dimensions_and_loading) ... ok
+test_normal_text_contrast_in_repaired_contexts (tests.test_getzilla_landing.GetzillaLandingTests.test_normal_text_contrast_in_repaired_contexts) ... ok
+test_real_favicon_and_share_image (tests.test_getzilla_landing.GetzillaLandingTests.test_real_favicon_and_share_image) ... ok
+test_resource_references_are_local_and_have_real_media_signatures (tests.test_getzilla_landing.GetzillaLandingTests.test_resource_references_are_local_and_have_real_media_signatures) ... ok
+test_template_reproduces_production_bytes (tests.test_getzilla_landing.GetzillaLandingTests.test_template_reproduces_production_bytes) ... ok
+test_tracking_bytes_location_and_reference_snippets (tests.test_getzilla_landing.GetzillaLandingTests.test_tracking_bytes_location_and_reference_snippets) ... ok
+test_external_runtime_resource_mutations_are_rejected (tests.test_seo_landing_side_project.SeoLandingShowcaseContractTests.test_external_runtime_resource_mutations_are_rejected) ... ok
+test_local_chrome_runner_exits_cleanly_after_contract_passes (tests.test_seo_landing_side_project.SeoLandingShowcaseContractTests.test_local_chrome_runner_exits_cleanly_after_contract_passes) ... skipped 'real-browser lifecycle skipped; unavailable optional lab dependencies: Chrome'
+test_local_chrome_runner_skips_without_optional_lab_dependencies (tests.test_seo_landing_side_project.SeoLandingShowcaseContractTests.test_local_chrome_runner_skips_without_optional_lab_dependencies) ... ok
+test_reproducible_browser_runner_is_versioned (tests.test_seo_landing_side_project.SeoLandingShowcaseContractTests.test_reproducible_browser_runner_is_versioned) ... ok
+test_static_noindex_and_no_external_runtime_resources (tests.test_seo_landing_side_project.SeoLandingShowcaseContractTests.test_static_noindex_and_no_external_runtime_resources) ... ok
+test_exact_package_inventory_and_codex_metadata (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_exact_package_inventory_and_codex_metadata) ... ok
+test_exact_upstream_notice_license_and_local_docs (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_exact_upstream_notice_license_and_local_docs) ... ok
+test_mixed_clause_write_instructions_are_rejected (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_mixed_clause_write_instructions_are_rejected) ... ok
+test_mode_sections_enforce_write_and_approval_boundaries (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_mode_sections_enforce_write_and_approval_boundaries) ... ok
+test_reference_links_exist_and_upstream_bytes_are_preserved (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_reference_links_exist_and_upstream_bytes_are_preserved) ... ok
+test_skill_has_no_claude_specific_paths_or_tools (tests.test_seo_landing_side_project.SeoLandingSkillTests.test_skill_has_no_claude_specific_paths_or_tools) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 0.077s
+
+OK (skipped=1)

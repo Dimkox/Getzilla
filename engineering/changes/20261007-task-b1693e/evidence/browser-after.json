@@ -1,0 +1,604 @@
+{
+  "browser": "153.0.8010.0",
+  "sourceSha256": "185ffa66df11bce9becf04d3e15f180c1c908d596cf5f5d4170f001f36676a62",
+  "matrix": [
+    {
+      "width": 320,
+      "scrollWidth": 320,
+      "fontFamily": "Onest, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif",
+      "fonts": [
+        {
+          "family": "Onest",
+          "status": "loaded"
+        },
+        {
+          "family": "Onest",
+          "status": "loaded"
+        }
+      ],
+      "images": [
+        {
+          "src": "/assets/images/photo-1685716851721-7e1419f2db18-360-c8a694e95701.avif",
+          "naturalWidth": 264,
+          "renderedWidth": 264,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1521737711867-e3b97375f902-360-276541ffc39e.avif",
+          "naturalWidth": 264,
+          "renderedWidth": 264,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1773091258432-da61c63abe41-360-7a0d7394496d.avif",
+          "naturalWidth": 264,
+          "renderedWidth": 264,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1726649339367-c2577a28881b-360-b19ec7066d48.avif",
+          "naturalWidth": 262,
+          "renderedWidth": 262,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1717667745852-a5bd6876c1de-360-723e381adcfc.avif",
+          "naturalWidth": 262,
+          "renderedWidth": 262,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1542831371-29b0f74f9713-360-02ad40cda18f.avif",
+          "naturalWidth": 262,
+          "renderedWidth": 262,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1641355527446-232d7f1f2c10-360-4922f0974eae.avif",
+          "naturalWidth": 262,
+          "renderedWidth": 262,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1572021335469-31706a17aaef-360-dd482bb44514.avif",
+          "naturalWidth": 288,
+          "renderedWidth": 288,
+          "complete": true
+        }
+      ],
+      "horizontalOverflows": [
+        {
+          "tag": "CODE",
+          "class": ""
+        },
+        {
+          "tag": "CODE",
+          "class": ""
+        },
+        {
+          "tag": "CODE",
+          "class": ""
+        },
+        {
+          "tag": "CODE",
+          "class": ""
+        },
+        {
+          "tag": "CODE",
+          "class": ""
+        }
+      ],
+      "anchors": [
+        {
+          "id": "who",
+          "top": 87.890625,
+          "headerBottom": 72
+        },
+        {
+          "id": "problem",
+          "top": 87.6875,
+          "headerBottom": 72
+        },
+        {
+          "id": "how",
+          "top": 88.3125,
+          "headerBottom": 72
+        },
+        {
+          "id": "install",
+          "top": 88.265625,
+          "headerBottom": 72
+        },
+        {
+          "id": "pricing",
+          "top": 87.765625,
+          "headerBottom": 72
+        }
+      ],
+      "controls": "pass"
+    },
+    {
+      "width": 768,
+      "scrollWidth": 768,
+      "fontFamily": "Onest, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif",
+      "fonts": [
+        {
+          "family": "Onest",
+          "status": "loaded"
+        },
+        {
+          "family": "Onest",
+          "status": "loaded"
+        }
+      ],
+      "images": [
+        {
+          "src": "/assets/images/photo-1685716851721-7e1419f2db18-720-109c823eef98.avif",
+          "naturalWidth": 696,
+          "renderedWidth": 696,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1521737711867-e3b97375f902-720-8943617c5f6e.avif",
+          "naturalWidth": 696,
+          "renderedWidth": 696,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1773091258432-da61c63abe41-720-ee05c61d0beb.avif",
+          "naturalWidth": 696,
+          "renderedWidth": 696,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1726649339367-c2577a28881b-360-b19ec7066d48.avif",
+          "naturalWidth": 322,
+          "renderedWidth": 322,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1717667745852-a5bd6876c1de-360-723e381adcfc.avif",
+          "naturalWidth": 322,
+          "renderedWidth": 322,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1542831371-29b0f74f9713-360-02ad40cda18f.avif",
+          "naturalWidth": 322,
+          "renderedWidth": 322,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1641355527446-232d7f1f2c10-360-4922f0974eae.avif",
+          "naturalWidth": 322,
+          "renderedWidth": 322,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1572021335469-31706a17aaef-720-73f8bce1c2c9.avif",
+          "naturalWidth": 720,
+          "renderedWidth": 720,
+          "complete": true
+        }
+      ],
+      "horizontalOverflows": [],
+      "anchors": [
+        {
+          "id": "who",
+          "top": 87.59375,
+          "headerBottom": 72
+        },
+        {
+          "id": "problem",
+          "top": 88.453125,
+          "headerBottom": 72
+        },
+        {
+          "id": "how",
+          "top": 88.421875,
+          "headerBottom": 72
+        },
+        {
+          "id": "install",
+          "top": 88.15625,
+          "headerBottom": 72
+        },
+        {
+          "id": "pricing",
+          "top": 88.296875,
+          "headerBottom": 72
+        }
+      ],
+      "controls": "pass"
+    },
+    {
+      "width": 1280,
+      "scrollWidth": 1280,
+      "fontFamily": "Onest, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif",
+      "fonts": [
+        {
+          "family": "Onest",
+          "status": "loaded"
+        },
+        {
+          "family": "Onest",
+          "status": "loaded"
+        }
+      ],
+      "images": [
+        {
+          "src": "/assets/images/photo-1685716851721-7e1419f2db18-720-109c823eef98.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1521737711867-e3b97375f902-720-8943617c5f6e.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1773091258432-da61c63abe41-720-ee05c61d0beb.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1726649339367-c2577a28881b-720-526f8bd5615a.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1717667745852-a5bd6876c1de-720-973c93354132.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1542831371-29b0f74f9713-720-4a8aa6d767b5.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1641355527446-232d7f1f2c10-720-5d5cad38b9ca.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1572021335469-31706a17aaef-720-73f8bce1c2c9.avif",
+          "naturalWidth": 558,
+          "renderedWidth": 557,
+          "complete": true
+        }
+      ],
+      "horizontalOverflows": [],
+      "anchors": [
+        {
+          "id": "who",
+          "top": 88.46875,
+          "headerBottom": 72
+        },
+        {
+          "id": "problem",
+          "top": 88.3125,
+          "headerBottom": 72
+        },
+        {
+          "id": "how",
+          "top": 88.234375,
+          "headerBottom": 72
+        },
+        {
+          "id": "install",
+          "top": 87.90625,
+          "headerBottom": 72
+        },
+        {
+          "id": "pricing",
+          "top": 87.890625,
+          "headerBottom": 72
+        }
+      ],
+      "controls": "pass"
+    },
+    {
+      "width": 1920,
+      "scrollWidth": 1920,
+      "fontFamily": "Onest, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif",
+      "fonts": [
+        {
+          "family": "Onest",
+          "status": "loaded"
+        },
+        {
+          "family": "Onest",
+          "status": "loaded"
+        }
+      ],
+      "images": [
+        {
+          "src": "/assets/images/photo-1685716851721-7e1419f2db18-720-109c823eef98.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1521737711867-e3b97375f902-720-8943617c5f6e.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1773091258432-da61c63abe41-720-ee05c61d0beb.avif",
+          "naturalWidth": 344,
+          "renderedWidth": 344,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1726649339367-c2577a28881b-720-526f8bd5615a.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1717667745852-a5bd6876c1de-720-973c93354132.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1542831371-29b0f74f9713-720-4a8aa6d767b5.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1641355527446-232d7f1f2c10-720-5d5cad38b9ca.avif",
+          "naturalWidth": 538,
+          "renderedWidth": 538,
+          "complete": true
+        },
+        {
+          "src": "/assets/images/photo-1572021335469-31706a17aaef-720-73f8bce1c2c9.avif",
+          "naturalWidth": 558,
+          "renderedWidth": 557,
+          "complete": true
+        }
+      ],
+      "horizontalOverflows": [],
+      "anchors": [
+        {
+          "id": "who",
+          "top": 88.46875,
+          "headerBottom": 72
+        },
+        {
+          "id": "problem",
+          "top": 88.3125,
+          "headerBottom": 72
+        },
+        {
+          "id": "how",
+          "top": 88.234375,
+          "headerBottom": 72
+        },
+        {
+          "id": "install",
+          "top": 87.90625,
+          "headerBottom": 72
+        },
+        {
+          "id": "pricing",
+          "top": 87.890625,
+          "headerBottom": 72
+        }
+      ],
+      "controls": "pass"
+    }
+  ],
+  "skipLink": "pass",
+  "reducedMotion": "pass",
+  "noJavaScript": "all six panels visible, dead controls hidden, no overflow at 320",
+  "analytics": [
+    {
+      "url": "https://www.googletagmanager.com/gtag/js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/metrika/tag.js",
+      "status": 200
+    },
+    {
+      "url": "https://region1.google-analytics.com/g/collect",
+      "status": 204
+    },
+    {
+      "url": "https://mc.yandex.com/sync_cookie_image_check",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.com/metrika/advert.gif",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/sync_cookie_image_start",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449/1",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/sync_cookie_image_decide",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.com/sync_cookie_image_check_secondary",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.ru/sync_cookie_image_finish",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/sync_cookie_image_start_secondary",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.com/sync_cookie_image_decide_secondary",
+      "status": 302
+    },
+    {
+      "url": "https://mc.yandex.ru/sync_cookie_image_finish_secondary",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://www.googletagmanager.com/gtag/js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/metrika/tag.js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://www.googletagmanager.com/gtag/js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/metrika/tag.js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://www.googletagmanager.com/gtag/js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/metrika/tag.js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://www.googletagmanager.com/gtag/js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.ru/metrika/tag.js",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/watch/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://mc.yandex.com/clmap/113486449",
+      "status": 200
+    },
+    {
+      "url": "https://region1.google-analytics.com/g/collect",
+      "status": 204
+    }
+  ],
+  "failed": [
+    {
+      "url": "https://region1.google-analytics.com/g/collect",
+      "reason": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://region1.google-analytics.com/g/collect",
+      "reason": "net::ERR_ABORTED"
+    }
+  ],
+  "pageErrors": [],
+  "internalErrors": []
+}

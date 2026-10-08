@@ -1,0 +1,934 @@
+{
+  "evidence_kind": "selected fields from original Lighthouse report; full raw report retained in session audit",
+  "lighthouseVersion": "13.4.1",
+  "fetchTime": "2026-10-07T11:48:24.647Z",
+  "requestedUrl": "http://127.0.0.1:4173/",
+  "finalDisplayedUrl": "http://127.0.0.1:4173/",
+  "environment": {
+    "networkUserAgent": "Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+    "hostUserAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36",
+    "benchmarkIndex": 2955.5,
+    "credits": {
+      "axe-core": "4.14.0"
+    }
+  },
+  "configSettings": {
+    "output": [
+      "json",
+      "html"
+    ],
+    "maxWaitForFcp": 30000,
+    "maxWaitForLoad": 45000,
+    "pauseAfterFcpMs": 1000,
+    "pauseAfterLoadMs": 1000,
+    "networkQuietThresholdMs": 1000,
+    "cpuQuietThresholdMs": 1000,
+    "formFactor": "mobile",
+    "throttling": {
+      "rttMs": 150,
+      "throughputKbps": 1638.4,
+      "requestLatencyMs": 562.5,
+      "downloadThroughputKbps": 1474.5600000000002,
+      "uploadThroughputKbps": 675,
+      "cpuSlowdownMultiplier": 4
+    },
+    "throttlingMethod": "simulate",
+    "screenEmulation": {
+      "mobile": true,
+      "width": 412,
+      "height": 823,
+      "deviceScaleFactor": 1.75,
+      "disabled": false
+    },
+    "emulatedUserAgent": "Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36",
+    "auditMode": false,
+    "gatherMode": false,
+    "clearStorageTypes": [
+      "file_systems",
+      "shader_cache",
+      "service_workers",
+      "cache_storage"
+    ],
+    "disableStorageReset": false,
+    "debugNavigation": false,
+    "channel": "cli",
+    "usePassiveGathering": false,
+    "disableFullPageScreenshot": false,
+    "skipAboutBlank": false,
+    "blankPage": "about:blank",
+    "ignoreStatusCode": false,
+    "locale": "en-US",
+    "blockedUrlPatterns": null,
+    "additionalTraceCategories": null,
+    "extraHeaders": null,
+    "precomputedLanternData": null,
+    "onlyAudits": null,
+    "onlyCategories": [
+      "performance",
+      "accessibility",
+      "best-practices",
+      "seo"
+    ],
+    "skipAudits": null
+  },
+  "categories": {
+    "performance": {
+      "score": 0.76,
+      "title": "Performance"
+    },
+    "accessibility": {
+      "score": 0.95,
+      "title": "Accessibility"
+    },
+    "best-practices": {
+      "score": 0.77,
+      "title": "Best Practices"
+    },
+    "seo": {
+      "score": 1,
+      "title": "SEO"
+    }
+  },
+  "audits": {
+    "first-contentful-paint": {
+      "id": "first-contentful-paint",
+      "title": "First Contentful Paint",
+      "description": "First Contentful Paint marks the time at which the first text or image is painted. [Learn more about the First Contentful Paint metric](https://developer.chrome.com/docs/lighthouse/performance/first-contentful-paint/).",
+      "score": 0.67,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 2510.7950000000014,
+      "numericUnit": "millisecond",
+      "displayValue": "2.5\u00a0s",
+      "scoringOptions": {
+        "p10": 1800,
+        "median": 3000
+      }
+    },
+    "largest-contentful-paint": {
+      "id": "largest-contentful-paint",
+      "title": "Largest Contentful Paint",
+      "description": "Largest Contentful Paint marks the time at which the largest text or image is painted. [Learn more about the Largest Contentful Paint metric](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-largest-contentful-paint/)",
+      "score": 0.69,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 3311.8150000000014,
+      "numericUnit": "millisecond",
+      "displayValue": "3.3\u00a0s",
+      "scoringOptions": {
+        "p10": 2500,
+        "median": 4000
+      }
+    },
+    "total-blocking-time": {
+      "id": "total-blocking-time",
+      "title": "Total Blocking Time",
+      "description": "Sum of all time periods between FCP and Time to Interactive, when task length exceeded 50ms, expressed in milliseconds. [Learn more about the Total Blocking Time metric](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-total-blocking-time/).",
+      "score": 0.97,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 121.5,
+      "numericUnit": "millisecond",
+      "displayValue": "120\u00a0ms",
+      "scoringOptions": {
+        "p10": 200,
+        "median": 600
+      }
+    },
+    "cumulative-layout-shift": {
+      "id": "cumulative-layout-shift",
+      "title": "Cumulative Layout Shift",
+      "description": "Cumulative Layout Shift measures the movement of visible elements within the viewport. [Learn more about the Cumulative Layout Shift metric](https://web.dev/articles/cls).",
+      "score": 0.91,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 0.09288905539437052,
+      "numericUnit": "unitless",
+      "displayValue": "0.093",
+      "scoringOptions": {
+        "p10": 0.1,
+        "median": 0.25
+      },
+      "details": {
+        "type": "debugdata",
+        "items": [
+          {
+            "cumulativeLayoutShiftMainFrame": 0.09288905539437052,
+            "newEngineResult": {
+              "cumulativeLayoutShift": 0.09288905539437052,
+              "cumulativeLayoutShiftMainFrame": 0.09288905539437052
+            },
+            "newEngineResultDiffered": false
+          }
+        ]
+      }
+    },
+    "speed-index": {
+      "id": "speed-index",
+      "title": "Speed Index",
+      "description": "Speed Index shows how quickly the contents of a page are visibly populated. [Learn more about the Speed Index metric](https://developer.chrome.com/docs/lighthouse/performance/speed-index/).",
+      "score": 0.02,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 13136.758269147422,
+      "numericUnit": "millisecond",
+      "displayValue": "13.1\u00a0s",
+      "scoringOptions": {
+        "p10": 3387,
+        "median": 5800
+      }
+    },
+    "color-contrast": {
+      "id": "color-contrast",
+      "title": "Background and foreground colors do not have a sufficient contrast ratio.",
+      "description": "Low-contrast text is difficult or impossible for many users to read. [Learn how to provide sufficient color contrast](https://dequeuniversity.com/rules/axe/4.12/color-contrast).",
+      "score": 0,
+      "scoreDisplayMode": "binary",
+      "details": {
+        "type": "table",
+        "headings": [
+          {
+            "key": "node",
+            "valueType": "node",
+            "subItemsHeading": {
+              "key": "relatedNode",
+              "valueType": "node"
+            },
+            "label": "Failing Elements"
+          }
+        ],
+        "items": [
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-0-A",
+              "path": "1,HTML,1,BODY,2,HEADER,0,DIV,1,NAV,4,A",
+              "selector": "header.top > div.wrap > nav.nav > a.btn",
+              "boundingRect": {
+                "top": 16,
+                "bottom": 56,
+                "left": 274,
+                "right": 396,
+                "width": 122,
+                "height": 40
+              },
+              "snippet": "<a class=\"btn btn-sm\" href=\"#install\">",
+              "nodeLabel": "Get started",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #ffffff, background color: #18946f, font size: 11.3pt (15px), font weight: normal). Expected contrast ratio of 4.5:1"
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-1-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,1,DIV,0,DIV,0,DIV,1,DIV,0,DIV,4,DIV,3,SPAN",
+              "selector": "div.win-body > div.pr > div.merge > span.btn",
+              "boundingRect": {
+                "top": 1557,
+                "bottom": 1597,
+                "left": 35,
+                "right": 188,
+                "width": 153,
+                "height": 40
+              },
+              "snippet": "<span class=\"btn btn-green btn-sm after-only\" aria-hidden=\"true\">",
+              "nodeLabel": "Merge into main",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #ffffff, background color: #18946f, font size: 11.3pt (15px), font weight: normal). Expected contrast ratio of 4.5:1"
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-2-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,2,SECTION,0,DIV,0,DIV,0,SPAN",
+              "selector": "section#who > div.wrap > div.head > span.eyebrow",
+              "boundingRect": {
+                "top": 2060,
+                "bottom": 2082,
+                "left": 162,
+                "right": 250,
+                "width": 88,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "Who it\u2019s for",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #18946f, background color: #ffffff, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-3-BODY",
+                    "path": "1,HTML,1,BODY",
+                    "selector": "body",
+                    "boundingRect": {
+                      "top": 0,
+                      "bottom": 12065,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 12065
+                    },
+                    "snippet": "<body>",
+                    "nodeLabel": "body"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-4-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,3,SECTION,0,DIV,0,DIV,0,SPAN",
+              "selector": "section#problem > div.wrap > div.head > span.eyebrow",
+              "boundingRect": {
+                "top": 3623,
+                "bottom": 3645,
+                "left": 160,
+                "right": 252,
+                "width": 92,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "The problem",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #18946f, background color: #ffffff, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-3-BODY",
+                    "path": "1,HTML,1,BODY",
+                    "selector": "body",
+                    "boundingRect": {
+                      "top": 0,
+                      "bottom": 12065,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 12065
+                    },
+                    "snippet": "<body>",
+                    "nodeLabel": "body"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-5-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,4,SECTION,0,DIV,1,DIV,0,SPAN",
+              "selector": "section#result > div.wrap > div > span.eyebrow",
+              "boundingRect": {
+                "top": 6283,
+                "bottom": 6305,
+                "left": 16,
+                "right": 115,
+                "width": 99,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "What you get",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #18946f, background color: #ffffff, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-3-BODY",
+                    "path": "1,HTML,1,BODY",
+                    "selector": "body",
+                    "boundingRect": {
+                      "top": 0,
+                      "bottom": 12065,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 12065
+                    },
+                    "snippet": "<body>",
+                    "nodeLabel": "body"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-6-A",
+              "path": "1,HTML,1,BODY,3,MAIN,4,SECTION,0,DIV,1,DIV,4,A",
+              "selector": "section#result > div.wrap > div > a.more",
+              "boundingRect": {
+                "top": 6733,
+                "bottom": 6759,
+                "left": 16,
+                "right": 169,
+                "width": 153,
+                "height": 26
+              },
+              "snippet": "<a class=\"more\" href=\"#how\">",
+              "nodeLabel": "See how it works \u2192",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #18946f, background color: #ffffff, font size: 12.0pt (16px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-3-BODY",
+                    "path": "1,HTML,1,BODY",
+                    "selector": "body",
+                    "boundingRect": {
+                      "top": 0,
+                      "bottom": 12065,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 12065
+                    },
+                    "snippet": "<body>",
+                    "nodeLabel": "body"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-7-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,0,DIV,0,SPAN",
+              "selector": "section#how > div.wrap > div.head > span.eyebrow",
+              "boundingRect": {
+                "top": 6905,
+                "bottom": 6927,
+                "left": 158,
+                "right": 254,
+                "width": 96,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "How it works",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.31 (foreground color: #18946f, background color: #f4eee8, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-8-SECTION",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION",
+                    "selector": "body > main > section#how",
+                    "boundingRect": {
+                      "top": 6831,
+                      "bottom": 8072,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 1241
+                    },
+                    "snippet": "<section class=\"sand\" id=\"how\">",
+                    "nodeLabel": "How it works\nBuild first. Clean up second.\n\nGetzilla does not slow down the fun\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-9-SMALL",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV,1,BUTTON,0,SMALL",
+              "selector": "div.wrap > div.tabs > button#t-sort > small",
+              "boundingRect": {
+                "top": 7221,
+                "bottom": 7232,
+                "left": 275,
+                "right": 323,
+                "width": 49,
+                "height": 12
+              },
+              "snippet": "<small>",
+              "nodeLabel": "STEP 2",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 8.6pt (11.5px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-10-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV",
+                    "selector": "main > section#how > div.wrap > div.tabs",
+                    "boundingRect": {
+                      "top": 7201,
+                      "bottom": 7417,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 217
+                    },
+                    "snippet": "<div class=\"tabs\" role=\"tablist\" aria-label=\"Steps\">",
+                    "nodeLabel": "STEP 1\nBuild\nSTEP 2\nSort\nSTEP 3\nWrite down\nSTEP 4\nCheck\nSTEP 5\nReview\nSTEP 6\nLe\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-11-SMALL",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV,2,BUTTON,0,SMALL",
+              "selector": "div.wrap > div.tabs > button#t-write > small",
+              "boundingRect": {
+                "top": 7290,
+                "bottom": 7302,
+                "left": 89,
+                "right": 137,
+                "width": 48,
+                "height": 12
+              },
+              "snippet": "<small>",
+              "nodeLabel": "STEP 3",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 8.6pt (11.5px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-10-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV",
+                    "selector": "main > section#how > div.wrap > div.tabs",
+                    "boundingRect": {
+                      "top": 7201,
+                      "bottom": 7417,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 217
+                    },
+                    "snippet": "<div class=\"tabs\" role=\"tablist\" aria-label=\"Steps\">",
+                    "nodeLabel": "STEP 1\nBuild\nSTEP 2\nSort\nSTEP 3\nWrite down\nSTEP 4\nCheck\nSTEP 5\nReview\nSTEP 6\nLe\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-12-SMALL",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV,3,BUTTON,0,SMALL",
+              "selector": "div.wrap > div.tabs > button#t-check > small",
+              "boundingRect": {
+                "top": 7290,
+                "bottom": 7302,
+                "left": 274,
+                "right": 324,
+                "width": 50,
+                "height": 12
+              },
+              "snippet": "<small>",
+              "nodeLabel": "STEP 4",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 8.6pt (11.5px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-10-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV",
+                    "selector": "main > section#how > div.wrap > div.tabs",
+                    "boundingRect": {
+                      "top": 7201,
+                      "bottom": 7417,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 217
+                    },
+                    "snippet": "<div class=\"tabs\" role=\"tablist\" aria-label=\"Steps\">",
+                    "nodeLabel": "STEP 1\nBuild\nSTEP 2\nSort\nSTEP 3\nWrite down\nSTEP 4\nCheck\nSTEP 5\nReview\nSTEP 6\nLe\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-13-SMALL",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV,4,BUTTON,0,SMALL",
+              "selector": "div.wrap > div.tabs > button#t-review > small",
+              "boundingRect": {
+                "top": 7360,
+                "bottom": 7371,
+                "left": 89,
+                "right": 137,
+                "width": 48,
+                "height": 12
+              },
+              "snippet": "<small>",
+              "nodeLabel": "STEP 5",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 8.6pt (11.5px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-10-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV",
+                    "selector": "main > section#how > div.wrap > div.tabs",
+                    "boundingRect": {
+                      "top": 7201,
+                      "bottom": 7417,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 217
+                    },
+                    "snippet": "<div class=\"tabs\" role=\"tablist\" aria-label=\"Steps\">",
+                    "nodeLabel": "STEP 1\nBuild\nSTEP 2\nSort\nSTEP 3\nWrite down\nSTEP 4\nCheck\nSTEP 5\nReview\nSTEP 6\nLe\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-14-SMALL",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV,5,BUTTON,0,SMALL",
+              "selector": "div.wrap > div.tabs > button#t-merge > small",
+              "boundingRect": {
+                "top": 7360,
+                "bottom": 7371,
+                "left": 275,
+                "right": 323,
+                "width": 48,
+                "height": 12
+              },
+              "snippet": "<small>",
+              "nodeLabel": "STEP 6",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 8.6pt (11.5px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-10-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,1,DIV",
+                    "selector": "main > section#how > div.wrap > div.tabs",
+                    "boundingRect": {
+                      "top": 7201,
+                      "bottom": 7417,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 217
+                    },
+                    "snippet": "<div class=\"tabs\" role=\"tablist\" aria-label=\"Steps\">",
+                    "nodeLabel": "STEP 1\nBuild\nSTEP 2\nSort\nSTEP 3\nWrite down\nSTEP 4\nCheck\nSTEP 5\nReview\nSTEP 6\nLe\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-15-H4",
+              "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,2,DIV,1,DIV,0,H4",
+              "selector": "div.wrap > div#p-build > div.card > h4",
+              "boundingRect": {
+                "top": 7775,
+                "bottom": 7789,
+                "left": 44,
+                "right": 368,
+                "width": 324,
+                "height": 14
+              },
+              "snippet": "<h4>",
+              "nodeLabel": "YOUR EVENING",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 2.39 (foreground color: #a3a9a6, background color: #ffffff, font size: 9.8pt (13px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-16-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,5,SECTION,0,DIV,2,DIV,1,DIV",
+                    "selector": "section#how > div.wrap > div#p-build > div.card",
+                    "boundingRect": {
+                      "top": 7747,
+                      "bottom": 8000,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 253
+                    },
+                    "snippet": "<div class=\"card\">",
+                    "nodeLabel": "YOUR EVENING\nyou:      add a checkout with saved cards\nagent:    done \u2713\nyou:   \u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-17-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,7,SECTION,0,DIV,0,DIV,0,SPAN",
+              "selector": "section#install > div.wrap > div > span.eyebrow",
+              "boundingRect": {
+                "top": 9084,
+                "bottom": 9107,
+                "left": 16,
+                "right": 104,
+                "width": 88,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "Get started",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #18946f, background color: #ffffff, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-3-BODY",
+                    "path": "1,HTML,1,BODY",
+                    "selector": "body",
+                    "boundingRect": {
+                      "top": 0,
+                      "bottom": 12065,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 12065
+                    },
+                    "snippet": "<body>",
+                    "nodeLabel": "body"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-18-SPAN",
+              "path": "1,HTML,1,BODY,3,MAIN,8,SECTION,0,DIV,0,SPAN",
+              "selector": "main > section#pricing > div.wrap > span.eyebrow",
+              "boundingRect": {
+                "top": 10047,
+                "bottom": 10069,
+                "left": 16,
+                "right": 66,
+                "width": 50,
+                "height": 22
+              },
+              "snippet": "<span class=\"eyebrow\">",
+              "nodeLabel": "Pricing",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.31 (foreground color: #18946f, background color: #f4eee8, font size: 10.5pt (14px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-19-SECTION",
+                    "path": "1,HTML,1,BODY,3,MAIN,8,SECTION",
+                    "selector": "body > main > section#pricing",
+                    "boundingRect": {
+                      "top": 9973,
+                      "bottom": 11295,
+                      "left": 0,
+                      "right": 412,
+                      "width": 412,
+                      "height": 1322
+                    },
+                    "snippet": "<section class=\"sand\" id=\"pricing\">",
+                    "nodeLabel": "Pricing\nFree for open source. Trust CI for private code.\n\nGetzilla itself is fr\u2026"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-20-A",
+              "path": "1,HTML,1,BODY,3,MAIN,8,SECTION,0,DIV,3,DIV,1,DIV,4,DIV,0,A",
+              "selector": "div.plans > div.plan > div.cta > a.btn",
+              "boundingRect": {
+                "top": 11150,
+                "bottom": 11198,
+                "left": 41,
+                "right": 218,
+                "width": 177,
+                "height": 48
+              },
+              "snippet": "<a class=\"btn btn-green\" href=\"https://github.com/Dimkox/Getzilla/issues/new?template=trust-ci-access.yml\">",
+              "nodeLabel": "Request access",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.81 (foreground color: #ffffff, background color: #18946f, font size: 12.0pt (16px), font weight: normal). Expected contrast ratio of 4.5:1"
+            }
+          },
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-21-P",
+              "path": "1,HTML,1,BODY,3,MAIN,9,DIV,0,DIV,0,DIV,1,P",
+              "selector": "div.band > div.wrap > div.box > p",
+              "boundingRect": {
+                "top": 11613,
+                "bottom": 11671,
+                "left": 38,
+                "right": 374,
+                "width": 336,
+                "height": 58
+              },
+              "snippet": "<p>",
+              "nodeLabel": "Free and open source. Install it into your repository in a few minutes.",
+              "explanation": "Fix any of the following:\n  Element has insufficient color contrast of 3.21 (foreground color: #d5f2e7, background color: #18946f, font size: 13.5pt (18px), font weight: normal). Expected contrast ratio of 4.5:1"
+            },
+            "subItems": {
+              "type": "subitems",
+              "items": [
+                {
+                  "relatedNode": {
+                    "type": "node",
+                    "lhId": "1-22-DIV",
+                    "path": "1,HTML,1,BODY,3,MAIN,9,DIV,0,DIV,0,DIV",
+                    "selector": "main > div.band > div.wrap > div.box",
+                    "boundingRect": {
+                      "top": 11407,
+                      "bottom": 11799,
+                      "left": 16,
+                      "right": 396,
+                      "width": 380,
+                      "height": 392
+                    },
+                    "snippet": "<div class=\"box\">",
+                    "nodeLabel": "Vibe-code tonight. Ship something you can maintain tomorrow.\n\nFree and open sou\u2026"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "debugData": {
+          "type": "debugdata",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ]
+        }
+      }
+    },
+    "heading-order": {
+      "id": "heading-order",
+      "title": "Heading elements are not in a sequentially-descending order",
+      "description": "Properly ordered headings that do not skip levels convey the semantic structure of the page, making it easier to navigate and understand when using assistive technologies. [Learn more about heading order](https://dequeuniversity.com/rules/axe/4.12/heading-order).",
+      "score": 0,
+      "scoreDisplayMode": "binary",
+      "details": {
+        "type": "table",
+        "headings": [
+          {
+            "key": "node",
+            "valueType": "node",
+            "subItemsHeading": {
+              "key": "relatedNode",
+              "valueType": "node"
+            },
+            "label": "Failing Elements"
+          }
+        ],
+        "items": [
+          {
+            "node": {
+              "type": "node",
+              "lhId": "1-23-H3",
+              "path": "1,HTML,1,BODY,3,MAIN,1,DIV,0,DIV,0,DIV,1,DIV,0,DIV,1,H3",
+              "selector": "div#demo > div.win-body > div.pr > h3",
+              "boundingRect": {
+                "top": 855,
+                "bottom": 882,
+                "left": 35,
+                "right": 377,
+                "width": 342,
+                "height": 26
+              },
+              "snippet": "<h3>",
+              "nodeLabel": "Add new checkout flow",
+              "explanation": "Fix any of the following:\n  Heading order invalid"
+            }
+          }
+        ],
+        "debugData": {
+          "type": "debugdata",
+          "impact": "moderate",
+          "tags": [
+            "cat.semantics",
+            "best-practice"
+          ]
+        }
+      }
+    },
+    "errors-in-console": {
+      "id": "errors-in-console",
+      "title": "No browser errors logged to the console",
+      "description": "Errors logged to the console indicate unresolved problems. They can come from network request failures and other browser concerns. [Learn more about this errors in console diagnostic audit](https://developer.chrome.com/docs/lighthouse/best-practices/errors-in-console/)",
+      "score": 1,
+      "scoreDisplayMode": "binary",
+      "details": {
+        "type": "table",
+        "headings": [
+          {
+            "key": "sourceLocation",
+            "valueType": "source-location",
+            "label": "Source"
+          },
+          {
+            "key": "description",
+            "valueType": "code",
+            "label": "Description"
+          }
+        ],
+        "items": []
+      }
+    }
+  }
+}
