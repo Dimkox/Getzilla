@@ -1,0 +1,71 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_linux_process_adapter.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "On a host outside Ubuntu 24.04/python3.12, the nine real-process tests skip with an explicit reason and the other four run and pass."
+    },
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_linux_process_adapter.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "On a supported host, all 13 tests run."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-ff5fda",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_linux_process_adapter.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Relaxing _host_supported() or the adapter's UNSUPPORTED_HOST refusal."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "factory/tests/test_linux_process_adapter.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "factory/runtime/linux_process_adapter.py is unchanged."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #27: stop real-process adapter tests failing on unsupported hosts.",
+    "success_metric": "test_linux_process_adapter: OK (skipped=9) on the box.",
+    "target": "factory/tests/test_linux_process_adapter.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

@@ -3,6 +3,7 @@ import importlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import unittest
 
@@ -269,6 +270,7 @@ class BBContractTests(unittest.TestCase):
                 ):
                     first.validate_replay(forged)
 
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
     def test_structural_schemas_accept_canonical_records_but_parser_is_semantic_gate(self):
         module = self.module()
         for name, value in (
@@ -293,3 +295,9 @@ class BBContractTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         with self.assertRaisesRegex(ContractError, "invalid_deadlines"):
             module.BBBackendProfileV1.from_dict(structurally_valid)
+
+    def test_parser_rejects_structurally_valid_profile_with_invalid_deadlines(self):
+        # Runs without the optional jsonschema CLI: the parser is the semantic gate.
+        module = self.module()
+        with self.assertRaisesRegex(ContractError, "invalid_deadlines"):
+            module.BBBackendProfileV1.from_dict(bb_profile(lease_seconds=61))

@@ -2180,7 +2180,7 @@ class FailFastVerificationTests(unittest.TestCase):
                         'factory/tests/run_disposable_exit.py', 'factory/pyproject.toml'):
                 (root / rel).write_text('# dispatch fixture\n')
             with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'ok')), \
-                 patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'bandit not available')), \
+                 patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'no non-test python paths')), \
                  patch.object(verification_module, 'selected_workers', return_value=None), \
                  patch.object(verification_module, 'run_core_tests', return_value=None), \
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \

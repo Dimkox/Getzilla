@@ -1,0 +1,89 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "A `bandit not available` skip is refused in pr/release, and `no non-test python paths` stays admitted."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "opengrep is in MANDATORY_PR_CHECKS; `opengrep not available` is refused in pr/release, and `no OpenGrep rules installed` stays admitted."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "fast mode admits both skips as before."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-26c995",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Changing what the bandit/opengrep checks report."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "FORBID-002",
+      "statement": "Touching _policy_legacy.py, state.py, getzilla_approve.py, updater.py, the installer or hook copies."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "The checks still return skip when a binary is missing; only the QG-01 admission changes."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close #33 and #40: no silent SAST bypass on a local pr/release verify.",
+    "success_metric": "`verify --mode pr` without bandit or opengrep returns FAIL (mandatory-check-skipped).",
+    "target": ".getzilla/getzilla/quality_gates.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

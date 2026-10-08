@@ -2,6 +2,7 @@ from copy import deepcopy
 from dataclasses import replace
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import unittest
 
@@ -226,6 +227,9 @@ class SemanticBridgeTests(unittest.TestCase):
             self.assertIs(variant["additionalProperties"], False)
             self.assertEqual(set(variant["required"]), set(variant["properties"]))
             self.assertEqual(variant["properties"]["schema_version"], {"const": 2 if name == "cohort_evidence" else 1})
+
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
+    def test_bridge_records_validate_with_jsonschema_cli(self):
         built = self.build()
         for name, value in (
             ("semantic-execution-binding.v1.schema.json", built.binding.to_dict()),
