@@ -42,4 +42,6 @@ jobs:
           fi
           python -m pip install --disable-pip-version-check ruff==0.16.2 bandit==1.9.4
       - name: Getzilla verification
+        env:
+          GETZILLA_OSV_ONLINE: "1"
         run: python scripts/getzilla_verify.py --mode pr

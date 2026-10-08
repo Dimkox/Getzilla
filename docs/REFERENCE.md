@@ -518,7 +518,8 @@ Declared route `human_gates` require a separate decision in the active change pa
 | `scripts/getzilla_governance.py` | Validate/summarize target-owned governance, check read-only projections, and emit an exact clean-state handoff |
 | `scripts/getzilla_status.py` | Local runtime status |
 | `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
-| `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, measured coverage in `pr`/`release`) |
+| `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
+| `scripts/getzilla_vulns.py` | Known vulnerabilities in pinned dependencies from OSV (`--online`, `--db DIR`, `--download-db DIR`) |
 | `scripts/getzilla_review.py` | Record local review receipt |
 | `scripts/getzilla_approve.py` | Delegated local action/resource grant bound to repository, route, change, exact HEAD and tree fingerprint; not accepted by Trust CI |
 | `scripts/getzilla_deploy.py` | Prepare-only human last mile |
@@ -526,6 +527,23 @@ Declared route `human_gates` require a separate decision in the active change pa
 | `scripts/getzilla_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
 | `scripts/install_into.py` | Plan an existing repository read-only or atomically materialize an absent new target |
 | `adaptive-trust-ci` | External API, worker, migration, signed approvals, holdout verification, attestation verification and app-bound branch protection |
+
+## Known vulnerabilities
+
+`getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. A finding fails the check with its OSV/GHSA/CVE ids, severity and fixed versions.
+
+It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked. The GitHub Actions workflow from `getzilla_ci.py --write` sets `GETZILLA_OSV_ONLINE=1`; Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
+
+A finding can be accepted for a limited time in `.getzilla/config/known-vulnerabilities.json`:
+
+```json
+{
+  "exclude": ["tests/**", "**/fixtures/**", "**/node_modules/**", "**/vendor/**"],
+  "accept": [{"id": "CVE-2024-22195", "reason": "templates are trusted input", "expires": "2026-12-31"}]
+}
+```
+
+`id` matches the OSV id or any alias; an expired entry fails the check again. Offline range matching uses the advisory's enumerated versions first and a generic version order otherwise, so the online API is the reference when they disagree.
 
 ## Local browser demo
 
