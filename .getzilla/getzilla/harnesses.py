@@ -22,8 +22,9 @@ CURSOR_MARKER = '<!-- Generated from .grok/cursor-rules/'  # marks the files Get
 CURSOR_KEYS = frozenset({'description', 'always_apply', 'globs', 'instructions'})
 CURSOR_BUDGET = {True: 4096, False: 8192}  # bytes per always-applied core / per scoped rule
 # Cursor splits `globs` on commas (https://cursor.com/docs/context/rules), so a pattern
-# may not contain a comma, brace list, quote or whitespace.
-_CURSOR_GLOB = re.compile(r'(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_.*?/!\[\]-]+')
+# may not contain a comma, brace list, quote or whitespace; a leading `!` (a YAML tag,
+# negation is undocumented) is rejected too.
+_CURSOR_GLOB = re.compile(r'(?![/!])(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_.*?/!\[\]-]+')
 CODEX_HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop')
 GEMINI_EVENTS = {
     'SessionStart': 'SessionStart',
@@ -173,7 +174,8 @@ def _cursor_rules(root: Path) -> dict[str, bytes]:
                 or not isinstance(rule.get('instructions'), str) or not rule['instructions'].strip() or not isinstance(globs, list)
                 or scoped != bool(globs) or not all(isinstance(g, str) and _CURSOR_GLOB.fullmatch(g) for g in globs)):
             raise ValueError(f'{source}: needs description, instructions and always_apply, and globs '
-                             'exactly when always_apply is false; globs hold no comma, brace, quote or space')
+                             'exactly when always_apply is false; globs hold no comma, brace, quote or space '
+                             'and start with neither / nor !')
         always += not scoped
         head = ['---', f'description: {_yaml_string(rule["description"])}']
         head += [f'globs: {",".join(globs)}'] if globs else []
@@ -238,10 +240,19 @@ def _generated(root: Path) -> Iterator[Path]:
 
 
 def _owned(path: Path, rel: str) -> bool:
-    """Cursor rules share .cursor/rules with the user's own: only marked files there are Getzilla's."""
-    if not rel.startswith(CURSOR_OUTPUT + '/') or path.is_symlink() or not path.is_file():
+    """Cursor rules share .cursor/rules with the user's own: only marked regular files there are Getzilla's.
+
+    A link is never Getzilla's output and is not read through. The marker is searched in the
+    largest rule `render` accepts, so a rule with a long frontmatter stays owned.
+    """
+    if not rel.startswith(CURSOR_OUTPUT + '/'):
         return True
-    return CURSOR_MARKER.encode('utf-8') in path.read_bytes()[:4096]
+    if path.is_symlink():
+        return False
+    if not path.is_file():
+        return True
+    with path.open('rb') as stream:
+        return CURSOR_MARKER.encode('utf-8') in stream.read(max(CURSOR_BUDGET.values()))
 
 
 def _unexpected(path: Path, rel: str, expected: dict[str, bytes]) -> bool:
@@ -250,9 +261,10 @@ def _unexpected(path: Path, rel: str, expected: dict[str, bytes]) -> bool:
 
 
 def _conflict(root: Path, rel: str) -> bool:
-    """A linked parent, a directory or an unowned file where an output goes blocks every write."""
+    """A linked or non-directory parent, a directory or an unowned file where an output goes blocks every write."""
     path = root / rel
-    return (any((root / parent).is_symlink() for parent in PurePosixPath(rel).parents)
+    parents = [root / parent for parent in PurePosixPath(rel).parents]
+    return (any(parent.is_symlink() or (parent.exists() and not parent.is_dir()) for parent in parents)
             or (path.is_dir() and not path.is_symlink()) or not _owned(path, rel))
 
 

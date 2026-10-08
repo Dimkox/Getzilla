@@ -39,15 +39,18 @@ no external rule library, installer or package is executed or copied.
 2. **Adapter hygiene.** The renderer rejects unknown keys, non-boolean flags, blank
    description/instructions, a scoped rule without globs, an always-applied rule with
    globs, other than one always-applied core, globs Cursor would split or misread
-   (comma, brace list, quote, whitespace/newline, absolute, `..`) and rules over 4 KiB
+   (comma, brace list, quote, whitespace/newline, absolute, `..`, leading `!`) and rules over 4 KiB
    (core) / 8 KiB (scoped) / 500 lines; TOML rejects duplicate keys and file names make
    rule IDs unique. Writes walk directories by descriptor through `getzilla.fsx` without
    following links and land files with mode 0644 for every generated harness.
-   `.cursor/rules` is shared with the user: only files carrying the generated marker are
-   Getzilla's. Unmarked files there (and `.cursorrules`, `.cursor/settings.json`, other
-   rule folders) are never touched; an unmarked file, a directory or a linked parent
-   where an output goes is a `conflict` that blocks every harness write before any file
-   changes. `.cursor/**` is protected control plane.
+   `.cursor/rules` is shared with the user: only regular files carrying the generated
+   marker (searched in the whole 8 KiB a rule may have) are Getzilla's. Unmarked files
+   and every symlink there (never read through), and `.cursorrules`,
+   `.cursor/settings.json`, other rule folders, are never touched; an unmarked file, a
+   symlink, a directory, or a linked or non-directory parent where an output goes is a
+   `conflict` that blocks every harness write before any file changes. The marker is a
+   convention, not a proof: a user file that copies it is treated as generated.
+   `.cursor/**` is protected control plane.
 3. **Conflicting delivery sequence.** The delivery skill requested a full gate before
    reviews and another after them; `verification-evidence` and the evidence template
    still said "reruns final verification". All of them now state one order: bounded
@@ -71,13 +74,13 @@ All in `tests/test_harnesses.py` (`CursorRuleTests`) unless noted.
 | First candidate test | Now |
 | --- | --- |
 | committed rules current; core only always-applied | `test_committed_harnesses_match_the_canonical_sources`, `test_committed_rules_use_the_documented_frontmatter` |
-| render deterministic and scoped | `test_committed_rules_use_the_documented_frontmatter` |
-| missing → write → clean → idempotent; stale detected and repaired; obsolete reported, removed only on write | `test_write_is_world_readable_idempotent_and_removes_stale_rules`, `test_symlinked_output_is_drift_and_is_replaced_not_followed` |
+| render deterministic and scoped (marker, no `@AGENTS.md`) | `test_committed_rules_use_the_documented_frontmatter`, `test_rules_do_not_inline_agents_md` |
+| missing → write → clean → idempotent; stale detected and repaired; obsolete reported, removed only on write | `test_write_is_world_readable_idempotent_and_removes_stale_rules`, `test_edited_rule_is_stale_until_write_repairs_it`, `test_rule_with_a_long_frontmatter_stays_owned` |
 | invalid metadata; duplicate JSON keys; invalid JSON; core/scoped budgets | `test_invalid_rule_sources_are_rejected` (TOML source) |
 | custom rules, legacy `.cursorrules`, local settings preserved | `test_user_cursor_files_are_preserved` |
-| unowned collision / directory collision block all writes; Cursor conflict prevents other harness rewrites | `test_unowned_file_or_directory_at_an_output_blocks_every_write` |
+| unowned collision / directory collision block all writes; Cursor conflict prevents other harness rewrites | `test_unowned_file_or_directory_at_an_output_blocks_every_write`, `test_a_file_where_a_parent_directory_goes_blocks_every_write` |
 | symlink components rejected without touching outside | `test_write_never_follows_a_symlinked_directory` |
-| output symlink rejected | changed: the link is drift and is replaced, never followed (`test_symlinked_output_is_drift_and_is_replaced_not_followed`) |
+| output symlink rejected | `test_symlink_in_the_rules_folder_is_the_users_and_never_read_through` (a `conflict`, other links kept); temp file `O_EXCL`/`O_NOFOLLOW`, 0755 directories, no `.tmp` left: `test_writes_use_an_exclusive_unfollowed_temp_and_world_readable_directories`, `test_failed_replace_leaves_no_temp_file` |
 | missing target not created | `test_missing_target_is_not_created` |
 | CLI read-only check, explicit repair, source error without traceback; harness CLI covers Cursor | `test_cli_checks_read_only_repairs_on_write_and_reports_source_errors` |
 | no Cursor execution harness | `test_cursor_is_not_an_execution_harness` |
