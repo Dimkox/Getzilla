@@ -540,14 +540,6 @@ def _dangerous_remove_target(operand: str) -> bool:
     }
 
 
-def _root_like_target(operand: str) -> bool:
-    """``/``, ``/.``, ``/*``, ``~``, ``$HOME``, a drive root, or any expansion-dependent word."""
-    if any(c in operand for c in '$`'):
-        return True
-    stripped = operand.lower().replace('\\', '/').rstrip('/.*')
-    return stripped in {'', '~'} or re.fullmatch(r'[a-z]:', stripped) is not None
-
-
 def _remove_operands(argv: list[str]) -> list[str] | None:
     """Operands of a recursive delete (``rm -r``, ``del /s``, ``rd /s``, ``Remove-Item -Recurse``), else ``None``."""
     name, words = argv[0], argv[1:]
@@ -567,11 +559,10 @@ def _remove_operands(argv: list[str]) -> list[str] | None:
         return paths or ['.']
     if name == 'rsync' and any(w.startswith('--del') for w in words):
         # `rsync --delete* src… dest` deletes extraneous files under the destination.
-        # Options may follow the destination (`… x/ / --exclude foo`), so besides the last
-        # operand every root-like operand counts: fail closed (review round 4).
+        # Options may follow the destination (`… x/ /etc --exclude foo`), so every operand gets
+        # the full dangerous-target check, as for rm: fail closed (review rounds 4-5).
         positionals = [w for w in words if not w.startswith('-')]
-        rooted = [w for w in positionals if _root_like_target(w)]
-        return [*positionals[-1:], *rooted] if len(positionals) > 1 or rooted else None
+        return positionals or None
     if name != 'rm':
         return None
     recursive = options_done = False
@@ -622,7 +613,8 @@ def _recursive_remove_of_root(command: str) -> bool:
                 operands = _remove_operands(wrapped)
                 if operands and any(_dangerous_remove_target(operand) for operand in operands):
                     return True
-                break
+                # No early break: a wrapper argument named like a verb (`flock /tmp/find rm -rf /`)
+                # must not hide a later delete, so every match is checked (review round 5).
     return False
 
 
