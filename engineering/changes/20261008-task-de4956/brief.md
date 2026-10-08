@@ -2,8 +2,8 @@
 
 > Typed authority: [`change-spec.yaml`](change-spec.yaml). This Markdown explains context and cannot override typed IDs, risk, acceptance criteria, forbidden outcomes, or approval scopes.
 
-Change ID: `20261008-task-3e50dc`
-Created: 2026-10-08T14:55:58+00:00
+Change ID: `20261008-task-de4956`
+Created: 2026-10-08T15:34:47+00:00
 Risk: high
 Complexity: high-risk
 Domains: security, infra
@@ -38,3 +38,5 @@ The updater installs only the pinned OpenGrep release whose SHA-256 matches the 
 - Data/privacy: none.
 - Performance: an already matching binary is not downloaded again.
 - Operational: on mismatch the result is `fail` and nothing is written.
+
+Re-routed at `07b461c` after `main` advanced (the owner merged the 2026-10-08 fix batch). This supersedes route `3e50dcf6f57f` (base `a8f9338`), so architecture comparison uses the current base. Two automated review findings on #52 were then fixed with tests first: a cached binary that matches the pin now gets its execute bits back, and the OSV CRC test corrupts member data past the first read chunk.

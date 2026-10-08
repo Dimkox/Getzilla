@@ -8,6 +8,8 @@
 | P0 | No request to releases/latest | `tests/test_updater.py` |
 | P1 | Pin equals CI runner pin | `tests/test_updater.py` |
 | P1 | Corrupt OSV zip refused | `tests/test_updater.py` |
+| P2 | Cached pinned binary without execute bits is repaired, not reported unusable | test_installed_opengrep_without_execute_bits_is_made_executable |
+| P2 | Corrupt OSV member data beyond the first read chunk is refused (kills a read-one-byte mutant of testzip) | test_osv_archive_with_bad_crc_is_rejected |
 
 ## Automated checks
 
