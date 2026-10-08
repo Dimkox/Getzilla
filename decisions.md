@@ -1121,3 +1121,7 @@ Hook policy now checks every word fragment of a Bash command (split at quotes, `
 ## 2026-10-08 — A grant names the exact target the command acts on
 
 Delegated grants are compared with the target the policy derives from the command itself: `github-api:<METHOD> <host>/<endpoint>`, `github-pr-review:<owner>/<repo>#<n>`, the pushed branch or tag, `owner/repo#N` for a merge. Deriving the resource from parsed argv and comparing by equality makes a grant cover one operation, and an undeterminable target simply matches no grant (fail closed) instead of falling back to a category (#38).
+
+## 2026-10-08 — Resolve gh env prefixes and refuse command-smuggling push/merge options (#38)
+
+A grant binds the target the policy derives from the command, so the derivation must see everything that redirects the command. `GH_REPO`/`GH_HOST` (and `--hostname`) now feed `_gh_repository`, and a non-default host binds as `host/owner/repo`, so a bare assignment prefix cannot point a merge, review, or api call at another repository or GitHub host while matching the original grant; leading assignments are captured per simple command and propagated into `sh -c` payloads. `git push --receive-pack`/`--exec` make the target unresolvable (they run a server- or local-side command a branch grant never authorized), and `gh pr merge --admin` resolves to a distinct `owner/repo#N!admin` resource so bypassing branch protection requires an explicit grant. Protected-path grants also refuse percent-encoded paths and bare control-plane directories (review S53-1/S53-2/P53-5).

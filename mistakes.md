@@ -1863,3 +1863,7 @@ Root cause: the policy modelled each guarded operation by one literal spelling (
 ## 2026-10-08 — Exact-looking category names were wildcards
 
 Root cause: the #38 fix forbade glob characters but kept the policy's category resources (`github-api`, `github-pull-request-review`) and production grants whose `--resource` was never compared, so one grant still authorized every endpoint, PR or branch. "No wildcard" has to mean "the grant is compared with the concrete target of the action", not "the string contains no `*`".
+
+## 2026-10-08 — Grant target derivation ignored env prefixes and command-smuggling options
+
+Root cause: the simple-command tokenizer dropped leading `VAR=value` assignments before target derivation, so `GH_REPO=other/x gh pr merge 5` resolved to the origin repo and matched a grant for it; `git push --receive-pack=`/`--exec=` were consumed as inert value options; and `gh pr merge --admin` resolved to the same resource as a plain merge. The target binding must account for every input that changes what a command acts on — env prefixes, host overrides, and options that smuggle a command or bypass branch protection — or an exact-target grant is not exact (review S53).

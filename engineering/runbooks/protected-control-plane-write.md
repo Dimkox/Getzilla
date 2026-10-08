@@ -56,3 +56,11 @@ The writer validates the complete batch before the first mutation:
 - file and total batch size limits are enforced.
 
 Files are staged in their target directories and replaced atomically per file. If a later replacement fails, already-replaced files are restored from the preflight snapshot. Arbitrary shell mutation remains denied.
+
+## Grant target binding (review S53)
+
+A delegated grant binds the exact target the policy derives from the command. Note:
+
+- A `GH_REPO=`/`GH_HOST=` prefix (or `gh --hostname`) is resolved into the target; a non-default host binds as `host/owner/repo`, so a prefix cannot redirect a granted `gh` merge, review, or api call onto another repository or host.
+- A branch push grant refuses `git push --receive-pack`/`--exec`: these run a command rather than update the granted branch.
+- `gh pr merge --admin` bypasses branch protection and needs its own `--resource 'owner/repo#N!admin'` grant, separate from a plain `owner/repo#N` merge grant.
