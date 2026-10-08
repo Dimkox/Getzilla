@@ -1859,3 +1859,7 @@ Root cause: the tool updater was written as "follow upstream latest" for every c
 ## 2026-10-08 — Hook guards matched literal spellings, not the operation
 
 Root cause: the policy modelled each guarded operation by one literal spelling (`argv[:3] == ['gh','pr','merge']`, a `\brm\s+-rf\s+/\b` regex, `-X PUT` with a space, secret globs only for Read tools and only below a directory because fnmatch has no globstar), so global options, `--opt=value`, sibling subcommands (`git send-pack`, `docker image push`), shell reads and root-level files passed. Guards must parse the command into options and operands (or match every path-like word) and be tested against alternative spellings from an adversarial review, not only the documented example (#36, #37).
+
+## 2026-10-08 — A pinned download was treated as proof of what later runs
+
+Root cause: the #39 fix verified OpenGrep only on the download path and its test required an unverified previous binary to be kept on failure, while the verifier still executed whatever `opengrep` PATH resolved to. Integrity has to be checked where the executable is run, and a fail-closed update must not preserve the untrusted artifact it failed to replace.

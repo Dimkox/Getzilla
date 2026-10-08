@@ -1117,3 +1117,7 @@ The updater now installs OpenGrep only from a pinned release after a SHA-256 mat
 ## 2026-10-08 — Match secret paths in every shell word, normalize options before classifying actions
 
 Hook policy now checks every word fragment of a Bash command (split at quotes, `=`, `:`, `@`, parentheses and operators; globs expanded on disk) against `secret_read_paths`, and strips gh/git/docker/npm global options before naming a production action. Matching what a command names, not which reader it calls, closes `cat`/`cp`/`tar`/`git show rev:path`/`curl -d @file`/interpreter one-liners at once and keeps `gh -R … pr merge` equal to `gh pr merge`; the cost is that literal mentions of `.env` in a message are also denied (#36, #37).
+
+## 2026-10-08 — Trust an executable by its digest at run time, not by its name on PATH
+
+The verifier hashes the `opengrep` it resolved on PATH, compares it with the pinned release digest and runs that exact path; the updater moves a non-matching binary to `<name>.unverified` without execute bits before downloading. Checking at the point of execution closes the gap where an old unpinned install (or a failed update) kept running, and quarantine instead of deletion leaves the bytes for a person to inspect (#39).
