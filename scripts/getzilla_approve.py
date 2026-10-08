@@ -52,7 +52,10 @@ parser.add_argument(
     '--resource',
     action='append',
     default=[],
-    help='Exact path, tool name, URL, or fnmatch pattern for protected/external grants.',
+    help=(
+        'Exact repository-relative path, MCP tool name or URL for protected/external grants. '
+        'Repeat for several resources; wildcard patterns are refused.'
+    ),
 )
 args = parser.parse_args()
 
@@ -64,15 +67,18 @@ if args.profile == 'release':
 if not actions:
     parser.error('at least one --action or --profile is required')
 
-result = add_approval(
-    find_root(),
-    args.scope,
-    args.reason,
-    args.ttl,
-    actions=actions,
-    resources=args.resource,
-    source=args.source,
-)
+try:
+    result = add_approval(
+        find_root(),
+        args.scope,
+        args.reason,
+        args.ttl,
+        actions=actions,
+        resources=args.resource,
+        source=args.source,
+    )
+except ValueError as exc:
+    parser.error(str(exc))
 result['external_trust_ci_authority'] = False
 result['notice'] = (
     'This delegated local grant authorizes only the listed operation on the '

@@ -196,7 +196,7 @@ class PolicyTests(unittest.TestCase):
                 'create issue',
                 5,
                 actions=['external-write'],
-                resources=['https://api.github.com/repos/Dimkox/Getzilla/*'],
+                resources=['https://api.github.com/repos/Dimkox/Getzilla/issues'],
             )
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
             self.assertTrue(allowed, reason)

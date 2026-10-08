@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import secrets
@@ -221,6 +220,36 @@ def _active_change_id(root: Path) -> str | None:
     return str(value) if value else None
 
 
+_GRANT_PATTERN_CHARACTERS = re.compile(r'[*?\[\]]')
+
+
+def _normalize_grant_resource(scope: str, raw: str) -> str:
+    """One exact grant resource; wildcard patterns are forbidden by AGENTS.md (issue #38).
+
+    Protected paths must be repository-relative without ``..``; external resources
+    are exact URLs, MCP tool names or the policy's fixed resource names.
+    """
+    resource = raw.replace('\\', '/').strip()
+    if _GRANT_PATTERN_CHARACTERS.search(resource):
+        raise ValueError(
+            f'{scope} grants require exact resources; wildcard pattern {resource!r} is forbidden'
+        )
+    if scope == 'protected-path':
+        while resource.startswith('./'):
+            resource = resource[2:]
+        parts = resource.split('/')
+        if (
+            not resource
+            or resource.startswith('/')
+            or re.match(r'^[A-Za-z]:', resource)
+            or any(part in {'', '.', '..'} for part in parts)
+        ):
+            raise ValueError(
+                f'protected-path grants require an exact repository-relative file path, not {raw!r}'
+            )
+    return resource
+
+
 def add_approval(
     root: Path,
     scope: str,
@@ -251,16 +280,15 @@ def add_approval(
     if unsupported:
         raise ValueError(f'actions are outside scope {normalized_scope}: {sorted(unsupported)}')
 
-    normalized_resources = sorted({str(item).replace('\\', '/').strip() for item in (resources or []) if str(item).strip()})
+    normalized_resources = sorted({
+        _normalize_grant_resource(normalized_scope, str(item)) for item in (resources or []) if str(item).strip()
+    })
     if normalized_scope in {'external-write', 'protected-path'} and not normalized_resources:
         raise ValueError(f'{normalized_scope} grants require explicit resources')
 
-    from .human_gates import gate_block_reason, route_has_gate
+    from .human_gates import gate_block_reason
 
     if normalized_scope == 'external-write':
-        if any(any(char in resource for char in '*?[') for resource in normalized_resources):
-            if route_has_gate(root, 'migration_or_external_write_approval'):
-                raise ValueError('route external-write gate requires exact resources, not patterns')
         for resource in normalized_resources:
             gate_reason = gate_block_reason(root, normalized_scope, 'external-write', resource)
             if gate_reason:
@@ -361,8 +389,9 @@ def has_valid_approval(
             continue
         if action and action not in set(approval.get('actions') or []):
             continue
-        patterns = [str(item).replace('\\', '/') for item in approval.get('resources') or []]
-        if normalized_resource is not None and not any(fnmatch.fnmatchcase(normalized_resource, pattern) for pattern in patterns):
+        # Exact equality only: a stored pattern (legacy or hand-edited) never widens a grant.
+        resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
+        if normalized_resource is not None and normalized_resource not in resources:
             continue
         matched = True
     if len(kept) != len(approvals):
