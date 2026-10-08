@@ -1761,7 +1761,7 @@
         "terminal_action": "reject",
         "timeout_ms": 300000
       },
-      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "from": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
       "id": "EDGE-LOCAL-SUPPLY-CHAIN-FETCH",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
@@ -2014,7 +2014,7 @@
         "evidence": "source_described",
         "kind": "python_process",
         "lifecycle": "on_demand",
-        "network": "declared_egress"
+        "network": "none"
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
@@ -2796,6 +2796,25 @@
       "secrets": [],
       "trust_domain": "TD-EXTERNAL-PLATFORM",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/updater.py",
+        "scripts/getzilla_update.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
     }
   ],
   "schema_version": 1,
