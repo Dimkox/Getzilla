@@ -53,4 +53,6 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/opengrep/opengrep"
           echo "$RUNNER_TEMP/opengrep" >> "$GITHUB_PATH"
       - name: Getzilla verification
+        env:
+          GETZILLA_OSV_ONLINE: "1"
         run: python scripts/getzilla_verify.py --mode pr

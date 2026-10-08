@@ -29,6 +29,7 @@ from .receipts import (
 )
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
+from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
@@ -1655,50 +1656,16 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
-OPENGREP_RULES = '.getzilla/sast/rules'
-OPENGREP_EXCLUDES = ('.getzilla/sast', 'tests', '**/fixtures/**', 'node_modules', 'vendor', '.getzilla/runtime')
-
-
-def _opengrep(root: Path) -> CheckResult:
-    """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
-    rules = root / OPENGREP_RULES
-    if not rules.is_dir():
-        return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
-    if not command_exists('opengrep'):
-        return CheckResult('opengrep', 'skip', 'opengrep not available')
-    command = ['opengrep', 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
-               '--disable-version-check', '--timeout', '30']
-    for pattern in OPENGREP_EXCLUDES:
-        command.extend(('--exclude', pattern))
-    command.append('.')
-    result = run(command, cwd=root, timeout=900, encoding='utf-8', errors='replace')
+def _known_vulnerabilities(root: Path) -> CheckResult:
     try:
-        report = json.loads(result.stdout or '{}')
-    except ValueError:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without a JSON report',
-                           command=command, stderr=result.stderr[-4000:])
-    if result.returncode not in {0, 1}:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
-                           stderr=result.stderr[-4000:])
-    findings = report.get('results') or []
-    errors = [item for item in report.get('errors') or [] if str(item.get('level', 'error')).lower() == 'error']
+        report = scan_known_vulnerabilities(root)
+    except VulnerabilityError as exc:
+        return CheckResult('known-vulnerabilities', 'fail', str(exc))
     details = [
-        {
-            'rule': str(item.get('check_id', '')),
-            'path': str(item.get('path', '')),
-            'line': str((item.get('start') or {}).get('line', '')),
-            'severity': str((item.get('extra') or {}).get('severity', '')),
-            'message': str((item.get('extra') or {}).get('message', ''))[:300],
-        }
-        for item in findings[:200]
+        {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+        for item in report['findings'][:200]
     ]
-    if findings:
-        return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
-                           command=command, details=details)
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} errors', command=command,
-                           stderr=json.dumps(errors[:20])[-4000:])
-    return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
+    return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
 
 
 def _trivy_config_present(root: Path) -> bool:
@@ -2363,9 +2330,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     if _trivy_config_present(root):
         dispatch.run('trivy-config', lambda: _trivy_config(root))
-    state.stage = 'opengrep'
+    state.stage = 'known-vulnerabilities'
     cancellation.check()
-    dispatch.run('opengrep', lambda: _opengrep(root))
+    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:

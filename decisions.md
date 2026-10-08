@@ -1,12 +1,16 @@
 # Decisions
 
-## 2026-10-07 — OpenGrep with our own rules in both gates, not CodeQL
+## 2026-10-07 — Trust CI is paid for private repositories
 
-CodeQL's license forbids private-code and hosted use without GitHub Advanced Security, and the `semgrep-rules`/`opengrep-rules` sets forbid selling a service built on them. The free GitHub Actions template and the Trust CI runner therefore both install the same pinned LGPL OpenGrep release with Getzilla-authored, MIT-licensed taint rules tested by `opengrep --test` (the owner chose to keep the rules free); anywhere without the binary the check skips explicitly.
+Public repositories keep the free GitHub Actions gate; Trust CI runs on owned hardware, so private repositories pay for it. Access is per GitHub account, invoiced by hand and granted as an explicit owner profile (`adaptive_trust_ci.customers`); there is no open "anyone who installed the App" profile, so unpaid accounts never run code on the CI host. Prices are on request for now.
 
 ## 2026-10-06 — CI gate follows repository visibility
 
 Supersedes "Never GitHub Actions" (2026-08-16). A public repository is gated by GitHub Actions, a private repository by Trust CI (`adaptive-trust-ci`). `scripts/getzilla_ci.py` detects visibility and renders `.getzilla/templates/ci/github-actions-verify.yml` only for public repositories; it never overwrites and never touches branch protection. Getzilla is public, so `.github/workflows/getzilla.yml` runs its suite on Linux and Windows. Workflows pin actions to full commit SHAs, grant only `contents: read`, never use secrets or `pull_request_target`, and are never dispatched by an agent. Dependabot and other CI vendors stay out. Local `getzilla_verify.py --mode pr` stays the pre-push gate.
+
+## 2026-10-05 — Keep reviewed SQL bytes distinct from semantic phase proof
+
+A separately fixed primary-to-mirror path map and independently reviewed raw SHA256 pins preserve closed compatibility without pretending the semicolon parser understands PostgreSQL functions and grants; 004 remains bound to bacb5346a95d25166e1f7c597b3f91bd5935c234 and forward 005 to 1f48c4ccc84192780395b18957ba8c9779e30f00, while synthetic fixtures and arbitrary digest keys supply no production path authority. Remove only the four exact public contract additions before comparing the original model envelope, and require their changed owner-bound source bytes so incidental legacy edits cannot qualify them. Execute every named negative case in the parameter list: branch labels alone provided no coverage for several existing source-separation claims.
 
 ## 2026-10-05 — Bind the real consumer and version changed wire semantics
 
@@ -1093,3 +1097,7 @@ The installer inventory deliberately appends `MANAGED_FILES`, then excludes `ROO
 ## 2026-10-04 — Combine frozen compatible source changes before requalification
 
 The user prefers one product PR, and the external refusal already invalidated qualification, so the same selected writer integrates the exact frozen shim cleanup into PR242 before refreshed reviews and one final gate. This avoids two new expensive full/App cycles without caching PASS, changing selected profiles or reducing the test inventory. Canonical hooks, installer/template bytes, deployed policy, external approvals and protection remain unchanged.
+
+## 2026-10-05 — Freeze fixture commits before qualifying Git-bound matrices
+
+Prepare every disposable fixture head before evaluating exact-base/head diffs, because intervening commits change Git registration identity and invalidate the immutable baseline cache. Retain public-API snapshots per head and assert their architecture digest against the actual diff before calling the unchanged fitness predicate; all real model/contracts and negative cases remain. A private positive/owner-negative profile improved from7.574s to5.522s without a production/cache patch, but this is not proof of meeting the external serial timeout.

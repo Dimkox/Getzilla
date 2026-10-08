@@ -12,9 +12,9 @@ The checked-in `config/policy.example.json` is configuration shape documentation
 
 The suffix is a policy epoch. A green check produced under an older policy or holdout digest cannot satisfy the current protected-branch requirement.
 
-## Taint analysis in the runner
+## Paid access
 
-`runner.Dockerfile` installs OpenGrep (`OPENGREP_VERSION`, checked against `OPENGREP_SHA256` before use), so Getzilla's `opengrep` verification check runs Getzilla's own taint rules inside the network-less sandbox. To upgrade, change both build arguments, verify the release with `cosign verify-blob` against its published `.sig`/`.cert`, rebuild the runner image and pin the new image digest in the policy (which rotates the policy epoch).
+Trust CI runs on owned hardware and is offered as a paid service for private repositories; public repositories use the free GitHub Actions gate that `scripts/getzilla_ci.py --write` renders. Access is granted per GitHub account, by hand after an invoice is paid: `python -m adaptive_trust_ci.customers add|remove|list` plans the owner profile change against the deployed policy without touching it (see `engineering/runbooks/getzilla-trust-ci-onboarding.md`, step 7). Accounts without a profile are rejected before enqueue, so nothing of theirs runs on the CI host.
 
 ## Repository-scoped policy profiles
 

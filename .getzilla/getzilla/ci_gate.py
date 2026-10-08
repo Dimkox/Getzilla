@@ -42,6 +42,7 @@ WORKFLOW_PATH = '.github/workflows/getzilla-verify.yml'
 TEMPLATE_PATH = '.getzilla/templates/ci/github-actions-verify.yml'
 SOURCE_WORKFLOW_PATH = '.github/workflows/getzilla.yml'
 ONBOARDING_RUNBOOK = 'engineering/runbooks/getzilla-trust-ci-onboarding.md'
+TRUST_CI_ACCESS_URL = 'https://github.com/Dimkox/Getzilla/issues/new?template=trust-ci-access.yml'
 CHECK_NAME = 'getzilla-verify'
 BRANCH_PLACEHOLDER = '__GETZILLA_DEFAULT_BRANCH__'
 FALLBACK_BRANCH = 'main'
@@ -308,9 +309,10 @@ def trust_ci_onboarding_steps(slug: str | None) -> list[str]:
     return [
         f'Nothing is written: {repository} is private, so its merge gate is Trust CI '
         '(the self-hosted GitHub App adaptive-trust-ci), not GitHub Actions.',
-        f'The deployed Trust CI policy must cover {repository}: an exact repository profile, or an owner '
-        f'profile for {owner} (owner profiles need the Trust CI code that understands owner_profiles); '
-        'repositories of any other owner are rejected before enqueue.',
+        'Trust CI is a paid service for private repositories (public repositories use GitHub Actions for free). '
+        f'Request access for {owner}: {TRUST_CI_ACCESS_URL}',
+        f'Once access is granted the operator adds an owner profile for {owner} to the deployed Trust CI policy '
+        '(adaptive_trust_ci.customers add); repositories of any account without access are rejected before enqueue.',
         f'Install the adaptive-trust-ci GitHub App on {repository}.',
         'Open a small pull request and confirm the App-owned check adaptive-trust-ci/verified@<policy-sha12> '
         'on its exact head SHA.',

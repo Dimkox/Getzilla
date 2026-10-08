@@ -86,6 +86,9 @@ class SandboxSpec:
     cpus: float
     pids_limit: int
     tmpfs_mb: int
+    # Optional offline OSV mirror on the Docker host, mounted read-only at
+    # /vulndb so the network-less runner can check known vulnerabilities.
+    vulnerability_db_host_path: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> 'SandboxSpec':
@@ -104,6 +107,12 @@ class SandboxSpec:
         cpus_raw = data.get('cpus')
         if isinstance(cpus_raw, bool) or not isinstance(cpus_raw, (int, float)) or not 0.1 <= float(cpus_raw) <= 128:
             raise PolicyError('sandbox cpus must be between 0.1 and 128')
+        vulnerability_db = data.get('vulnerability_db_host_path')
+        if vulnerability_db is not None:
+            if not isinstance(vulnerability_db, str) or vulnerability_db.strip() != vulnerability_db \
+                    or not Path(vulnerability_db).is_absolute() or '..' in Path(vulnerability_db).parts \
+                    or ':' in vulnerability_db:
+                raise PolicyError('sandbox vulnerability_db_host_path must be an absolute host path without traversal')
         return cls(
             runtime=runtime,
             image=image,
@@ -112,6 +121,7 @@ class SandboxSpec:
             cpus=float(cpus_raw),
             pids_limit=pids_limit,
             tmpfs_mb=tmpfs_mb,
+            vulnerability_db_host_path=vulnerability_db,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +133,8 @@ class SandboxSpec:
             'cpus': self.cpus,
             'pids_limit': self.pids_limit,
             'tmpfs_mb': self.tmpfs_mb,
+            **({'vulnerability_db_host_path': self.vulnerability_db_host_path}
+               if self.vulnerability_db_host_path is not None else {}),
         }
 
 

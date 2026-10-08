@@ -1,0 +1,37 @@
+name: Trust CI access for private repositories
+description: Ask for paid Trust CI verification of private repositories. Public repositories use GitHub Actions for free.
+title: "Trust CI access: <account>"
+labels: ["trust-ci-access"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Trust CI re-runs Getzilla's checks on the exact pull-request commit on a dedicated server and publishes a signed, App-owned check. It is a paid service for **private** repositories; public repositories are gated by GitHub Actions for free (`python3 scripts/getzilla_ci.py --write`).
+        You receive an invoice; access is enabled for the whole GitHub account once it is paid. Do not post secrets, keys or private code here.
+  - type: input
+    id: account
+    attributes:
+      label: GitHub account
+      description: User or organization login whose private repositories should be verified.
+      placeholder: acme-corp
+    validations:
+      required: true
+  - type: input
+    id: repositories
+    attributes:
+      label: Number of private repositories
+      placeholder: "3"
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Where to send the invoice
+      description: An email or messenger handle. This issue is public; leave it empty to be contacted in the issue instead.
+  - type: checkboxes
+    id: getzilla
+    attributes:
+      label: Requirements
+      options:
+        - label: Getzilla is installed in these repositories (Trust CI verifies Getzilla installations).
+          required: true

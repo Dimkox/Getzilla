@@ -116,7 +116,21 @@ Protecting a repository before a green App-owned check exists for its current ep
 
 Making it public is effectively one-way: GitHub does not let a public App become private again while it is installed on other accounts.
 
-Strangers can install it, but the service only enqueues repositories covered by an exact or owner profile; everything else is rejected before any code runs on the CI host. To serve another account, add an owner profile for it (or an exact profile per repository) with the planner, review it and install it like any policy change.
+Strangers can install it, but the service only enqueues repositories covered by an exact or owner profile; everything else is rejected before any code runs on the CI host.
+
+## 7. Paid access for other accounts
+
+Trust CI runs on owned hardware, so it is a paid service for **private** repositories; public repositories are gated by GitHub Actions for free (`scripts/getzilla_ci.py --write`). An account asks for access with the [Trust CI access issue form](https://github.com/Dimkox/Getzilla/issues/new?template=trust-ci-access.yml), is invoiced by hand, and gets access once it has paid:
+
+```bash
+cd "$DEPLOY"
+PYTHONPATH="$SRC/trust-ci/src" python3 -m adaptive_trust_ci.customers add \
+  --policy runtime/policy.json --out runtime/policy.next.json --owner <login> \
+  --holdout-root "$TRUST_CI_HOLDOUT_PATH" --holdout-host-root "$TRUST_CI_HOLDOUT_HOST_PATH" \
+  --bundle "$SRC/trust-ci/holdout.consumer.example"
+```
+
+The report names the bundle to copy (`install_bundle.to`) and the one new check name; no other profile's check changes. Copy the bundle, review the planned file, swap it in for `runtime/policy.json`, and restart the API and workers. The account then installs the App on its private repositories and binds branch protection after the first green check. When access lapses, `customers remove --owner <login>` plans the reverse change; `customers list --policy runtime/policy.json` shows who has access.
 
 ## Why Getzilla started from a direct import
 
