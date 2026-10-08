@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-08 — A conflict resolution dropped the OpenGrep verifier stage
+
+Root cause: merge `4ae0447` resolved a `verification.py` conflict by keeping only the known-vulnerabilities side, so `_opengrep()`, its rule and exclude constants and the quality-gate skip entry disappeared. Nobody ran the full suite after the merge, and four more failures piled up on main (#19–#23). When resolving a conflict in a verifier module, keep both stages, run `tests/test_opengrep.py` and `tests/test_quality_gates.py`, and run the full PR verifier before pushing the merge.
+
 ## 2026-10-08 — A stdlib import turned on an analyser that could not converge
 
 `ccaab18` added `import queue` (stdlib, for the Windows pipe pump) to `architecture_diff.py`. That made the queue provenance analyser interpret the module for the first time. Its list-append loops never reached a fixpoint, and its merge charges overran the value budget. Every later edit to a module importing `architecture_diff` (for example `verification.py`) failed architecture fitness as FIT-BOUNDED-WORKER-JOBS unsupported, with no override. The analyser only had tests on small snippets. When adding a queue-library import (stdlib included) to a Getzilla module, check that `analyze_queue_tree` still accepts it; `tests/test_architecture_fitness.py` now pins `architecture_diff.py` within the default limits.
