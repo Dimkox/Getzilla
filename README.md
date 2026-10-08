@@ -33,6 +33,12 @@ You do not give up vibe coding. The rule is **vibe first, check second**: build 
 4. **Review it.** Separate AI reviewers read the change and write down what they find.
 5. **Ship it.** A pull request is opened, and a person merges it. Teams that want an extra lock can add Trust CI, a separate service that tests the exact version again before merge.
 
+## What it costs
+
+- **Getzilla itself** is free.
+- **Public repositories** are gated by GitHub Actions for free: `python3 scripts/getzilla_ci.py --write` adds a pinned, read-only workflow.
+- **Private repositories** are gated by Trust CI, which runs on dedicated hardware. It is paid, priced on request: [ask for access](https://github.com/Dimkox/Getzilla/issues/new?template=trust-ci-access.yml).
+
 ## Try it
 
 One command installs everything that is missing (Git, Python, the Grok Build CLI), downloads Getzilla to `~/Getzilla` and checks the machine.

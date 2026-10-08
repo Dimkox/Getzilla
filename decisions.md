@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-07 — Trust CI is paid for private repositories
+
+Public repositories keep the free GitHub Actions gate; Trust CI runs on owned hardware, so private repositories pay for it. Access is per GitHub account, invoiced by hand and granted as an explicit owner profile (`adaptive_trust_ci.customers`); there is no open "anyone who installed the App" profile, so unpaid accounts never run code on the CI host. Prices are on request for now.
+
 ## 2026-10-06 — CI gate follows repository visibility
 
 Supersedes "Never GitHub Actions" (2026-08-16). A public repository is gated by GitHub Actions, a private repository by Trust CI (`adaptive-trust-ci`). `scripts/getzilla_ci.py` detects visibility and renders `.getzilla/templates/ci/github-actions-verify.yml` only for public repositories; it never overwrites and never touches branch protection. Getzilla is public, so `.github/workflows/getzilla.yml` runs its suite on Linux and Windows. Workflows pin actions to full commit SHAs, grant only `contents: read`, never use secrets or `pull_request_target`, and are never dispatched by an agent. Dependabot and other CI vendors stay out. Local `getzilla_verify.py --mode pr` stays the pre-push gate.
