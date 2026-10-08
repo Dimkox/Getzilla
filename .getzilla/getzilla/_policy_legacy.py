@@ -952,11 +952,11 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
 
 def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
     """Target host of a gh command: ``--hostname`` flag, else ``GH_HOST`` from the prefix."""
-    for index, token in enumerate(argv):
-        if token == '--hostname' and index + 1 < len(argv):
+    for index, word in enumerate(argv):
+        if word == '--hostname' and index + 1 < len(argv):
             return argv[index + 1].lower()
-        if token.startswith('--hostname='):
-            return token.split('=', 1)[1].lower()
+        if word.startswith('--hostname='):
+            return word.split('=', 1)[1].lower()
     if env and env.get('GH_HOST'):
         return env['GH_HOST'].lower()
     return None
