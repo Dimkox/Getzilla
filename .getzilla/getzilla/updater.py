@@ -217,6 +217,8 @@ def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None
     version = f'v{OPENGREP_VERSION}'
     target = root / 'bin' / ('opengrep.exe' if asset_name.endswith('.exe') else 'opengrep')
     if _sha256_file(target) == expected:
+        if os.name != 'nt' and not os.access(target, os.X_OK):
+            target.chmod(0o755)  # a restored or copied binary may have lost its execute bits
         return [Result('tool:opengrep', 'ok', f'{version} (already installed, sha256 verified)')]
     try:
         data = fetch(OPENGREP_DOWNLOAD.format(version=OPENGREP_VERSION, asset=asset_name))
