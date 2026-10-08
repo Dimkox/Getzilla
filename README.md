@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/instal
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder.
 
-To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database, OpenGrep) to their latest versions, run `python3 scripts/getzilla_update.py`; the installer offers this at the end of every run.
+To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this at the end of every run.
 
 Then, from the Getzilla folder, take the read-only tour in your browser:
 
