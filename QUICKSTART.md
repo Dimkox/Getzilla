@@ -5,7 +5,7 @@ Use this page for the simple path. It gives you a local candidate and evidence. 
 **One-command install.** These installers add whatever is missing (Git, Python 3.10+, your coding agent: Qwen Code by default, or Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Grok Build), point the agent at its models (OpenRouter with your own key from https://openrouter.ai/keys by default, or the agent's own sign-in), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
 
 ```powershell
-# Windows: winget when available, otherwise official per-user installers (no admin rights needed)
+# Windows: winget when available (installed from github.com/microsoft/winget-cli when missing, e.g. on Windows 10), otherwise official per-user downloads (no admin rights needed)
 irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
 ```
 

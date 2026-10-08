@@ -97,6 +97,53 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertEqual(node['minimum'], '20.0')
         self.assertIn('read -rs key </dev/tty', shell)
 
+    def test_powershell_installer_installs_winget_or_falls_back_to_direct_downloads(self) -> None:
+        text = POWERSHELL.read_text(encoding='utf-8')
+        for needle in ('    Initialize-Winget\n', 'repos/microsoft/winget-cli/releases/latest',
+                       'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle', 'DesktopAppInstaller_Dependencies.zip',
+                       'Add-AppxPackage -Path $package -DependencyPath $paths', 'GETZILLA_SKIP_WINGET',
+                       'repos/PowerShell/PowerShell/releases/latest', 'https://nodejs.org/dist/index.json'):
+            self.assertIn(needle, text)
+        self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
+
+    @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
+    def test_powershell_no_winget_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            deps = Path(tmp) / 'deps'
+            for arch in ('x64', 'arm64', 'x86'):
+                (deps / arch).mkdir(parents=True)
+                (deps / arch / f'Microsoft.VCLibs.140.00.UWPDesktop_14.0_{arch}.appx').write_text('x')
+                (deps / arch / f'Microsoft.UI.Xaml.2.8_8.2310_{arch}.appx').write_text('x')
+            archive = Path(tmp) / 'node.zip'
+            shutil.make_archive(str(archive.with_suffix('')), 'zip', root_dir=ROOT / 'tests', base_dir='fixtures')
+            command = (
+                f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
+                '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
+                'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
+                "$index = @(@{version='v25.1.0'; lts=$false}, @{version='v24.11.1'; lts='Krypton'}, "
+                "@{version='v22.21.0'; lts='Jod'}, @{version='v20.19.5'; lts='Iron'}); "
+                "'node20=' + (Select-NodeLts $index 20); 'node25=' + (Select-NodeLts $index 25); "
+                "$env:PROCESSOR_ARCHITEW6432 = $null; $env:PROCESSOR_ARCHITECTURE = 'ARM64'; 'arch=' + (Get-WindowsArchitecture); "
+                f"'deps=' + ((Select-WingetDependencies '{deps}' 'arm64' | ForEach-Object {{ Split-Path $_ -Leaf }}) -join ','); "
+                f"$env:LOCALAPPDATA = '{tmp}'; 'program=' + (Expand-ToUserPrograms '{archive}' 'nodejs'); "
+                "function Test-Winget { $false }; $env:GETZILLA_SKIP_WINGET = '1'; Initialize-Winget"
+            )
+            result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True,
+                                    timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('node20=v24.11.1', result.stdout)
+            self.assertIn('node25=\n', result.stdout + '\n')
+            self.assertIn('arch=arm64', result.stdout)
+            deps_line = next(line for line in result.stdout.splitlines() if line.startswith('deps='))
+            self.assertEqual(sorted(deps_line[5:].split(',')), [
+                'Microsoft.UI.Xaml.2.8_8.2310_arm64.appx', 'Microsoft.VCLibs.140.00.UWPDesktop_14.0_arm64.appx',
+            ])
+            program = Path(tmp) / 'Programs' / 'nodejs'
+            self.assertIn(f'program={program}', result.stdout)
+            self.assertTrue(any(program.iterdir()))
+            self.assertFalse(archive.exists())
+            self.assertIn('skipping its installation (GETZILLA_SKIP_WINGET=1)', result.stdout)
+
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_minimum_version_check_accepts_the_host_pwsh(self) -> None:
         command = (

@@ -25,6 +25,12 @@
 #   $env:GETZILLA_SKIP_AGENT = '1'              do not install or configure the coding agent
 #   $env:GETZILLA_SKIP_GROK = '1'               do not install the Grok Build CLI (when the agent is grok)
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
+#   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
+#
+# winget is missing on many Windows 10 machines. The installer then installs it
+# (App Installer from github.com/microsoft/winget-cli); if that is not possible it
+# downloads Git, Python, PowerShell 7 and Node.js directly and installs them for the
+# current user, without administrator rights.
 #
 # Coding agents: Qwen Code and Codex install with npm (Node.js LTS is installed with winget
 # when missing), Claude Code and Grok Build with their vendors' official installers. Models
@@ -51,6 +57,8 @@ function Install-Getzilla {
     if (-not $Repo) { $Repo = 'https://github.com/Dimkox/Getzilla.git' }
 
     Write-Step 'Getzilla installer (Windows)'
+
+    Initialize-Winget
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Install-Git }
     Write-Step ("Git: " + (& git --version))
@@ -144,6 +152,98 @@ function Invoke-Winget([string]$Id, [string[]]$Extra) {
     $arguments = @('install', '-e', '--id', $Id, '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
     & winget @arguments | Out-Host
     return ($LASTEXITCODE -eq 0)
+}
+
+function Get-WindowsArchitecture {
+    $name = $env:PROCESSOR_ARCHITEW6432
+    if (-not $name) { $name = $env:PROCESSOR_ARCHITECTURE }
+    switch -Regex ("$name") {
+        '^ARM64$' { return 'arm64' }
+        '^x86$' { return 'x86' }
+        default { return 'x64' }
+    }
+}
+
+function Select-WingetDependencies([string]$Root, [string]$Architecture) {
+    if (-not (Test-Path $Root)) { return @() }
+    return @(Get-ChildItem -Path $Root -Recurse -File -Include '*.appx', '*.msix' |
+        Where-Object { $_.Directory.Name -eq $Architecture -or $_.Name -match "_$([regex]::Escape($Architecture))\." } |
+        ForEach-Object { $_.FullName })
+}
+
+function Initialize-Winget {
+    if (Test-Winget) {
+        Write-Step ('winget: ' + ((& winget --version) | Select-Object -First 1))
+        return
+    }
+    if ($env:GETZILLA_SKIP_WINGET -eq '1') {
+        Write-Step 'winget is missing; skipping its installation (GETZILLA_SKIP_WINGET=1). Using direct downloads.'
+        return
+    }
+    try {
+        if (Install-Winget) {
+            Write-Step ('winget installed: ' + ((& winget --version) | Select-Object -First 1))
+            return
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    Write-Step 'winget could not be installed here; Git, Python, PowerShell 7 and Node.js will be downloaded directly.'
+}
+
+function Install-Winget {
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        Import-Module Appx -UseWindowsPowerShell -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    }
+    if (-not (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue)) { return $false }
+    Write-Step 'winget is missing (common on Windows 10). Installing App Installer from github.com/microsoft/winget-cli...'
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -UseBasicParsing
+    $bundle = $release.assets | Where-Object { $_.name -eq 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' } | Select-Object -First 1
+    $dependencies = $release.assets | Where-Object { $_.name -eq 'DesktopAppInstaller_Dependencies.zip' } | Select-Object -First 1
+    if (-not $bundle) { return $false }
+    $paths = @()
+    if ($dependencies) {
+        $zip = Get-Download $dependencies.browser_download_url $dependencies.name
+        $folder = Join-Path ([System.IO.Path]::GetTempPath()) 'getzilla-winget-dependencies'
+        if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
+        Expand-Archive -Path $zip -DestinationPath $folder -Force
+        Remove-Item -Force $zip
+        $paths = Select-WingetDependencies $folder (Get-WindowsArchitecture)
+    }
+    $package = Get-Download $bundle.browser_download_url $bundle.name
+    if ($paths.Count) {
+        Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop
+    } else {
+        Add-AppxPackage -Path $package -ErrorAction Stop
+    }
+    Remove-Item -Force $package
+    $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+    if (($env:Path -split ';') -notcontains $apps) { $env:Path = "$env:Path;$apps" }
+    return (Test-Winget)
+}
+
+function Expand-ToUserPrograms([string]$Zip, [string]$Name) {
+    $target = Join-Path $env:LOCALAPPDATA "Programs\$Name"
+    $staging = Join-Path ([System.IO.Path]::GetTempPath()) "getzilla-$Name"
+    foreach ($path in @($target, $staging)) { if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
+    Expand-Archive -Path $Zip -DestinationPath $staging -Force
+    Remove-Item -Force $Zip
+    $children = @(Get-ChildItem -Path $staging)
+    $source = $staging
+    if ($children.Count -eq 1 -and $children[0].PSIsContainer) { $source = $children[0].FullName }
+    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+    Move-Item -Path $source -Destination $target
+    if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
+    return $target
+}
+
+function Select-NodeLts($Index, [int]$Minimum) {
+    foreach ($release in $Index) {
+        if (-not $release.lts) { continue }
+        $major = [int]("$($release.version)".TrimStart('v').Split('.')[0])
+        if ($major -ge $Minimum) { return "$($release.version)" }
+    }
+    return $null
 }
 
 function Get-Download([string]$Url, [string]$FileName) {
@@ -242,6 +342,20 @@ function Install-PowerShell7 {
     Write-Step "Installing PowerShell $MinimumPowerShell or newer (Getzilla's minimum)..."
     if ((Test-Winget) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
     $pwsh = Get-Pwsh
+    if (-not ($pwsh -and $pwsh.Version -ge $MinimumPowerShell)) {
+        try {
+            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -UseBasicParsing
+            $pattern = '^PowerShell-[0-9.]+-win-' + (Get-WindowsArchitecture) + '\.zip$'
+            $asset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+            if ($asset) {
+                $folder = Expand-ToUserPrograms (Get-Download $asset.browser_download_url $asset.name) 'PowerShell7'
+                Add-UserPath $folder
+            }
+        } catch {
+            Write-Verbose $_.Exception.Message
+        }
+        $pwsh = Get-Pwsh
+    }
     if ($pwsh -and $pwsh.Version -ge $MinimumPowerShell) {
         Write-Step ("PowerShell: " + $pwsh.Version)
     } else {
@@ -340,6 +454,18 @@ function Install-Node([int]$Minimum = 20) {
     if (Test-Node $Minimum) { return $true }
     Write-Step "Installing Node.js LTS ($Minimum or newer is needed)..."
     if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
+    if (Test-Node $Minimum) { return $true }
+    try {
+        $version = Select-NodeLts (Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing) $Minimum
+        if ($version) {
+            $name = "node-$version-win-$(Get-WindowsArchitecture).zip"
+            $folder = Expand-ToUserPrograms (Get-Download "https://nodejs.org/dist/$version/$name" $name) 'nodejs'
+            Add-UserPath $folder
+            Add-UserPath (Join-Path $env:APPDATA 'npm')
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
     if (Test-Node $Minimum) { return $true }
     Write-Step "Node.js $Minimum or newer is still missing. Install it from https://nodejs.org and run this installer again."
     return $false
