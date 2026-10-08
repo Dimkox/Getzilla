@@ -1847,3 +1847,7 @@ Root cause: two fake local-dispatch controls inherited `GROK_VERIFY_CAPABILITY=r
 ## 2026-10-04 — Inventory membership was mistaken for source-file existence
 
 Root cause: an analysis inferred alias source-file existence from managed inventory membership without reading the inventory producer and alias rendering branch. `_SourceTree.inventory()` inserts virtual managed names and `build_payload()` skips their source reads, so the warning was corrected before runtime edits; inspect both sides of this seam before changing the installer.
+
+## 2026-10-08 — The updater trusted `latest` for an executable the CI pins
+
+Root cause: the tool updater was written as "follow upstream latest" for every component, including the OpenGrep binary that the verifier executes, while CI already pinned and checksummed the same binary; integrity was treated as a CI concern instead of a property of every download path that produces an executable. Any code path that writes an executable must pin and verify it (#39).

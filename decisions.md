@@ -1105,3 +1105,7 @@ The user prefers one product PR, and the external refusal already invalidated qu
 ## 2026-10-05 — Freeze fixture commits before qualifying Git-bound matrices
 
 Prepare every disposable fixture head before evaluating exact-base/head diffs, because intervening commits change Git registration identity and invalidate the immutable baseline cache. Retain public-API snapshots per head and assert their architecture digest against the actual diff before calling the unchanged fitness predicate; all real model/contracts and negative cases remain. A private positive/owner-negative profile improved from7.574s to5.522s without a production/cache patch, but this is not proof of meeting the external serial timeout.
+
+## 2026-10-08 — Pin executables the verifier runs, keep the pin in lockstep with CI
+
+The updater now installs OpenGrep only from a pinned release after a SHA-256 match, using Python constants because consumer installs do not ship `trust-ci/`, and a test keeps the version and linux digest equal to `trust-ci/runner.Dockerfile`. One pin, checked in two places, gives local machines the same integrity guarantee as CI without a second source of truth drifting (#39).
