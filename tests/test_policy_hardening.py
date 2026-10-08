@@ -430,6 +430,23 @@ class Review3RootDeleteTests(_Case):
         self.assert_allowed(('find build -name "*.o" -delete', 'rsync -a --delete dist/ out/', 'find / -name x -print'))
 
 
+class Review4WrappedRootDeleteTests(_Case):
+    """Round-4 review: find/rsync root deletes behind any wrapper, and rsync options after the destination."""
+
+    def test_wrapped_find_and_rsync_root_deletes_are_blocked(self) -> None:
+        self.assert_denied((
+            'ionice -c3 find / -delete', 'flock /l find / -delete', 'chrt -i 0 find / -delete',
+            'watch find / -delete', 'unbuffer find / -delete', 'busybox find / -delete', 'toybox find / -delete',
+            'busybox rsync --delete x/ /', 'ionice rsync --delete x/ /',
+        ))
+
+    def test_rsync_options_after_the_destination_do_not_hide_it(self) -> None:
+        self.assert_denied(('rsync -a --delete x/ / --exclude foo', 'rsync --delete x/ / -e ssh'))
+
+    def test_scoped_wrapped_deletes_stay_allowed(self) -> None:
+        self.assert_allowed(('ionice find build -delete', 'ionice rsync -a --delete dist/ out/ --exclude foo'))
+
+
 class Review2WindowsTests(_Case):
     """Round-2 review (S59-6): Windows parity for carets, publish/HTTP, destructive and secret reads."""
 
