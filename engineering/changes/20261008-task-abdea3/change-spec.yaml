@@ -1,0 +1,71 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "trust-ci/tests/test_ops.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "trust-ci declares cryptography==50.0.2 and fastapi==0.142.4 and the Trust CI tests pass against them."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "OSV reports no known vulnerabilities for the trust-ci pins."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261008-task-abdea3",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "Accepting the advisories instead of upgrading."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_architecture_model.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Only trust-ci paths change (FIT-TRUST-CI-SEPARATION)."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Close the trust-ci known vulnerabilities from issue #22 by pinning cryptography 50.0.2 and fastapi 0.142.4.",
+    "success_metric": "getzilla_vulns.py --online reports no trust-ci findings and the Trust CI test suite passes on the new pins.",
+    "target": "trust-ci/pyproject.toml, trust-ci/README.md"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "generic"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
