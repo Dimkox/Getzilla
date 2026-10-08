@@ -29,6 +29,7 @@ from .receipts import (
 )
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
+from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
@@ -1655,6 +1656,18 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
+def _known_vulnerabilities(root: Path) -> CheckResult:
+    try:
+        report = scan_known_vulnerabilities(root)
+    except VulnerabilityError as exc:
+        return CheckResult('known-vulnerabilities', 'fail', str(exc))
+    details = [
+        {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+        for item in report['findings'][:200]
+    ]
+    return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
+
+
 def _trivy_config_present(root: Path) -> bool:
     return any((root / name).is_file() for name in _TRIVY_FILES) or bool(
         list(root.glob('docker-compose*.yml')) or list(root.glob('docker-compose*.yaml'))
@@ -2317,6 +2330,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     if _trivy_config_present(root):
         dispatch.run('trivy-config', lambda: _trivy_config(root))
+    state.stage = 'known-vulnerabilities'
+    cancellation.check()
+    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:

@@ -1,0 +1,15 @@
+test_normal_text_contrast_in_repaired_contexts (tests.test_getzilla_landing.GetzillaLandingTests.test_normal_text_contrast_in_repaired_contexts) ...
+  test_normal_text_contrast_in_repaired_contexts (tests.test_getzilla_landing.GetzillaLandingTests.test_normal_text_contrast_in_repaired_contexts) (context='CTA paragraph') ... FAIL
+
+======================================================================
+FAIL: test_normal_text_contrast_in_repaired_contexts (tests.test_getzilla_landing.GetzillaLandingTests.test_normal_text_contrast_in_repaired_contexts) (context='CTA paragraph')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/d8e33c67341b/getzilla-seo/tests/test_getzilla_landing.py", line 255, in test_normal_text_contrast_in_repaired_contexts
+    self.assertGreaterEqual((high + .05) / (low + .05), 4.5)
+AssertionError: 4.464976671382634 not greater than or equal to 4.5
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)

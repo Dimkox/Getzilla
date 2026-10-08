@@ -1,0 +1,24 @@
+{
+  "base_commit": "b7aa0a55f3236c578d4365f3f0e58ce5962cf319",
+  "live_url": "https://getzilla.app/",
+  "captured_at": "2026-10-07T11:17:36Z",
+  "analytics": {
+    "head": {
+      "repo_sha256": "c45825f2f9b0117307fe0fbf5c875ef0b9ab15d19e3cfd481045ef91c47fdb04",
+      "live_sha256": "c45825f2f9b0117307fe0fbf5c875ef0b9ab15d19e3cfd481045ef91c47fdb04",
+      "repo_equals_live": true,
+      "bytes": 1014
+    },
+    "noscript": {
+      "repo_sha256": "3576068d6e4ac30fc0bc8b3cffe297bec5180da34462409ab106ec00d2f4e679",
+      "live_sha256": "3576068d6e4ac30fc0bc8b3cffe297bec5180da34462409ab106ec00d2f4e679",
+      "repo_equals_live": true,
+      "bytes": 130
+    }
+  },
+  "repo_analytics_files": {
+    "side-projects/getzilla-landing/analytics/yandex-metrika.html": "7fe4a102fc407eb3e93e42319ba3a4e1e7aaf17084a472b5620a0bf71a974d25",
+    "side-projects/getzilla-landing/analytics/google-analytics.html": "a75449dfef9963ff4973fe7c4bf3438d9f6dd9509ae44642afa3f9b689d9ed39"
+  },
+  "source_drift": "Published page lacks Pricing/navigation and has pre-Pricing CTA spacing. Use latest merged main; preserve both tracking counters."
+}

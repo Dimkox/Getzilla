@@ -60,6 +60,7 @@ MANAGED_FILES = (
     "scripts/getzilla_spec.py",
     "scripts/getzilla_artifacts.py",
     "scripts/getzilla_verify.py",
+    "scripts/getzilla_vulns.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
     "scripts/getzilla_doctor.py",

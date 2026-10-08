@@ -25,6 +25,14 @@ RUN python -m pip install --no-cache-dir ".[test]" \
         bandit==1.9.4 \
         tomli==2.4.1
 
+ARG OPENGREP_VERSION=1.30.1
+ARG OPENGREP_SHA256=d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4
+RUN python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/opengrep')" \
+        "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86" \
+    && echo "${OPENGREP_SHA256}  /usr/local/bin/opengrep" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/opengrep \
+    && opengrep --version
+
 USER 10001:10001
 WORKDIR /workspace
 CMD ["python3", "--version"]

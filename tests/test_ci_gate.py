@@ -362,6 +362,8 @@ class CliTests(unittest.TestCase):
             steps = '\n'.join(plan['next_steps'])
             self.assertIn(ci_gate.ONBOARDING_RUNBOOK, steps)
             self.assertIn('owner profile for example-owner', steps)
+            self.assertIn('paid service', steps)
+            self.assertIn(ci_gate.TRUST_CI_ACCESS_URL, steps)
             code, out, _ = self.run_cli(
                 '--plan', '--json', '--target', tmp, fetch=lambda url: HttpResponse(404, b''),
             )

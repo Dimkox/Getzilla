@@ -65,6 +65,7 @@
     "getzilla_spec.py",
     "getzilla_status.py",
     "getzilla_agent.py",
-    "getzilla_verify.py"
+    "getzilla_verify.py",
+    "getzilla_vulns.py"
   ]
 }

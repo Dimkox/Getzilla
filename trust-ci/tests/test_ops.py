@@ -69,6 +69,39 @@ class OperationsTests(unittest.TestCase):
             )
         self.assertIn('PYTHONPATH=/workspace', argv)
 
+    def test_optional_vulnerability_mirror_is_mounted_read_only_and_keeps_old_digests(self) -> None:
+        plain = Policy.from_dict(policy_data())
+        self.assertNotIn('vulnerability_db_host_path', plain.sandbox.to_dict())
+        data = policy_data()
+        data['sandbox'] = {**data['sandbox'], 'vulnerability_db_host_path': '/var/lib/adaptive-trust-ci/osv'}
+        mirrored = Policy.from_dict(data)
+        self.assertNotEqual(mirrored.digest, plain.digest)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / 'workspace'
+            (workspace / '.git').mkdir(parents=True)
+            argv = ContainerExecutor(mirrored.sandbox).build_argv(
+                workspace=workspace,
+                workspace_host_path=Path('/var/lib/adaptive-trust-ci/workspaces/job-1'),
+                command=('python3', 'scripts/getzilla_vulns.py'),
+                env={},
+                container_name='trust-ci-test',
+            )
+            plain_argv = ContainerExecutor(plain.sandbox).build_argv(
+                workspace=workspace,
+                workspace_host_path=Path('/var/lib/adaptive-trust-ci/workspaces/job-1'),
+                command=('python3', 'scripts/getzilla_vulns.py'),
+                env={},
+                container_name='trust-ci-test',
+            )
+        self.assertIn('/var/lib/adaptive-trust-ci/osv:/vulndb:ro', ' '.join(argv))
+        self.assertIn('GETZILLA_OSV_DB=/vulndb', argv)
+        self.assertIn('--network', argv)
+        self.assertNotIn('/vulndb', ' '.join(plain_argv))
+        for bad in ('relative/osv', '/var/../etc', '/srv/osv:rw', ' /srv/osv'):
+            data['sandbox'] = {**data['sandbox'], 'vulnerability_db_host_path': bad}
+            with self.subTest(path=bad), self.assertRaises(Exception):
+                Policy.from_dict(data)
+
     def test_sandbox_rejects_relative_daemon_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / 'workspace'
@@ -134,6 +167,9 @@ class OperationsTests(unittest.TestCase):
         for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
                     'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
             self.assertIn(pin, runner)
+        self.assertIn('ARG OPENGREP_VERSION=1.30.1', runner)
+        self.assertRegex(runner, r'ARG OPENGREP_SHA256=[0-9a-f]{64}\n')
+        self.assertIn('sha256sum -c -', runner)
         pyproject = (ROOT / 'trust-ci/pyproject.toml').read_text(encoding='utf-8')
         self.assertIn('setuptools==84.0.0', pyproject)
         self.assertNotIn('setuptools>=', pyproject)

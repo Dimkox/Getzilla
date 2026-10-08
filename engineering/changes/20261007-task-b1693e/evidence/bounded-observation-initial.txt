@@ -1,0 +1,4 @@
+PASS python-named-smoke: exit=0 seconds=0.151 budget=180
+     INFO tests: observation only; no verification receipt
+PASS source-stability: repository fingerprint remained stable
+RESULT: PASS | mode=fast scope=not-run evidence=not-run reason=not-run | profiles= | changed=0 checked=0 focused_tests=none terminal=completed checks=pass receipt=not_recorded
