@@ -73,14 +73,6 @@ The write agent must:
 
 Do not spawn a second write agent for the same route. Review fixes return to the same write owner.
 
-## Tool-denial circuit breaker
-
-1. Never repeat an identical denied invocation.
-2. One semantic rewrite is allowed: split a compound command, remove unnecessary temporary output, use a structured tool, or follow the exact denial guidance.
-3. If the rewritten invocation is denied for the same objective, mark that objective `BLOCKED`, stop dependent subagents, skip its verification and review work, and report the blocker.
-4. Request a protected-path grant only when the hook names at least one exact repository-relative protected target. An opaque denial requires explicit targets, not a speculative grant.
-5. Treat the hook's exact-repeat and same-objective fingerprints as authoritative within their active denial window; cosmetic command changes do not reset the objective.
-
 ## 5. Bounded observations
 
 Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying `python3 scripts/getzilla_verify.py --mode pr`.
@@ -118,14 +110,25 @@ The active `engineering/changes/<id>/` package is workflow evidence, not product
 For every genuinely passing independent report, after the qualifying gate succeeds, record its exact evidence kind with fresh fingerprint-bound receipts that cover the persisted reports and final tree:
 
 ```bash
-python scripts/getzilla_review.py code_review --status pass --report engineering/changes/<id>/evidence/code-review.md
-python scripts/getzilla_review.py test_review --status pass --report engineering/changes/<id>/evidence/test-review.md
+python scripts/getzilla_review.py code_review --status pass --report engineering/changes/<id>/evidence/code-review.md --reviewed-commit <exact-full-sha>
+python scripts/getzilla_review.py test_review --status pass --report engineering/changes/<id>/evidence/test-review.md --reviewed-commit <exact-full-sha>
 ```
 
 Use `bitrix_review`, `security_review`, `data_review`, and `release_review` when requested. If review or verification cannot execute, record `NOT_RUN` or `BLOCKED` with the reason; do not fabricate a passing receipt or substitute self-review for an independent reviewer. Any change after review invalidates all receipts: repeat the independent reviews on the new tree, save the new reports, commit and freeze again, and run a new final gate. Never reuse evidence from another tree.
 
 ## 8. Close
 
-Run `python scripts/getzilla_status.py`. Completion requires zero evidence gaps. For durable changes, transition to `ready` after verification and review.
+Run `python scripts/getzilla_status.py`. Completion requires zero evidence gaps. For durable changes, freeze tracked state at `reviewing` before independent review; current receipts and exact-head gates qualify completion.
 
-Do not deploy, publish, merge, or perform external writes as part of closure. Those are separate, explicitly approved actions. The last mile is `python3 scripts/getzilla_deploy.py`; humans own the printed commands.
+Follow conditional AGENTS L5 for repository merge, tag and release. Record exact grants after green exact-head checks, independent review and resolved threads. Production mutation, deploy, external writes and security approvals need separate scoped authority. `python3 scripts/getzilla_deploy.py` remains prepare-only unless separately authorized.
+
+PASS review receipts require `--reviewed-commit <exact-full-sha>`. The CLI and core require a clean committed candidate and recheck ancestry plus a delta limited to non-executable regular Markdown files in `engineering/reviews/` or the valid active change evidence directory. Deleted, renamed, executable, symlinked and unknown-path reports do not qualify. Missing legacy or forged source bindings are evidence gaps. Failure observations need no reviewed identity.
+
+## Manual override
+
+An explicit owner override of a local workflow rule is acceptable. Record the exact rule, scope, reason, deferred checks and follow-up validation in the change package. Label the result UNVERIFIED until those checks run. Never create a fake PASS receipt, review or external attestation. This does not grant authority to bypass exact-head external checks, branch protection or the human private-key boundary.
+
+
+Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
+
+Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.

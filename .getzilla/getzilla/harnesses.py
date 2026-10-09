@@ -13,7 +13,7 @@ from getzilla import fsx  # absolute like install_into.py; FIT-BOUNDED-WORKER-JO
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
-GENERATED_ROOTS = ('.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
+GENERATED_ROOTS = ('.grok/skills', '.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
 HOOK_SOURCE = '.grok/hooks.json'
 AGENT_SOURCE = '.grok/agents'
 SKILL_SOURCE = '.agents/skills'
@@ -226,6 +226,7 @@ def render(root: Path) -> dict[str, bytes]:
         out[f'.github/agents/{name}.agent.md'] = _agent_markdown(name, data, extra=copilot_extra)
 
     for rel, content in skills.items():
+        out[f'.grok/skills/{rel}'] = content
         out[f'.qwen/skills/{rel}'] = content
         out[f'.claude/skills/{rel}'] = content
         out[f'.gemini/skills/{rel}'] = content

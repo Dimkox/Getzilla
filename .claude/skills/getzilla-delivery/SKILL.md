@@ -122,7 +122,7 @@ Run `python scripts/getzilla_status.py`. Completion requires zero evidence gaps.
 
 Follow conditional AGENTS L5 for repository merge, tag and release. Record exact grants after green exact-head checks, independent review and resolved threads. Production mutation, deploy, external writes and security approvals need separate scoped authority. `python3 scripts/getzilla_deploy.py` remains prepare-only unless separately authorized.
 
-PASS review receipts require `--reviewed-commit <exact-full-sha>`. The CLI and core require a clean committed candidate and recheck ancestry plus a delta limited to non-executable regular Markdown files under the active change evidence directory. Deleted, renamed, executable, symlinked and out-of-package reports do not qualify. Missing legacy or forged source bindings are evidence gaps. Failure observations need no reviewed identity.
+PASS review receipts require `--reviewed-commit <exact-full-sha>`. The CLI and core require a clean committed candidate and recheck ancestry plus a delta limited to non-executable regular Markdown files in `engineering/reviews/` or the valid active change evidence directory. Deleted, renamed, executable, symlinked and unknown-path reports do not qualify. Missing legacy or forged source bindings are evidence gaps. Failure observations need no reviewed identity.
 
 ## Manual override
 
@@ -131,4 +131,4 @@ An explicit owner override of a local workflow rule is acceptable. Record the ex
 
 Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
 
-Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.

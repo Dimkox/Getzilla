@@ -1904,3 +1904,7 @@ The release candidate advanced VERSION to 2.2.1 while the verified install comma
 
 ## 2026-10-09 — Negative identity test reintroduced a forbidden literal
 A new negative handoff assertion contained the obsolete predecessor script name as a literal, so the repository rename guard correctly flagged the test itself. Assert the current Getzilla command instead; do not exempt the test or label a new assertion as a historical quote. Include the identity guard in bounded repair controls.
+
+- PR74 compatibility root causes: the harness renderer excluded the installed Grok skill mirror, so canonical workflow changes did not reach an actual supported consumer. Review admission also treated durable-package routing as universal despite documented low-risk micro and engineering/reviews support; regression controls now exercise generation, actual installation and both core/CLI receipt consumption.
+
+- The new Grok preservation test supplied incomplete agent TOML and failed renderer admission; use a valid canonical agent fixture when testing output ownership, rather than accidentally testing unrelated malformed-agent input.

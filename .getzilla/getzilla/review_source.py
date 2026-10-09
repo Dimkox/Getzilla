@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .architecture_diff import _exact_commit, _git, _git_blob
-from .architecture import _read_regular_bytes
-from .state import get_active_change
+from .architecture import ArchitectureError, _read_regular_bytes
+from .state import get_active_route
 
 
 REVIEW_REPORT_NAMES = frozenset({
@@ -40,16 +41,35 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
     # package_status consumes receipt kinds; defer its path policy import to avoid a module cycle.
     from .package_status import _CHANGE_ID
 
-    active = get_active_change(root) or {}
-    package = _safe_path(active.get('path'))
-    change_id = active.get('change_id')
-    if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id) or package != 'engineering/changes/' + change_id:
-        raise ValueError('review source requires an active change package')
-    prefix = package + '/evidence/'
+    route = get_active_route(root) or {}
+    route_id = route.get('route_id')
+    if not isinstance(route_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', route_id):
+        raise ValueError('review source requires a valid selected route')
+    selected_present = True
+    try:
+        active = json.loads(_read_regular_bytes(root, '.getzilla/runtime/active-change.json',
+                                               label='selected active change').decode('utf-8'))
+    except ArchitectureError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            raise
+        selected_present = False
+        active = None
+    prefixes = {'engineering/reviews/'}
+    if selected_present:
+        if not isinstance(active, dict):
+            raise ValueError('selected active change must be a valid package record')
+        package = _safe_path(active.get('path'))
+        change_id = active.get('change_id')
+        if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id) or package != 'engineering/changes/' + change_id:
+            raise ValueError('selected active change must be a valid package record')
+        prefixes.add(package + '/evidence/')
+    elif route.get('complexity') != 'micro' or route.get('risk') != 'low' or route.get('change_id'):
+        raise ValueError('a durable selected route requires its active change package')
+    allowed_reports = {prefix + name for prefix in prefixes for name in REVIEW_REPORT_NAMES}
 
     def regular_report(path: str, commit: str) -> bytes:
         path = _safe_path(path)
-        if path not in {prefix + name for name in REVIEW_REPORT_NAMES}:
+        if path not in allowed_reports:
             raise ValueError('review delta must contain conventional independent-review Markdown reports only')
         current = root
         for part in path.split('/')[:-1]:
@@ -89,6 +109,8 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
         changed.append(path)
     return {
         'contract': 'getzilla.review-source/v1',
+        'route_id': route_id,
+        'report_namespace': report.rsplit('/', 1)[0],
         'reviewed_commit': reviewed_commit,
         'reviewed_tree': (_git(root, ['rev-parse', reviewed_commit + '^{tree}']) or b'').decode('ascii').strip(),
         'frozen_commit': head,

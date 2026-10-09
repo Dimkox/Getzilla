@@ -43,6 +43,67 @@ class ReviewSourceTests(unittest.TestCase):
         return write_receipt(self.root, 'code_review', 'pass', report or self.report,
                              reviewed_commit=source or self.source)
 
+    def test_micro_route_without_package_admits_global_reports_and_consumption(self):
+        (self.root / '.getzilla/runtime/active-change.json').unlink()
+        self.route.update(complexity='micro', risk='low')
+        set_active_route(self.root, self.route)
+        self.report = 'engineering/reviews/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent micro review.\n')
+        self.commit()
+        self.source = self.git('rev-parse', 'HEAD').strip()
+        (self.root / self.report).write_text('Saved independent micro review.\n')
+        self.commit()
+        self.record()
+        self.assertEqual(validate_evidence(self.root, self.route), [])
+        self.assertFalse((self.root / '.getzilla/runtime/active-change.json').exists())
+        script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_review.py'
+        result = subprocess.run([sys.executable, str(script), 'code_review', '--status', 'pass',
+                                 '--report', self.report, '--reviewed-commit', self.source],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_active_package_accepts_documented_global_review_location(self):
+        self.report = 'engineering/reviews/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent report.\n')
+        self.commit()
+        self.source = self.git('rev-parse', 'HEAD').strip()
+        self.record()
+        self.assertEqual(validate_evidence(self.root, self.route), [])
+
+    def test_missing_durable_or_malformed_selected_package_fails_closed(self):
+        self.report = 'engineering/reviews/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent report.\n')
+        self.commit()
+        self.source = self.git('rev-parse', 'HEAD').strip()
+        selected = self.root / '.getzilla/runtime/active-change.json'
+        for active in (None, {}, {'path': '../escape', 'change_id': 'escape'}, []):
+            selected.write_text(json.dumps(active))
+            self.route.update(complexity='micro', risk='low')
+            set_active_route(self.root, self.route)
+            with self.assertRaises((RuntimeError, ValueError)):
+                self.record()
+        selected.unlink()
+        for complexity, risk in (('standard', 'low'), ('high-risk', 'high'), ('micro', 'high')):
+            self.route.update(complexity=complexity, risk=risk)
+            set_active_route(self.root, self.route)
+            with self.assertRaises((RuntimeError, ValueError)):
+                self.record()
+
+    def test_micro_unsafe_selected_metadata_does_not_fall_back(self):
+        self.route.update(complexity='micro', risk='low')
+        set_active_route(self.root, self.route)
+        selected = self.root / '.getzilla/runtime/active-change.json'
+        selected.unlink()
+        try:
+            selected.symlink_to(self.root / 'source.py')
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        with self.assertRaises((RuntimeError, ValueError)):
+            self.record()
+
     def test_pass_requires_reviewed_identity(self):
         with self.assertRaisesRegex((ValueError, RuntimeError), 'reviewed'):
             write_receipt(self.root, 'code_review', 'pass', self.report)
