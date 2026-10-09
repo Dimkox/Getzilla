@@ -65,3 +65,25 @@ def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     except json.JSONDecodeError:
         data = {}
     return proc.returncode, data, proc.stderr
+
+
+def prepare_review_source(root: Path) -> dict[str, str]:
+    """Freeze a real Git candidate and return explicit independent-review inputs."""
+    from getzilla.state import get_active_change, set_active_change
+    active = get_active_change(root)
+    if not active:
+        active = {'path': 'engineering/changes/test-review', 'change_id': 'test-review'}
+        set_active_change(root, active)
+    report = str(active['path']) + '/evidence/code-review.md'
+    path = root / report
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('Fixture independent review of the committed candidate.\n', encoding='utf-8')
+    ignored = root / '.gitignore'
+    text = ignored.read_text(encoding='utf-8') if ignored.exists() else ''
+    if '.getzilla/runtime/' not in text:
+        ignored.write_text(text + '\n.getzilla/runtime/\n__pycache__/\n*.pyc\n', encoding='utf-8')
+    # Copies may already track .gitkeep; preserve it, ignore only machine-local files.
+    subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'freeze reviewed fixture'], cwd=root, check=True)
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    return {'report': report, 'reviewed_commit': head}

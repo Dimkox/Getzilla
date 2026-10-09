@@ -78,6 +78,16 @@ def _broken_local_links(document: Path, root: Path) -> list[str]:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_installed_grok_skills_equal_canonical_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            MODULE.materialize_new(ROOT, target)
+            for source in (target / '.agents/skills').rglob('*'):
+                if source.is_file():
+                    relative = source.relative_to(target / '.agents/skills')
+                    self.assertEqual((target / '.grok/skills' / relative).read_bytes(), source.read_bytes(), str(relative))
+
+
     def test_installed_root_hook_aliases_delegate_and_preserve_fallback(self) -> None:
         names = {
             'session_start.py', 'user_prompt_submit.py', 'pre_tool_use.py',

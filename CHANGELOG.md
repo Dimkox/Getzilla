@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1 — 2026-10-09 (source candidate)
+
+- Bind PASS review receipts to the exact reviewed commit/tree and a clean frozen candidate; permit only saved non-executable Markdown reports in active change evidence. Recheck this binding when receipts are consumed.
+- Correct Getzilla release identity and issue72 continuation. Align local delivery with conditional L5 and one final verifier. Explicit owner overrides remain UNVERIFIED until deferred checks run.
+- Published v2.2.0 is immutable. No production installation, provider activation or successor publication is claimed.
+
 ## 2.2.0 — 2026-10-05 (source candidate)
 
 - Cursor (#55): prompt-only project rules in `.cursor/rules/getzilla/` are one more target of `scripts/getzilla_harness.py`, rendered from `.grok/cursor-rules/*.toml` with unquoted comma-separated globs, drift-checked with the other harnesses and protected as control plane. Every generated harness file is now written by descriptor without following links, mode 0644. Unmarked user files and symlinks in `.cursor/rules/getzilla/` are kept; one at an output path, or a file where a parent directory goes, blocks every write; generated only for this repository, not installed into consumers; the harness CLI exits 2 without a traceback on an invalid source. The delivery skills, `verification-evidence` and the evidence template state one order: local checks, independent reviews, saved reports, commit/freeze, one final `getzilla_verify.py --mode pr`; any later change invalidates all receipts.

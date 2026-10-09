@@ -25,6 +25,10 @@ That consent applies only when required checks are green on the exact head SHA, 
 The agent records that standing consent with `scripts/getzilla_approve.py` as an exact action and resource. The wildcard scope stays forbidden.
 Production mutation, deploy, external writes and security approvals still need an explicit human decision.
 
+## Manual override
+
+An explicit owner override of a local workflow rule is acceptable. Record the exact rule, scope, reason, deferred checks and follow-up validation in the change package. Label the result UNVERIFIED until those checks run. Never create a fake PASS receipt, review or external attestation. This does not grant authority to bypass exact-head external checks, branch protection or the human private-key boundary.
+
 ## Lean reviews
 
 Reviews cover only three areas: security, double writes and tests.
@@ -125,7 +129,7 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 - A delegated local grant never creates or substitutes the external Trust CI check, a human-signed security approval, or branch protection. It authorizes only the named local operation.
 - Tagging and GitHub Release publication must use the exact merged commit. No delegated grant permits changing the tested tree after approval and then reusing the grant.
 
-This repository uses an adaptive, task-routed agent workflow (Grok Build, Qwen Code, Claude Code, Codex, Gemini CLI or Copilot CLI; the others load generated copies of `.grok/` from `.qwen/`, `.claude/`, `.codex/`, `.gemini/` and `.github/hooks/` + `.github/agents/`, and Cursor gets prompt-only rules in `.cursor/rules/getzilla/` from `.grok/cursor-rules/` — edit `.grok/` and `.agents/skills/`, then run `python3 scripts/getzilla_harness.py --write`). The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
+This repository uses an adaptive, task-routed agent workflow (Grok Build, Qwen Code, Claude Code, Codex, Gemini CLI or Copilot CLI; the others load generated copies of `.grok/` from `.qwen/`, `.claude/`, `.codex/`, `.gemini/` and `.github/hooks/` + `.github/agents/`, and Cursor gets prompt-only rules in `.cursor/rules/getzilla/` from `.grok/cursor-rules/` — edit canonical `.grok/` configuration/agents and `.agents/skills/` (the `.grok/skills/` mirror is generated), then run `python3 scripts/getzilla_harness.py --write`). The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
 
 ## Mandatory entrypoint
 
@@ -238,7 +242,7 @@ python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_qua
 Then dispatch every independent review agent listed by the active route. Keep each report lean (see Lean reviews). Store every report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
 
 ```bash
-python3 scripts/getzilla_review.py code_review --status pass --report <path>
+python3 scripts/getzilla_review.py code_review --status pass --report <path> --reviewed-commit <exact-full-sha>
 ```
 
 Use the exact local evidence kind requested by the route. A local receipt is stale after any repository change. The Stop hook warns when local evidence is missing or stale.
@@ -276,3 +280,7 @@ For each report with probes, list the claims probed, exact commands and concise 
 - Broad cleanup, force push, destructive Git commands, unbounded SQL, or infrastructure apply/destroy.
 - Editing Bitrix core instead of implementing an extension under `local/`.
 - Adding a GitHub Actions workflow to a private repository, adding Dependabot or another CI vendor, referencing an action by tag or branch instead of a full commit SHA, granting a workflow write permissions or secrets, or dispatching a workflow.
+
+Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
+
+Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.

@@ -13,7 +13,7 @@ from getzilla.router import build_route
 from getzilla.state import add_approval, get_active_route, set_active_route
 import subprocess
 
-from tests._support import project_copy, run_hook
+from tests._support import prepare_review_source, project_copy, run_hook
 
 
 class HookTests(unittest.TestCase):
@@ -766,12 +766,12 @@ class HookTests(unittest.TestCase):
 
     def test_stop_allows_current_evidence(self) -> None:
         with project_copy(git=True) as root:
-            route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            route['required_evidence'] = ['verification', 'code_review', 'test_review']
-            set_active_route(root, route)
+            from tests.test_package_status import PackageStatusTests
+            route, _, _, _ = PackageStatusTests().prepare(root, complete=True)
             (root / 'feature.txt').write_text('changed')
+            review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass')
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
             _, data, err = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'stop_hook_active': False})
             self.assertEqual(data, {}, err)
             self.assertEqual(get_active_route(root)['status'], 'completed')
@@ -781,7 +781,7 @@ class HookTests(unittest.TestCase):
             route = build_route(root, 'Review current change', 's1').to_dict()
             route['required_evidence'] = ['code_review']
             set_active_route(root, route)
-            write_receipt(root, 'code_review', 'pass')
+            write_receipt(root, 'code_review', 'pass', **prepare_review_source(root))
             # Establish previous fingerprint marker.
             run_hook(root, 'post_tool_use.py', {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {}})
             (root / 'changed.txt').write_text('x')

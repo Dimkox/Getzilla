@@ -26,7 +26,7 @@ from getzilla import util
 from getzilla import verification as verifier
 from getzilla.router import build_route
 from getzilla.state import set_active_route
-from tests._support import project_copy as full_project_copy
+from tests._support import prepare_review_source, project_copy as full_project_copy
 
 
 def project_copy(*, git: bool = False):
@@ -860,9 +860,10 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_other_receipt_kinds_do_not_spill(self):
         with routed_fixture() as (root, route):
+            review = prepare_review_source(root)
             for kind in sorted(receipts.RECEIPT_KINDS - {'verification'}):
                 with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'receipt exceeds the byte limit'):
-                    receipts.write_receipt(root, kind, 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+                    receipts.write_receipt(root, kind, 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, **review)
             self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_same_tree_new_head_invalidates_receipt(self):

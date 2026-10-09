@@ -417,14 +417,14 @@ class StructureTests(unittest.TestCase):
         readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
-        self.assertEqual(version, "2.2.0")
+        self.assertEqual(version, "2.2.1")
         self.assertTrue(readme.startswith(f"# Getzilla v{version}\n"))
-        self.assertIn("Identity: **2.2.0 source candidate**", readme)
+        self.assertIn("Identity: **2.2.1 source candidate**", readme)
         self.assertTrue(
-            changelog.startswith("# Changelog\n\n## 2.2.0 — 2026-10-05 (source candidate)\n")
+            changelog.startswith("# Changelog\n\n## 2.2.1 — 2026-10-09 (source candidate)\n")
         )
         self.assertIn(
-            "product version: 2.2.0 source candidate (latest published release: v2.1.1; U5/U6 default-off and not live-qualified)",
+            "product version: 2.2.1 source candidate (latest published release: v2.2.0; U5/U6 default-off and not live-qualified)",
             roadmap,
         )
         sys.path.insert(0, str(ROOT / ".getzilla"))
@@ -1066,6 +1066,8 @@ class StructureTests(unittest.TestCase):
         self.assertIn("\n  windows:\n", gate)
         for step in ("Doctor", "Windows-ported tests", "Hooks and CLI smoke", "Annotate smoke failure"):
             self.assertIn(f"- name: {step}\n", gate)
+        ported_step = gate.split("- name: Windows-ported tests\n", 1)[1].split("- name:", 1)[0]
+        self.assertIn("tests.test_review_source", ported_step)
         self.assertNotIn("module by module", gate)
         self.assertNotIn("continue-on-error", gate)
 

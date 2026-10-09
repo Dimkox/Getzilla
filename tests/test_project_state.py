@@ -193,15 +193,15 @@ class ProjectStateTests(unittest.TestCase):
         readme = (ROOT / 'docs/REFERENCE.md').read_text(encoding='utf-8')
         active_line = next(line for line in start.splitlines() if line.startswith('- **Active delivery:**'))
         for document in (active_line, _section(readme, 'Current state')):
-            self.assertIn('2.2.0', document)
+            self.assertIn('2.2.1', document)
             self.assertIn('exact-head', document)
             self.assertIn('engineering/changes/20261004-task-b25860', readme)
         self.assertNotIn('20261002-assemble-2-1-1', active_line)
         self.assertIn('Historical core observation', start)
         self.assertIn('Historical pre-publication core observation', readme)
 
-    def test_current_published_v211_binds_observed_remote_release(self) -> None:
-        published = self.state['published_release']
+    def test_historical_published_v211_preserves_observed_remote_release(self) -> None:
+        published = self.state['historical_v2_1_1_published_release']
         self.assertEqual(published['tag'], 'v2.1.1')
         self.assertEqual(published['published_at'], '2026-10-03T09:11:19Z')
         self.assertEqual(published['pull_request'], 238)
@@ -215,6 +215,32 @@ class ProjectStateTests(unittest.TestCase):
         self.assertFalse(published['operational_activation'])
         self.assertIsNone(published['trust_ci']['attestation_id'])
 
+    def test_getzilla_current_identity_and_issue72_continuation(self) -> None:
+        state = self.state
+        self.assertEqual(state['repository'], 'Dimkox/Getzilla')
+        self.assertEqual(state['product_version'], (ROOT / 'VERSION').read_text().strip())
+        published = state['published_release']
+        self.assertEqual(published['tag'], 'v2.2.0')
+        self.assertEqual(published['published_at'], '2026-10-09T01:57:09Z')
+        self.assertEqual(published['tag_object'], '5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9')
+        self.assertEqual(published['tree'], '0f6fa49b00519f67260492320e40b1656c850549')
+        self.assertEqual(published['assets'], [])
+        self.assertEqual(published['installers'], {
+            'scripts/install.sh': {'sha256': '39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9'},
+            'scripts/install.ps1': {'sha256': '32f5dfd05e8b19cf327bef6ea2b7da1f677675573a0eceb27c17aab8aca73987'},
+        })
+        self.assertIsNone(published['artifact'])
+        self.assertFalse(published['operational_activation'])
+        continuation = state['current_continuation']
+        self.assertEqual(continuation['issue'], 72)
+        self.assertEqual(continuation['branch'], 'readiness/72-production-20261009')
+        self.assertEqual(continuation['route_id'], '37371d21accb')
+        self.assertTrue((ROOT / continuation['change_package'] / 'brief.md').is_file())
+        self.assertEqual(continuation['target_version'], state['product_version'])
+        self.assertIn('one final PR verifier', continuation['next_action'])
+        self.assertIn('Native harness', continuation['next_action'])
+        self.assertIn('scripts/getzilla_m8.py', state['operational_qualification']['m8_scope'])
+
     def test_current_owner_policy_is_bound_to_one_real_case_without_numeric_telemetry(self) -> None:
         from getzilla_factory.owner_autonomy import OwnerCaseV1, OwnerPolicyV1
         policy = OwnerPolicyV1.from_dict(json.loads((ROOT / 'factory/runtime/owner-autonomy-policy.v1.json').read_text()))
@@ -226,10 +252,10 @@ class ProjectStateTests(unittest.TestCase):
         self.assertIsNone(case.cost_usd_micros)
         self.assertIsNone(case.human_intervention_count)
         self.assertEqual(policy.allowed_actions, ('local_read', 'local_test'))
-        continuation = self.state['current_continuation']
+        continuation = self.state['historical_m8_continuation']
         self.assertEqual(continuation['route_id'], 'b258608f2ced')
         self.assertEqual(continuation['branch'], 'feat/m8-one-task-autonomy')
-        self.assertEqual(continuation['target_version'], self.state['product_version'])
+        self.assertEqual(continuation['target_version'], '2.2.0')
         self.assertEqual(continuation['accepted_product_delivery']['merge_commit'], '2a8e3839a469b3e05da167e9d8a807bf18e6adbf')
         self.assertIn('Source-enabled bounded owner policy', self.state['operational_qualification']['m8_scope'])
         self.assertFalse(self.state['operational_qualification']['m9_general_operational_qualification'])
@@ -241,10 +267,10 @@ class ProjectStateTests(unittest.TestCase):
     def test_project_state_has_independent_milestone_axes_and_truthful_facts(self) -> None:
         state = self.state
         self.assertEqual(state["schema_version"], 2)
-        self.assertEqual(state["product_version"], "2.2.0")
-        self.assertEqual(state["latest_published_release"], "v2.1.1")
-        self.assertEqual(state["observed_main_sha"], OBSERVED_MAIN_SHA)
-        self.assertRegex(state["observed_at"], r"^2026-09-24T\d{2}:\d{2}:\d{2}Z$")
+        self.assertEqual(state["product_version"], "2.2.1")
+        self.assertEqual(state["latest_published_release"], "v2.2.0")
+        self.assertEqual(state["historical_predecessor_identity"]["observed_main_sha"], OBSERVED_MAIN_SHA)
+        self.assertRegex(state["historical_predecessor_identity"]["observed_at"], r"^2026-09-24T\d{2}:\d{2}:\d{2}Z$")
         self.assertEqual(set(state["milestones"]), MILESTONES)
         for name, milestone in state["milestones"].items():
             expected_axes = set(AXES)
@@ -1026,9 +1052,9 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(state["local_candidate"]["version"], "2.1.1")
         self.assertFalse(state["local_candidate"]["published"])
         self.assertFalse(state["local_candidate"]["operational_activation"])
-        self.assertEqual(state["published_release"]["tag"], "v2.1.1")
+        self.assertEqual(state["published_release"]["tag"], "v2.2.0")
         self.assertIn("Historical pre-publication", state["local_candidate"]["record_scope"])
-        self.assertEqual(state["observed_main_sha"], OBSERVED_MAIN_SHA)
+        self.assertEqual(state["historical_predecessor_identity"]["observed_main_sha"], OBSERVED_MAIN_SHA)
 
     def test_m4_roadmap_matches_typed_state_machine_and_local_scope(self) -> None:
         factory_src = str(ROOT / "factory" / "src")

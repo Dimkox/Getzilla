@@ -28,6 +28,13 @@ from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER,
 
 
 class HarnessTests(unittest.TestCase):
+    def test_grok_skills_are_rendered_from_the_canonical_sources(self):
+        outputs = render(ROOT)
+        for source in (ROOT / '.agents/skills').rglob('*'):
+            if source.is_file():
+                relative = source.relative_to(ROOT / '.agents/skills').as_posix()
+                self.assertEqual(outputs.get('.grok/skills/' + relative), source.read_bytes(), relative)
+
     def test_committed_harnesses_match_the_canonical_sources(self) -> None:
         self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --write')
 
@@ -289,6 +296,28 @@ class CursorRuleTests(unittest.TestCase):
         self.assertFalse(settings.is_symlink() or extra.is_symlink())
         self.assertEqual(outside.read_bytes(), settings.read_bytes())
         self.assertFalse((root.parent / 'absent.json').exists())
+
+    def test_grok_skill_drift_repair_and_retirement_preserve_configuration(self) -> None:
+        root = self.fixture()
+        canonical = root / '.agents/skills/example/SKILL.md'
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text('canonical skill')
+        agent = root / '.grok/agents/owner.toml'
+        agent.parent.mkdir(parents=True)
+        agent_bytes = (ROOT / '.grok/agents/general_implementer.toml').read_bytes()
+        agent.write_bytes(agent_bytes)
+        hooks = (root / '.grok/hooks.json').read_bytes()
+        write(root)
+        mirror = root / '.grok/skills/example/SKILL.md'
+        mirror.write_text('stale')
+        retired = root / '.grok/skills/retired.md'
+        retired.write_text('retired')
+        self.assertIn('stale .grok/skills/example/SKILL.md', drift(root))
+        write(root)
+        self.assertEqual(mirror.read_bytes(), canonical.read_bytes())
+        self.assertFalse(retired.exists())
+        self.assertEqual((root / '.grok/hooks.json').read_bytes(), hooks)
+        self.assertEqual(agent.read_bytes(), agent_bytes)
 
     def test_write_removes_empty_directories_left_in_a_generated_root(self) -> None:
         root = self.fixture()

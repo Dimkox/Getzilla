@@ -1,0 +1,131 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Passing review records an exact ancestor reviewed commit/tree and rejects missing or invalid commit, source differences and dirty/untracked product changes; only saved Markdown review reports under the active evidence directory may differ. Non-pass observations remain possible.",
+      "evidence": [
+        {
+          "test": "tests/test_review_source.py"
+        },
+        {
+          "test": "tests/test_change_receipts.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Evidence validation and status reject legacy unbound review passes, forged bindings, unsafe report paths and source changes. Current tree/spec/architecture/governance bindings remain intact.",
+      "evidence": [
+        {
+          "test": "tests/test_review_source.py"
+        },
+        {
+          "test": "tests/test_change_receipts.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Getzilla current handoff identifies its own repo, v2.2.0 release and issue72 readiness work; preserved predecessor delivery and runtime records remain explicitly historical. L5 and one-final-gate docs match AGENTS.",
+      "evidence": [
+        {
+          "test": "tests/test_project_state.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Observe safe installer provenance and bounded local admission/revocation on an isolated scratch clone; report target/task unknown as NO-GO rather than infer production from release publication.",
+      "evidence": [
+        {
+          "receipt": "release_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Record owner instruction that explicit manual override of local workflow rules is acceptable, with exact scope and deferred checks, followed by verification. Deferred outcomes remain UNVERIFIED; no forged PASS or external authority is inferred.",
+      "evidence": [
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "scope_and_design_approval"
+    ]
+  },
+  "change_id": "20261009-task-37371d",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "No deployed policy/holdout/branch-protection change, secret read, human signature fabrication, new daemon or production effect.",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Existing provider defaults remain off. Published v2.2.0 is immutable; successor source deliveries need fresh exact-head gates.",
+      "evidence": [
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Issue #72: audit production readiness of Getzilla v2.2.0, verify open security findings against current source, define blockers and bounded repair plan; no deployment or production writes",
+    "success_metric": "Current reviewer-source binding rejects unreviewed code, fresh-agent handoff identifies Getzilla and current release, exact-head checks and independent reviews pass; production readiness remains explicit NO-GO until a target scenario is proved.",
+    "target": "Issue #72, deadline 2026-10-09T05:00:00Z; successor2.2.1 repairs #61/current handoff and records owner manual-override rule, without live default/deployed policy changes."
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

@@ -33,7 +33,7 @@ from getzilla.router import build_route
 from getzilla.state import get_active_change, get_active_route, set_active_route
 from getzilla.verification import _architecture_check, verify
 from getzilla.spec import dump_canonical_spec
-from tests._support import project_copy
+from tests._support import prepare_review_source, project_copy
 from tests.test_architecture_model import _rules, _system
 
 _PASSING_UNITTEST = (
@@ -643,8 +643,9 @@ class ReceiptTests(unittest.TestCase):
                 f'AC-{index:03d}': {'receipt': kind}
                 for index, kind in enumerate(kinds, 1)
             })
+            review = prepare_review_source(root)
             for index, kind in enumerate(kinds, 1):
-                receipt = json.loads(write_receipt(root, kind, 'pass').read_text(encoding='utf-8'))
+                receipt = json.loads(write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {})).read_text(encoding='utf-8'))
                 self.assertEqual(receipt['criterion_ids'], [f'AC-{index:03d}'])
             self.assertEqual(validate_evidence(root, get_active_route(root) or route), [])
 
@@ -713,8 +714,9 @@ class ReceiptTests(unittest.TestCase):
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
             route['required_evidence'] = ['verification', 'code_review']
             set_active_route(root, route)
+            review = prepare_review_source(root)
             write_receipt(root, 'verification', 'pass')
-            write_receipt(root, 'code_review', 'pass')
+            write_receipt(root, 'code_review', 'pass', **review)
             self.assertEqual(validate_evidence(root, route), [])
 
     def test_receipt_becomes_stale_after_change(self) -> None:
@@ -740,7 +742,7 @@ class ReceiptTests(unittest.TestCase):
             route = build_route(root, 'Review this PR', 's1').to_dict()
             route['required_evidence'] = ['code_review']
             set_active_route(root, route)
-            path = write_receipt(root, 'code_review', 'pass')
+            path = write_receipt(root, 'code_review', 'pass', **prepare_review_source(root))
             invalidate_receipts(root, route['route_id'], 'changed')
             self.assertIn('"stale": true', path.read_text(encoding='utf-8'))
             self.assertTrue(
@@ -769,12 +771,13 @@ class ContourTests(unittest.TestCase):
             evidence.mkdir(parents=True, exist_ok=True)
             (evidence / 'code-review.md').write_text('# dummy code review\n', encoding='utf-8')
             (evidence / 'test-review.md').write_text('# dummy test review\n', encoding='utf-8')
+            review = prepare_review_source(root)
             report = verify(root, mode='fast', record=True)
             checks = {item['name']: item for item in report['checks']}
             self.assertIn('python-unittest', checks)
             self.assertEqual(checks['python-unittest']['status'], 'pass')
-            write_receipt(root, 'code_review', 'pass')
-            write_receipt(root, 'test_review', 'pass')
+            write_receipt(root, 'code_review', 'pass', **review)
+            write_receipt(root, 'test_review', 'pass', **review)
             self.assertEqual(validate_evidence(root, get_active_route(root) or route), [])
 
 

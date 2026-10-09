@@ -1416,9 +1416,9 @@ module.main()
 
     def test_published_zip_matches_immutable_release_record_and_embedded_manifest(self) -> None:
         state = json.loads((ROOT / 'PROJECT_STATE.json').read_text(encoding='utf-8'))
-        published = state['published_release']
+        published = state['historical_v2_1_1_published_release']
         candidate_version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
-        self.assertEqual(candidate_version, '2.2.0')
+        self.assertEqual(candidate_version, '2.2.1')
         self.assertEqual(state['product_version'], candidate_version)
         candidate = state['local_candidate']
         self.assertEqual(candidate['status'], 'source_candidate')
@@ -1443,7 +1443,8 @@ module.main()
         self.assertEqual(candidate_artifact['reproducible_build_count'], 2)
         published_version = published['tag'].removeprefix('v')
         self.assertEqual(published_version, '2.1.1')
-        self.assertEqual(state['latest_published_release'], published['tag'])
+        self.assertEqual(state['latest_published_release'], state['published_release']['tag'])
+        self.assertEqual(state['published_release']['tag'], 'v2.2.0')
         artifact = published['artifact']
         self.assertEqual(artifact['binding'], 'immutable_release_tag')
         self.assertEqual(artifact['storage'], 'github_release_asset')

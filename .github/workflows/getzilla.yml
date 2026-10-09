@@ -123,7 +123,7 @@ jobs:
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
-        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source
       - name: Hooks and CLI smoke
         run: |
           set -euo pipefail

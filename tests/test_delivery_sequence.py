@@ -76,9 +76,12 @@ class DeliverySequenceTests(unittest.TestCase):
             self.assertIn(sentence, text)
 
     def test_grok_keeps_its_tool_denial_circuit_breaker(self) -> None:
-        grok = read(DELIVERY[1])
-        self.assertIn('## Tool-denial circuit breaker', grok)
-        self.assertIn('Never repeat an identical denied invocation', grok)
+        for delivery in DELIVERY:
+            text = read(delivery)
+            self.assertIn('## Tool-denial circuit breaker', text, delivery)
+            self.assertIn('Never repeat an identical denied invocation', text, delivery)
+            self.assertIn('One semantic rewrite is allowed', text, delivery)
+            self.assertIn('An opaque denial requires explicit targets', text, delivery)
 
 
 if __name__ == '__main__':

@@ -1892,3 +1892,21 @@ Root cause: `updater.py`'s https client predates the architecture fitness model,
 ## 2026-10-08 — A pinned download was treated as proof of what later runs
 
 Root cause: the #39 fix verified OpenGrep only on the download path and its test required an unverified previous binary to be kept on failure, while the verifier still executed whatever `opengrep` PATH resolved to. Integrity has to be checked where the executable is run, and a fail-closed update must not preserve the untrusted artifact it failed to replace.
+
+## 2026-10-09 — Validate evidence roles before scope transition
+The first issue72 spec omitted required evidence on its forbidden-outcome entry because the draft shape was copied without checking the schema. Validation exposed this before implementation; corrected the mapping and revalidated.
+
+## 2026-10-09 — Receipt path policy import cycle
+A new receipt module imported package_status at module load, but package_status imports receipt kinds. Bounded import tests caught the dependency cycle before delivery. Import the existing path policy only when source binding runs after module initialization.
+
+## 2026-10-09 — Source version was mistaken for published installer identity
+The release candidate advanced VERSION to 2.2.1 while the verified install commands correctly stayed on immutable published v2.2.0. I did not run the installer-script contract in the initial bounded controls; its assumption that VERSION always names a published tag caused both Windows and Linux failures. Bind install commands to the tracked published release and its observed installer digests, and check this contract before review.
+
+## 2026-10-09 — Negative identity test reintroduced a forbidden literal
+A new negative handoff assertion contained the obsolete predecessor script name as a literal, so the repository rename guard correctly flagged the test itself. Assert the current Getzilla command instead; do not exempt the test or label a new assertion as a historical quote. Include the identity guard in bounded repair controls.
+
+- PR74 compatibility root causes: the harness renderer excluded the installed Grok skill mirror, so canonical workflow changes did not reach an actual supported consumer. Review admission also treated durable-package routing as universal despite documented low-risk micro and engineering/reviews support; regression controls now exercise generation, actual installation and both core/CLI receipt consumption.
+
+- The new Grok preservation test supplied incomplete agent TOML and failed renderer admission; use a valid canonical agent fixture when testing output ownership, rather than accidentally testing unrelated malformed-agent input.
+
+- Grok mirror generation erased a supported circuit-breaker instruction because it existed only in the old generated mirror, not the canonical skill. Before transferring ownership to a generator, preserve consumer-specific rules in the canonical source and bind all mirrors to the same rule; the delivery sequence test now checks every source.
