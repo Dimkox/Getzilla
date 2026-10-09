@@ -1193,3 +1193,54 @@ class CommunicationRuleTests(unittest.TestCase):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("up to one per verified effective logical CPU", text)
         self.assertIn("share any idle cores and threads", text)
+
+    def test_l5_autonomy_keeps_exact_grants_and_human_risk_decisions(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "## L5 autonomy",
+            "The agent decides process calls itself.",
+            "standing consent covers merge, tag and release of the project's own repository",
+            "green on the exact head SHA",
+            "The wildcard scope stays forbidden.",
+            "Production mutation, deploy, external writes and security approvals still need an explicit human decision.",
+            "## Local delegated grants",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_mutation_probes_only_for_critical_code(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Mutation probes are required only for critical code.",
+            "policy and permission parsers",
+            "data deletion",
+            "mutation: skipped (non-critical)",
+            "reviewed-tree-modified: no",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_reviews_are_lean(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in ("## Lean reviews", "security, double writes and tests", "idempotency", "Give findings as a short list."):
+            self.assertIn(phrase, text)
+        self.assertNotIn("Store every complete report", text)
+
+    def test_low_severity_findings_are_batched(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Collect Low-severity findings into one issue.",
+            "Fix them together in one later PR.",
+            "Low-severity findings do not block a merge.",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_merge_discipline_and_no_public_exploits(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "## Merge discipline",
+            "gh pr merge --match-head-commit",
+            "including threads from bot reviewers such as Codex",
+            "Never use `--admin`.",
+            "Never bypass branch protection.",
+            "Describe the hole, not the weapon.",
+        ):
+            self.assertIn(phrase, text)

@@ -12,6 +12,41 @@ In Russian, apply the same rules to Russian text.
 - Use the active voice and give instructions in the imperative.
 - Give the result first. Do not add filler, apologies or recaps.
 
+## L5 autonomy
+
+The owner wants full automation at level L5.
+The agent decides process calls itself.
+Process calls include merging a PR that improves the repository, deferring review findings to an issue, and tagging and publishing a release.
+The agent asks the human only for real risk decisions or for steps that only a human can do.
+Real risk decisions are production writes, secrets, security exposure and human security approvals.
+Steps that only a human can do include authentication and 2FA.
+Under L5, the owner's standing consent covers merge, tag and release of the project's own repository.
+That consent applies only when required checks are green on the exact head SHA, all review threads are resolved, and an independent review passed.
+The agent records that standing consent with `scripts/getzilla_approve.py` as an exact action and resource. The wildcard scope stays forbidden.
+Production mutation, deploy, external writes and security approvals still need an explicit human decision.
+
+## Lean reviews
+
+Reviews cover only three areas: security, double writes and tests.
+Double writes means duplicate external mutations; check idempotency.
+Do not write long reports.
+Give findings as a short list.
+
+## Low-severity findings
+
+Collect Low-severity findings into one issue.
+Fix them together in one later PR.
+Low-severity findings do not block a merge.
+
+## Merge discipline
+
+Merge only through required checks on the exact head SHA, with `gh pr merge --match-head-commit`.
+Before a merge, answer and resolve all review threads, including threads from bot reviewers such as Codex.
+Never use `--admin`.
+Never bypass branch protection.
+Public issues and PRs never contain copy-paste exploit commands.
+Describe the hole, not the weapon.
+
 ## Working order: vibe first, factory second
 
 Build what the user asked for first, then apply the factory to it.
@@ -200,7 +235,7 @@ Before reviews, run bounded committed-HEAD controls as observations:
 python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
 ```
 
-Then dispatch every independent review agent listed by the active route. Store every complete report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
+Then dispatch every independent review agent listed by the active route. Keep each report lean (see Lean reviews). Store every report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
 
 ```bash
 python3 scripts/getzilla_review.py code_review --status pass --report <path>
@@ -210,25 +245,32 @@ Use the exact local evidence kind requested by the route. A local receipt is sta
 
 For merge eligibility, open or update the pull request and require the App-owned check named by the deployed policy, currently shaped as `adaptive-trust-ci/verified@<policy-sha12>`, on the exact head SHA. Local receipts and delegated grants cannot create that check.
 
-Reviewers return complete reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, commits/freezes that tree, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze requires the same writer's repair, affected controls/reviews, a new frozen candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
+Reviewers return their short reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, commits/freezes that tree, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze requires the same writer's repair, affected controls/reviews, a new frozen candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
 
 ### Reviewer mutation evidence
 
-Code and test reviewers perform bounded, change-relevant mutation probes in a reviewer-owned private scratch copy outside the reviewed worktree. Never edit, restore, or generate artifacts in the reviewed candidate. Keep scratch under a trusted non-sticky parent with mode `0700`; include the exact candidate snapshot (HEAD plus relevant staged, unstaged, and untracked changes), and record the HEAD and candidate tree fingerprint before and after review. If the snapshot cannot be reproduced, scratch safety cannot be established, or the candidate fingerprint changes, report the review as inconclusive/stale rather than clean. These are workflow requirements; read-only reviewer configuration and prompts do not provide OS-enforced filesystem isolation.
+Mutation probes are required only for critical code.
+Critical code is security checks, policy and permission parsers, authentication, money or external-write paths (for example ads or API mutations), and data deletion.
+For other changes, reviewers skip mutation probes and state `mutation: skipped (non-critical)`.
 
-For each report, list the claims probed, exact commands and concise observed output, and each mutant's killed/survived/inconclusive result. Identify unexecuted claims and why, give the scratch path and source identity, and include the literal `reviewed-tree-modified: no`. A surviving mutant is a finding or explicit limitation; do not imply a blanket mutation-score threshold unless a scoped policy requires one. Static claims without an executable probe remain unexecuted.
+When probes are done, code and test reviewers perform bounded, change-relevant mutation probes in a reviewer-owned private scratch copy outside the reviewed worktree. Never edit, restore, or generate artifacts in the reviewed candidate. Keep scratch under a trusted non-sticky parent with mode `0700`; include the exact candidate snapshot (HEAD plus relevant staged, unstaged, and untracked changes), and record the HEAD and candidate tree fingerprint before and after review. If the snapshot cannot be reproduced, scratch safety cannot be established, or the candidate fingerprint changes, report the review as inconclusive/stale rather than clean. These are workflow requirements; read-only reviewer configuration and prompts do not provide OS-enforced filesystem isolation.
+
+For each report with probes, list the claims probed, exact commands and concise observed output, and each mutant's killed/survived/inconclusive result. Identify unexecuted claims and why, give the scratch path and source identity, and include the literal `reviewed-tree-modified: no`. A surviving mutant is a finding or explicit limitation; do not imply a blanket mutation-score threshold unless a scoped policy requires one. Static claims without an executable probe remain unexecuted.
 
 ## Local delegated grants
 
 - `scripts/getzilla_approve.py` does not originate authority. It materializes explicit or standing user consent already present in the working context.
 - Every grant must name explicit actions and, for protected/external writes, explicit resources. It is bound to the current repository, route, change, Git HEAD, tree digest and TTL; any tree or commit change invalidates it. Current grants serialize that binding as `grant_binding_digest`; readers retain compatibility with legacy `tree_fingerprint` records.
 - An agent may invoke `getzilla_approve.py` only when the user has explicitly delegated the named operation. The wildcard scope is forbidden.
+- Under L5 autonomy, the owner's standing consent is that explicit delegation for merge, tag and release of the project's own repository. It applies only with green required checks on the exact head SHA, resolved review threads and a passed independent review. The agent still records an exact action and resource for each operation.
 - Trust CI security approvals use Ed25519 envelopes generated by `adaptive-trust-ci approval-create` on a human-controlled machine and submitted to the external API. Local grants are never accepted by Trust CI.
 
 ## Prohibited routine actions
 
 - Direct push to a protected/shared branch.
-- Merge, publish, tag, deploy, production mutation or external write without an exact delegated local grant naming that operation and resource.
+- Merge, publish, tag, deploy, production mutation or external write without an exact delegated local grant naming that operation and resource. Under L5 autonomy, the owner's standing consent supplies that grant only for merge, tag and release of the project's own repository; production mutation, deploy, external writes and security approvals still need an explicit human decision.
+- `gh pr merge --admin`, a merge without `--match-head-commit`, or any bypass of branch protection.
+- Copy-paste exploit commands in a public issue or PR.
 - Creating or submitting a human security approval, using a human private key, or editing the deployed trust store/policy/holdout/GitHub App configuration.
 - Reading `.env`, private keys, credential stores, production dumps, CI signing keys, GitHub App keys or approval keys.
 - Broad cleanup, force push, destructive Git commands, unbounded SQL, or infrastructure apply/destroy.
