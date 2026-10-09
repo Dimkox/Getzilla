@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SHELL = ROOT / 'scripts/install.sh'
@@ -40,12 +41,23 @@ def _clean_env(**extra: str) -> dict[str, str]:
 class InstallScriptContractTests(unittest.TestCase):
     def test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it(self) -> None:
         # Issue #63: the documented install path must not pipe an unverified download into a shell.
-        # README and QUICKSTART download the installer from the release tag (= VERSION), compare its
-        # SHA-256 with the published digest of the shipped script, and only then run it pinned to that tag.
-        version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
-        pinned = f'https://raw.githubusercontent.com/Dimkox/Getzilla/v{version}/scripts/'
+        # Install commands use the observed immutable publication, which can precede the source candidate.
+        state = json.loads((ROOT / 'PROJECT_STATE.json').read_text(encoding='utf-8'))
+        published = state['published_release']
+        tag = published['tag']
+        self.assertEqual(published['repository'], 'Dimkox/Getzilla')
+        self.assertEqual(state['latest_published_release'], tag)
+        self.assertRegex(tag, r'^v[0-9]+\.[0-9]+\.[0-9]+$')
+        self.assertRegex(published['tag_object'], r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$')
+        self.assertEqual(state['product_version'], (ROOT / 'VERSION').read_text(encoding='utf-8').strip())
+        version = tag.removeprefix('v')
+        pinned = f'https://raw.githubusercontent.com/Dimkox/Getzilla/{tag}/scripts/'
         sh_digest = hashlib.sha256(SHELL.read_bytes()).hexdigest()
         ps_digest = hashlib.sha256(POWERSHELL.read_bytes()).hexdigest()
+        self.assertEqual(published['installers'], {
+            'scripts/install.sh': {'sha256': sh_digest},
+            'scripts/install.ps1': {'sha256': ps_digest},
+        })
         for name in ('README.md', 'QUICKSTART.md'):
             text = (ROOT / name).read_text(encoding='utf-8')
             with self.subTest(document=name):
@@ -73,6 +85,34 @@ class InstallScriptContractTests(unittest.TestCase):
                 self.assertIn(ps_line, lines)
                 self.assertLess(ps_fetch, text.index(ps_line))
                 self.assertEqual([line for line in lines if 'Invoke-Expression (Get-Content -Raw $f)' in line], [ps_line])
+
+    def test_published_install_contract_allows_a_new_source_version_without_git_history(self) -> None:
+        with tempfile.TemporaryDirectory(prefix='getzilla-install-contract-') as temporary:
+            root = Path(temporary)
+            for relative in ('VERSION', 'PROJECT_STATE.json', 'README.md', 'QUICKSTART.md',
+                             'scripts/install.sh', 'scripts/install.ps1'):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            state = json.loads((root / 'PROJECT_STATE.json').read_text(encoding='utf-8'))
+            state['product_version'] = '9.9.9'
+            (root / 'VERSION').write_text('9.9.9\n', encoding='utf-8')
+            (root / 'PROJECT_STATE.json').write_text(json.dumps(state), encoding='utf-8')
+            self.assertFalse((root / '.git').exists())
+            with patch.dict(globals(), ROOT=root, SHELL=root / 'scripts/install.sh',
+                            POWERSHELL=root / 'scripts/install.ps1'):
+                self.test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it()
+                for field, invalid in (('repository', 'other/project'), ('tag', 'main'),
+                                       ('tag_object', 'HEAD'), ('installers', {})):
+                    mutated = json.loads(json.dumps(state))
+                    mutated['published_release'][field] = invalid
+                    (root / 'PROJECT_STATE.json').write_text(json.dumps(mutated), encoding='utf-8')
+                    with self.assertRaises(AssertionError):
+                        self.test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it()
+                (root / 'PROJECT_STATE.json').write_text(json.dumps(state), encoding='utf-8')
+                (root / 'scripts/install.sh').write_bytes(b'changed unpublished installer\n')
+                with self.assertRaises(AssertionError):
+                    self.test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it()
 
     def test_hashed_installers_keep_lf_endings_in_every_checkout(self) -> None:
         # The documented digests hash the repository bytes; an eol rule keeps Windows checkouts identical.

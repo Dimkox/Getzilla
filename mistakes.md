@@ -1898,3 +1898,9 @@ The first issue72 spec omitted required evidence on its forbidden-outcome entry 
 
 ## 2026-10-09 — Receipt path policy import cycle
 A new receipt module imported package_status at module load, but package_status imports receipt kinds. Bounded import tests caught the dependency cycle before delivery. Import the existing path policy only when source binding runs after module initialization.
+
+## 2026-10-09 — Source version was mistaken for published installer identity
+The release candidate advanced VERSION to 2.2.1 while the verified install commands correctly stayed on immutable published v2.2.0. I did not run the installer-script contract in the initial bounded controls; its assumption that VERSION always names a published tag caused both Windows and Linux failures. Bind install commands to the tracked published release and its observed installer digests, and check this contract before review.
+
+## 2026-10-09 — Negative identity test reintroduced a forbidden literal
+A new negative handoff assertion contained the obsolete predecessor script name as a literal, so the repository rename guard correctly flagged the test itself. Assert the current Getzilla command instead; do not exempt the test or label a new assertion as a historical quote. Include the identity guard in bounded repair controls.

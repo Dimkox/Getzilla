@@ -13,11 +13,11 @@
     "issue": 72,
     "route_id": "37371d21accb",
     "branch": "readiness/72-production-20261009",
-    "pull_request": null,
+    "pull_request": 74,
     "change_package": "engineering/changes/20261009-task-37371d",
     "target_version": "2.2.1",
     "source_base": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
-    "status": "source_candidate_pending_independent_review_and_final_gates",
+    "status": "repair_candidate_pending_fresh_independent_reviews_and_exact_head_gates",
     "next_action": "Continue issue72 production readiness. Bind each independent review to its exact reviewed commit, save only active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional AGENTS L5, record exact grants for merge/tag/release after checks and resolved threads. Keep v2.2.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority."
   },
   "historical_cleanup_continuation": {
@@ -131,7 +131,15 @@
     "assets": [],
     "artifact": null,
     "operational_activation": false,
-    "qualification_status": "publication_only_not_production_acceptance"
+    "qualification_status": "publication_only_not_production_acceptance",
+    "installers": {
+      "scripts/install.sh": {
+        "sha256": "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9"
+      },
+      "scripts/install.ps1": {
+        "sha256": "32f5dfd05e8b19cf327bef6ea2b7da1f677675573a0eceb27c17aab8aca73987"
+      }
+    }
   },
   "prior_published_releases": [
     {

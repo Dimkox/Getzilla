@@ -225,6 +225,10 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(published['tag_object'], '5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9')
         self.assertEqual(published['tree'], '0f6fa49b00519f67260492320e40b1656c850549')
         self.assertEqual(published['assets'], [])
+        self.assertEqual(published['installers'], {
+            'scripts/install.sh': {'sha256': '39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9'},
+            'scripts/install.ps1': {'sha256': '32f5dfd05e8b19cf327bef6ea2b7da1f677675573a0eceb27c17aab8aca73987'},
+        })
         self.assertIsNone(published['artifact'])
         self.assertFalse(published['operational_activation'])
         continuation = state['current_continuation']
@@ -235,7 +239,7 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(continuation['target_version'], state['product_version'])
         self.assertIn('one final PR verifier', continuation['next_action'])
         self.assertIn('Native harness', continuation['next_action'])
-        self.assertNotIn('scripts/grok_m8.py', continuation['next_action'])
+        self.assertIn('scripts/getzilla_m8.py', state['operational_qualification']['m8_scope'])
 
     def test_current_owner_policy_is_bound_to_one_real_case_without_numeric_telemetry(self) -> None:
         from getzilla_factory.owner_autonomy import OwnerCaseV1, OwnerPolicyV1
