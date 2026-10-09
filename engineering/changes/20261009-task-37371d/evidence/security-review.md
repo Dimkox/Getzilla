@@ -1,45 +1,43 @@
-# Security review — compatibility candidate
+# Security review — denial-rule repair
 
-Verdict: PASS for local security review. No blocking findings. Older reports remain historical.
+Verdict: PASS for local security review. No blocking findings. Final local and external gates remain pending; earlier reports are historical.
 
-- Missing active-change metadata permits only a low-risk micro route without a change ID. Null, malformed, unsafe or symlink metadata does not become a missing-package fallback. Durable routes still require a valid package.
-- Both supported report namespaces retain exactly six conventional names. Commit format, ancestry, clean inventory, safe file reads, Git modes and consumer rederivation remain enforced.
-- Grok skill generation owns only `.grok/skills`. Existing parent-conflict checks and descriptor-relative writes apply. Canonical hooks and agents remain outside generated ownership. Controls check mirror repair and retirement without changing those inputs.
-- Published installer provenance remains separate from candidate VERSION. No new duplicate external write path was found. Manual overrides remain UNVERIFIED; conditional L5 consent does not replace exact-head checks or human approval boundaries. Source2.2.1 is not a published release. Low follow-up #73 remains deferred.
+- The canonical delivery skill now contains all five tool-denial clauses. The Grok, Claude, Gemini and Qwen mirrors retain those clauses. The binding test checks canonical and Grok delivery for denial refusal, one rewrite and exact protected targets. Static review confirms same-objective blocking and fingerprint rules.
+- Full base..HEAD review retains exact commit admission, ancestry, clean inventory, six report names in supported namespaces, safe reads and consumer rederivation. Missing-package fallback remains limited to low-risk micro routes; unsafe metadata fails closed.
+- Grok generation owns only `.grok/skills`; hooks and agents remain canonical. No new duplicate external mutation path was found. Manual overrides remain UNVERIFIED and conditional L5 grants do not bypass external checks or the human private-key boundary. Low follow-up #73 remains deferred. Source2.2.1 is not published.
 
-Exact source identity before and after:
+Candidate identity before and after:
 
 - Base: `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`
-- HEAD: `80215eecb7ecec69cc31a965cbf4d678bee842a3`
-- Tree: `39d3f24c62e964081ccd903820e6e7c90ca74ce5`
-- Fingerprint: `82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370`
+- HEAD: `1870996cb987dabff915639d2e2104600fa1cd4b`
+- Tree: `88f91d423658a56450aab4de70c26110dcfd3eb4`
+- Fingerprint: `d205977d7a1b94ff2938fc6972c23581edf5b68b75031ca4c289976c0d635c1f`
 - Status: clean.
 
-Scratch: `/home/pall/getzilla-session/security-compat-scratch/candidate`. Its reviewer-owned scratch root and non-sticky parent have mode `0700`. Local `--no-hardlinks` clone at exact detached HEAD reproduced the candidate tree and fingerprint. Capacity was remeasured: physical14, online logical28, cpuset0-27, unlimited applicable ancestor quotas, successful child-only affinity probe. Probes ran sequentially on CPUs8-11 with one worker.
+Scratch: `/home/pall/getzilla-session/security-breaker-scratch/candidate`. Reviewer-owned scratch root and non-sticky parent have mode `0700`. Local clone used `--no-hardlinks` and exact detached HEAD. Initial and restored scratch fingerprints matched the candidate. Capacity was remeasured: physical14, logical28, cpuset0-27, unlimited applicable ancestor quotas, successful child-only affinity probe; capacity28. Probes used CPUs8-11 and one worker, sequentially.
 
-Fresh commands and results:
-
-```text
-taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source tests.test_harnesses tests.test_install_scripts.InstallScriptContractTests -q
-60 tests; OK in15.907s.
-
-taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 /home/pall/getzilla-session/security-compat-scratch/mutation_probe.py
-Three sequential critical mutants, restored between probes:
-- Durable-package guard removed: KILLED; missing-durable test failed.
-- Report name allowlist broadened to index file: KILLED; index/analysis rejection test failed.
-- Consumer binding rederivation removed: KILLED; three forged-binding assertions failed.
-```
-
-The mutation runner executed these exact named test commands, each with `taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest` and `-q`:
+Fresh commands and output:
 
 ```text
-tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed
-tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report
-tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source tests.test_delivery_sequence -q
+23 tests; OK in13.011s.
+
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 /home/pall/getzilla-session/security-breaker-scratch/mutation_probe.py
+Durable guard mutant: KILLED, one assertion failure.
+Report-name namespace mutant: KILLED, one assertion failure.
+Consumer rederivation mutant: KILLED, three forged-binding failures.
 ```
 
-The combined restored command ran the same three names: 3 tests; OK in4.111s. Scratch Git status was clean afterward. Controls also execute micro global-report CLI/consumption, active-package global reports, unsafe metadata, revision/path, dirty-state and report-mode checks.
+The runner restored each scratch file before the next probe and invoked these exact named commands:
 
-Limits: no native Windows execution, real concurrent filesystem stress, deployed production validation or external exact-head check. Policy and delegation prose received static review only. Local evidence does not certify publication, production or merge authority.
+```text
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed -q
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report -q
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q
+```
+
+Restored scratch status was clean and its fingerprint matched. No candidate artifacts were created.
+
+Limits: no native Windows execution, concurrent filesystem stress, production validation or external exact-head check. Policy prose received static review; tests cannot prove agent compliance. No broad unrelated suite or new publication claim was made. Local review is not merge authority.
 
 reviewed-tree-modified: no

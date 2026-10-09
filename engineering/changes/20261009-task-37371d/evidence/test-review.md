@@ -1,26 +1,26 @@
 # Test review: PASS, bounded scope
 
-No blocking finding in tests, security or duplicate mutations. Route `37371d21accb`. Inspected full base `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`..HEAD and the new compatibility delta. Earlier reports are historical.
+No blocking finding in tests, security or duplicate mutations. Route37371d21accb. Reviewed full base `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`..HEAD, with fresh inspection of receipt admission/consumption, canonical harness generation and final circuit-breaker repair. Old reports and failing/canceled gates are historical, not current PASS.
 
-Candidate before and after: HEAD `80215eecb7ecec69cc31a965cbf4d678bee842a3`; Git tree `39d3f24c62e964081ccd903820e6e7c90ca74ce5`; fingerprint `82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370`. Git status clean at both observations.
+Candidate before/after: HEAD `1870996cb987dabff915639d2e2104600fa1cd4b`; tree `88f91d423658a56450aab4de70c26110dcfd3eb4`; fingerprint `d205977d7a1b94ff2938fc6972c23581edf5b68b75031ca4c289976c0d635c1f`. Git status clean at both observations.
 
 reviewed-tree-modified: no
 
-Private scratch `/home/pall/getzilla-session/test-review-compat-faxg9E/repo` was created with `git clone -q --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>`. The private parent and trusted enclosing parent are pall-owned mode0700, non-sticky. Scratch HEAD, tree and fingerprint matched the exact clean committed candidate before execution. One sequential unittest process used CPU4-7. No candidate artifacts or writes.
+Private scratch `/home/pall/getzilla-session/test-review-breaker-7srciR/repo`, created with `git clone -q --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>`. Its parent and trusted enclosing parent are pall-owned mode0700, non-sticky. HEAD, tree and fingerprint matched before tests. One sequential unittest worker used CPU4-7. No writes or test artifacts in candidate.
 
-Fresh baseline command:
+Fresh baseline:
 
 ```text
-taskset -c 4-7 python3 -m unittest tests.test_review_source tests.test_harnesses tests.test_installer tests.test_install_scripts tests.test_history tests.test_ci_gate -q
-164 tests; OK; 62.201s.
+taskset -c 4-7 python3 -m unittest tests.test_delivery_sequence tests.test_review_source tests.test_harnesses -q
+54 tests; OK;8.184s.
 ```
 
-Fresh critical scratch probes:
+Fresh scratch mutants:
 
-- Missing-package risk guard: changed the micro/low-risk-only fallback condition to false. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed -q`. Failed on absent durable selected package being accepted. KILLED; one failure;0.591s.
-- Receipt consumer binding: skipped the PASS review-source consumption branch. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q`. Missing/tree/commit/report-digest assertions failed. KILLED; four failures;2.184s.
-- Report namespace/name guard: replaced allowed_reports membership with generic Markdown acceptance. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report tests.test_review_source.ReviewSourceTests.test_rejects_other_report_directory_and_executable_evidence_delta -q`. Five assertions failed for global other.md and package README/analysis/checkpoint acceptance. KILLED;2.349s.
+- PASS source consumer binding removed in receipts.py. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q`. Four missing/tree/commit/digest assertions failed. KILLED;2.196s.
+- Micro/low-risk-only missing-package guard removed in review_source.py. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed -q`. Durable missing-package refusal assertion failed. KILLED;0.556s.
+- Canonical one-rewrite clause replaced with unlimited rewrites. `taskset -c 4-7 python3 -m unittest tests.test_delivery_sequence.DeliverySequenceTests.test_grok_keeps_its_tool_denial_circuit_breaker -q`. New canonical-source assertion failed. KILLED;0.001s.
 
-Restored all scratch mutants. Baseline exercises micro no-package global report admission at core and CLI, subsequent consumption, selected-package global reports, malformed/null/unsafe selected metadata refusal, source delta refusal and real Git mode checks. Positive fixture freezing does not hide source changes in independent negative tests. Consumer installation checks actual canonical-to-Grok file bytes. Drift/retirement tests remove obsolete managed skills while preserving hooks and agent bytes. Publication/version negative contract and unchanged history tests pass. No external mutation path was added. Deferred Low issue73 stays outside this repair.
+Restored all scratch mutants. New binding test checks canonical and Grok copies; harness tests enforce exact mirror parity. All five breaker clauses are present in the source and generated delivery mirrors. Review-source negatives retain earlier Git identity and exercise real admission and receipt consumption; helper freezing does not hide their source deltas. No added external mutation path. Deferred Low issue73 remains outside this repair.
 
-Limits: this Linux run does not prove native Windows behavior. Windows workflow selects the new receipt module and portable Git-index executable-mode probe; symlink cases may skip where permissions deny them. Full final PR verification and external exact-head checks remain pending. The canceled older full run is not PASS. No production acceptance or remote publication reobservation is claimed. Existing status/hook/recovery changes were inspected; their full modules were not rerun in this bounded review. No blanket mutation score is claimed.
+Limits: breaker tests bind written instructions; they do not prove future agent compliance or exercise a live denial hook. Native Windows tests and exact-head external gates were not executed here. Symlink cases may skip on hosts that deny them. The full final PR verifier must run after report freeze. Unchanged installer, history, status/hook/recovery modules were inspected within full scope but were not broadly rerun in this narrow fresh control set. No production qualification, remote publication reobservation or blanket mutation score is claimed.

@@ -1,26 +1,26 @@
-# Release review — supported-consumer compatibility
+# Release review — canonical circuit-breaker preservation
 
-PASS for conditional source PR delivery. Production NO-GO. This report does not authorize merge or publication before fresh gates.
+PASS for conditional source PR delivery. Production NO-GO. Fresh local and exact-head external gates remain required before merge/publication.
 
-Route37371d21accb, base5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9. Read the full source change, compatibility delta, current package and implementation evidence. Before/after HEAD80215eecb7ecec69cc31a965cbf4d678bee842a3, tree39d3f24c62e964081ccd903820e6e7c90ca74ce5, fingerprint82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370. Clean status both times. reviewed-tree-modified: no.
+Route37371d21accb; full comparison base5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9. Reviewed full change and repair delta, current package and implementation evidence. Before/after HEAD1870996cb987dabff915639d2e2104600fa1cd4b, tree88f91d423658a56450aab4de70c26110dcfd3eb4, fingerprintd205977d7a1b94ff2938fc6972c23581edf5b68b75031ca4c289976c0d635c1f; Git status clean. reviewed-tree-modified: no.
 
-- No new release-blocking finding from this lens. Grok skill copies now come from canonical skills and participate in drift enforcement. Generated ownership adds only .grok/skills, preserving canonical hooks/agents. Installer parity tests cover actual consumers; retirement tests cover preservation.
-- Review-source compatibility restores conventional engineering/reviews reports and low-risk micro routes without a package. Durable routes still require valid package metadata. Present malformed metadata fails closed. Exact reviewed source, ancestry, clean candidate, regular report modes, six-name whitelist and rederived receipt binding remain mandatory. These are local evidence controls, not authenticated reviewer identity or external authority.
-- Source2.2.1 remains unpublished. Publishedv2.2.0 stays immutable at the base commit, zero assets. Neither installer nor package bytes changed. Recorded published installer provenance remains separate from advancing candidate VERSION.
-- Low findings remain deferred to issue73. Manual overrides remain UNVERIFIED until named deferred checks run. Tracked reviewing state stays frozen; conditional L5 still requires exact grants, green exact-head checks, independent review and resolved threads.
-- No changed external mutation path was identified. No universal retry/idempotency claim is made. Production target/task, installed repaired-source acceptance, observable runtime failure signals and exercised recovery remain unknown. Native harness execution and historical M8 smoke do not prove unattended production operation.
+- No new release-blocking finding. The five tool-denial clauses lost through skill canonicalization now live in canonical delivery and generated Grok/Qwen/Claude/Gemini mirrors. The binding test is strengthened across delivery sources rather than removed. It checks identical-denial prohibition, one semantic rewrite and opaque-denial targets.
+- Previous compatibility repairs remain: narrow .grok/skills generated ownership, actual consumer parity, bounded global/micro review report support and malformed-package fail-closed checks. Exact source identity and receipt rederivation remain local workflow evidence, not merge authority.
+- Candidate source2.2.1 remains unpublished. Publishedv2.2.0 stays immutable at base SHA with zero assets. Installer/package bytes remain unchanged. Source VERSION does not silently advance published installation provenance.
+- Low findings remain deferred to issue73. Manual override outcomes stay UNVERIFIED until deferred checks run. Frozen reviewing state, exact grants, green exact-head gates, independent reviews and resolved threads remain conditions for L5 delivery.
+- No changed external mutation path was found. Production target/task, installed repaired-source acceptance, current runtime observability and exercised recovery remain unproved. No daemon or unattended production qualification is inferred. Recovery uses a gated forward fix and fresh evidence; historical passes are not auto-upgraded.
 
 Executed read-only controls/results:
 
-- git rev-parse HEAD HEAD^{tree}; git status --porcelain=v1; getzilla.util.tree_fingerprint(Path('.').resolve()) with PYTHONDONTWRITEBYTECODE=1: identities above, clean before/after.
-- git diff --stat 3e59aa15..HEAD; git diff 3e59aa15..HEAD -- .getzilla/getzilla/review_source.py .getzilla/getzilla/harnesses.py tests/test_installer.py; current package/analysis/implementation reads: narrow generated ownership, report namespace compatibility and consumer regression inspected.
+- git rev-parse HEAD HEAD^{tree}; git status --porcelain=v1; getzilla.util.tree_fingerprint(Path('.').resolve()) with PYTHONDONTWRITEBYTECODE=1: exact identities above, clean before/after.
+- git diff --stat 80215eec..HEAD; git diff 80215eec..HEAD -- .agents/skills/getzilla-delivery/SKILL.md tests/test_delivery_sequence.py; current implementation/package reads: exact canonical clauses restored, mirrors and binding tests retained.
 - git diff --name-only 5d5b45f..HEAD -- scripts/install.sh scripts/install.ps1 packages: no paths.
+- gh pr view74 --repo Dimkox/Getzilla --json headRefOid,statusCheckRollup: remote head37bf768f9c328258add90346641caff8103cd49e; linux IN_PROGRESS, windows SUCCESS, GitGuardian SUCCESS at observation. These are older-source results, not current candidate qualification.
 - gh api repos/Dimkox/Getzilla/branches/main/protection/required_status_checks: required linux/windows, Actions App15368; strictfalse. No protection mutation.
-- gh pr view74 --repo Dimkox/Getzilla --json headRefOid,statusCheckRollup: remote head9ea7c523304da5a747d3663bf278641a36bf04f7. Linux/windows/GitGuardian SUCCESS on that older head. These do not qualify reviewed80215eec.
-- gh api repos/Dimkox/Getzilla/releases/tags/v2.2.0: base target, publication2026-10-09T01:57:09Z, assets0.
+- gh api repos/Dimkox/Getzilla/releases/tags/v2.2.0: base target, assets0.
 
-Unexecuted: fresh final full-scope local PR verifier, current exact-head Linux/Windows checks, native Windows compatibility qualification, repaired artifact smoke and production acceptance/recovery. Old9ea7 local verifier was cancelled/incomplete; its external success cannot replace fresh checks. Bot threads still need resolution before merge. Reported49 compatibility and33 receipt/identity controls were read, not rerun. Historical75ff artifact smoke is not fresh evidence.
+Unexecuted: fresh final full-scope local PR verification, current exact-head external Linux/Windows checks, native Windows acceptance, fresh current artifact smoke and production acceptance/recovery. Previous37bf full verifier failed its circuit-breaker test;1558 passes do not make that invocation qualify. Its640-entry artifact smoke is historical only. Reported66 bounded controls were read, not rerun. Coordinator reports bot P1/P2 threads answered/resolved; final thread state still requires a merge-time check.
 
-Scratch:none. Static release review only; no tests/artifacts generated in candidate. mutation: skipped (non-critical) for release and skill-copy claims. Critical receipt validation mutation probes remain assigned to code/test/security reviewers.
+Scratch:none; static read-only release review, no candidate tests/artifacts. mutation: skipped (non-critical) for release/skill prose claims. Critical receipt mutation review remains assigned to code/test/security reviewers.
 
-Persist fresh reports, freeze report-only delta, pass the final local and exact-head external gates, resolve threads and record exact conditional L5 grants. Publish2.2.1 only from actual merged tested source. Preservev2.2.0. Production deployment requires separate exact target/action authority and acceptance evidence.
+Persist fresh reports, freeze report-only delta, pass final local and current exact-head external gates, check resolved threads and record exact L5 grants. Tag/publish2.2.1 only from actual merged tested source. Preservev2.2.0. Production deployment requires separate exact target/action authority and acceptance evidence.
