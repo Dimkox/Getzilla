@@ -185,7 +185,7 @@ def _cursor_rules(root: Path) -> dict[str, bytes]:
         if len(content) > CURSOR_BUDGET[not scoped] or content.count(b'\n') > 500:
             raise ValueError(f'{source}: rendered rule exceeds its context budget')
         out[f'{CURSOR_OUTPUT}/{path.stem}.mdc'] = content
-    if out and always != 1:
+    if always != 1:
         raise ValueError(f'{CURSOR_SOURCE}: exactly one rule must set always_apply = true')
     return out
 

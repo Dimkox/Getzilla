@@ -208,6 +208,15 @@ class CursorRuleTests(unittest.TestCase):
             with self.subTest(case=name), self.assertRaises(ValueError):
                 render(root)
 
+    def test_empty_rule_source_set_is_rejected_and_keeps_generated_rules(self) -> None:
+        root = self.fixture()
+        write(root)
+        for source in (root / '.grok/cursor-rules').glob('*.toml'):
+            source.unlink()
+        with self.assertRaises(ValueError):
+            write(root)
+        self.assertTrue((root / CURSOR_OUTPUT / '00-rule.mdc').is_file())
+
     def test_write_is_world_readable_idempotent_and_removes_stale_rules(self) -> None:
         root = self.fixture()
         cursor = [problem for problem in drift(root) if CURSOR_OUTPUT in problem]
