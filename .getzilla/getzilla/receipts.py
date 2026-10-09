@@ -15,6 +15,7 @@ from typing import Any
 from collections.abc import Callable
 
 from . import fsx
+from .review_source import review_source_binding
 from .architecture import (
     ArchitectureError,
     RULES_PATH,
@@ -835,10 +836,12 @@ def write_receipt(
     spec_fingerprint: str | None = None,
     expected_tree_fingerprint: str | None = None,
     interrupt_check: Callable[[], None] | None = None,
+    reviewed_commit: str | None = None,
 ) -> Path:
     route = get_active_route(root)
     if not route:
         raise RuntimeError('no active route')
+    review_source = review_source_binding(root, reviewed_commit, report) if kind != 'verification' and status == 'pass' else None
     before_tree = tree_fingerprint(root)
     before_head = _exact_head(root)
     if (
@@ -874,6 +877,7 @@ def write_receipt(
         'git_head': before_head,
         'report': report,
         'details': details or {},
+        **({'review_source': review_source} if review_source is not None else {}),
         **binding,
         **(current_architecture or {}),
         **(current_governance or {}),
@@ -883,7 +887,8 @@ def write_receipt(
     after_architecture = active_architecture_binding(root, route)
     after_governance = active_governance_binding(root, route, after_architecture)
     if (
-        after_tree != before_tree
+        (review_source is not None and review_source_binding(root, reviewed_commit, report) != review_source)
+        or after_tree != before_tree
         or _exact_head(root) != before_head
         or after_binding != current
         or after_architecture != current_architecture
@@ -1011,6 +1016,13 @@ def validate_evidence(
             missing.append(f'{kind}: stale after repository changes')
         if 'git_head' in receipt and receipt['git_head'] != _exact_head(root):
             missing.append(f'{kind}: stale after Git head changes')
+        if kind != 'verification' and receipt.get('status') == 'pass':
+            try:
+                source = receipt.get('review_source')
+                if not isinstance(source, dict) or review_source_binding(root, source.get('reviewed_commit'), receipt.get('report')) != source:
+                    raise RuntimeError('missing or forged reviewed source binding')
+            except (RuntimeError, ValueError, OSError, UnicodeError) as exc:
+                missing.append(f'{kind}: review source invalid: {exc}')
         try:
             binding = _active_spec_binding(root, route, kind)
         except (RuntimeError, ValueError) as exc:

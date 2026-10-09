@@ -1154,3 +1154,7 @@ The verifier hashes the `opengrep` it resolved on PATH, compares it with the pin
 
 ## 2026-10-09 — Issue72 current-source triage
 Compare old open issue claims against delivered source before treating them as production blockers; 123 named policy regressions show the original issues36/37/38 repaired. Owner L5 instructions and explicit execute-goal direction authorize routine source/process repairs; target-specific production authority remains separate.
+
+- 2026-10-09: The owner accepts an explicit manual override of local workflow rules, followed by validation. Record the exact rule, scope, reason, deferred checks and follow-up; keep the result UNVERIFIED until checks run. This grants no fake PASS, external attestation, branch-protection bypass or human-key access.
+
+- 2026-10-09: Restrict saved-report deltas to six conventional independent report names; analysis, index and checkpoint Markdown cannot be used to hide source changes. Freeze tracked lifecycle state at reviewing before review; final receipts, zero gaps and exact-head gates record completion without a later ready mutation. This preserves the reviewed-source contract without a lifecycle redesign.

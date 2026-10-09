@@ -1,12 +1,14 @@
 # Getzilla
 
+Current source: **2.2.1 source candidate** for [issue72](https://github.com/Dimkox/Getzilla/issues/72). Latest published: [v2.2.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0), source `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`, with no uploaded assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
 ## The short version
 
 With "vibe coding", you ask an AI for something, it writes the code, and you hope it works. It is fast and fun. You usually find out later what it broke.
 
-Getzilla keeps the fast part and adds a checking part. The AI still builds what you asked for. Before that work joins the real project, it gets checked: tests run, a second AI reviews it, and a person decides whether to keep it.
+Getzilla keeps the fast part and adds a checking part. The AI still builds what you asked for. Before that work joins the real project, it gets checked: tests run, a second AI reviews it, and the required checks and review decide whether it can merge.
 
 Think of a child building a LEGO tower. Building is the fun part, and nobody should slow it down. But before the tower goes on the shelf next to everything else, someone makes sure it is steady, so it does not knock the whole shelf over. Getzilla is that someone.
 
@@ -21,7 +23,7 @@ Think of a child building a LEGO tower. Building is the fun part, and nobody sho
 | Mistakes | The next session repeats them | Lessons are written down in `mistakes.md` and `decisions.md` for the next session |
 | Small vs. risky tasks | Treated the same | Small tasks take a short path. Risky ones get more checks and a human sign-off |
 | Something unclear | The AI guesses | Getzilla stops instead of guessing |
-| Who ships | The AI | You do. The agent works through a pull request, and a person merges it |
+| Who ships | The AI | The agent uses a pull request. Under conditional L5, it merges after checks and independent review |
 
 You do not give up vibe coding. The rule is **vibe first, check second**: build it fast, then run it through Getzilla before it is kept.
 
@@ -31,7 +33,7 @@ You do not give up vibe coding. The rule is **vibe first, check second**: build 
 2. **Sort it.** Getzilla looks at the task and decides how careful to be: which skills to use, which reviewers to call, whether a person must approve the plan first.
 3. **Check it.** Tests and other checks run. The results are saved next to the task.
 4. **Review it.** Separate AI reviewers read the change and write down what they find.
-5. **Ship it.** A pull request is opened, and a person merges it. Teams that want an extra lock can add Trust CI, a separate service that tests the exact version again before merge.
+5. **Ship it.** A pull request is opened. Conditional L5 permits agent merge after exact-head checks, independent review and resolved threads. Teams that want an extra lock can add Trust CI, a separate service that tests the exact version again before merge.
 
 ## What it costs
 
@@ -105,7 +107,7 @@ Then follow [QUICKSTART.md](QUICKSTART.md).
 
 - Not a hosted service. It runs on your machine, inside your repository.
 - Not a CI service. CI follows repository visibility: public repositories run the pinned GitHub Actions workflow from `scripts/getzilla_ci.py`, private ones use Trust CI.
-- Not a bot that merges or deploys on its own.
+- Conditional L5 covers repository merge, tag and release with exact grants after required checks and independent review. Deploy and production writes require separate scoped authority.
 
 ## Learn more
 

@@ -1,33 +1,37 @@
 {
   "schema_version": 2,
-  "repository": "Dimkox/adaptive-grok-build-pro",
+  "repository": "Dimkox/Getzilla",
   "default_branch": "main",
-  "observed_at": "2026-09-24T20:06:48Z",
-  "observed_main_sha": "3f41be92161fef451a2dfa7451eb458ce8f022b3",
-  "product_version": "2.2.0",
-  "latest_published_release": "v2.1.1",
+  "observed_at": "2026-10-09T02:19:00Z",
+  "observed_main_sha": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+  "product_version": "2.2.1",
+  "latest_published_release": "v2.2.0",
   "bootstrap_entrypoint": "START_HERE.md",
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
   "current_continuation": {
-    "route_id": "b258608f2ced",
-    "branch": "feat/m8-one-task-autonomy",
+    "issue": 72,
+    "route_id": "37371d21accb",
+    "branch": "readiness/72-production-20261009",
     "pull_request": null,
-    "change_package": "engineering/changes/20261004-task-b25860",
-    "target_version": "2.2.0",
+    "change_package": "engineering/changes/20261009-task-37371d",
+    "target_version": "2.2.1",
+    "source_base": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
     "status": "source_candidate_pending_independent_review_and_final_gates",
-    "accepted_product_delivery": {
-      "pull_request": 244,
-      "merge_commit": "2a8e3839a469b3e05da167e9d8a807bf18e6adbf",
-      "merged_at": "2026-10-05T00:07:26Z"
-    },
-    "next_action": "Deliver one-case bounded local owner-autonomy source through independent review, one final full verifier and exact-head external Trust CI. Activate per clone on the final source using scripts/grok_m8.py; GitHub Release publication requires the exact merged tested source and delegated operation. M9 remains separate."
+    "next_action": "Continue issue72 production readiness. Bind each independent review to its exact reviewed commit, save only active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional AGENTS L5, record exact grants for merge/tag/release after checks and resolved threads. Keep v2.2.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority."
   },
   "historical_cleanup_continuation": {
     "pull_request": 241,
-    "superseded_pull_requests": [239],
+    "superseded_pull_requests": [
+      239
+    ],
     "historical_pull_requests": [
-      {"pull_request": 239, "record_scope": "historical", "status": "superseded", "successor_pull_request": 241}
+      {
+        "pull_request": 239,
+        "record_scope": "historical",
+        "status": "superseded",
+        "successor_pull_request": 241
+      }
     ],
     "historical_external_observations": [
       {
@@ -37,7 +41,14 @@
         "check_run_id": 111478461651,
         "completed_at": "2026-10-04T16:47:22Z",
         "conclusion": "SUCCESS",
-        "reported_pass_checks": ["holdout-bundle-integrity", "external-holdout", "root-unittest", "trust-ci-unittest", "compileall", "repository-verification"],
+        "reported_pass_checks": [
+          "holdout-bundle-integrity",
+          "external-holdout",
+          "root-unittest",
+          "trust-ci-unittest",
+          "compileall",
+          "repository-verification"
+        ],
         "current_verification": false
       }
     ],
@@ -109,42 +120,18 @@
     "M9"
   ],
   "published_release": {
-    "tag": "v2.1.1",
-    "published_at": "2026-10-03T09:11:19Z",
-    "pull_request": 238,
-    "checked_head": "4c5be3ab2370792e71bfa43a031d7f074cfb78f5",
-    "merge_commit": "97a7581238022356b2de8d193a9bd8363fc92dc3",
-    "merged_at": null,
-    "tag_object": "97a7581238022356b2de8d193a9bd8363fc92dc3",
+    "repository": "Dimkox/Getzilla",
+    "tag": "v2.2.0",
+    "published_at": "2026-10-09T01:57:09Z",
+    "tag_object": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
     "tag_kind": "lightweight",
-    "tree": "9aecfc9fa6ba17f94acd1a9fac069acee218b393",
-    "artifact": {
-      "path": "packages/adaptive-grok-build-pro-v2.1.1.zip",
-      "sha256": "f5116c5e1303232ae883ed7a3aa804b71f0b5654d2c385924653b5ffd2d631c1",
-      "sidecar_path": "packages/adaptive-grok-build-pro-v2.1.1.zip.sha256",
-      "sidecar_sha256": "07ddeb5f9fa7c9d8135c347defc84a271c102947724744ec8288370bd5c60269",
-      "binding": "immutable_release_tag",
-      "storage": "github_release_asset",
-      "url": "https://github.com/Dimkox/adaptive-grok-build-pro/releases/download/v2.1.1/adaptive-grok-build-pro-v2.1.1.zip",
-      "sidecar_url": "https://github.com/Dimkox/adaptive-grok-build-pro/releases/download/v2.1.1/adaptive-grok-build-pro-v2.1.1.zip.sha256"
-    },
-    "trust_ci": {
-      "name": "adaptive-trust-ci/verified@06ecf1c875bc",
-      "check_run_id": 111167969839,
-      "github_app_id": "<redacted-app-id>",
-      "conclusion": "SUCCESS",
-      "completed_at": "2026-10-03T09:07:03Z",
-      "attestation_id": null,
-      "signer": null
-    },
-    "gitguardian": {
-      "conclusion": "SUCCESS",
-      "check_run_id": 111167989942,
-      "note": "Informational exact PR-head check, not merge authority."
-    },
-    "merge_tag_target_check_runs": [],
+    "merge_commit": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+    "tree": "0f6fa49b00519f67260492320e40b1656c850549",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0",
+    "assets": [],
+    "artifact": null,
     "operational_activation": false,
-    "notes": "Observed from GitHub on 2026-10-04. Trust CI succeeded on PR238 head; release assets bind the distinct immutable merged tag target. Publication establishes no F/G successor acceptance, pilot qualification, deployment or activation. Unknown merge time and attestation identity are not inferred."
+    "qualification_status": "publication_only_not_production_acceptance"
   },
   "prior_published_releases": [
     {
@@ -2331,7 +2318,8 @@
       "attestation_id": "9defb556-f703-4a13-b20a-8b88aa6781b4",
       "signer": "0519cf1d47436f2e",
       "conclusion": "SUCCESS"
-    }
+    },
+    "record_scope": "Historical predecessor/private deployment observation; not current public Getzilla branch protection or fresh verification."
   },
   "fresh_clone": {
     "continuation_record": "current_continuation",
@@ -2470,7 +2458,7 @@
     "m8_qualifying_cohort": true,
     "m8_activation": true,
     "m8_evidence_kind": "explicit_owner_confirmation",
-    "m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/grok_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification.",
+    "m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/getzilla_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification.",
     "m9_general_operational_qualification": false,
     "factory_site_publication": false,
     "record_scope": "Owner-confirmed Liqvera acceptance, accounting and human readiness qualify the one-case bounded local M8 policy. Numeric telemetry remains null. General M9 and factory-runtime site publication remain unestablished; no external authority is conferred.",
@@ -2766,5 +2754,77 @@
     "independent_acceptance_review_sha256": "2212829f44706783058b81e44704a3fa504b8871ec72d605d0afd5fd892fe864",
     "observed_at": "2026-09-21T09:25:49.745618+00:00",
     "later_pr170_delivery": "engineering/changes/20260921-fix-the-combined-delivery-of-already-reviewed-is-bcc1d6/evidence/pr170-delivery.json"
-  }
+  },
+  "historical_predecessor_identity": {
+    "repository": "Dimkox/adaptive-grok-build-pro",
+    "observed_at": "2026-09-24T20:06:48Z",
+    "observed_main_sha": "3f41be92161fef451a2dfa7451eb458ce8f022b3",
+    "latest_published_release": "v2.1.1"
+  },
+  "historical_m8_continuation": {
+    "route_id": "b258608f2ced",
+    "branch": "feat/m8-one-task-autonomy",
+    "pull_request": null,
+    "change_package": "engineering/changes/20261004-task-b25860",
+    "target_version": "2.2.0",
+    "status": "source_candidate_pending_independent_review_and_final_gates",
+    "accepted_product_delivery": {
+      "pull_request": 244,
+      "merge_commit": "2a8e3839a469b3e05da167e9d8a807bf18e6adbf",
+      "merged_at": "2026-10-05T00:07:26Z"
+    },
+    "next_action": "Deliver one-case bounded local owner-autonomy source through independent review, one final full verifier and exact-head external Trust CI. Activate per clone on the final source using scripts/grok_m8.py; GitHub Release publication requires the exact merged tested source and delegated operation. M9 remains separate."
+  },
+  "historical_v2_1_1_published_release": {
+    "tag": "v2.1.1",
+    "published_at": "2026-10-03T09:11:19Z",
+    "pull_request": 238,
+    "checked_head": "4c5be3ab2370792e71bfa43a031d7f074cfb78f5",
+    "merge_commit": "97a7581238022356b2de8d193a9bd8363fc92dc3",
+    "merged_at": null,
+    "tag_object": "97a7581238022356b2de8d193a9bd8363fc92dc3",
+    "tag_kind": "lightweight",
+    "tree": "9aecfc9fa6ba17f94acd1a9fac069acee218b393",
+    "artifact": {
+      "path": "packages/adaptive-grok-build-pro-v2.1.1.zip",
+      "sha256": "f5116c5e1303232ae883ed7a3aa804b71f0b5654d2c385924653b5ffd2d631c1",
+      "sidecar_path": "packages/adaptive-grok-build-pro-v2.1.1.zip.sha256",
+      "sidecar_sha256": "07ddeb5f9fa7c9d8135c347defc84a271c102947724744ec8288370bd5c60269",
+      "binding": "immutable_release_tag",
+      "storage": "github_release_asset",
+      "url": "https://github.com/Dimkox/adaptive-grok-build-pro/releases/download/v2.1.1/adaptive-grok-build-pro-v2.1.1.zip",
+      "sidecar_url": "https://github.com/Dimkox/adaptive-grok-build-pro/releases/download/v2.1.1/adaptive-grok-build-pro-v2.1.1.zip.sha256"
+    },
+    "trust_ci": {
+      "name": "adaptive-trust-ci/verified@06ecf1c875bc",
+      "check_run_id": 111167969839,
+      "github_app_id": "<redacted-app-id>",
+      "conclusion": "SUCCESS",
+      "completed_at": "2026-10-03T09:07:03Z",
+      "attestation_id": null,
+      "signer": null
+    },
+    "gitguardian": {
+      "conclusion": "SUCCESS",
+      "check_run_id": 111167989942,
+      "note": "Informational exact PR-head check, not merge authority."
+    },
+    "merge_tag_target_check_runs": [],
+    "operational_activation": false,
+    "notes": "Observed from GitHub on 2026-10-04. Trust CI succeeded on PR238 head; release assets bind the distinct immutable merged tag target. Publication establishes no F/G successor acceptance, pilot qualification, deployment or activation. Unknown merge time and attestation identity are not inferred."
+  },
+  "current_ci": {
+    "repository": "Dimkox/Getzilla",
+    "visibility": "public",
+    "required_checks": [
+      "linux",
+      "windows"
+    ],
+    "github_app_id": 15368,
+    "workflow": ".github/workflows/getzilla.yml",
+    "observed_at": "2026-10-09",
+    "source": "engineering/changes/20261009-task-37371d/evidence/analysis-integration_architect.md",
+    "current_candidate_verified": false
+  },
+  "historical_predecessor_m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/grok_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification."
 }

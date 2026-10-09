@@ -7,3 +7,5 @@ AC-003: repair current handoff and L5 delivery instructions while preserving imm
 AC-004: prove supported installation and bounded local admission in private scratch; keep deployment unproved until exact owner target and task exist.
 
 Security: reject unsafe paths and revision arguments; never execute payloads. Reliability: preserve stale detection and atomic receipts. Performance: bounded Git operations. Observability: concise refusal, missing/stale evidence reasons. No external schemas or provider behavior change.
+
+AC-005: Owner explicitly requested manual local-rule overrides to be recorded as acceptable, with later verification. Scope/reason/deferred checks must be named; no fake passing evidence. Source successor is2.2.1; v2.2.0 stays immutable and published.

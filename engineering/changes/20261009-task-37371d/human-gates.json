@@ -24,6 +24,78 @@
       "resource": null,
       "route_id": "37371d21accb",
       "scope_digest": "f3284b6201a500d5ed4d291dbbc60be545e78546a8a8b3bef4836817e883a53d"
+    },
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:17:37+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner additionally requested recording explicit manual local-rule override followed by verification. Scope includes that prose plus reviewer-source/handoff repairs and successor2.2.1; no checks waived and no production deployment/security authority granted.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "3cd2c7891ab9517379ee676096fabbb7c1eb0e4f45b7b82facf2663017a32b53"
+    },
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:21:22+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Same owner-approved routine source-repair scope, evidence mapping updated to the actual new tests/test_review_source.py plus existing receipt tests. No permissions expanded or checks waived.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "65fad6ee4201e5073e64bfdecb22bb03449449f16d15503592d1082144fe8918"
+    },
+    {
+      "action": "git-push-branch",
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:26:12+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "Owner instructed delivery of Getzilla issue72 goal. Exact isolated branch readiness/72-production-20261009 transport is part of authorized PR delivery and remains UNVERIFIED until gates pass; actual runtime grant binds its final HEAD/tree/resource. No direct main push or production deployment.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "65fad6ee4201e5073e64bfdecb22bb03449449f16d15503592d1082144fe8918"
+    },
+    {
+      "action": "pull-request-merge",
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:26:12+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "AGENTS L5 standing owner consent for Getzilla own PR merge applies only with green exact-head required checks, resolved threads and independent review. This is a consent mapping, not proof those conditions passed; exact runtime grant and match-head merge still required.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "65fad6ee4201e5073e64bfdecb22bb03449449f16d15503592d1082144fe8918"
+    },
+    {
+      "action": "git-push-tag",
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:26:12+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "AGENTS L5 standing consent for Getzilla own successor v2.2.1 tag applies only to actual merged tested commit after exact required checks/review. No operation now; exact runtime HEAD/tree/resource grant required, immutable v2.2.0 preserved.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "65fad6ee4201e5073e64bfdecb22bb03449449f16d15503592d1082144fe8918"
+    },
+    {
+      "action": "github-release",
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:26:12+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "AGENTS L5 standing consent for Getzilla own successor v2.2.1 release applies only to actual merged tested commit after exact required checks/review. No publication now; exact runtime grant required. This does not approve deployed production mutation.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "65fad6ee4201e5073e64bfdecb22bb03449449f16d15503592d1082144fe8918"
     }
   ],
   "route_id": "37371d21accb",

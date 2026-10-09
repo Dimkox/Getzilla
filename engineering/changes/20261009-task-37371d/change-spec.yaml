@@ -5,6 +5,9 @@
       "statement": "Passing review records an exact ancestor reviewed commit/tree and rejects missing or invalid commit, source differences and dirty/untracked product changes; only saved Markdown review reports under the active evidence directory may differ. Non-pass observations remain possible.",
       "evidence": [
         {
+          "test": "tests/test_review_source.py"
+        },
+        {
           "test": "tests/test_change_receipts.py"
         },
         {
@@ -22,6 +25,9 @@
       "id": "AC-002",
       "statement": "Evidence validation and status reject legacy unbound review passes, forged bindings, unsafe report paths and source changes. Current tree/spec/architecture/governance bindings remain intact.",
       "evidence": [
+        {
+          "test": "tests/test_review_source.py"
+        },
         {
           "test": "tests/test_change_receipts.py"
         },
@@ -54,6 +60,18 @@
         },
         {
           "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Record owner instruction that explicit manual override of local workflow rules is acceptable, with exact scope and deferred checks, followed by verification. Deferred outcomes remain UNVERIFIED; no forged PASS or external authority is inferred.",
+      "evidence": [
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
         }
       ]
     }
@@ -95,7 +113,7 @@
     "id": "OBJ-001",
     "statement": "Issue #72: audit production readiness of Getzilla v2.2.0, verify open security findings against current source, define blockers and bounded repair plan; no deployment or production writes",
     "success_metric": "Current reviewer-source binding rejects unreviewed code, fresh-agent handoff identifies Getzilla and current release, exact-head checks and independent reviews pass; production readiness remains explicit NO-GO until a target scenario is proved.",
-    "target": "Issue #72, deadline 2026-10-09T05:00:00Z; repair #61 and current handoff without changing live defaults or deployed security policy."
+    "target": "Issue #72, deadline 2026-10-09T05:00:00Z; successor2.2.1 repairs #61/current handoff and records owner manual-override rule, without live default/deployed policy changes."
   },
   "observability": [],
   "risk": {

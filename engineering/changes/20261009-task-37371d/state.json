@@ -101,6 +101,18 @@
       "from": "approved",
       "reason": "Selected general_implementer owns reviewer-source binding and current handoff repairs",
       "to": "implementing"
+    },
+    {
+      "at": "2026-10-09T02:26:56+00:00",
+      "from": "implementing",
+      "reason": "Bounded implementation controls pass; prepare exact committed candidate for independent review",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-09T02:26:56+00:00",
+      "from": "verifying",
+      "reason": "Freeze tracked workflow state before exact-commit independent reviews; final receipts and gates qualify completion without a post-freeze source transition",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -110,7 +122,7 @@
   "human_gates_digest": "d18e51328e36d21c8813a853836cb0f44cc91f40a7d4ad33c7b94a37e3a63ad1",
   "route_id": "37371d21accb",
   "schema_version": 1,
-  "status": "implementing",
+  "status": "reviewing",
   "title": "Issue 72: production readiness by 08:00 GMT+3",
-  "updated_at": "2026-10-09T02:13:23+00:00"
+  "updated_at": "2026-10-09T02:26:56+00:00"
 }

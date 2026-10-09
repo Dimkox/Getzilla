@@ -19,7 +19,7 @@ from getzilla.receipts import validate_evidence, write_receipt
 from getzilla.router import build_route
 from getzilla.spec import SpecError, _parse_canonical_json
 from getzilla.state import get_active_change, get_active_route, set_active_change, set_active_route
-from tests._support import project_copy, run_hook
+from tests._support import prepare_review_source, project_copy, run_hook
 
 
 class PackageStatusTests(unittest.TestCase):
@@ -122,8 +122,9 @@ class PackageStatusTests(unittest.TestCase):
         with project_copy(git=True) as root:
             self.install_cli(root)
             route, _, _, _ = self.prepare(root, complete=True)
+            review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass')
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
             before = self.inventory(root)
             for _ in range(2):
                 proc = self.cli(root)
@@ -136,11 +137,34 @@ class PackageStatusTests(unittest.TestCase):
                 self.assertEqual(value['evidence_gaps'], [])
             self.assertEqual(self.inventory(root), before)
 
+    def test_status_rejects_legacy_and_forged_review_source_receipts(self):
+        with project_copy(git=True) as root:
+            self.install_cli(root)
+            route, _, _, _ = self.prepare(root, complete=True)
+            review = prepare_review_source(root)
+            for kind in route['required_evidence']:
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
+            path = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'
+            original = json.loads(path.read_text())
+            for mutation in ('missing', 'forged'):
+                data = json.loads(json.dumps(original))
+                if mutation == 'missing':
+                    data.pop('review_source')
+                else:
+                    data['review_source']['reviewed_tree'] = '0' * 40
+                path.write_text(json.dumps(data))
+                before = self.inventory(root)
+                proc = self.cli(root)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                result = json.loads(proc.stdout)
+                self.assertTrue(any('review source' in gap for gap in result['evidence_gaps']))
+                self.assertEqual(self.inventory(root), before)
+
     def test_status_does_not_reopen_unsafe_package_through_receipt_validation(self):
         with project_copy(git=True) as root:
             self.install_cli(root)
             route, active, _, package = self.prepare(root, complete=True)
-            write_receipt(root, 'code_review', 'pass')
+            write_receipt(root, 'code_review', 'pass', **prepare_review_source(root))
             outside = root.parent / 'outside'
             outside.mkdir()
             spec = json.loads((package / 'change-spec.yaml').read_text())
@@ -649,8 +673,9 @@ class PackageStatusTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route, _, _, package = self.prepare(root)
             self.update_state(package, status='implementing')
+            review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass')
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
             code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root)})
             self.assertEqual(code, 0, error)
             self.assertNotEqual(result.get('decision'), 'block')
@@ -662,9 +687,10 @@ class PackageStatusTests(unittest.TestCase):
             self.install_cli(root)
             route, _, _, package = self.prepare(root, complete=True)
             self.update_state(package, status='reviewing')
-            report = package / 'evidence/review.md'
+            report = package / 'evidence/code-review.md'
             report.write_text('Concrete review findings.\n', encoding='utf-8')
-            args = ('code_review', '--report', report.relative_to(root).as_posix())
+            review = prepare_review_source(root)
+            args = ('code_review', '--report', report.relative_to(root).as_posix(), '--reviewed-commit', review['reviewed_commit'])
             passed = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
             self.assertEqual(passed.returncode, 0, passed.stderr)
             receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'

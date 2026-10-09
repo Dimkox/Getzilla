@@ -123,24 +123,21 @@ python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40
    python3 scripts/getzilla_status.py
    ```
 
-5. Verify before delivery:
+5. Complete delivery checks once:
+
+   Run bounded controls on a clean committed candidate. Independent route-selected reviewers inspect that exact commit. Save their reports as regular non-executable Markdown under the active change evidence directory. Commit and freeze the report-containing tree.
 
    ```bash
-   git status --short
-   git diff
    python3 scripts/getzilla_verify.py --mode pr
+   python3 scripts/getzilla_review.py code_review --status pass --report engineering/changes/<id>/evidence/code-review.md --reviewed-commit <exact-full-sha>
    python3 scripts/getzilla_status.py
    ```
 
-   Treat local evidence as preflight only. Delivery still uses a branch and pull request. Trust CI and signed approvals are advanced merge controls, not the first-run path.
+   Repeat the receipt command for every selected review kind. A source change requires new independent reviews and a new final gate. Local receipts are preflight evidence. Public repositories use pinned Actions checks; private ones use the external Trust CI gate. Require green exact-head checks before merge.
 
-5. Optional explicit skill: `/getzilla-delivery`
+6. Follow `/getzilla-delivery` and `/release-readiness`. Conditional AGENTS L5 covers merge, tag and release of the project's own repository after required checks, independent review and resolved threads. Record exact action/resource grants. Production writes, deployment and external writes need separate scoped authority. `getzilla_deploy.py` prepares commands.
 
-6. Verify before finish:
-   ```bash
-   python3 scripts/getzilla_verify.py --mode pr
-   ```
-   Then `/release-readiness` and `python3 scripts/getzilla_deploy.py` to prepare human-owned publish commands (`--record` only with production approval).
+Explicit owner overrides of local workflow rules must name the rule, scope, reason, deferred checks and follow-up validation. Keep the result UNVERIFIED until deferred checks run; do not create fake passing evidence or bypass external checks.
 
 ### Optional workflow artifact convergence
 
@@ -315,3 +312,7 @@ curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/inst
 curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-linux-amd64 -o /tmp/cosign
 sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 ```
+
+Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
+
+Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.

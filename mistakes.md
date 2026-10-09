@@ -1895,3 +1895,6 @@ Root cause: the #39 fix verified OpenGrep only on the download path and its test
 
 ## 2026-10-09 — Validate evidence roles before scope transition
 The first issue72 spec omitted required evidence on its forbidden-outcome entry because the draft shape was copied without checking the schema. Validation exposed this before implementation; corrected the mapping and revalidated.
+
+## 2026-10-09 — Receipt path policy import cycle
+A new receipt module imported package_status at module load, but package_status imports receipt kinds. Bounded import tests caught the dependency cycle before delivery. Import the existing path policy only when source binding runs after module initialization.
