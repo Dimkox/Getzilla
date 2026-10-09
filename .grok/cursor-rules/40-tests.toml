@@ -1,0 +1,20 @@
+description = "Tests, regression coverage, negative cases and honest verification results"
+always_apply = false
+globs = ["tests/**", "**/tests/**", "**/test_*.py", "**/*.test.*", "**/*.spec.*"]
+instructions = '''
+# Verification evidence
+
+- Reproduce a bug or add a failing/characterization test before changing behavior. Test observable contracts, not only implementation details or a mocked copy of the intended logic.
+- Cover meaningful boundary, denied-access, malformed-input, missing-dependency, timeout and partial-failure cases appropriate to the change.
+- Keep fixtures isolated and deterministic. Do not use production credentials, mutate a shared candidate from a reviewer, or let tests write outside their dedicated scratch directories.
+- Run focused checks while repairing. They are observations, not final receipts or permission to skip a required full check; scope selection belongs to the existing fail-closed selector.
+- Record exact commands, source identity and observed outcomes. Missing tools, an unexecuted assertion or a cancelled shard are not a pass; do not lower assertions or coverage to make the result green.
+- Independent reviewers inspect the candidate read-only and return complete reports out of band. Persist reports before freezing the candidate and running its final qualifying verifier.
+- Any change after review invalidates all receipts: rerun the checks and independent reviews on the new tree, save the new reports, freeze again and run a new final gate. Never reuse evidence from another tree.
+
+## Read relevant references on demand
+
+- `.agents/skills/bugfix-workflow/SKILL.md`
+- `.agents/skills/feature-workflow/SKILL.md`
+- `.agents/skills/getzilla-delivery/SKILL.md`
+'''

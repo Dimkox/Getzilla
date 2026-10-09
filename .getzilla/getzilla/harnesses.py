@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import secrets
 import tomllib
-from pathlib import Path
+from contextlib import contextmanager, suppress
+from pathlib import Path, PurePosixPath
+from typing import Iterator
+
+from getzilla import fsx  # absolute like install_into.py; FIT-BOUNDED-WORKER-JOBS misreads `from . import fsx` (#60)
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
-GENERATED_ROOTS = ('.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents')
+CURSOR_OUTPUT = '.cursor/rules/getzilla'
+GENERATED_ROOTS = ('.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
 HOOK_SOURCE = '.grok/hooks.json'
 AGENT_SOURCE = '.grok/agents'
 SKILL_SOURCE = '.agents/skills'
+CURSOR_SOURCE = '.grok/cursor-rules'
+CURSOR_MARKER = '<!-- Generated from .grok/cursor-rules/'  # marks the files Getzilla owns in .cursor/rules
+CURSOR_KEYS = frozenset({'description', 'always_apply', 'globs', 'instructions'})
+CURSOR_BUDGET = {True: 4096, False: 8192}  # bytes per always-applied core / per scoped rule
+# Cursor splits `globs` on commas (https://cursor.com/docs/context/rules), so a pattern
+# may not contain a comma, brace list, quote or whitespace; a leading `!` (a YAML tag,
+# negation is undocumented) is rejected too.
+_CURSOR_GLOB = re.compile(r'(?![/!])(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_.*?/!\[\]-]+')
 CODEX_HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop')
 GEMINI_EVENTS = {
     'SessionStart': 'SessionStart',
@@ -146,6 +161,35 @@ def _skills(root: Path) -> dict[str, bytes]:
     return files
 
 
+def _cursor_rules(root: Path) -> dict[str, bytes]:
+    """Prompt-only Cursor project rules; Cursor has no hooks, so it is not in HARNESSES."""
+    out: dict[str, bytes] = {}
+    always = 0
+    for path in sorted((root / CURSOR_SOURCE).glob('*.toml')):
+        source = f'{CURSOR_SOURCE}/{path.name}'
+        rule = tomllib.loads(path.read_text(encoding='utf-8'))
+        globs, scoped = rule.get('globs', []), rule.get('always_apply') is False
+        if (set(rule) - CURSOR_KEYS or type(rule.get('always_apply')) is not bool
+                or not isinstance(rule.get('description'), str) or not rule['description'].strip()
+                or not isinstance(rule.get('instructions'), str) or not rule['instructions'].strip() or not isinstance(globs, list)
+                or scoped != bool(globs) or not all(isinstance(g, str) and _CURSOR_GLOB.fullmatch(g) for g in globs)):
+            raise ValueError(f'{source}: needs description, instructions and always_apply, and globs '
+                             'exactly when always_apply is false; globs hold no comma, brace, quote or space '
+                             'and start with neither / nor !')
+        always += not scoped
+        head = ['---', f'description: {_yaml_string(rule["description"])}']
+        head += [f'globs: {",".join(globs)}'] if globs else []
+        head += [f'alwaysApply: {str(not scoped).lower()}', '---', '',
+                 f'{CURSOR_MARKER}{path.name} by scripts/getzilla_harness.py --write; do not edit. -->', '', '']
+        content = ('\n'.join(head) + rule['instructions'].strip() + '\n').encode('utf-8')
+        if len(content) > CURSOR_BUDGET[not scoped] or content.count(b'\n') > 500:
+            raise ValueError(f'{source}: rendered rule exceeds its context budget')
+        out[f'{CURSOR_OUTPUT}/{path.stem}.mdc'] = content
+    if always != 1:
+        raise ValueError(f'{CURSOR_SOURCE}: exactly one rule must set always_apply = true')
+    return out
+
+
 def render(root: Path) -> dict[str, bytes]:
     events = _hook_events(root)
     agents = _agents(root)
@@ -185,7 +229,43 @@ def render(root: Path) -> dict[str, bytes]:
         out[f'.qwen/skills/{rel}'] = content
         out[f'.claude/skills/{rel}'] = content
         out[f'.gemini/skills/{rel}'] = content
+    out.update(_cursor_rules(root))
     return out
+
+
+def _generated(root: Path) -> Iterator[Path]:
+    for base in GENERATED_ROOTS:
+        if (root / base).is_dir():
+            yield from sorted((root / base).rglob('*'), reverse=True)
+
+
+def _owned(path: Path, rel: str) -> bool:
+    """Cursor rules share .cursor/rules with the user's own: only marked regular files there are Getzilla's.
+
+    A link is never Getzilla's output and is not read through. The marker is searched in the
+    largest rule `render` accepts, so a rule with a long frontmatter stays owned.
+    """
+    if not rel.startswith(CURSOR_OUTPUT + '/'):
+        return True
+    if path.is_symlink():
+        return False
+    if not path.is_file():
+        return True
+    with path.open('rb') as stream:
+        return CURSOR_MARKER.encode('utf-8') in stream.read(max(CURSOR_BUDGET.values()))
+
+
+def _unexpected(path: Path, rel: str, expected: dict[str, bytes]) -> bool:
+    return ((path.is_file() or path.is_symlink()) and rel not in expected and path.name not in LOCAL_FILES
+            and _owned(path, rel))
+
+
+def _conflict(root: Path, rel: str) -> bool:
+    """A linked or non-directory parent, a directory or an unowned file where an output goes blocks every write."""
+    path = root / rel
+    parents = [root / parent for parent in PurePosixPath(rel).parents]
+    return (any(parent.is_symlink() or (parent.exists() and not parent.is_dir()) for parent in parents)
+            or (path.is_dir() and not path.is_symlink()) or not _owned(path, rel))
 
 
 def drift(root: Path) -> list[str]:
@@ -193,36 +273,71 @@ def drift(root: Path) -> list[str]:
     problems = []
     for rel, content in sorted(expected.items()):
         path = root / rel
-        if not path.is_file():
+        if _conflict(root, rel):
+            problems.append(f'conflict {rel}')
+        elif not path.is_file():
             problems.append(f'missing {rel}')
-        elif path.read_bytes() != content:
+        elif path.is_symlink() or path.read_bytes() != content:
             problems.append(f'stale {rel}')
-    for base in GENERATED_ROOTS:
-        for path in sorted((root / base).rglob('*')) if (root / base).is_dir() else []:
-            rel = path.relative_to(root).as_posix()
-            if path.is_file() and rel not in expected and path.name not in LOCAL_FILES:
-                problems.append(f'unexpected {rel}')
+    for path in reversed(list(_generated(root))):
+        rel = path.relative_to(root).as_posix()
+        if _unexpected(path, rel, expected):
+            problems.append(f'unexpected {rel}')
     return problems
+
+
+@contextmanager
+def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str]]:
+    """Walk to rel's directory by descriptor, never following a link (no check-then-use race)."""
+    *directories, name = rel.split('/')
+    handles = [fsx.open_dir(root)]
+    try:
+        for part in directories:
+            if create:
+                with suppress(FileExistsError):
+                    fsx.mkdir_at(handles[-1], part, 0o755)
+            handles.append(fsx.open_dir_at(handles[-1], part))
+        yield handles[-1], name
+    finally:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+
+
+def _write_file(root: Path, rel: str, content: bytes) -> None:
+    with _parent(root, rel, create=True) as (parent, name):
+        temporary = f'.{name}.{secrets.token_hex(6)}.tmp'
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC
+        descriptor = fsx.open_at(parent, temporary, flags, 0o644)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                fsx.fchmod(stream.fileno(), 0o644)
+                stream.write(content)
+            fsx.replace_at(parent, temporary, parent, name)
+        except BaseException:
+            with suppress(FileNotFoundError):
+                fsx.unlink_at(parent, temporary)
+            raise
 
 
 def write(root: Path) -> list[str]:
     expected = render(root)
+    conflicts = [rel for rel in sorted(expected) if _conflict(root, rel)]
+    if conflicts:
+        raise ValueError(f'nothing written; resolve conflict {", ".join(conflicts)}')
     changed = []
-    for base in GENERATED_ROOTS:
-        if not (root / base).is_dir():
-            continue
-        for path in sorted((root / base).rglob('*'), reverse=True):
-            rel = path.relative_to(root).as_posix()
-            if path.is_file() and rel not in expected and path.name not in LOCAL_FILES:
-                path.unlink()
-                changed.append(f'removed {rel}')
-            elif path.is_dir() and not any(path.iterdir()):
-                path.rmdir()
+    for path in _generated(root):
+        rel = path.relative_to(root).as_posix()
+        if _unexpected(path, rel, expected):
+            with _parent(root, rel) as (parent, name):
+                fsx.unlink_at(parent, name)
+            changed.append(f'removed {rel}')
+        elif path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            with _parent(root, rel) as (parent, name):
+                fsx.rmdir_at(parent, name)
     for rel, content in sorted(expected.items()):
         path = root / rel
-        if path.is_file() and path.read_bytes() == content:
+        if path.is_file() and not path.is_symlink() and path.read_bytes() == content:
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
+        _write_file(root, rel, content)
         changed.append(f'wrote {rel}')
     return changed

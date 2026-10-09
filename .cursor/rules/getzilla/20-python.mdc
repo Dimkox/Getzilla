@@ -1,0 +1,21 @@
+---
+description: "Python code and Python toolchain changes in Getzilla or an installed consumer"
+globs: **/*.py,pyproject.toml,**/pyproject.toml,ruff.toml,.coveragerc
+alwaysApply: false
+---
+
+<!-- Generated from .grok/cursor-rules/20-python.toml by scripts/getzilla_harness.py --write; do not edit. -->
+
+# Python implementation
+
+- Use the configured Python version, project layout, formatter, linter and tests. Read nearby implementations before choosing abstractions; do not impose a new framework or universal function-length limit.
+- Keep errors explicit and actionable. Catch only errors that can be handled at that boundary; do not swallow failures or turn unavailable tools into successful verification.
+- Add type annotations at changed interfaces and deterministic tests for the behavior being changed. Avoid compatibility scaffolding for versions the project does not support.
+- Prefer the standard library and existing dependencies for bounded tasks. Any new dependency needs a concrete reason, lockfile update and verification of the resulting environment.
+- Use resource context managers, bounded subprocess timeouts and explicit cleanup. Make retries conditional on safety, idempotency and the existing attempt/budget policy.
+- Comments explain non-obvious logic and invariants. Do not narrate the chat, restate obvious code or add unused defensive branches to appear thorough.
+
+## Read relevant references on demand
+
+- `AGENTS.md`
+- `.agents/skills/bugfix-workflow/SKILL.md`

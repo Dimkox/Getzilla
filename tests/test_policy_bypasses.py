@@ -308,5 +308,29 @@ class RecursiveRemoveTests(_ProjectCase):
                 self.assert_allowed(command)
 
 
+class ProtectedSourceMoveTests(_ProjectCase):
+    """A move or rename removes its source, so a protected source is a protected mutation."""
+
+    def test_moving_protected_sources_away_is_blocked(self) -> None:
+        for command in (
+            'mv .cursor /tmp/cursor-away',
+            'mv .cursor/rules/getzilla/00-core.mdc /tmp/x',
+            'mv -f .grok/cursor-rules /tmp/away',
+            'mv -t /tmp .cursor',
+            'mv --target-directory=/tmp AGENTS.md',
+            'mv AGENTS.md notes.md',
+            "bash -c 'mv .cursor /tmp/away'",
+            'rename s/core/x/ .cursor/rules/getzilla/00-core.mdc',
+            'git mv .cursor/rules/getzilla/00-core.mdc moved.mdc',
+        ):
+            with self.subTest(command=command):
+                self.assert_denied(command)
+
+    def test_ordinary_moves_and_protected_copies_stay_allowed(self) -> None:
+        for command in ('mv build/a.txt build/b.txt', 'mv out.txt /tmp/out.txt', 'cp .cursor/rules/getzilla/00-core.mdc /tmp/x'):
+            with self.subTest(command=command):
+                self.assert_allowed(command)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,19 @@
+description = "API/event/data contracts, schema evolution, migrations and enterprise integrations"
+always_apply = false
+globs = ["**/*.sql", "**/migrations/**", "**/contracts/**", "schemas/**", "**/openapi*", "**/asyncapi*"]
+instructions = '''
+# Contracts, migrations and integrations
+
+- Change the machine-readable contract and its consumers/tests together. Preserve backward compatibility unless a breaking change is explicitly approved and versioned.
+- Distinguish validation failures, authorization failures, retryable failures and permanent failures. Do not expose stack traces or raw internal database structures in external errors.
+- Preserve transactional invariants and tenant boundaries. Design migrations with an explicit safe rollout and rollback or forward-recovery plan; test existing-data and partial-failure cases.
+- Design retryable writes and event handlers for idempotency and duplicate delivery. Never retry a non-idempotent external operation merely because its response was lost.
+- For external integrations, specify timeouts, retry limits, rate-limit handling, correlation identifiers and failure visibility. Do not introduce a queue, service or new protocol without architectural justification.
+- Update affected canonical examples and operational documentation alongside behavior. Record the exact contracts and compatibility checks that were exercised.
+
+## Read relevant references on demand
+
+- `.agents/skills/api-event-change/SKILL.md`
+- `.agents/skills/data-change/SKILL.md`
+- `.agents/skills/enterprise-integration/SKILL.md`
+'''

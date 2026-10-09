@@ -125,7 +125,7 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 - A delegated local grant never creates or substitutes the external Trust CI check, a human-signed security approval, or branch protection. It authorizes only the named local operation.
 - Tagging and GitHub Release publication must use the exact merged commit. No delegated grant permits changing the tested tree after approval and then reusing the grant.
 
-This repository uses an adaptive, task-routed agent workflow (Grok Build, Qwen Code, Claude Code, Codex, Gemini CLI or Copilot CLI; the others load generated copies of `.grok/` from `.qwen/`, `.claude/`, `.codex/`, `.gemini/` and `.github/hooks/` + `.github/agents/` — edit `.grok/` and `.agents/skills/`, then run `python3 scripts/getzilla_harness.py --write`). The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
+This repository uses an adaptive, task-routed agent workflow (Grok Build, Qwen Code, Claude Code, Codex, Gemini CLI or Copilot CLI; the others load generated copies of `.grok/` from `.qwen/`, `.claude/`, `.codex/`, `.gemini/` and `.github/hooks/` + `.github/agents/`, and Cursor gets prompt-only rules in `.cursor/rules/getzilla/` from `.grok/cursor-rules/` — edit `.grok/` and `.agents/skills/`, then run `python3 scripts/getzilla_harness.py --write`). The `UserPromptSubmit` hook classifies development tasks and writes `.getzilla/runtime/active-route.json`. That route is the authority for local skills, agents, quality profiles, human gates, and local evidence. It is not authority to merge.
 
 ## Mandatory entrypoint
 
@@ -165,7 +165,7 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 - Do not let an implementer approve its own work.
 - Do not spawn an agent that the active route did not select; the hook may block it.
 - Give each agent a narrow brief with route, exact repository/HEAD/base, one question, dependencies, CPU allocation and write/read-only boundary. Prefer a clean brief over repeated full-history reads.
-- Collect related failures and review findings into one repair batch for the same write owner; rerun affected bounded committed-HEAD controls and affected reviews before final freeze. Named smoke uses `getzilla_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
+- Collect related failures and review findings into one repair batch for the same write owner; rerun the bounded committed-HEAD controls and all independent reviews on the repaired tree before final freeze. Named smoke uses `getzilla_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
 - Persist all complete review reports, commit, then freeze the candidate. After exact delegated UNVERIFIED branch transport, run one final qualifying local PR gate in parallel with external App-owned exact-head Trust CI; keep their outcomes separate. No preliminary full local gate is required before review. A ten-minute delivery cycle is an unconfirmed target; Core/PostgreSQL overlap is not implemented. A fetched identical merged tree with no new product changes is a no-op and requires no repeated full gate.
 
 ## Tool-denial circuit breaker
@@ -245,7 +245,7 @@ Use the exact local evidence kind requested by the route. A local receipt is sta
 
 For merge eligibility, open or update the pull request and require the App-owned check named by the deployed policy, currently shaped as `adaptive-trust-ci/verified@<policy-sha12>`, on the exact head SHA. Local receipts and delegated grants cannot create that check.
 
-Reviewers return their short reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, commits/freezes that tree, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze requires the same writer's repair, affected controls/reviews, a new frozen candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
+Reviewers return their short reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, commits/freezes that tree, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze invalidates all receipts and requires the same writer's repair, fresh controls and independent reviews, a new frozen candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
 
 ### Reviewer mutation evidence
 

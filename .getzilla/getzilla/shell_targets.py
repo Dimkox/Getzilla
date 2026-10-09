@@ -167,6 +167,9 @@ def _copy_like_targets(root: Path, command: str, argv: list[str]) -> list[str]:
         return []
 
     targets = list(destinations)
+    if command == 'mv':
+        # A move removes its source, so a protected source is a protected mutation.
+        targets.extend(sources)
     for destination in destinations:
         if not _directory_target(root, destination, explicit=explicit_directory):
             continue
@@ -218,7 +221,7 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
         return _operands(argv, {'-d', '--date', '-r', '--reference', '-t', '--time'})
     if command == 'mkdir':
         return _operands(argv, {'-m', '--mode', '-Z', '--context'})
-    if command in {'rmdir', 'rm'}:
+    if command in {'rmdir', 'rm', 'rename'}:
         return _operands(argv)
     if command == 'truncate':
         return _operands(argv, {'-s', '--size', '-r', '--reference'})
