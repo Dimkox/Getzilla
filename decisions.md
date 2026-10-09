@@ -1151,3 +1151,6 @@ The updater now installs OpenGrep only from a pinned release after a SHA-256 mat
 ## 2026-10-08 — Trust an executable by its digest at run time, not by its name on PATH
 
 The verifier hashes the `opengrep` it resolved on PATH, compares it with the pinned release digest and runs that exact path; the updater moves a non-matching binary to `<name>.unverified` without execute bits before downloading. Checking at the point of execution closes the gap where an old unpinned install (or a failed update) kept running, and quarantine instead of deletion leaves the bytes for a person to inspect (#39).
+
+## 2026-10-09 — Issue72 current-source triage
+Compare old open issue claims against delivered source before treating them as production blockers; 123 named policy regressions show the original issues36/37/38 repaired. Owner L5 instructions and explicit execute-goal direction authorize routine source/process repairs; target-specific production authority remains separate.

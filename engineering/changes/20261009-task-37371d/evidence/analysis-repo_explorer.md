@@ -1,0 +1,6 @@
+# Repository analysis
+Source HEAD5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9, tree0f6fa49b00519f67260492320e40b1656c850549; route37371d21accb. Read-only analysis, not review receipt. reviewed-tree-modified: no.
+
+Issues36/37/38 are OPEN but their original claims are fixed in current code. Shell secret matching now covers root/nested arguments, grant paths reject wildcard resources and exact equality is used; command classifiers cover alternative push/merge/publish/review/delete forms. Delivered PR53 9d1e97f611775490cb9268d471191a71e46b7c39, PR54 07b461ca69b4afe4e31b6e622e02f030ba25445c, PR59 d438de5dbd1ea578ee26e2faf13a60ef7a9ad798, PR62 0d88581bc01f44b4b73b17f6b8261066236da43e.
+
+Private0700 scratch /home/pall/getzilla-session/readiness72-repo-explorer-74ubao4w from git archive HEAD; untracked workflow docs excluded. PYTHONDONTWRITEBYTECODE=1 taskset -c0-3 python3 -m unittest tests.test_policy_bypasses tests.test_approval_resources tests.test_policy_hardening tests.test_policy_parser_gaps:123 tests PASS,22.425s,exit0. Policy strings were evaluated, no exploit executed against live system. Static inspections rg/sed/cat plus read-only gh issue/pr view and Git identities. Limit: named source regressions, not current installed source, all shell spellings, mutation review or production qualification.

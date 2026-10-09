@@ -1892,3 +1892,6 @@ Root cause: `updater.py`'s https client predates the architecture fitness model,
 ## 2026-10-08 — A pinned download was treated as proof of what later runs
 
 Root cause: the #39 fix verified OpenGrep only on the download path and its test required an unverified previous binary to be kept on failure, while the verifier still executed whatever `opengrep` PATH resolved to. Integrity has to be checked where the executable is run, and a fail-closed update must not preserve the untrusted artifact it failed to replace.
+
+## 2026-10-09 — Validate evidence roles before scope transition
+The first issue72 spec omitted required evidence on its forbidden-outcome entry because the draft shape was copied without checking the schema. Validation exposed this before implementation; corrected the mapping and revalidated.

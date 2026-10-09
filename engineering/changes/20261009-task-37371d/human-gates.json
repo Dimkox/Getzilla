@@ -1,0 +1,31 @@
+{
+  "change_id": "20261009-task-37371d",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:13:23+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner explicitly instructed to follow Getzilla AGENTS L5 and execute issue72 goal without process confirmation. Routine reviewer-source and handoff repairs are within that scope; no production deployment or external security authority is included.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "dcf455c526b4eb8d25fa59b20ec913154ba0da35e8650e46cad6991fc2f6012a"
+    },
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261009-task-37371d",
+      "decided_at": "2026-10-09T02:14:04+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Final schema-validated scope: reviewer-source receipt integrity plus Getzilla current handoff. Owner L5 process delegation and explicit execute-goal instruction cover these source repairs; production target/action and external security approvals remain ungranted.",
+      "resource": null,
+      "route_id": "37371d21accb",
+      "scope_digest": "f3284b6201a500d5ed4d291dbbc60be545e78546a8a8b3bef4836817e883a53d"
+    }
+  ],
+  "route_id": "37371d21accb",
+  "schema_version": 1
+}
