@@ -1908,3 +1908,5 @@ A new negative handoff assertion contained the obsolete predecessor script name 
 - PR74 compatibility root causes: the harness renderer excluded the installed Grok skill mirror, so canonical workflow changes did not reach an actual supported consumer. Review admission also treated durable-package routing as universal despite documented low-risk micro and engineering/reviews support; regression controls now exercise generation, actual installation and both core/CLI receipt consumption.
 
 - The new Grok preservation test supplied incomplete agent TOML and failed renderer admission; use a valid canonical agent fixture when testing output ownership, rather than accidentally testing unrelated malformed-agent input.
+
+- Grok mirror generation erased a supported circuit-breaker instruction because it existed only in the old generated mirror, not the canonical skill. Before transferring ownership to a generator, preserve consumer-specific rules in the canonical source and bind all mirrors to the same rule; the delivery sequence test now checks every source.
