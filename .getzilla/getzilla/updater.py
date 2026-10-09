@@ -1,4 +1,4 @@
-"""Update third-party tools to their latest versions: agent CLIs, workflow sources, OSV data, OpenGrep.
+"""Update third-party tools: agent CLIs and workflow sources to latest, OSV data, pinned OpenGrep.
 
 Runs only when a person starts it (`python3 scripts/getzilla_update.py`); the
 installers offer it at the end and wait for an explicit yes. Nothing here
@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
+import hmac
+import io
 import json
 import os
 import platform
@@ -19,6 +22,8 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -41,13 +46,20 @@ NPM_AGENTS = {
     'gemini': '@google/gemini-cli@latest',
     'copilot': '@github/copilot@latest',
 }
-OPENGREP_RELEASE = 'https://api.github.com/repos/opengrep/opengrep/releases/latest'
+# OpenGrep is an executable the verifier runs, so it is pinned to one release and
+# every asset is checked against its SHA-256 before it is written (issue #39).
+# Keep OPENGREP_VERSION and the linux/x86_64 digest in lockstep with
+# trust-ci/runner.Dockerfile, which the CI workflow verifies the same way
+# (tests/test_updater.py enforces it). Digests are the release's published asset
+# digests; bump all of them together.
+OPENGREP_VERSION = '1.30.1'
+OPENGREP_DOWNLOAD = 'https://github.com/opengrep/opengrep/releases/download/v{version}/{asset}'
 OPENGREP_ASSETS = {
-    ('linux', 'x86_64'): 'opengrep_manylinux_x86',
-    ('linux', 'aarch64'): 'opengrep_manylinux_aarch64',
-    ('darwin', 'arm64'): 'opengrep_osx_arm64',
-    ('darwin', 'x86_64'): 'opengrep_osx_x86',
-    ('windows', 'amd64'): 'opengrep_windows_x86.exe',
+    ('linux', 'x86_64'): ('opengrep_manylinux_x86', 'd3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4'),
+    ('linux', 'aarch64'): ('opengrep_manylinux_aarch64', 'a730f6fdce1e978ea29e610a2e0503bfe1ec31fce08979a9a84e3699f03e16ee'),
+    ('darwin', 'arm64'): ('opengrep_osx_arm64', '7b788794e111ce3fb83f0aa52c100a3b85d37d8b59482262109031f50d4a8d91'),
+    ('darwin', 'x86_64'): ('opengrep_osx_x86', 'a8c6d5f51bb38253b48e9a80fca63684aa2a0f9abfeacea27b8d8b5778476bae'),
+    ('windows', 'amd64'): ('opengrep_windows_x86.exe', 'd3a45326ff63cabe90d94ebc679fcd4302440178a0e5bf0248a6f7b610db3b53'),
 }
 PATH_MARKER = '# Getzilla: tools in ~/.getzilla/bin'
 
@@ -148,14 +160,30 @@ def _replace_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
         raise
 
 
+def _check_zip(data: bytes) -> None:
+    """Refuse anything but a complete zip whose members pass their CRC checks.
+
+    The OSV bucket publishes no checksum file, so this catches truncated or
+    corrupted downloads and HTML error pages rather than a malicious mirror.
+    """
+    if not data.startswith(b'PK'):
+        raise ValueError('not a zip archive')
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            broken = archive.testzip()
+    except (zipfile.BadZipFile, zlib.error, EOFError, ValueError) as exc:
+        raise ValueError(f'corrupt zip archive: {exc}') from exc
+    if broken is not None:
+        raise ValueError(f'corrupt zip archive: bad CRC in {broken}')
+
+
 def update_osv(fetch: Fetch, root: Path) -> list[Result]:
     database = root / 'osv'
     results = []
     for ecosystem in OSV_ECOSYSTEMS:
         try:
             data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip')
-            if not data.startswith(b'PK'):
-                raise ValueError('not a zip archive')
+            _check_zip(data)
             _replace_bytes(database / ecosystem / 'all.zip', data)
             results.append(Result(f'osv:{ecosystem}', 'ok', f'{len(data) // 1024} KiB'))
         except Exception as exc:  # noqa: BLE001 - one ecosystem failing must not stop the others
@@ -170,21 +198,57 @@ def _platform_key() -> tuple[str, str]:
     return system, platform.machine().lower()
 
 
-def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None) -> list[Result]:
-    asset_name = OPENGREP_ASSETS.get(key or _platform_key())
-    if asset_name is None:
-        return [Result('tool:opengrep', 'skip', f'no OpenGrep build for {key or _platform_key()}')]
+def _sha256_file(path: Path) -> str | None:
     try:
-        release = json.loads(fetch(OPENGREP_RELEASE).decode('utf-8'))
-        asset = next(item for item in release.get('assets', []) if item.get('name') == asset_name)
-        data = fetch(asset['browser_download_url'])
-        target = root / 'bin' / ('opengrep.exe' if asset_name.endswith('.exe') else 'opengrep')
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for block in iter(lambda: handle.read(1 << 20), b''):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None) -> list[Result]:
+    pinned = OPENGREP_ASSETS.get(key or _platform_key())
+    if pinned is None:
+        return [Result('tool:opengrep', 'skip', f'no OpenGrep build for {key or _platform_key()}')]
+    asset_name, expected = pinned
+    version = f'v{OPENGREP_VERSION}'
+    target = root / 'bin' / ('opengrep.exe' if asset_name.endswith('.exe') else 'opengrep')
+    if _sha256_file(target) == expected:
+        if os.name != 'nt' and not os.access(target, os.X_OK):
+            target.chmod(0o755)  # a restored or copied binary may have lost its execute bits
+        return [Result('tool:opengrep', 'ok', f'{version} (already installed, sha256 verified)')]
+    note = ''
+    try:
+        # Whatever sits at the target now does not match the pin: never leave it runnable,
+        # even if the pinned download below fails.
+        note = _quarantine(target)
+        data = fetch(OPENGREP_DOWNLOAD.format(version=OPENGREP_VERSION, asset=asset_name))
+        actual = hashlib.sha256(data).hexdigest()
+        if not hmac.compare_digest(actual, expected):
+            return [Result('tool:opengrep', 'fail',
+                           f'{asset_name} {version}: sha256 {actual} does not match pinned {expected}; '
+                           f'not installed{note}')]
         _replace_bytes(target, data, mode=0o755)
-        return [Result('tool:opengrep', 'ok', str(release.get('tag_name', '')))]
-    except StopIteration:
-        return [Result('tool:opengrep', 'fail', f'release has no {asset_name}')]
+        return [Result('tool:opengrep', 'ok', f'{version} (sha256 verified){note}')]
     except Exception as exc:  # noqa: BLE001
-        return [Result('tool:opengrep', 'fail', str(exc)[:200])]
+        return [Result('tool:opengrep', 'fail', f'{str(exc)[:200]}{note}')]
+
+
+def _quarantine(target: Path) -> str:
+    """Move an unverified binary off its runnable name (``<name>.unverified``, no execute bits)."""
+    if target.is_symlink():
+        target.unlink()
+        return '; unverified previous symlink removed'
+    if not target.exists():
+        return ''
+    destination = target.with_name(target.name + '.unverified')
+    os.replace(target, destination)
+    if os.name != 'nt':
+        destination.chmod(0o600)
+    return f'; unverified previous binary quarantined to {destination}'
 
 
 def export_environment(root: Path) -> list[str]:

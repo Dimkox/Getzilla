@@ -1745,6 +1745,29 @@
       "sync_or_async": "synchronous",
       "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "id": "EDGE-LOCAL-SUPPLY-CHAIN-FETCH",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -2753,6 +2776,41 @@
         "kind": "python_process",
         "lifecycle": "on_demand",
         "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "owner": "external artifact registries",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/updater.py",
+        "scripts/getzilla_update.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",

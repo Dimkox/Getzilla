@@ -220,6 +220,54 @@ def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
     return fsx.directory_identity(info, _identity(info))
 
 
+CONTRACT_PROBE_DIRS = ('engineering/contracts/openapi', 'engineering/contracts/asyncapi')
+CONTRACT_PROBE_MAX_ENTRIES = 256
+
+
+def _probe_contracts(inventory: _Inventory, root_descriptor: fsx.DirHandle) -> None:
+    """Admit top-level contract files before the bounded walk.
+
+    The shared file budget is consumed in sorted path order, so unrelated
+    paths that sort earlier (for example engineering/changes packages) could
+    otherwise exhaust it and silently drop the api/event domains. Like the
+    root manifest probes, these fixed probes share the budgets and
+    deduplicate with the later walk.
+    """
+    for relative in CONTRACT_PROBE_DIRS:
+        handles: list[fsx.DirHandle] = []
+        try:
+            current = root_descriptor
+            for part in relative.split('/'):
+                info = fsx.lstat_at(current, part)
+                if fsx.is_link(info) or not stat.S_ISDIR(info.st_mode):
+                    raise FileNotFoundError(relative)
+                child = fsx.open_dir_at(current, part)
+                handles.append(child)
+                if _directory_identity(fsx.fstat_dir(child)) != _directory_identity(info):
+                    raise OSError('directory changed before open')
+                current = child
+            names: list[str] = []
+            with fsx.scandir(current) as iterator:
+                for entry in iterator:
+                    if len(names) >= CONTRACT_PROBE_MAX_ENTRIES:
+                        break
+                    names.append(entry.name)
+            for name in sorted(names):
+                if name.startswith('.') or Path(name).suffix.lower() not in {'.yaml', '.yml', '.json'}:
+                    continue
+                info = fsx.lstat_at(current, name)
+                if stat.S_ISREG(info.st_mode) and not fsx.is_link(info):
+                    if not inventory.file(current, name, f'{relative}/{name}', info):
+                        return
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        finally:
+            for handle in reversed(handles):
+                fsx.close_dir(handle)
+
+
 def _scan(root: Path) -> _Inventory:
     inventory = _Inventory()
     descriptor = None
@@ -241,6 +289,7 @@ def _scan(root: Path) -> _Inventory:
                 inventory.symlinks.add(name)
             else:
                 inventory.non_regular.add(name)
+        _probe_contracts(inventory, descriptor)
         inventory.walk(descriptor)
     except OSError:
         inventory.unreadable.add('.')
