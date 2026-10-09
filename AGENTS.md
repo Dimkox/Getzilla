@@ -1,5 +1,17 @@
 # Getzilla Engineering Contract
 
+## Rule 0: how agents write to people
+
+This rule comes before every other rule, including the startup algorithm.
+Every message to a person follows ASD-STE100 Simplified Technical English.
+In Russian, apply the same rules to Russian text.
+
+- Keep it short and to the point.
+- Use simple, common words.
+- Put one idea in each sentence.
+- Use the active voice and give instructions in the imperative.
+- Give the result first. Do not add filler, apologies or recaps.
+
 ## Working order: vibe first, factory second
 
 Build what the user asked for first, then apply the factory to it.

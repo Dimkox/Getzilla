@@ -1179,3 +1179,12 @@ class StructureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommunicationRuleTests(unittest.TestCase):
+    def test_ste100_rule_precedes_every_other_rule_in_agents_md(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        sections = [line for line in text.splitlines() if line.startswith("## ")]
+        self.assertEqual(sections[0], "## Rule 0: how agents write to people")
+        for phrase in ("ASD-STE100", "one idea in each sentence", "simple, common words", "Russian"):
+            self.assertIn(phrase, text)
