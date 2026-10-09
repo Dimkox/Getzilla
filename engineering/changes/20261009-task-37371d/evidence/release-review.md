@@ -1,26 +1,26 @@
-# Release review — repaired PR74 candidate
+# Release review — supported-consumer compatibility
 
-PASS for conditional source PR delivery. Production remains NO-GO. Merge and publication remain blocked until fresh exact-head gates pass.
+PASS for conditional source PR delivery. Production NO-GO. This report does not authorize merge or publication before fresh gates.
 
-Route37371d21accb; base5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9. Reviewed the full base..HEAD change and repair delta from c6bbfa86, current package, handoff and repair evidence. Before/after HEAD3e59aa153e4eb0c2d1b71e5b55d723d14949ac9b, tree08c67e409236086b4e890384071876b464a48073, fingerprint70b24e2556958d779dda0131a90368abe7b2f50247223fc35fb4af99853d105a. Git status clean both times. reviewed-tree-modified: no.
+Route37371d21accb, base5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9. Read the full source change, compatibility delta, current package and implementation evidence. Before/after HEAD80215eecb7ecec69cc31a965cbf4d678bee842a3, tree39d3f24c62e964081ccd903820e6e7c90ca74ce5, fingerprint82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370. Clean status both times. reviewed-tree-modified: no.
 
-- No new release-blocking source finding. Source2.2.1 is an unpublished candidate. Installer tests now bind documented installation to published_release rather than advancing VERSION. They retain digest/check-before-execution checks, reject malformed publication records and changed installer bytes, and include a history-free successor fixture. These are tests/state changes; no external-write path or installer behavior changed.
-- Publishedv2.2.0 remains immutable at the base SHA with zero assets. Actual Git diff shows no installer or package bytes changed. Recorded immutable installer hashes remain distinct from candidate version. Future installer changes require new publication provenance.
-- Current handoff names PR74 and pending fresh reviews/gates. Existing old reports and artifact smoke are historical only. The 91-test and 68-test repair observations are reported bounded evidence, not this review's execution or native Windows qualification.
-- Low documentation findings are deferred to issue73. Frozen reviewing state, manual-override UNVERIFIED wording and conditional L5 retain exact gates and grant requirements. No target deployment authority is inferred.
-- Production target/task, installed repaired-source acceptance, runtime error signals and exercised recovery remain unproved. No daemon or unattended production qualification is inferred. Recovery requires a gated forward fix and fresh reviews; legacy PASS receipts are not auto-upgraded.
+- No new release-blocking finding from this lens. Grok skill copies now come from canonical skills and participate in drift enforcement. Generated ownership adds only .grok/skills, preserving canonical hooks/agents. Installer parity tests cover actual consumers; retirement tests cover preservation.
+- Review-source compatibility restores conventional engineering/reviews reports and low-risk micro routes without a package. Durable routes still require valid package metadata. Present malformed metadata fails closed. Exact reviewed source, ancestry, clean candidate, regular report modes, six-name whitelist and rederived receipt binding remain mandatory. These are local evidence controls, not authenticated reviewer identity or external authority.
+- Source2.2.1 remains unpublished. Publishedv2.2.0 stays immutable at the base commit, zero assets. Neither installer nor package bytes changed. Recorded published installer provenance remains separate from advancing candidate VERSION.
+- Low findings remain deferred to issue73. Manual overrides remain UNVERIFIED until named deferred checks run. Tracked reviewing state stays frozen; conditional L5 still requires exact grants, green exact-head checks, independent review and resolved threads.
+- No changed external mutation path was identified. No universal retry/idempotency claim is made. Production target/task, installed repaired-source acceptance, observable runtime failure signals and exercised recovery remain unknown. Native harness execution and historical M8 smoke do not prove unattended production operation.
 
-Executed read-only commands/results:
+Executed read-only controls/results:
 
-- git rev-parse HEAD HEAD^{tree}; git status --porcelain=v1; getzilla.util.tree_fingerprint(Path('.').resolve()) with PYTHONDONTWRITEBYTECODE=1: exact identities above, clean before/after.
-- git diff --stat c6bbfa86..HEAD; git diff c6bbfa86..HEAD -- tests/test_install_scripts.py tests/test_manifest_package.py tests/test_project_state.py tests/test_structure.py PROJECT_STATE.json; package/evidence reads: repaired publication binding and positive renamed-command assertion inspected.
+- git rev-parse HEAD HEAD^{tree}; git status --porcelain=v1; getzilla.util.tree_fingerprint(Path('.').resolve()) with PYTHONDONTWRITEBYTECODE=1: identities above, clean before/after.
+- git diff --stat 3e59aa15..HEAD; git diff 3e59aa15..HEAD -- .getzilla/getzilla/review_source.py .getzilla/getzilla/harnesses.py tests/test_installer.py; current package/analysis/implementation reads: narrow generated ownership, report namespace compatibility and consumer regression inspected.
 - git diff --name-only 5d5b45f..HEAD -- scripts/install.sh scripts/install.ps1 packages: no paths.
-- gh api repos/Dimkox/Getzilla/branches/main/protection/required_status_checks: required linux/windows, Actions App15368; strictfalse. No protection change.
-- gh pr view74 --repo Dimkox/Getzilla --json headRefOid,statusCheckRollup: remote head75ff49d90546f2b89ad20cdc5f9e2a240f573914. Linux/windows FAILURE; GitGuardian SUCCESS. These are old-source results and do not qualify repaired HEAD.
-- gh api repos/Dimkox/Getzilla/releases/tags/v2.2.0: target5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9; published2026-10-09T01:57:09Z; assets0.
+- gh api repos/Dimkox/Getzilla/branches/main/protection/required_status_checks: required linux/windows, Actions App15368; strictfalse. No protection mutation.
+- gh pr view74 --repo Dimkox/Getzilla --json headRefOid,statusCheckRollup: remote head9ea7c523304da5a747d3663bf278641a36bf04f7. Linux/windows/GitGuardian SUCCESS on that older head. These do not qualify reviewed80215eec.
+- gh api repos/Dimkox/Getzilla/releases/tags/v2.2.0: base target, publication2026-10-09T01:57:09Z, assets0.
 
-Unexecuted: fresh final full-scope local verifier, repaired exact-head external Linux/Windows checks, native Windows acceptance, fresh repaired artifact smoke and production acceptance/recovery. These are pending gates, not waived checks. Historical artifact75ff smoke is not reused as fresh evidence.
+Unexecuted: fresh final full-scope local PR verifier, current exact-head Linux/Windows checks, native Windows compatibility qualification, repaired artifact smoke and production acceptance/recovery. Old9ea7 local verifier was cancelled/incomplete; its external success cannot replace fresh checks. Bot threads still need resolution before merge. Reported49 compatibility and33 receipt/identity controls were read, not rerun. Historical75ff artifact smoke is not fresh evidence.
 
-Scratch:none; static read-only release review only. mutation: skipped (non-critical) for repair tests/state and release claims; critical receipt probes remain with code/test/security reviewers. No tests/artifacts generated in candidate.
+Scratch:none. Static release review only; no tests/artifacts generated in candidate. mutation: skipped (non-critical) for release and skill-copy claims. Critical receipt validation mutation probes remain assigned to code/test/security reviewers.
 
-Conditional release requires persisted fresh reviews, report-only freeze, successful final local gate, exact-head required checks and resolved threads, then exact L5 grants. Tag/publish2.2.1 only from actual merged tested source. Preservev2.2.0.
+Persist fresh reports, freeze report-only delta, pass the final local and exact-head external gates, resolve threads and record exact conditional L5 grants. Publish2.2.1 only from actual merged tested source. Preservev2.2.0. Production deployment requires separate exact target/action authority and acceptance evidence.

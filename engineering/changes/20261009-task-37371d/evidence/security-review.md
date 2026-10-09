@@ -1,38 +1,45 @@
-# Security review — repaired candidate
+# Security review — compatibility candidate
 
-Verdict: PASS for local security review. No blocking findings. This fresh report replaces the older report as source-review evidence; historical reports do not qualify this candidate.
+Verdict: PASS for local security review. No blocking findings. Older reports remain historical.
 
-- Exact commit format, ancestry, clean Git inventory, safe report reads and six conventional report names fail closed. Receipt consumers rederive the binding and reject forged or missing identities.
-- Published installer tests now use observed publication identity separately from candidate VERSION. They reject malformed provenance and changed installer bytes and retain digest checks before execution. Installer scripts are unchanged across base..HEAD; README and QUICKSTART are unchanged by the repair.
-- No new duplicate external mutation path was found. Manual overrides remain UNVERIFIED until deferred checks run. Conditional L5 consent does not bypass external checks, production consent or the human private-key boundary.
-- Low-severity follow-up #73 stays deferred. No new blocker was found in this review.
+- Missing active-change metadata permits only a low-risk micro route without a change ID. Null, malformed, unsafe or symlink metadata does not become a missing-package fallback. Durable routes still require a valid package.
+- Both supported report namespaces retain exactly six conventional names. Commit format, ancestry, clean inventory, safe file reads, Git modes and consumer rederivation remain enforced.
+- Grok skill generation owns only `.grok/skills`. Existing parent-conflict checks and descriptor-relative writes apply. Canonical hooks and agents remain outside generated ownership. Controls check mirror repair and retirement without changing those inputs.
+- Published installer provenance remains separate from candidate VERSION. No new duplicate external write path was found. Manual overrides remain UNVERIFIED; conditional L5 consent does not replace exact-head checks or human approval boundaries. Source2.2.1 is not a published release. Low follow-up #73 remains deferred.
 
-Exact candidate identity before and after:
+Exact source identity before and after:
 
 - Base: `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`
-- HEAD: `3e59aa153e4eb0c2d1b71e5b55d723d14949ac9b`
-- Tree: `08c67e409236086b4e890384071876b464a48073`
-- Fingerprint: `70b24e2556958d779dda0131a90368abe7b2f50247223fc35fb4af99853d105a`
+- HEAD: `80215eecb7ecec69cc31a965cbf4d678bee842a3`
+- Tree: `39d3f24c62e964081ccd903820e6e7c90ca74ce5`
+- Fingerprint: `82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370`
 - Status: clean.
 
-Scratch: `/home/pall/getzilla-session/security-repaired-scratch/candidate`. Its reviewer-owned non-sticky parent and scratch root have mode `0700`. A local `--no-hardlinks` clone at exact detached HEAD reproduced the candidate tree and fingerprint. Probes ran sequentially on CPUs8-11 with one worker. Capacity was remeasured: 14 physical cores, 28 online logical CPUs, effective cpuset0-27, no finite ancestor quota, successful child-only affinity probe; capacity28.
+Scratch: `/home/pall/getzilla-session/security-compat-scratch/candidate`. Its reviewer-owned scratch root and non-sticky parent have mode `0700`. Local `--no-hardlinks` clone at exact detached HEAD reproduced the candidate tree and fingerprint. Capacity was remeasured: physical14, online logical28, cpuset0-27, unlimited applicable ancestor quotas, successful child-only affinity probe. Probes ran sequentially on CPUs8-11 with one worker.
 
-Fresh executed commands and outcomes:
+Fresh commands and results:
 
 ```text
-taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source tests.test_install_scripts.InstallScriptContractTests tests.test_project_state -q
-46 tests; OK in11.943s.
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source tests.test_harnesses tests.test_install_scripts.InstallScriptContractTests -q
+60 tests; OK in15.907s.
 
-taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q
-Consumer-rederivation mutant: KILLED; three failures for forged tree, commit and digest.
-Same command after scratch restoration: 1 test; OK in3.526s.
-
-taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 /home/pall/getzilla-session/security-repaired-scratch/race_probe.py
-1 test; OK. Changed second source binding refused publication; no review receipt appeared.
+taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 /home/pall/getzilla-session/security-compat-scratch/mutation_probe.py
+Three sequential critical mutants, restored between probes:
+- Durable-package guard removed: KILLED; missing-durable test failed.
+- Report name allowlist broadened to index file: KILLED; index/analysis rejection test failed.
+- Consumer binding rederivation removed: KILLED; three forged-binding assertions failed.
 ```
 
-The 46-test control covers unsafe revisions and paths, ancestry, dirty/staged/untracked states, executable/symlink evidence, report-only admission, forged consumer bindings and installer provenance rejection without Git history.
+The mutation runner executed these exact named test commands, each with `taskset -c 8-11 env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest` and `-q`:
 
-Limits: no native Windows execution, real concurrent filesystem stress, deployed production validation or external exact-head check. Race checks are bounded observations and do not provide OS-enforced isolation or eliminate every publication window. Policy and delegation prose received static review only. Local review is not merge authority.
+```text
+tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed
+tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report
+tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding
+```
+
+The combined restored command ran the same three names: 3 tests; OK in4.111s. Scratch Git status was clean afterward. Controls also execute micro global-report CLI/consumption, active-package global reports, unsafe metadata, revision/path, dirty-state and report-mode checks.
+
+Limits: no native Windows execution, real concurrent filesystem stress, deployed production validation or external exact-head check. Policy and delegation prose received static review only. Local evidence does not certify publication, production or merge authority.
 
 reviewed-tree-modified: no

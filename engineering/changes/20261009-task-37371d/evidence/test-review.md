@@ -1,26 +1,26 @@
 # Test review: PASS, bounded scope
 
-No blocking finding in tests, security or duplicate mutations. Route `37371d21accb`. Inspected full base `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`..HEAD and repair delta `75ff49d`..HEAD. Prior reports are historical.
+No blocking finding in tests, security or duplicate mutations. Route `37371d21accb`. Inspected full base `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`..HEAD and the new compatibility delta. Earlier reports are historical.
 
-Candidate before and after: HEAD `3e59aa153e4eb0c2d1b71e5b55d723d14949ac9b`; Git tree `08c67e409236086b4e890384071876b464a48073`; fingerprint `70b24e2556958d779dda0131a90368abe7b2f50247223fc35fb4af99853d105a`. Status clean at both observations.
+Candidate before and after: HEAD `80215eecb7ecec69cc31a965cbf4d678bee842a3`; Git tree `39d3f24c62e964081ccd903820e6e7c90ca74ce5`; fingerprint `82e94c0074b5e548b35ea4c6e5f6f182fa7d130f4fcbbbe53448ab6251cc1370`. Git status clean at both observations.
 
 reviewed-tree-modified: no
 
-Scratch `/home/pall/getzilla-session/test-review-repaired-vLGD8n/repo` was created with `git clone -q --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>`. Its private parent and trusted enclosing parent are owned by pall, mode0700, non-sticky. Exact committed snapshot and fingerprint matched before execution. One sequential unittest worker used CPU4-7. No candidate tests or artifacts were written.
+Private scratch `/home/pall/getzilla-session/test-review-compat-faxg9E/repo` was created with `git clone -q --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>`. The private parent and trusted enclosing parent are pall-owned mode0700, non-sticky. Scratch HEAD, tree and fingerprint matched the exact clean committed candidate before execution. One sequential unittest process used CPU4-7. No candidate artifacts or writes.
 
 Fresh baseline command:
 
 ```text
-taskset -c 4-7 python3 -m unittest tests.test_review_source tests.test_install_scripts tests.test_history tests.test_project_state tests.test_ci_gate -q
-107 tests; OK; 18.551s.
+taskset -c 4-7 python3 -m unittest tests.test_review_source tests.test_harnesses tests.test_installer tests.test_install_scripts tests.test_history tests.test_ci_gate -q
+164 tests; OK; 62.201s.
 ```
 
-Fresh scratch mutation probes:
+Fresh critical scratch probes:
 
-- Consumer binding: replaced the PASS review-source consumption condition in receipts.py with false. Command `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q`. Four missing/tree/commit/report-digest assertions failed. KILLED; 2.235s.
-- Report guard: replaced the six-name allowlist with generic Markdown under evidence. Command `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report tests.test_review_source.ReviewSourceTests.test_rejects_other_report_directory_and_executable_evidence_delta -q`. Four assertions failed for README, analysis and checkpoint admission. KILLED; 1.989s.
-- Installer provenance test contract: removed its repository identity assertion. Command `taskset -c 4-7 python3 -m unittest tests.test_install_scripts.InstallScriptContractTests.test_published_install_contract_allows_a_new_source_version_without_git_history -q`. Negative repository case failed because no AssertionError was raised. KILLED; 0.013s. This probes the binding test, not production installer behavior.
+- Missing-package risk guard: changed the micro/low-risk-only fallback condition to false. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_missing_durable_or_malformed_selected_package_fails_closed -q`. Failed on absent durable selected package being accepted. KILLED; one failure;0.591s.
+- Receipt consumer binding: skipped the PASS review-source consumption branch. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q`. Missing/tree/commit/report-digest assertions failed. KILLED; four failures;2.184s.
+- Report namespace/name guard: replaced allowed_reports membership with generic Markdown acceptance. `taskset -c 4-7 python3 -m unittest tests.test_review_source.ReviewSourceTests.test_index_and_analysis_cannot_be_supplied_as_review_report tests.test_review_source.ReviewSourceTests.test_rejects_other_report_directory_and_executable_evidence_delta -q`. Five assertions failed for global other.md and package README/analysis/checkpoint acceptance. KILLED;2.349s.
 
-Restored each mutant in scratch. Baseline tests exercise real Git receipt admission and consumption. Negative cases retain the earlier reviewed commit; fixture freezing does not hide those source deltas. New installer cases admit a newer source VERSION without Git history and reject wrong repository, malformed tag/object, absent installer digests and changed installer bytes. History tests pass unchanged. No new external mutation path exists. Deferred Low issue73 remains outside this repair.
+Restored all scratch mutants. Baseline exercises micro no-package global report admission at core and CLI, subsequent consumption, selected-package global reports, malformed/null/unsafe selected metadata refusal, source delta refusal and real Git mode checks. Positive fixture freezing does not hide source changes in independent negative tests. Consumer installation checks actual canonical-to-Grok file bytes. Drift/retirement tests remove obsolete managed skills while preserving hooks and agent bytes. Publication/version negative contract and unchanged history tests pass. No external mutation path was added. Deferred Low issue73 stays outside this repair.
 
-Limits: Windows workflow selects review-source tests and the portable Git-index mode check. Native Windows execution is pending; symlink cases can skip when permissions deny symlinks. Published provenance tests bind recorded local facts and digest bytes; they do not reobserve the remote publication. Full final PR verification, external exact-head checks and production acceptance were not executed or established here. Existing fixture/status/hook/recovery edits were inspected; this fresh bounded run does not claim all their modules passed.
+Limits: this Linux run does not prove native Windows behavior. Windows workflow selects the new receipt module and portable Git-index executable-mode probe; symlink cases may skip where permissions deny them. Full final PR verification and external exact-head checks remain pending. The canceled older full run is not PASS. No production acceptance or remote publication reobservation is claimed. Existing status/hook/recovery changes were inspected; their full modules were not rerun in this bounded review. No blanket mutation score is claimed.
