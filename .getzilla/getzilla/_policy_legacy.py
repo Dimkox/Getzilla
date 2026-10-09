@@ -4,6 +4,7 @@ import codecs
 import fnmatch
 import itertools
 import os
+import posixpath
 import re
 import shlex
 import time
@@ -63,7 +64,7 @@ DESTRUCTIVE_COMMANDS = [
     r'\brm\s+-rf\s+(?:/|~|\$HOME)\b',
     r'\bchmod\s+-R\s+777\b',
     r'\brobocopy\b[^\n]*\s/mir\b',
-    r'(?:^|[\s;&|])format(?:\.com)?\s+(?:/\S+\s+)*[a-z]:',
+    r'''(?:^|[\s;&|\\/"'])format(?:\.com|\.exe)?["']?\s+(?:/\S+\s+)*[a-z]:''',
     r'\bformat-volume\b',
     r'\bclear-disk\b',
 ]
@@ -401,6 +402,17 @@ def _strip_wrappers(argv: list[str]) -> list[str]:
     return argv
 
 
+_POWERSHELL_EXECUTABLES = frozenset({'powershell', 'pwsh', 'powershell.exe', 'pwsh.exe'})
+
+
+def _is_encoded_flag(word: str) -> bool:
+    """Any spelling of -EncodedCommand: a prefix (`-e`, `-en`, `-enc`), `-ec`, `/enc`, `-enc:X` (#64)."""
+    if not word.startswith(('-', '/')):
+        return False
+    name = word.lstrip('-/').split(':', 1)[0].lower()
+    return name == 'ec' or (bool(name) and 'encodedcommand'.startswith(name))
+
+
 def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
     """Command strings (``str``) or argv lists that ``argv`` itself runs.
 
@@ -411,13 +423,18 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
     """
     name, lowered = argv[0], [word.lower() for word in argv]
     if name in _SHELL_EXECUTABLES:
-        index = next((i for i, word in enumerate(argv[1:-1], 1) if _SHELL_COMMAND_OPTION.fullmatch(word)), None)
-        return [argv[index + 1]] if index else []
+        # Short (`-c`, `-qc`) and long (`--command X`, `--command=X`) spellings (#64).
+        for i, word in enumerate(argv[1:], 1):
+            if word.startswith('--command='):
+                return [word.split('=', 1)[1]]
+            if (_SHELL_COMMAND_OPTION.fullmatch(word) or word == '--command') and i + 1 < len(argv):
+                return [argv[i + 1]]
+        return []
     if name == 'cmd':
         index = next((i for i, word in enumerate(lowered) if word in {'/c', '/k'}), None)
         return [' '.join(argv[index + 1:])] if index else []
-    if name in {'powershell', 'pwsh'}:
-        if any(word in {'-e', '-ec'} or (len(word) > 3 and '-encodedcommand'.startswith(word)) for word in lowered[1:]):
+    if name in _POWERSHELL_EXECUTABLES:
+        if any(_is_encoded_flag(word) for word in lowered[1:]):
             return [None]
         index = next(
             (i for i, word in enumerate(lowered[1:], 1) if word == '-c' or (len(word) > 3 and '-command'.startswith(word))),
@@ -437,10 +454,24 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
                 filepath = rest[pos + 1]
                 pos += 2
                 continue
+            option, colon, value = low.partition(':')
+            if colon and option in {'-argumentlist', '-args', '-argument'}:
+                # `-ArgumentList:X` is the same parameter; split it into option and value (#64).
+                rest = [*rest[:pos], rest[pos][:len(option)], rest[pos][len(option) + 1:], *rest[pos + 1:]]
+                low = option
             if low in {'-argumentlist', '-args', '-argument'} and pos + 1 < len(rest):
-                launched = [item for item in rest[pos + 1].replace(',', ' ').split() if item]
+                if rest[pos + 1].startswith(('@', '(')):
+                    # An array/paren expression is split off by the tokenizer: opaque, fail closed (#64).
+                    return [None]
+                # A comma-separated array spans several words (`'pr', 'merge', '1'`): take all of it (#64).
+                pos += 1
+                items = [rest[pos]]
+                while pos + 1 < len(rest) and (rest[pos].endswith(',') or rest[pos + 1].startswith(',')):
+                    pos += 1
+                    items.append(rest[pos])
+                launched = [item for chunk in items for item in chunk.replace(',', ' ').split() if item]
                 have_arglist = True
-                pos += 2
+                pos += 1
                 continue
             if rest[pos].startswith('-'):
                 pos += 1
@@ -515,7 +546,10 @@ def _expand_command(argv: list[str], depth: int) -> list[list[str] | None]:
     name = _executable_name(argv[0])
     argv = ['git', name[4:], *argv[1:]] if name.startswith('git-') and len(name) > 4 else [name, *argv[1:]]
     result: list[list[str] | None] = [argv]
-    for nested in _nested_commands(argv):
+    nested_commands = _nested_commands(argv)
+    if not nested_commands and name not in _DATA_ARGUMENT_EXECUTABLES:
+        nested_commands = _wrapped_payloads(argv, depth)
+    for nested in nested_commands:
         if nested is None or depth >= 4:
             result.append(None)
         elif isinstance(nested, str):
@@ -523,6 +557,31 @@ def _expand_command(argv: list[str], depth: int) -> list[list[str] | None]:
         elif nested:
             result.extend(_expand_command(nested, depth + 1))
     return result
+
+
+# Executables whose quoted arguments are data (messages, patterns, programs), never a command.
+_DATA_ARGUMENT_EXECUTABLES = frozenset({
+    'echo', 'printf', 'git', 'gh', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ack-grep',
+    'findstr', 'select-string', 'sls', 'jq', 'yq', 'awk', 'sed',
+})
+
+
+def _wrapped_payloads(argv: list[str], depth: int) -> list[str]:
+    """Quoted arguments of an unknown wrapper that parse as a risky command (fail closed, #64).
+
+    ``flock LOCK -c 'CMD'``, ``su -c 'CMD'``, ``watch 'CMD'`` and wrappers not modelled
+    at all hand one argument to a shell. Any multi-word argument (or ``--opt=value``)
+    whose own parse runs a delete verb, an authority client or a shell is inspected.
+    """
+    risky = _REMOVE_VERBS | _AUTHORITY_EXECUTABLES | _SHELL_EXECUTABLES | _WINDOWS_SHELL_EXECUTABLES | {'find', 'rsync'}
+    payloads: list[str] = []
+    for word in argv[1:]:
+        text = word.split('=', 1)[1] if word.startswith('--') and '=' in word else word
+        if not re.search(r'\s', text.strip()) or depth >= 4:
+            continue
+        if any(inner and inner[0] in risky for inner in _simple_commands(text, depth + 1)):
+            payloads.append(text)
+    return payloads
 
 
 def _shell_pieces(command: str) -> list[list[str] | None]:
@@ -938,21 +997,14 @@ def _production_action(argv: list[str]) -> str | None:
             return 'docker-push'
         return None
     if executable == 'npm':
-        positionals, indexes = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
-        if positionals[:1] == ['publish']:
-            return 'npm-publish'
-        # An unknown option may take the next word as its value: 'npm --opt value publish'.
-        if positionals[1:2] == ['publish'] and argv[indexes[0] - 1].startswith('-'):
-            return 'npm-publish'
-        return None
+        # Any option may take the next word as its value, so the verb anywhere is a publish (#64).
+        return 'npm-publish' if 'publish' in argv[1:] else None
     if executable in {'pnpm', 'yarn'}:
-        positionals, _ = _positionals(argv, _NPM_VALUE_OPTIONS, 2)
-        return 'npm-publish' if 'publish' in positionals[:2] else None
+        return 'npm-publish' if 'publish' in argv[1:] else None
     if executable in _PACKAGE_PUBLISH_CLIENTS:
-        positionals, _ = _positionals(argv, frozenset(), 2)
-        if positionals[:1] and positionals[0] in _PACKAGE_PUBLISH_CLIENTS[executable]:
-            return 'package-publish'
-        return None
+        # Global options come before the verb (`cargo +toolchain --config K=V publish`,
+        # `gem -C DIR push`); no positional counting: the verb anywhere is a publish (#64).
+        return 'package-publish' if _PACKAGE_PUBLISH_CLIENTS[executable] & set(argv[1:]) else None
     return None
 
 
@@ -1224,8 +1276,30 @@ def _analyze_authority_pieces(
     return AuthorityAnalysis(tuple(actions), ambiguous, context_proven)
 
 
-_IFS_OBFUSCATION = re.compile(r'\S\$\{?IFS|\$\{?IFS\}?[^\s]')
-_ENCODED_POWERSHELL = re.compile(r'\b(?:powershell|pwsh)\b[^\n]*\s-e(?:c|nc|ncodedcommand)?\b', re.IGNORECASE)
+# $IFS glued to a word; `$IFSx` is another variable and does not split (#64).
+_IFS_OBFUSCATION = re.compile(r'\S\$\{?IFS(?![A-Za-z0-9_])|\$(?:IFS(?![A-Za-z0-9_])|\{IFS\})\S')
+_ENCODED_POWERSHELL = re.compile(r'\b(?:powershell|pwsh)\b[^\n]*\s[-/]e(?:c|n[a-z]*)?(?![a-z])', re.IGNORECASE)
+_SINGLE_QUOTED = re.compile(r"'[^']*'")
+
+
+def _standalone(text: str, match: re.Match[str]) -> bool:
+    """A quoted span that is a whole word; ``'git'$IFS'push'`` concatenates into executable text (#64)."""
+    before = text[match.start() - 1] if match.start() else ' '
+    after = text[match.end()] if match.end() < len(text) else ' '
+    return (before.isspace() or before in ';&|(') and (after.isspace() or after in ';&|)')
+
+
+def _executable_text(raw_command: str) -> str:
+    """Command text that can expand: inert ``echo``/``printf`` chunks and standalone single-quoted words dropped."""
+    pieces: list[str] = []
+    for chunk in _command_chunks(raw_command):
+        tokens = _command_tokens(chunk)
+        if tokens and not _HAS_SUBST.search(chunk):
+            bounded, _ = _bounded_command(tokens)
+            if bounded and _executable_name(bounded[0]) in _INERT_EXECUTABLES:
+                continue
+        pieces.append(_SINGLE_QUOTED.sub(lambda m: ' ' if _standalone(chunk, m) else m.group(0), chunk))
+    return '\n'.join(pieces)
 
 
 def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
@@ -1241,17 +1315,23 @@ def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     else:
         analysis = _analyze_authority_pieces(raw_command)
     actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
-    if _IFS_OBFUSCATION.search(raw_command):
+    executable_text = _executable_text(raw_command)
+    if _IFS_OBFUSCATION.search(executable_text):
         # `git$IFS'push'`/`git${IFS}push`: $IFS word-splits into `git push` at runtime but
         # tokenizes as one opaque word here, so treat it as ambiguous authority (review S59-5).
         ambiguous = True
-    if _ENCODED_POWERSHELL.search(raw_command):
+    simple = _simple_commands(raw_command)
+    if any(argv is None for argv in simple) and _ENCODED_POWERSHELL.search(executable_text):
         # powershell -EncodedCommand carries an opaque base64 payload the parser cannot read;
-        # fail closed as ambiguous instead of silently allowing it (review S59-6).
+        # fail closed as ambiguous instead of silently allowing it (review S59-6). Parsed text
+        # is checked per command below, so a commit message mentioning it stays allowed (#64).
         ambiguous = True
-    for argv in _simple_commands(raw_command):
+    for argv in simple:
         if argv is None or argv[0] in _INERT_EXECUTABLES:
             continue
+        if None in _nested_commands(argv):
+            # An opaque payload (`pwsh -EncodedCommand`, a Start-Process argument expression) (#64).
+            ambiguous = True
         action, candidate_ambiguous = _candidate_authority(argv)
         ambiguous = ambiguous or candidate_ambiguous
         if action and action not in actions:
@@ -1609,6 +1689,10 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
     return f'gh:{repository} ' + ' '.join([*positionals, *operands])
 
 
+_PS_METHOD_OPTION = re.compile(r'''(?:^|\s)-([a-z]+)(?:\s+|=|:)(\S+)''')
+_PS_READ_METHODS = frozenset({'get', 'head', 'options', 'default'})
+
+
 def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
     lowered = command.lower()
     mutation = False
@@ -1640,9 +1724,15 @@ def _http_write_resource_text(command: str, root: Path | None = None) -> str | N
     elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
         return 'github-pr-review:unparsed'
     if not mutation and re.search(r'\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b', lowered):
-        # PowerShell web cmdlets: a non-GET -Method or a request body is a write (review S59-6).
-        mutation = bool(re.search(r'-me(?:thod)?(?:\s+|=|:)["\']?(?:post|put|patch|delete)\b', lowered)) or bool(
-            re.search(r'-(?:body|infile|form|contenttype)\b', lowered)
+        # PowerShell web cmdlets: any -Method/-CustomMethod outside the read-only allowlist
+        # (Merge, PURGE, ...) or a request body is a write (review S59-6, #64).
+        # A variable, expression or splatted hashtable (`$m`, `($v)`, `@p`) may carry any verb (#64).
+        methods = [
+            value.strip('\'"') for option, value in _PS_METHOD_OPTION.findall(lowered)
+            if len(option) >= 2 and ('method'.startswith(option) or 'custommethod'.startswith(option))
+        ]
+        mutation = any(method not in _PS_READ_METHODS for method in methods) or bool(
+            re.search(r'-(?:body|infile|form|contenttype)\b|(?:^|\s)@[a-z_{]', lowered)
         )
     if not mutation:
         return None
@@ -1722,8 +1812,10 @@ def _brace_expand(word: str) -> list[str]:
         for option in _brace_options(match.group(1)):
             stack.append(prefix + option + suffix)
         if len(stack) + len(results) > 256:
-            break
-    return (results or [word])[:64]
+            raise _BudgetExceeded  # over the cap: deny rather than check a truncated list (#64)
+    if stack or len(results) > 64:
+        raise _BudgetExceeded
+    return results or [word]
 
 
 def _secret_path_match(path: str, patterns: list[str]) -> bool:
@@ -1744,14 +1836,25 @@ def _secret_path_match(path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _secret_exception(raw: str) -> bool:
-    normalized = raw.replace('\\', '/').rstrip('/')
+def _secret_exception(raw: str, patterns: list[str]) -> bool:
+    # Collapse `//`, `.` and `..` first so `trust-ci//runtime/...` still names the protected tree (#64).
+    normalized = posixpath.normpath(raw.replace('\\', '/')).rstrip('/')
     # The ssh client config and host-key caches are routinely read and carry no key
     # material; only files like .ssh/id_* stay secret (via their own patterns).
-    if normalized.lower().endswith('.ssh/config'):
-        return True
     base = os.path.basename(normalized)
-    return bool(base) and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS)
+    if normalized.lower().endswith('.ssh/config'):
+        enclosing = normalized[:-len('.ssh/config')]
+    elif base and any(fnmatch.fnmatch(base, exc) for exc in SECRET_READ_EXCEPTIONS):
+        enclosing = os.path.dirname(normalized)
+        if os.path.basename(enclosing).lower() == '.ssh':
+            enclosing = os.path.dirname(enclosing)
+    else:
+        return False
+    # A public name never overrides a protected enclosing tree (`trust-ci/runtime/**`,
+    # `**/secrets/**`); only the ordinary SSH store pattern is waived (#64).
+    enclosing = enclosing.rstrip('/')
+    stronger = [pattern for pattern in patterns if '.ssh' not in pattern.lower()]
+    return not (enclosing.strip('./~') and _secret_path_match(enclosing + '/', stronger))
 
 
 def _bounded_glob(start: str, pattern: str, budget: _Budget) -> list[str]:
@@ -1791,9 +1894,11 @@ def _secret_reference(
         # Count every literal word checked, not only filesystem globbing, so the overall
         # wall-clock/entry budget bounds the word x pattern scan and fails closed (review S59-1).
         budget.tick()
-    if not raw or '\x00' in raw or _secret_exception(raw):
+    if not raw or '\x00' in raw:
         return False
     rel = safe_relative_path(root, raw)
+    if _secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns)):
+        return False
     if rel is not None and _secret_path_match(rel, patterns):
         return True
     if _secret_path_match(raw, patterns):
@@ -1838,7 +1943,7 @@ def _walk_for_secret(
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
-                    elif (not glob_filter or fnmatch.fnmatch(entry.name, glob_filter)) and _secret_reference(
+                    elif (not glob_filter or any(fnmatch.fnmatch(entry.name, g) for g in _brace_expand(glob_filter))) and _secret_reference(
                         root, entry.path, patterns, expand=False,
                     ):
                         return entry.path
@@ -1967,7 +2072,33 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
         return [token for token in rest if not (token.startswith('-') and len(token) > 1)]
     if name in _WINDOWS_COPY_READERS or name in _WINDOWS_ARCHIVE_READERS:
         # Windows copy/archive readers: path operands are bare tokens; '/switch' and '-Option' drop out.
-        return [token for token in rest if not token.startswith(('-', '/'))]
+        # `\\` is a separator there, not an escape: split `pub\\ C:\\out`, drop a trailing `\\` (#64).
+        return [
+            word.replace('\\', '/').rstrip('/') or word
+            for token in rest for word in token.split() if not word.startswith(('-', '/'))
+        ]
+    if name in {'select-string', 'sls'}:
+        # Named parameters (`-Pattern X`, `-Path:X`, `-LiteralPath X`): every bare word and colon value
+        # may be a path; only a purely positional first word is the pattern (#64).
+        words: list[str] = []
+        named = False
+        index = 0
+        while index < len(rest):
+            low = rest[index].lower()
+            option, colon, value = low.partition(':')
+            if option.startswith('-'):
+                name = option.lstrip('-')
+                if len(name) >= 2 and any(full.startswith(name) for full in ('pattern', 'path', 'literalpath', 'pspath', 'lp')):
+                    named = True
+                    if colon and value:
+                        words.append(rest[index].split(':', 1)[1])
+                    elif name.startswith('patt') and not colon:
+                        index += 1
+                index += 1
+                continue
+            words.append(rest[index])
+            index += 1
+        return words if named else words[1:]
     if name in _WINDOWS_GREP_READERS:
         # findstr/Select-String: the first bare operand is the pattern, the rest are paths.
         paths = [token for token in rest if not token.startswith(('-', '/'))]
@@ -1996,6 +2127,9 @@ def _is_recursive_reader(argv: list[str]) -> bool:
     if name == 'find':
         return any(token in {'-exec', '-execdir', '-ok', '-okdir'} for token in rest)
     if name in _WINDOWS_ARCHIVE_READERS:
+        return True
+    if name in {'robocopy', 'xcopy'}:
+        # Without /S they still copy every file directly in the source directory (#64).
         return True
     if name in _WINDOWS_COPY_READERS:
         return any(
@@ -2193,11 +2327,12 @@ def evaluate_pre_tool(
         glob_filter = tool_input.get('glob') if is_grep else None
         glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
         search_inputs = list(candidate_paths)
-        if is_grep and glob_filter:
-            # A grep glob names the files ripgrep opens even with no path given; a glob that
-            # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
-            search_inputs.append(glob_filter)
         try:
+            if is_grep and glob_filter:
+                # A grep glob names the files ripgrep opens even with no path given; a glob that
+                # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
+                # ripgrep globs take `{a,b}` alternatives: check every alternative (#64).
+                search_inputs.extend(_brace_expand(glob_filter))
             for raw in search_inputs:
                 if not isinstance(raw, str) or not raw:
                     continue
