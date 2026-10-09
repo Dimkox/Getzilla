@@ -1188,3 +1188,8 @@ class CommunicationRuleTests(unittest.TestCase):
         self.assertEqual(sections[0], "## Rule 0: how agents write to people")
         for phrase in ("ASD-STE100", "one idea in each sentence", "simple, common words", "Russian"):
             self.assertIn(phrase, text)
+
+    def test_agent_pool_scales_to_one_worker_per_logical_cpu(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("up to one per verified effective logical CPU", text)
+        self.assertIn("share any idle cores and threads", text)
