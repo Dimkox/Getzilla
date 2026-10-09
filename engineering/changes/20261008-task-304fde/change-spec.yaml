@@ -1,0 +1,107 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "The verifier hashes the resolved PATH opengrep and does not execute it unless the SHA-256 equals the pinned digest for the platform; a mismatch is a failing, PR-refused stage.",
+      "evidence": [
+        {
+          "test": "tests/test_opengrep.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "The verifier runs the exact resolved path it hashed.",
+      "evidence": [
+        {
+          "test": "tests/test_opengrep.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "update_opengrep moves a non-matching previous binary to <name>.unverified without execute bits before downloading, whether the download fails or mismatches.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Full PR verification, independent reviews and the exact-head external check precede merge.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "security"
+    ]
+  },
+  "change_id": "20261008-task-304fde",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "An unverified opengrep binary stays executable under ~/.getzilla/bin after a failed or mismatched update.",
+      "evidence": [
+        {
+          "test": "tests/test_updater.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "No code path executes an opengrep whose sha256 differs from the pinned release digest.",
+      "evidence": [
+        {
+          "test": "tests/test_opengrep.py"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "The verifier executes OpenGrep only when the resolved binary matches the pinned release digest.",
+    "success_metric": "unpinned_binary_never_executed",
+    "target": ".getzilla/getzilla/verification.py"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

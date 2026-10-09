@@ -8,6 +8,7 @@ pwsh when that is available on the host.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -37,14 +38,47 @@ def _clean_env(**extra: str) -> dict[str, str]:
 
 
 class InstallScriptContractTests(unittest.TestCase):
-    def test_documented_one_liners_point_at_the_shipped_scripts(self) -> None:
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        quickstart = (ROOT / 'QUICKSTART.md').read_text(encoding='utf-8')
-        for text in (readme, quickstart):
-            self.assertIn(f'irm {RAW}install.ps1 | iex', text)
-            self.assertIn(f'curl -fsSL {RAW}install.sh | bash', text)
-        self.assertIn(f'irm {RAW}install.ps1 | iex', POWERSHELL.read_text(encoding='utf-8'))
-        self.assertIn(f'curl -fsSL {RAW}install.sh | bash', SHELL.read_text(encoding='utf-8'))
+    def test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it(self) -> None:
+        # Issue #63: the documented install path must not pipe an unverified download into a shell.
+        # README and QUICKSTART download the installer from the release tag (= VERSION), compare its
+        # SHA-256 with the published digest of the shipped script, and only then run it pinned to that tag.
+        version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
+        pinned = f'https://raw.githubusercontent.com/Dimkox/Getzilla/v{version}/scripts/'
+        sh_digest = hashlib.sha256(SHELL.read_bytes()).hexdigest()
+        ps_digest = hashlib.sha256(POWERSHELL.read_bytes()).hexdigest()
+        for name in ('README.md', 'QUICKSTART.md'):
+            text = (ROOT / name).read_text(encoding='utf-8')
+            with self.subTest(document=name):
+                self.assertNotIn(f'{RAW}install.sh | bash', text)
+                self.assertNotIn(f'{RAW}install.ps1 | iex', text)
+                self.assertNotRegex(text, r'Getzilla/[^/\s]+/scripts/install\.(sh \| *(ba)?sh|ps1 \| *iex)')
+                sh_fetch = text.index(f'curl -fsSLo getzilla-install.sh {pinned}install.sh')
+                sh_run = f'GETZILLA_REF=v{version} bash getzilla-install.sh'
+                lines = text.splitlines()
+                # The check and the run must be one fail-stop command line (`check && run`), so a
+                # line-by-line paste cannot reach the installer after a failed check (Linux and macOS).
+                for tool in ('sha256sum -c -', 'shasum -a 256 -c -'):
+                    line = f'echo "{sh_digest}  getzilla-install.sh" | {tool} && {sh_run}'
+                    self.assertIn(line, lines)
+                    self.assertLess(sh_fetch, text.index(line))
+                for line in lines:
+                    if 'bash getzilla-install.sh' in line:
+                        self.assertRegex(line, rf'^echo "{sh_digest}  getzilla-install\.sh" \| (sha256sum|shasum -a 256) -c - && ')
+                ps_fetch = text.index(f'Invoke-WebRequest -UseBasicParsing {pinned}install.ps1 -OutFile $f')
+                ps_line = (
+                    f"if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '{ps_digest.upper()}') "
+                    f"{{ $env:GETZILLA_REF = 'v{version}'; Invoke-Expression (Get-Content -Raw $f) }} "
+                    "else { throw 'install.ps1 SHA-256 mismatch: do not run it' }"
+                )
+                self.assertIn(ps_line, lines)
+                self.assertLess(ps_fetch, text.index(ps_line))
+                self.assertEqual([line for line in lines if 'Invoke-Expression (Get-Content -Raw $f)' in line], [ps_line])
+
+    def test_hashed_installers_keep_lf_endings_in_every_checkout(self) -> None:
+        # The documented digests hash the repository bytes; an eol rule keeps Windows checkouts identical.
+        rules = (ROOT / '.gitattributes').read_text(encoding='utf-8').splitlines()
+        for path in ('scripts/install.sh', 'scripts/install.ps1'):
+            self.assertIn(f'{path} text eol=lf', rules)
 
     def test_shell_installer_only_acts_from_main(self) -> None:
         text = SHELL.read_text(encoding='utf-8')

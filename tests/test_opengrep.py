@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -15,22 +16,31 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import updater  # noqa: E402
 from getzilla import verification as V  # noqa: E402
 from getzilla.quality_gates import required_check_refused  # noqa: E402
 
 RULES = ROOT / '.getzilla/sast/rules'
 
 
-def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0) -> None:
+def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0) -> str:
+    """Write a fake ``opengrep`` that records each run in ``ran`` and return its sha256."""
     script = directory / 'opengrep'
     body = payload if isinstance(payload, str) else json.dumps(payload)
     script.write_text(textwrap.dedent(f'''\
         #!{sys.executable}
-        import sys
+        import pathlib, sys
+        pathlib.Path({str(directory / 'ran')!r}).touch()
         sys.stdout.write({body!r})
         sys.exit({exit_code})
     '''), encoding='utf-8')
     script.chmod(0o755)
+    return hashlib.sha256(script.read_bytes()).hexdigest()
+
+
+def _pin(sha256: str) -> mock._patch:
+    """Pin the running platform's OpenGrep digest to ``sha256``."""
+    return mock.patch.dict(updater.OPENGREP_ASSETS, {updater._platform_key(): ('opengrep', sha256)})
 
 
 class OpengrepCheckTests(unittest.TestCase):
@@ -44,12 +54,27 @@ class OpengrepCheckTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _run(self, payload: dict | str | None, exit_code: int = 0) -> V.CheckResult:
-        if payload is not None:
-            _fake_opengrep(self.bin, payload, exit_code)
+    def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True) -> V.CheckResult:
+        digest = _fake_opengrep(self.bin, payload, exit_code) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
-        with mock.patch.dict(os.environ, {'PATH': path}):
+        with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64):
             return V._opengrep(self.root)
+
+    def test_binary_on_path_that_does_not_match_the_pin_is_refused_unexecuted(self) -> None:
+        # A PATH opengrep (for example one an older updater took from `latest`) is not trusted
+        # by name: its sha256 must equal the pinned release digest before it is ever run (#39).
+        result = self._run({'results': []}, pinned=False)
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('sha256', result.summary)
+        self.assertIn(updater.OPENGREP_VERSION, result.summary)
+        self.assertFalse((self.bin / 'ran').exists())
+        self.assertTrue(required_check_refused(result, mode='pr'))
+
+    def test_pinned_binary_runs_by_its_resolved_path(self) -> None:
+        result = self._run({'results': [], 'errors': []})
+        self.assertEqual(result.status, 'pass')
+        self.assertTrue((self.bin / 'ran').exists())
+        self.assertEqual(Path(result.command[0]), self.bin / 'opengrep')
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
