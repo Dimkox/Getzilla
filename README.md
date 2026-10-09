@@ -48,14 +48,26 @@ One command installs everything that is missing (Git, Python and a coding agent 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
+$f = Join-Path $env:TEMP 'getzilla-install.ps1'
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.ps1 -OutFile $f
+if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '32F5DFD05E8B19CF327BEF6EA2B7DA1F677675573A0ECEB27C17AAB8ACA73987') { $env:GETZILLA_REF = 'v2.2.0'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
 ```
 
-Linux or macOS:
+Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.sh
+echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.2.0 bash getzilla-install.sh
 ```
+
+macOS:
+
+```bash
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.sh
+echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.2.0 bash getzilla-install.sh
+```
+
+The installer is verified before it runs: the commands download it from the `v2.2.0` release tag, compare its SHA-256 with the digest published here (the test suite keeps this digest equal to the shipped `scripts/install.sh` / `scripts/install.ps1`), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder.
 

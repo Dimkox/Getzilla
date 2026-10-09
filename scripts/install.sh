@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Getzilla installer for Linux and macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.sh | bash
+#   download this script from a release tag, check its SHA-256 against the digest
+#   published in README.md / QUICKSTART.md, then run it (never pipe it into a shell)
 #
 # Installs what is missing (Git, Python 3.10+, curl, your coding agent), downloads
 # Getzilla, points the agent at its models and runs the health check. Nothing is

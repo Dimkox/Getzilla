@@ -1,6 +1,7 @@
 # Getzilla installer for Windows (Windows PowerShell 5.1 or PowerShell 7).
 #
-#   irm https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/install.ps1 | iex
+#   download this script from a release tag, check its SHA-256 against the digest
+#   published in README.md / QUICKSTART.md, then run it (never pipe it into iex)
 #
 # Installs what is missing (Git, Python 3.13, your coding agent), downloads Getzilla,
 # points the agent at its models and runs its health check. Uses winget when it is available; otherwise it downloads the
