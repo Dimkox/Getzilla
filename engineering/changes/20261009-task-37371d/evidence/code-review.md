@@ -1,44 +1,35 @@
-# Code review — PASS with one Low test finding
+# Code review — PASS with deferred Low finding #73
 
-Scope: security, duplicate external writes, and tests. No blocking defect found.
+Fresh scope: security, duplicate external writes and tests across base `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9` through current HEAD. Inspected repair `75ff49d..HEAD`. No blocking defect found. Historical reports in the candidate are not this review's PASS evidence.
 
-- **Low:** `test_rejects_nonancestor` changes source on its orphan branch. The source-delta guard masks removal of the ancestry guard. Add an unrelated commit with the same tree to isolate ancestry. Current code rejects this case correctly.
-- No external mutation path was added. Duplicate external writes do not apply.
-- The fixture helper commits all prepared changes. It therefore proves committed-candidate admission, not dirty-candidate rejection. Dedicated dirty, staged, and untracked tests retain that coverage.
+- Low #73 remains: removing the ancestry guard survives `test_rejects_nonancestor`, because that fixture also changes source. An independent equal-tree orphan probe isolates the guard and confirms current code rejects it.
+- The installer repair correctly binds documented installation to the published release rather than an unpublished source version. Tests retain repository, tag, object-format and installer-digest checks. The no-history fixture rejects each invalid binding and changed installer bytes.
+- No external-write implementation changed. Duplicate external writes do not apply.
+- `prepare_review_source` commits fixture changes; dedicated dirty/staged/untracked tests retain rejection coverage. Its committed success fixtures do not establish dirty admission.
 
-Source identity before and after:
+Source before/after: HEAD `3e59aa153e4eb0c2d1b71e5b55d723d14949ac9b`; tree `08c67e409236086b4e890384071876b464a48073`; fingerprint `70b24e2556958d779dda0131a90368abe7b2f50247223fc35fb4af99853d105a`. Candidate clean before/after.
 
-- HEAD: `c6bbfa86b3d3177b0b66993ceaf3f092b6e6cbfa`
-- Tree: `9950552a6d088e518ea5db688659808ce271e4b7`
-- Fingerprint: `7fc6376f1514f3be3cc0cca905b6fe65d9d857c5a7af15dba87cf849dfa4a0ad`
-- Candidate status: clean.
-- reviewed-tree-modified: no
+reviewed-tree-modified: no
 
-Scratch: `/home/pall/getzilla-session/code-review-ee7lw94a`, mode `0700`, under owner-controlled non-sticky parent `/home/pall/getzilla-session`, mode `0700`. `git clone --quiet --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>/repo` and checkout of the exact HEAD reproduced the candidate HEAD/tree with clean status. All tests and mutations ran there.
+Scratch `/home/pall/getzilla-session/code-review-repaired-6qbwsqzk`, mode0700, under owner-controlled non-sticky mode0700 `/home/pall/getzilla-session`. `git clone --quiet --no-hardlinks /home/pall/getzilla-session/Getzilla <scratch>/repo` reproduced exact HEAD/tree. Tests and mutations ran only in scratch, sequentially, with `PYTHONDONTWRITEBYTECODE=1 TMPDIR=<scratch>/tmp taskset -c 0-3`.
 
-Executed controls used `PYTHONDONTWRITEBYTECODE=1 TMPDIR=<scratch>/tmp taskset -c 0-3` and one test process:
+Executed control:
 
 ```text
-python3 -m unittest tests.test_review_source -q
-14 tests; OK.
-
-python3 -m unittest \
- tests.test_package_status.PackageStatusTests.test_status_rejects_legacy_and_forged_review_source_receipts \
- tests.test_package_status.PackageStatusTests.test_stop_does_not_hide_incomplete_package_behind_current_receipts \
- tests.test_hooks.HookTests.test_stop_allows_current_evidence -q
-3 tests; OK.
+python3 -m unittest tests.test_review_source tests.test_install_scripts.InstallScriptContractTests.test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it tests.test_install_scripts.InstallScriptContractTests.test_published_install_contract_allows_a_new_source_version_without_git_history -q
+16 tests; OK, 7.294s.
 ```
 
-An earlier command named a nonexistent package-status test. It produced one loader error. The corrected command above passed.
+Fresh mutation probes changed one scratch guard to `if False`, ran the exact named command, then restored original bytes:
 
-Mutation probes edited scratch files, ran the named test, then restored the original bytes:
-
-| Mutation | Command/probe | Result |
+| Guard disabled | Exact command | Result |
 |---|---|---|
-| Replace ancestry condition with `if False` | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_rejects_nonancestor -q` | **Survived**: existing test passed; Low finding above. |
-| Remove report-path allowlist condition | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_rejects_source_delta_and_dirty_or_untracked_candidate -q` | **Killed**: committed source delta was admitted; assertion failed. |
-| Disable consumption binding check | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q` | **Killed**: all four missing/forged-binding subtests failed. |
+| Ancestry | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_rejects_nonancestor -q` | SURVIVED, exit0; Low #73. |
+| Report path allowlist | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_rejects_source_delta_and_dirty_or_untracked_candidate -q` | KILLED, exit1; committed-delta assertion failed. |
+| Consumption binding validation | `python3 -m unittest tests.test_review_source.ReviewSourceTests.test_consumption_rejects_missing_and_forged_binding -q` | KILLED, exit1; four forged/missing-binding assertions failed. |
 
-Independent ancestry probe: create an unrelated identical-tree commit with `git commit-tree <tree> -m 'unrelated identical tree'`, then call `review_source_binding(root, unrelated_commit, report)` in a fresh subprocess. Original code exited `1` with “reviewed commit is not an ancestor.” The ancestry mutant exited `0` and admitted it. This probe **kills** that mutant.
+Fresh independent ancestry probe used `git commit-tree <fixture HEAD tree> -m 'unrelated equal tree'` without parents, followed by `review_source_binding(fixture_root, orphan_commit, report)` in a fresh Python subprocess. Original code exited1: `reviewed commit is not an ancestor of frozen HEAD`. The ancestry mutant exited0: ADMITTED. This independent probe kills that mutant.
 
-Limits: no Windows execution, full-suite run, production activation, external CI, or concurrent filesystem-race probe. Static inspection of path safety, bounded Git calls, receipt publication, and external-write absence is not executable proof. Final exact-head verification and external checks remain pending.
+Final source check: `git rev-parse HEAD HEAD^{tree}`, `git status --porcelain`, and `getzilla.util.tree_fingerprint(Path.cwd())` returned the identities above and empty status.
+
+Limits: no Windows execution, full-suite run, concurrent filesystem-race probe, external checks, or production qualification. Static path/publication/external-write inspection is not executable proof. Installer controls prove local bytes and declared publication binding, not fresh remote tag authenticity. Final exact-head verifier and external gates remain pending.
