@@ -28,4 +28,3 @@ Observed: exit `1`; the child inherited override `'1'` and selected `operator-ov
 Restored with `tar -xf ../snapshot.tar .getzilla/getzilla/python_test_runner.py`; repeated the regression: exit `0`, one test passed.
 
 Limitations: Linux only; no full suites, final PR gate, packaging, or external CI executed. AC-003 remains coordinator work. Security and duplicate-write findings are static observations; only the stated environment/scope claims received executable probes.
-

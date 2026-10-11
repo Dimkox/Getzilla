@@ -116,6 +116,3 @@ The two allowed CPUs bound the focused worker load without overriding the test's
 Production changes import the acyclic selector constant and omit only that flag in the copied child environment. The selector, CLI and generic execute boundary are unchanged. The regression covers defined/absent parent controls, preserved parent environment and parent scope, test-owned child override, ordinary and GETZILLA marker values, capability retention, import roots, worker recursion, plugin isolation and coverage isolation.
 
 Residual risk: checks ran on Linux; independent reviews and the full PR gate remain for the coordinator. No commit, push, merge, deployment or final verification receipt was created. Roll back the import/filter and regression changes to restore the prior behavior; keep this evidence as the historical RED/GREEN record.
-
-
-

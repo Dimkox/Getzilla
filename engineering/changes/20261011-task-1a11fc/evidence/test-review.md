@@ -24,4 +24,3 @@ env -u GETZILLA_TEST_WORKERS -u GETZILLA_VERIFY_FORCE_FULL -u _GETZILLA_TEST_CHI
 - Forced parent: 91 tests passed; parent flag remained `1`, with `operator-override` / `full-pr-suite`. Both runs completed without cleanup errors.
 - Critical verification-control mutation: removed `FORCE_FULL_VARIABLE` from the exclusion filter. Regression killed it: exit 1, child observed inherited `1` and `operator-override`. Restored regression passed: exit 0.
 - Limitations: Linux only; no full suite, CLI full gate, scanners, archive rebuild, or external gate executed. Those remain coordinator checks for AC-003.
-
