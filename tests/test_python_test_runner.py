@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla.verification import CheckResult, _python
 from getzilla import python_test_runner
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
+from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
 
 @contextlib.contextmanager
@@ -401,6 +402,68 @@ class PythonTestCapacityTests(unittest.TestCase):
 
 
 class PythonTestRunnerTests(unittest.TestCase):
+    def test_child_scope_does_not_inherit_controller_override(self) -> None:
+        code = (
+            'import json, os\nfrom pathlib import Path\n'
+            'from getzilla.python_test_runner import selected_workers\n'
+            'from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope\n'
+            'def scope():\n'
+            '    return select_docs_state_scope("pr", ["README.md"], range_base_count=1,\n'
+            '        file_statuses=[{"status": "M", "path": "README.md"}],\n'
+            '        status_inventory_trusted=True, available_test_targets=FOCUSED_TEST_TARGETS)\n'
+            'observed = {"override": os.environ.get("GETZILLA_VERIFY_FORCE_FULL"),\n'
+            '    "scope": scope()["reason_code"], "workers": selected_workers(Path.cwd()),\n'
+            '    "environment": {key: os.environ.get(key) for key in (\n'
+            '        "RUNNER_MARKER", "GETZILLA_RUNNER_MARKER", "GETZILLA_VERIFY_CAPABILITY",\n'
+            '        "GETZILLA_TEST_WORKERS", "_GETZILLA_TEST_CHILD", "PYTEST_ADDOPTS",\n'
+            '        "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "COVERAGE_PROCESS_START",\n'
+            '        "COV_CORE_SOURCE", "COVERAGE_FILE", "PYTHONDONTWRITEBYTECODE", "PYTHONPATH")}}\n'
+            'os.environ["GETZILLA_VERIFY_FORCE_FULL"] = "1"\n'
+            'observed["test_owned_scope"] = scope()["reason_code"]\n'
+            'print(json.dumps(observed))\n'
+        )
+        for override in ('1', None):
+            with self.subTest(override=override), fixture() as root, patch.dict(os.environ, {
+                'RUNNER_MARKER': 'ordinary', 'GETZILLA_RUNNER_MARKER': 'retained',
+                'GETZILLA_VERIFY_CAPABILITY': 'required', 'GETZILLA_TEST_WORKERS': '2',
+                '_GETZILLA_TEST_CHILD': '0', 'PYTEST_ADDOPTS': '--bad-option',
+                'PYTEST_PLUGINS': 'unwanted_plugin', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '0',
+                'COVERAGE_PROCESS_START': 'parent.rc', 'COV_CORE_SOURCE': 'parent-source',
+                'COVERAGE_FILE': 'parent.coverage', 'PYTHONDONTWRITEBYTECODE': '0',
+                'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla'),
+            }):
+                if override is None:
+                    os.environ.pop('GETZILLA_VERIFY_FORCE_FULL', None)
+                else:
+                    os.environ['GETZILLA_VERIFY_FORCE_FULL'] = override
+                parent = dict(os.environ)
+                data_file = root / '.coverage-child'
+                result = execute([sys.executable, '-c', code], root,
+                                 python_test_runner._environment(root, data_file), timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(dict(os.environ), parent)
+                parent_scope = select_docs_state_scope(
+                    'pr', ['README.md'], range_base_count=1,
+                    file_statuses=[{'status': 'M', 'path': 'README.md'}],
+                    status_inventory_trusted=True, available_test_targets=FOCUSED_TEST_TARGETS,
+                )
+                self.assertEqual(parent_scope['reason_code'], 'operator-override' if override else 'eligible')
+                self.assertEqual(parent_scope['profile'], 'full-pr-suite' if override else 'docs-state-focused')
+                self.assertEqual(json.loads(result.stdout), {
+                    'override': None, 'scope': 'eligible', 'workers': 0,
+                    'test_owned_scope': 'operator-override',
+                    'environment': {
+                        'RUNNER_MARKER': 'ordinary', 'GETZILLA_RUNNER_MARKER': 'retained',
+                        'GETZILLA_VERIFY_CAPABILITY': 'required', 'GETZILLA_TEST_WORKERS': None,
+                        '_GETZILLA_TEST_CHILD': '1', 'PYTEST_ADDOPTS': None, 'PYTEST_PLUGINS': None,
+                        'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'COVERAGE_PROCESS_START': None,
+                        'COV_CORE_SOURCE': None, 'COVERAGE_FILE': str(data_file),
+                        'PYTHONDONTWRITEBYTECODE': '1',
+                        'PYTHONPATH': os.pathsep.join((str(root), str(root / 'tests'),
+                                                      str(root / '.getzilla'), parent['PYTHONPATH'])),
+                    },
+                })
+
     def assert_descendant_stopped(self, pid_file: Path) -> None:
         if sys.platform != 'linux':
             self.skipTest('process-group verification reads /proc; Linux-only')

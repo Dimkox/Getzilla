@@ -1910,3 +1910,6 @@ A new negative handoff assertion contained the obsolete predecessor script name 
 - The new Grok preservation test supplied incomplete agent TOML and failed renderer admission; use a valid canonical agent fixture when testing output ownership, rather than accidentally testing unrelated malformed-agent input.
 
 - Grok mirror generation erased a supported circuit-breaker instruction because it existed only in the old generated mirror, not the canonical skill. Before transferring ownership to a generator, preserve consumer-specific rules in the canonical source and bind all mirrors to the same rule; the delivery sequence test now checks every source.
+
+## 2026-10-11 — Inherited verifier control changed child scope
+The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child tests, so the parent scope choice overrode child test fixtures. Remove this controller flag only from the shared child-test environment copy and preserve parent scope selection. A bounded check also set GETZILLA_TEST_WORKERS for a test that requires absent opt-in; unset that override and use child CPU affinity to bound the run.
