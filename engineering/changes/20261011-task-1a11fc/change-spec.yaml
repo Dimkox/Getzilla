@@ -1,0 +1,95 @@
+{
+  "acceptance_criteria": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_python_test_runner.py"
+        },
+        {
+          "test": "tests/test_verification_scope.py"
+        }
+      ],
+      "id": "AC-001",
+      "statement": "A controller full-scope override is absent from environments created for child tests while the parent environment and parent full scope selection remain unchanged."
+    },
+    {
+      "evidence": [
+        {
+          "test": "tests/test_python_test_runner.py"
+        }
+      ],
+      "id": "AC-002",
+      "statement": "Existing worker recursion guard, capability controls, ordinary environment, plugin isolation and coverage isolation remain intact."
+    },
+    {
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "test": "tests/test_manifest_package.py"
+        }
+      ],
+      "id": "AC-003",
+      "statement": "Full local PR verification, independent code/test reviews and reproducible packaging are recorded on the repaired candidate."
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261011-task-1a11fc",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "evidence": [
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ],
+      "id": "FORBID-001",
+      "statement": "No blanket removal of GETZILLA variables, policy weakening, fake pass, provider activation, deployment or production mutation."
+    }
+  ],
+  "invariants": [
+    {
+      "evidence": [
+        {
+          "test": "tests/test_verification_scope.py"
+        }
+      ],
+      "id": "INV-001",
+      "statement": "Explicit parent --full-scope and GETZILLA_VERIFY_FORCE_FULL continue to select the complete fail-closed verification profile."
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix bug: Getzilla --full-scope leaks GETZILLA_VERIFY_FORCE_FULL into child test processes, breaking verification scope regression tests. Isolate verification control flags from child tests, run a complete local PR gate with OSV and OpenGrep, and rebuild the installation archive.",
+    "success_metric": "Full local PR verification succeeds with --full-scope; child tests use their own scope controls and parent forced full selection remains effective.",
+    "target": "Getzilla local Python test runner on supported platforms; corrected deterministic 2.2.1 source archive."
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

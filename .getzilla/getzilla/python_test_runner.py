@@ -21,6 +21,7 @@ import time
 
 from . import fsx
 from ._cpu_capacity import linux_quota_capacity
+from .verification_scope import FORCE_FULL_VARIABLE
 
 
 PINS = {'pytest': '9.1.1', 'pytest-xdist': '3.8.0', 'pytest-cov': '7.1.0', 'coverage': '7.15.4'}
@@ -297,7 +298,8 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
 def _environment(root: Path, data_file: Path) -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(('PYTEST_', 'COVERAGE_', 'COV_CORE_')) and key != 'GETZILLA_TEST_WORKERS'
+        if not key.startswith(('PYTEST_', 'COVERAGE_', 'COV_CORE_'))
+        and key not in ('GETZILLA_TEST_WORKERS', FORCE_FULL_VARIABLE)
     }
     environment.update(
         PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', PYTHONDONTWRITEBYTECODE='1',
