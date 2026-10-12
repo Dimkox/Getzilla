@@ -1,0 +1,22 @@
+# Release review
+
+PASS for the bounded source repair, subject to final gates. Production: NO-GO.
+
+- Security: no blocking finding. Native `exec_command.cmd` reaches existing policy and workdir checks. Invalid or conflicting fields deny before the soft outer handler. Legacy `command` strings/lists remain supported. The patch adds no permission, provider, daemon, deployment or trust-policy change.
+- Double writes: no external mutation path is added. The mapper copies the input. Tests submit command text to hooks; they do not execute that text.
+- Tests: source inspection shows native/legacy, malformed, conflict, envelope, oversize, workdir and installed-launcher coverage. The generated Codex launcher delegates to `.grok/hooks/pre_tool_use.py`. The installer manages `.grok`, so a fresh install includes the canonical repair. Existing installed consumers need an explicit source update before they gain the fix.
+- Recovery: revert both canonical hook changes and regression tests through a fresh checked PR, or forward-fix them. No schema or deployed state changes. Denial reasons give a local failure signal. Revert restores the former native-input gap, so prefer forward repair if this guard is needed.
+
+Source identity before and after: repository `/home/pall/.local/share/getzilla-worktrees/fix-codex-cmd-20261011`; route `43786cadd549`; base `540c12f93e798c2f483455a5086ab0018ac3216e`; HEAD `66049ff92c52a088d21560c093f7234b2d5f84cb`; tree `24200066e9388f7dbe36c58b5846868e82c25fd0`; fingerprint `c7c0b4e3e8374b2a66affe66da010df1f8d34609c3f0fb34f56f8f2141923790`. Git status was empty at both observations.
+
+Commands and observed results: `git rev-parse HEAD HEAD^{tree}` returned the identities above; `git status --porcelain=v1` returned no entries. `git diff --stat <base> HEAD` returned 24 files, 801 insertions. `git diff <base> HEAD -- .grok/hooks/_lib.py .grok/hooks/pre_tool_use.py tests/test_harness_hook_payloads.py README.md` showed the bounded repair and tests. `sed`/`rg` inspected surrounding normalization, PreToolUse, generated launcher and installer implementation. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.getzilla taskset -c 18-23 python3 -c 'from pathlib import Path; from getzilla.util import tree_fingerprint; print(tree_fingerprint(Path.cwd()))'` returned the fingerprint above.
+
+Limits: this reviewer ran no tests or hooks. Implementation evidence reports 23 payload tests passed; this is inspected evidence, not this reviewer's fresh test result. Critical security mutants belong to the independent code/test/security reviews. Mutation: skipped (non-critical delivery claims). Installed-consumer execution, actual Codex host integration, full-suite success and external checks remain unexecuted by this reviewer. No historical v2.2.1 result qualifies this HEAD.
+
+Conditions: persist all selected independent reviews, freeze the report-containing candidate, run the final full PR selector/gate, and require green exact-head linux/windows checks plus resolved review threads before merge. Local review gives no merge authority. No production target or accepted task is present; no production qualification, activation, release publication or deployment is approved here.
+
+Capacity observation: 14 physical cores, 28 online logical CPUs; process affinity 0,1,8-27; default nproc 22. Effective cpuset 0-27; session/user ancestor cpu.max values were max 100000. Child taskset 18-23 returned nproc 6 and affinity 18-23. Review used at most one process within that allocation. Root cpu.max is absent, so total quota capacity is not asserted.
+
+reviewed-tree-modified: no
+
+Refresh: `git diff cde3947fde6aca4c7058c7114af957b61043a661 HEAD` shows only 24 added lines in human-gates.json. The entries map conditional owner consent to isolated branch transport and PR merge. Their reasons require exact operation grants and green exact-head checks/reviews/threads. Despite the generic gate name, these entries do not authorize deployed policy changes, production mutation, release publication or deployment. No application change exists. The original static component inspection remains applicable; its tests are historical observations. The coordinator reports a fresh named payload observation PASS in 13.040s on this HEAD; this reviewer did not execute it. Original report is preserved as release-review-cde3947-historical.md. Fresh identity and empty status were checked during refresh; source PASS remains conditional and production remains NO-GO.
