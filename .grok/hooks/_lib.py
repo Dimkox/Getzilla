@@ -539,9 +539,35 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
             value = {'command': payload['toolArgs']}
     elif value is None:
         value = payload.get('toolArgs')
+    raw_tool = str(first(payload.get('tool_name'), payload.get('toolName'), ''))
     if not isinstance(value, dict):
+        if raw_tool == 'exec_command':
+            return {'_getzilla_input_error': 'exec_command requires a command object.'}
         return {}
     mapped = dict(value)
+    mapped.pop('_getzilla_input_error', None)
+    # Normalize only the known native contract. Validate without throwing into
+    # the soft hook's outer fail-open handler; main emits this explicit denial.
+    if raw_tool == 'exec_command':
+        if 'cmd' in mapped:
+            cmd = mapped['cmd']
+            if not isinstance(cmd, str) or not cmd.strip():
+                mapped['_getzilla_input_error'] = 'exec_command cmd must be a non-empty string.'
+            elif 'command' in mapped:
+                alias = mapped['command']
+                if isinstance(alias, list) and alias and all(isinstance(part, str) for part in alias):
+                    alias = shlex.join(alias)
+                if not isinstance(alias, str) or alias != cmd:
+                    mapped['_getzilla_input_error'] = 'exec_command cmd and command conflict.'
+            mapped['command'] = cmd
+        else:
+            alias = mapped.get('command')
+            valid = isinstance(alias, str) and bool(alias.strip())
+            valid = valid or (isinstance(alias, list) and bool(alias)
+                              and all(isinstance(part, str) for part in alias)
+                              and any(part.strip() for part in alias))
+            if not valid:
+                mapped['_getzilla_input_error'] = 'exec_command requires cmd or a legacy command.'
     if 'command' not in mapped and str(first(payload.get('tool_name'), payload.get('toolName'), '')) == 'apply_patch':
         patch = first(mapped.get('patch'), mapped.get('input'))
         if isinstance(patch, str):

@@ -75,6 +75,108 @@ class HarnessHookPayloadTests(unittest.TestCase):
             data = self._pre_tool(root, 'run_shell_command', {'command': 'ls', 'description': 'list'})
             self.assertEqual(data['decision'], 'allow')
 
+    def test_codex_cmd_payload_reaches_sensitive_command_policy(self) -> None:
+        with project_copy() as root:
+            for command in ('git push origin main', 'terraform destroy', 'cat .env',
+                            'printf x >> AGENTS.md'):
+                with self.subTest(command=command):
+                    data = self._pre_tool(root, 'exec_command', {
+                        'cmd': command, 'workdir': str(root),
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_cmd_is_authoritative_for_exec_command(self) -> None:
+        with project_copy() as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git push origin main', 'command': 'ls', 'workdir': str(root),
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_conflicting_and_malformed_commands_are_denied(self) -> None:
+        with project_copy() as root:
+            for inputs in (
+                {'cmd': 'ls', 'command': 'terraform destroy'},
+                {'cmd': 'terraform destroy', 'command': 'ls'},
+                {}, {'cmd': None}, {'cmd': ''}, {'cmd': '   '},
+                {'cmd': 1}, {'cmd': False}, {'cmd': ['ls']},
+                {'cmd': {}, 'command': 'ls'}, None, [],
+            ):
+                with self.subTest(inputs=inputs):
+                    self.assertEqual(self._pre_tool(root, 'exec_command', inputs)['decision'], 'deny')
+
+    def test_codex_envelopes_and_oversize_commands_are_checked(self) -> None:
+        with project_copy() as root:
+            for key in ('tool_input', 'toolInput', 'toolArgs'):
+                inputs = {'cmd': 'terraform destroy', 'workdir': str(root)}
+                code, data, stderr = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root), 'toolName': 'exec_command',
+                    key: json.dumps(inputs) if key == 'toolArgs' else inputs,
+                })
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(data['decision'], 'deny', key)
+            data = self._pre_tool(root, 'exec_command', {'cmd': 'x' * 131073})
+            self.assertEqual(data['decision'], 'deny')
+            self.assertIn('longer', data['reason'])
+
+    def test_codex_legacy_and_equal_alias_commands_stay_supported(self) -> None:
+        with project_copy() as root:
+            for inputs in ({'command': 'ls'}, {'command': ['ls']},
+                           {'cmd': 'ls', 'command': 'ls'}, {'cmd': 'ls', 'command': ['ls']}):
+                self.assertEqual(self._pre_tool(root, 'exec_command', inputs)['decision'], 'allow')
+
+    def test_normalization_preserves_input_and_does_not_invent_alias_contracts(self) -> None:
+        import copy
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location('cmd_hook_fixture', PROJECT / '.grok/hooks/_lib.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        inputs = {'cmd': 'ls', 'workdir': '/somewhere', 'extra': ['value']}
+        payload = {'tool_name': 'exec_command', 'tool_input': inputs}
+        before = copy.deepcopy(payload)
+        result = module.tool_input(payload)
+        self.assertEqual(result['command'], 'ls')
+        self.assertEqual(result['workdir'], '/somewhere')
+        self.assertEqual(payload, before)
+        self.assertIsNot(result, inputs)
+        unknown = module.tool_input({'tool_name': 'shell', 'tool_input': {'cmd': 'ls'}})
+        self.assertNotIn('command', unknown)
+
+    def test_installed_codex_launcher_checks_native_cmd(self) -> None:
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location('cmd_install_fixture', PROJECT / 'scripts/install_into.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        with project_copy() as root:
+            target = root.parent / 'installed'
+            module.materialize_new(PROJECT, target)
+            for consumer, configuration in ((root, PROJECT), (target, target)):
+                hooks = json.loads((configuration / '.codex/hooks.json').read_text())
+                launcher = hooks['hooks']['PreToolUse'][0]['hooks'][0]['command']
+                result = subprocess.run(launcher, shell=True, cwd=consumer, input=json.dumps({
+                    'cwd': str(consumer), 'tool_name': 'exec_command',
+                    'tool_input': {'cmd': 'terraform destroy'},
+                }), text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_codex_cmd_respects_command_workdir(self) -> None:
+        with project_copy(git=True) as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git push origin feature', 'workdir': str(root.parent),
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_read_only_cmd_is_allowed(self) -> None:
+        with project_copy() as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git status --short', 'workdir': str(root),
+            })
+            self.assertEqual(data['decision'], 'allow', data)
+
     def test_structured_writes_to_protected_paths_need_a_grant(self) -> None:
         with project_copy() as root:
             for tool, tool_input in (

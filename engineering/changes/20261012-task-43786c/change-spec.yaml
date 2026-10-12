@@ -1,0 +1,98 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Native executedcmd reaches policy/root/oversize/grant checks, including alternate envelopes and directoryscope",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Malformedpresentcmd and conflictingcommand aliases produceexplicitdenial without failopen, legacycommand remainscompatible",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "GeneratedCodexlauncher and installedconsumer enforce same boundary; no mutation/retry authorityadded",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "release_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "scope_and_design_approval"
+    ]
+  },
+  "change_id": "20261012-task-43786c",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "No productionwrite,secretread or trustpolicy modification; no harmfulpayload execution",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Existinggrant/rootpolicy/providerdefaults and priorpublications unchanged",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
+    "success_metric": "Executednativecmd cannot evade existing policy/root checks; malformed/conflictingpayloadsdeny; legacy and installedconsumers remain usable",
+    "target": "Canonicalhook and change-relevantregressions"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

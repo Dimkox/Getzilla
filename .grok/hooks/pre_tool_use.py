@@ -256,6 +256,9 @@ def main() -> None:
         payload = read_payload()
         current_tool = tool_name(payload)
         current_input = tool_input(payload)
+        if current_input.get('_getzilla_input_error'):
+            emit(permission_output(False, current_input['_getzilla_input_error']))
+            return
         if _oversize_bash_command(current_tool, current_input):
             emit(permission_output(False, (
                 f'Blocked a Bash command longer than {MAX_BASH_COMMAND_CHARS} characters; '

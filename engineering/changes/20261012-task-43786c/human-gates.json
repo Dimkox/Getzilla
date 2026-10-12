@@ -1,0 +1,19 @@
+{
+  "change_id": "20261012-task-43786c",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261012-task-43786c",
+      "decided_at": "2026-10-12T23:33:41+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner goal authorizes confirmed source security blocker repairs and AGENTS delegates routine process decisions. Bounded cmd normalization with tests; no production operation, secret or permission expansion.",
+      "resource": null,
+      "route_id": "43786cadd549",
+      "scope_digest": "510b2c34dbbac823ee1019f18ea951137f37c19f15266050b026b2841facc1c2"
+    }
+  ],
+  "route_id": "43786cadd549",
+  "schema_version": 1
+}

@@ -1913,3 +1913,7 @@ A new negative handoff assertion contained the obsolete predecessor script name 
 
 ## 2026-10-11 — Inherited verifier control changed child scope
 The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child tests, so the parent scope choice overrode child test fixtures. Remove this controller flag only from the shared child-test environment copy and preserve parent scope selection. A bounded check also set GETZILLA_TEST_WORKERS for a test that requires absent opt-in; unset that override and use child CPU affinity to bound the run.
+
+- The command hook mapped exec_command to Bash but did not map its native cmd field, so policy scanned no executed command. Normalize known native input before root, size and policy checks; reject conflicting fields explicitly before the broad soft-hook exception handler. The first new launcher test also assumed Grok output for Codex; assert the actual hookSpecificOutput contract instead.
+
+- The coordinator started a duplicate release handoff before checking all local worktrees. Equal branch tips hid the prepared, uncommitted 2.2.2 release; committed refs and PR inventory did not show dirty worktree content. Check every worktree status before creating a successor contour and preserve existing work.

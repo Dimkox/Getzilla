@@ -1,0 +1,3 @@
+# Bounded design and ruling
+
+Normalize knownnativepayload at canonicalhook boundary, preserve directoryfields, emit validationdenial before broad fail-openexception boundary. No genericcmd fallback to undocumentedaliases. Existing repository legacyexec_command command-only callers remain supported: missingcmd alone is not newly forbidden; presentcmd requires validnonemptystring and conflictingaliasesdeny. This bounded compatibility ruling refines strictarchitectrecommendation against existingcontracts. No newservice/API/grantauthority. Standalone brainstorm approval is superseded by explicitownerAGENTS L5 process delegation; routine scope is alreadyauthorized.

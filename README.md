@@ -4,6 +4,8 @@ Current source: **2.2.1 source candidate** for [issue72](https://github.com/Dimk
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
+The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported.
+
 ## The short version
 
 With "vibe coding", you ask an AI for something, it writes the code, and you hope it works. It is fast and fun. You usually find out later what it broke.
