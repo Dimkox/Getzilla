@@ -12,6 +12,30 @@
       "resource": null,
       "route_id": "43786cadd549",
       "scope_digest": "510b2c34dbbac823ee1019f18ea951137f37c19f15266050b026b2841facc1c2"
+    },
+    {
+      "action": "git-push-branch",
+      "actor": "owner-standing-L5",
+      "change_id": "20261012-task-43786c",
+      "decided_at": "2026-10-12T23:44:18+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "Owner goal authorizes isolated PR delivery of branch fix/codex-cmd-hooks-20261011. Exact final HEAD/tree/branch grant must be materialized; preverification push is UNVERIFIED transport only. No shared branch push or deployment.",
+      "resource": null,
+      "route_id": "43786cadd549",
+      "scope_digest": "510b2c34dbbac823ee1019f18ea951137f37c19f15266050b026b2841facc1c2"
+    },
+    {
+      "action": "pull-request-merge",
+      "actor": "owner-standing-L5",
+      "change_id": "20261012-task-43786c",
+      "decided_at": "2026-10-12T23:44:18+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "Owner AGENTS L5 standing consent permits only this own repository repair PR merge after independent reviews, green exact-head required checks and resolved threads. Conditional consent mapping only, no claim gates have passed; exact final operation grant required.",
+      "resource": null,
+      "route_id": "43786cadd549",
+      "scope_digest": "510b2c34dbbac823ee1019f18ea951137f37c19f15266050b026b2841facc1c2"
     }
   ],
   "route_id": "43786cadd549",
