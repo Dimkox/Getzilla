@@ -21,7 +21,7 @@ from .util import (
     tree_fingerprint,
 )
 
-APPROVAL_SCOPES = {'production', 'external-write', 'protected-path'}
+APPROVAL_SCOPES = {'production', 'external-write', 'protected-path', 'task-execution'}
 APPROVAL_SOURCES = {'standing-user-consent', 'explicit-user-consent'}
 SCOPE_ACTIONS = {
     'production': {
@@ -34,6 +34,7 @@ SCOPE_ACTIONS = {
     },
     'external-write': {'external-write'},
     'protected-path': {'protected-path-write'},
+    'task-execution': {'task-tool-execute'},
 }
 
 
@@ -250,6 +251,10 @@ def _normalize_grant_resource(scope: str, raw: str) -> str:
         )
     if resource in _CATEGORY_RESOURCES or resource.endswith((':', '#')):
         raise ValueError(f'{scope} grants require an exact target, not the category {resource!r}')
+    if scope == 'task-execution':
+        if not re.fullmatch(r'tool:[A-Za-z0-9_.:-]{1,160}:sha256:[0-9a-f]{64}', resource):
+            raise ValueError('task-execution requires one exact tool-input digest resource')
+        return resource
     if scope == 'protected-path':
         while resource.startswith('./'):
             resource = resource[2:]
@@ -318,7 +323,7 @@ def add_approval(
     normalized_resources = sorted({
         _normalize_grant_resource(normalized_scope, str(item)) for item in (resources or []) if str(item).strip()
     })
-    if normalized_scope in {'external-write', 'protected-path'} and not normalized_resources:
+    if normalized_scope in {'external-write', 'protected-path', 'task-execution'} and not normalized_resources:
         raise ValueError(f'{normalized_scope} grants require explicit resources')
 
     from .human_gates import gate_block_reason

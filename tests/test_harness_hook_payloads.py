@@ -191,12 +191,18 @@ class HarnessHookPayloadTests(unittest.TestCase):
             set_active_route(root, build_route(root, 'Fix policy tests', 'fixture').to_dict())
             add_approval(root, 'production', 'Fixture branch transport only',
                          actions=['git-push-branch'], resources=['feature'])
+            from getzilla.execution_admission import task_execution_resource
+            command = '/usr/bin/timeout --signal=KILL 5s git push origin feature'
+            add_approval(root, 'task-execution', 'Fixture exact bounded task action',
+                         actions=['task-tool-execute'], resources=[task_execution_resource('Bash', {
+                             'cmd': command, 'command': command, 'workdir': str(root),
+                         })], source='explicit-user-consent')
             allowed = self._pre_tool(root, 'exec_command', {
-                'cmd': 'git push origin feature', 'workdir': str(root),
+                'cmd': command, 'workdir': str(root),
             })
             self.assertEqual(allowed['decision'], 'allow', allowed)
             data = self._pre_tool(root, 'exec_command', {
-                'cmd': 'git push origin feature', 'workdir': str(root.parent),
+                'cmd': command, 'workdir': str(root.parent),
             })
             self.assertEqual(data['decision'], 'deny', data)
             self.assertIn('root resolution status is', data['hookSpecificOutput']['permissionDecisionReason'])
@@ -308,7 +314,7 @@ class GeneratedHookCommandTests(unittest.TestCase):
             self.assertEqual(code, 0)
             data = json.loads(out)
             self.assertEqual(data['decision'], 'deny')
-            self.assertTrue(data['hookSpecificOutput']['permissionDecisionReason'])
+            self.assertTrue(data['reason'])
             self.assertNotIn('hookSpecificOutput', data)
             code, out = self._run(root, '.github/hooks/getzilla.json', {
                 'timestamp': 1, 'cwd': str(root), 'toolName': 'bash',

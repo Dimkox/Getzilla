@@ -352,6 +352,9 @@ def main() -> None:
             except Exception:
                 allowed, reason = False, 'Mandatory policy evaluation failed closed.'
         if allowed:
+            from getzilla.execution_admission import evaluate_task_execution
+            allowed, reason = evaluate_task_execution(root, current_tool, current_input, raw_tool=raw_tool)
+        if allowed:
             emit(permission_output(True))
             return
 

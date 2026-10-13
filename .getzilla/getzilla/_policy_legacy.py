@@ -837,6 +837,9 @@ def _unwrap_execution_wrappers(tokens: list[str]) -> tuple[list[str], bool]:
             elif index < len(remaining) and remaining[index].startswith('-'):
                 return [], True
         elif wrapper == 'timeout':
+            # Exact bounded-task wrapper. Other wrapper options remain ambiguous.
+            if index < len(remaining) and remaining[index] == '--signal=KILL':
+                index += 1
             if index < len(remaining) and remaining[index] == '--':
                 index += 1
             if index >= len(remaining) or remaining[index].startswith('-'):
