@@ -1,42 +1,41 @@
-Recommendation: PASS for source repair and refreshed consent metadata. Final local PR and external exact-head gates remain required.
+Recommendation: PASS for the bounded source repair at34bee4d. This is not an all-database PASS, deployment approval or final gate.
 
-- Security: no blocking finding. Actual full base-to-candidate code diff was reviewed previously. Fresh comparison confirms only human-gates.json changed since that review. Consent records cover isolated branch transport and conditional merge. They require exact runtime grants. They claim no signed human security approval, deployment authority or passing gate. Null resources in these metadata records do not serve as external-write grants.
-- Double writes: none added. Consent metadata performs no mutation. Command normalization executes no commands.
-- Tests: fresh private-copy payload run passed 23 tests in 13.430s. Consent-record consistency assertions passed. Existing source checks and mutation evidence below are historical/reused for byte-identical code only.
-- Residual risk: unchanged outer hook and import failures remain fail-open. Early validation denial bypasses the existing denial ledger. Full shell-policy abuse and deployed authorization were not verified. Final gates remain pending.
+- Security: no blocking finding in the actual base-to-HEAD diff. Native cmd reaches existing command, size, root and policy checks. Invalid types/conflicts deny. The new denial helper retains DENY when root, fingerprint or ledger recording fails. Repeated invalid calls enter the exact/objective ledger. Ledger evidence stores hashes and generic reasons rather than raw command text.
+- Security: generated launchers select the nearest marked project and preserve explicit valid project-env precedence. Hook-only planted subdirectories cannot replace the project. Nested installed consumers use their own hook code and route/denial state. The marker and environment are trusted workflow inputs, not an OS-enforced or cryptographic boundary.
+- Security: build-system.requires now enters exact-pin inventory with provenance and rejects malformed requirement arrays. Factory/delivery setuptools84.0.0 replaces affected75.8.0. Trust CI84.0.0 stays unchanged. Consent metadata requires exact grants and conditional exact-head merge checks; it creates no signed security approval or deployed trust-policy authority. Release2.2.2 metadata introduces no external mutation.
+- Double writes: none added for external systems. New writes are local denial-ledger observations under the existing lock. No command payload, production operation, image build or code upload ran in this review.
+- Tests:46focused tests passed in21.391s. The independent marker probe passed. All8critical mutants were killed after expanding the build-only probe. Candidate identity remained unchanged.
 
-Source: /home/pall/.local/share/getzilla-worktrees/fix-codex-cmd-20261011
-Route: 43786cadd549; security_reviewer is allowed.
-Base: 540c12f93e798c2f483455a5086ab0018ac3216e
-HEAD before/after: 66049ff92c52a088d21560c093f7234b2d5f84cb
-Git tree before/after: 24200066e9388f7dbe36c58b5846868e82c25fd0
-Fingerprint before/after: c7c0b4e3e8374b2a66affe66da010df1f8d34609c3f0fb34f56f8f2141923790
-Inventory before/after: clean.
+Reviewed source: /home/pall/projects/getzilla/.getzilla/runtime/worktrees/fix-codex-cmd-20261011
+Route43786cadd549 permits security_reviewer.
+Comparison base540c12f93e798c2f483455a5086ab0018ac3216e.
+HEAD before/after34bee4d1f10125e4e44e9835fc931595ff9f03a2.
+Git tree before/afterf95ae47fca84b309b2386815b65c7008beb53fdf.
+Fingerprint before/aftera7e378d0df851e1ff64c78fca8e6c6225eb4073ff4431ea01d5e9f6ed071eb9f.
+Inventory before/after: clean, no staged/unstaged/untracked changes.
 reviewed-tree-modified: no
 
-Fresh scratch: /home/pall/.local/share/getzilla-cmd-review-20261012/security/refreshed-snapshot
-Parent and reviewer directory: trusted non-sticky 0700. Local no-hardlink clone reproduced the exact clean HEAD. Fresh command from refreshed-snapshot:
-taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads -q
-Observed: Ran 23 tests in 13.430s; OK.
-Fresh metadata assertions: actions equal [None, git-push-branch, pull-request-merge]; every actor equals owner-standing-L5. Result PASS. Static record review confirms transport is labelled UNVERIFIED and merge requires green exact-head checks, independent review and resolved threads. Capacity and allocation remain unchanged: CPUs 12-17, at most two concurrent test processes.
+Scratch: controller runtime reviews/20261012-codex/security-34bee4d/snapshot, outside candidate. Trusted non-sticky parent and reviewer directory mode0700. No-hardlink clone reproduced the exact clean candidate. TMPDIR points to private sibling scratch; PYTHONDONTWRITEBYTECODE=1. No candidate test artifacts or writes. Allocation CPUs12-17, at most4test workers; actual mutation tests run sequentially and provider reads use2workers.
 
-Historical/reused evidence ONLY, not fresh qualification or probes for new HEAD:
-Original HEAD cde3947fde6aca4c7058c7114af957b61043a661; Git tree 56f76f3306e0a346910c3fcf2d009ebddeb892c9; fingerprint f04f3fcfd219ad3585f7500f7d7e8b2ba1ab8c9940d29bb1a9225e895b3644f5. Original report retained at security/historical-cde-security-review.md. Original scratch security/snapshot. Reuse covers unchanged hook code and tests only. No new critical code was introduced by the metadata delta. The historical probe commands, results and limits follow:
+Fresh checks and exact commands (relative paths below are under canonical /home/pall/projects/getzilla/.getzilla/runtime/reviews/20261012-codex):
+1. From snapshot: taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads tests.test_pre_tool_circuit_breaker tests.test_known_vulns -q. Result46tests, OK. baseline.log preserves output.
+2. taskset -c 12-17 python3 -B security-34bee4d/marker-probe.py. Result: Hook-only child ignored; native DENY emitted. The command text is only a hook fixture, never executed.
+3. taskset -c 12-17 python3 -B security-34bee4d/probes.py. Complete mutant bytes, exact child command arrays and failure output: mutation-results.json; summary probes.log. Each unittest child uses taskset -c 12-17 python3 -B -m unittest <test> -q in the snapshot.
 
-Commands (run from scratch unless stated):
-1. taskset -c 12-17 python3 -m unittest tests.test_harness_hook_payloads -q
-   Result: Ran 23 tests; OK.
-2. taskset -c 12-17 python3 -B /home/pall/.local/share/getzilla-cmd-review-20261012/security/extra.py
-   Result: 32 malformed-envelope/root-alias checks PASS; payload commands were never executed.
-3. taskset -c 12-17 python3 /home/pall/.local/share/getzilla-cmd-review-20261012/security/probes.py
-   Result: mapping initially SURVIVED; gate KILLED (9 failures); type KILLED (5 failures); conflict KILLED (1 failure). Driver and exact test commands are retained in probes.py and probes.log.
-   Each mutant runs: taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.HarnessHookPayloadTests.<test> -q
-   Mapping test: test_codex_cmd_payload_reaches_sensitive_command_policy.
-   Other three: test_codex_conflicting_and_malformed_commands_are_denied.
-4. Expanded mapping mutant command:
-   taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.HarnessHookPayloadTests.test_normalization_preserves_input_and_does_not_invent_alias_contracts -q
-   Result: KILLED; expected normalized command differs from empty result. Exact output: mapping-expanded.log.
+- mapping: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.HarnessHookPayloadTests.test_normalization_preserves_input_and_does_not_invent_alias_contracts -q. Assertion failures were observed; no timeout.
+- type: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.HarnessHookPayloadTests.test_codex_conflicting_and_malformed_commands_are_denied -q. Assertion failures were observed; no timeout.
+- conflict: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.HarnessHookPayloadTests.test_codex_conflicting_and_malformed_commands_are_denied -q. Assertion failures were observed; no timeout.
+- denial_exception: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_pre_tool_circuit_breaker.DenialCircuitBreakerTest.test_validation_denial_survives_root_and_ledger_failures -q. Assertion failures were observed; no timeout.
+- ledger: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_pre_tool_circuit_breaker.DenialCircuitBreakerTest.test_native_validation_denials_record_exact_and_objective_retries -q. Assertion failures were observed; no timeout.
+- nearest: KILLED; test command taskset -c 12-17 python3 -B -m unittest tests.test_harness_hook_payloads.GeneratedHookCommandTests.test_nested_real_worktree_uses_its_own_route_and_denial_state -q. Assertion failures were observed; no timeout.
+- marker: KILLED; test command taskset -c 12-17 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/reviews/20261012-codex/security-34bee4d/marker-probe.py. Assertion failures were observed; no timeout.
+- build_inventory: SURVIVED; test command taskset -c 12-17 python3 -B -m unittest tests.test_known_vulns.CollectTests.test_build_system_exact_pins_keep_manifest_provenance -q. Initial provenance fixture repeated its backend pin in runtime dependencies, masking removal. Expanded build-only/current-inventory commands killed this same mutant with2failures; expanded-build-mutation.json preserves full commands/output.
 
-Probe claims: mapping native command to policy text; explicit validation denial; nonstring validation does not escape into fail-open; conflicting aliases deny. Mapping mutant replaced cmd assignment with the prior alias or empty string. Gate mutant disabled the early denial. Type mutant removed the string guard before strip. Conflict mutant disabled alias mismatch validation. Initial mapping survival demonstrates that a denial alone cannot prove correct normalization; the expanded direct assertion killed that mutant. No unresolved mutant remains within these four claims.
+Probe claims: mappingcmd, type guard, alias conflicts, denial retained under root/ledger/fingerprint exceptions, repeat-ledger participation, nearest nested source, installed marker and build-only inventory. Mutants restored only in scratch. No unresolved survivor within these8claims. The build mutant's initial survival is disclosed, not counted as fresh success.
 
-Unexecuted claims: exhaustive JSON size/depth abuse, every shell syntax, deployed policies, production authz and external Trust CI. These require other scope or gates. Full PR qualification was not run by this reviewer. Parent-provided committed-HEAD smoke observations are not substituted for final verification. Findings remain limited to security, double writes and tests.
+Fresh vulnerability checks bound to this HEAD:
+Scanner now38manifest rows/27unique exact versions, including all3setuptools84.0.0 build pins. Union with historical resolved Trust CI/runner graph gives46exact versions. Fresh OSV querybatch HTTP200,46results, zero hits, no pagination tokens. Direct authenticated GitHub queries reviewed/unreviewed/malware with pagination return zero records. All46Snyk PUBLIC exact-version pages HTTP200, no SNYK-PYTHON advisory-ID references. Public HTML matching is limited and is not a paid Snyk engine scan. Script/requests/results/HTML are security-34bee4d/fresh-advisories.py and fresh-advisory-results.json. Command: python3 -B security-34bee4d/fresh-advisories.py.
+
+Historical/reused scope is explicit: transitive-resolution/ resolved the40-package graph at main540c12f, uv0.11.12, Python3.12.3/Linuxx86_64. Fresh hashes confirm TrustCIpyproject and runnerDockerfile inputs match reviewed34bee4d. That graph is reused input for new queries, not a newly resolved/deployed SBOM. Earlier provider-coverage.md uses original47-version inventory including affected75.8.0 and original26Snykpages; its CVEList/CISA/NVD/GitLab/paid-access observations remain historical within that scope. Fresh46page observations above extend public Snyk coverage for the current union. No old review PASS substitutes for these fresh code probes.
+
+Residual risk and unexecuted claims: unchanged broad outer/import fail-open remains outside the bounded repair. Policy evasions across all shell grammars, emit-sink failures, all oversized/deep JSON inputs, arbitrary malicious installed projects and host-level isolation were not exhaustively tested. Ledger unavailable states retain DENY but cannot establish repeat counts. Private paid feeds, full NVD exact-CPE mapping, image/OS layers, wheel-bundled libraries, other platforms/Python versions, dynamic build requirements and actual deployment state remain unscanned. Other harness behavior is covered only by selected focused fixtures; no full platform matrix. No final full PR or external Trust CI gate was run by this reviewer. Final frozen-source gates and exact operational grants remain required.
