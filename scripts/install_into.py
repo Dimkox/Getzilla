@@ -8,6 +8,8 @@ import json
 import os
 import re
 import stat
+import subprocess
+import threading
 import sys
 import uuid
 from dataclasses import dataclass
@@ -486,7 +488,8 @@ class _SourceTree:
                     f"managed source changed during enumeration: {relative}"
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
-                if name == "__pycache__":
+                if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} or name.endswith(".egg-info"):
+                    # Packaging/cache artifacts are not installation source.
                     continue
                 child, _identity_value = _open_child_directory(
                     descriptor, name, _identity(metadata)
@@ -682,7 +685,7 @@ def build_payload(
         entries = [
             _source_entry(relative, tree, expected_identity)
             for relative, expected_identity in inventory
-            if relative not in ROOT_HOOK_SHIMS
+            if relative not in ROOT_HOOK_SHIMS and relative != ".getzilla/install-ownership.json"
         ]
         # Render from the descriptor-validated inventory bytes, so the shipped
         # templates and generated documents belong to the same source snapshot.
@@ -909,6 +912,123 @@ def _is_link_path(path: Path) -> bool:
         return False
 
 
+OWNERSHIP_PATH = ".getzilla/install-ownership.json"
+
+
+def _ownership_payload(payload: tuple[InstallEntry, ...]) -> tuple[InstallEntry, ...]:
+    files = [{"path": entry.path, "sha256": entry.sha256, "mode": entry.mode}
+             for entry in payload if entry.path != OWNERSHIP_PATH]
+    identity = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    content = json.dumps({"schema_version": 1, "source_payload_sha256": identity,
+                          "files": files}, sort_keys=True, indent=2).encode() + b"\n"
+    return tuple(sorted([entry for entry in payload if entry.path != OWNERSHIP_PATH] + [
+        InstallEntry(OWNERSHIP_PATH, content, 0o644)], key=lambda entry: entry.path.encode("utf-8")))
+
+
+def _consumer_git_status(target: Path) -> dict[str, object]:
+    # Put Git output outside the consumer. Disable optional index writes.
+    try:
+        process = subprocess.Popen(
+            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(target), "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert process.stdout is not None
+        chunks: list[bytes] = []
+        reader = threading.Thread(target=lambda: chunks.append(process.stdout.read(MAX_SOURCE_FILE_BYTES + 1)), daemon=True)
+        reader.start()
+        reader.join(timeout=5)
+        if reader.is_alive() or (chunks and len(chunks[0]) > MAX_SOURCE_FILE_BYTES):
+            process.kill()
+            process.wait()
+            reader.join(timeout=1)
+            process.stdout.close()
+            return {"state": "unknown", "reason": "timeout-or-output-limit", "records": []}
+        try:
+            code = process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            process.stdout.close()
+            return {"state": "unknown", "reason": "timeout", "records": []}
+        process.stdout.close()
+        if code:
+            return {"state": "unknown", "reason": "not-readable-git-tree", "records": []}
+        raw = chunks[0] if chunks else b""
+        if len(raw) > MAX_SOURCE_FILE_BYTES:
+            return {"state": "unknown", "reason": "output-limit", "records": []}
+        # Preserve NUL-delimited rename source records without guessing their
+        # role. No status record gives permission to change a consumer path.
+        records = raw.decode("utf-8", errors="strict").split("\0")
+        return {"state": "observed", "format": "porcelain-v1-z", "records": records[:-1]}
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        return {"state": "unknown", "reason": "unavailable", "records": []}
+
+
+def _consumer_inventory(target: Path) -> dict[str, object]:
+    # Classification is descriptive. A consumer-editable manifest is never
+    # authorization to delete, update or quarantine a path.
+    owned: dict[str, dict[str, object]] = {}
+    uncertainty: list[str] = []
+    try:
+        raw = _read_target_relative(target, OWNERSHIP_PATH, limit=MAX_SOURCE_FILE_BYTES)
+        if raw is not None:
+            record = json.loads(raw)
+            files = record["files"]
+            if record["schema_version"] != 1 or not isinstance(files, list):
+                raise ValueError("invalid schema")
+            if hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest() != record["source_payload_sha256"]:
+                raise ValueError("invalid provenance")
+            for row in files:
+                path = row["path"]
+                _path_parts(path)
+                if path == OWNERSHIP_PATH or path in owned or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) or type(row["mode"]) is not int or not 0 <= row["mode"] <= 0o777:
+                    raise ValueError("invalid entry")
+                owned[path] = row
+    except (UnsafeInstallTarget, ValueError, TypeError, KeyError, AttributeError):
+        owned = {}
+        uncertainty.append("invalid-or-unsafe-ownership-manifest")
+    entries: list[dict[str, object]] = []
+    def failed(_error: OSError) -> None:
+        uncertainty.append("unreadable-directory")
+    directories_seen = 0
+    for directory, dirs, names in os.walk(target, followlinks=False, onerror=failed):
+        directories_seen += 1
+        if directories_seen > MAX_LEGACY_REPORT_ENTRIES:
+            uncertainty.append("directory-limit")
+            break
+        dirs[:] = sorted(name for name in dirs if name != ".git")
+        for name in sorted(names + [name for name in dirs if _is_link_path(Path(directory) / name)]):
+            path = Path(directory) / name
+            relative = path.relative_to(target).as_posix()
+            if len(entries) >= MAX_LEGACY_REPORT_ENTRIES:
+                uncertainty.append("inventory-limit")
+                return {"entries": entries, "complete": False, "uncertainty": sorted(set(uncertainty))}
+            category = "unknown"
+            parts = PurePosixPath(relative).parts
+            try:
+                metadata = os.lstat(path)
+                if fsx.is_link(metadata) or not stat.S_ISREG(metadata.st_mode):
+                    uncertainty.append("unsafe-or-special-path")
+                elif "evidence" in parts or "scratch" in parts or "runtime" in parts:
+                    category = "evidence"
+                elif any(part.startswith("requirements") for part in parts):
+                    category = "requirements"
+                elif any(part.endswith(".egg-info") or part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} for part in parts):
+                    category = "generated-metadata"
+                elif relative in owned:
+                    content = _read_target_relative(target, relative, limit=MAX_SOURCE_FILE_BYTES)
+                    row = owned[relative]
+                    category = "owned-unchanged" if content is not None and hashlib.sha256(content).hexdigest() == row["sha256"] and _mode_matches(metadata.st_mode, row["mode"]) and _file_identity(metadata) == _file_identity(os.lstat(path)) else "user-change"
+                elif relative == "AGENTS.md" or relative.startswith(".github/"):
+                    category = "user-change"
+            except (OSError, UnsafeInstallTarget):
+                uncertainty.append("unreadable-or-changing-path")
+            report: dict[str, object] = {"path": relative, "classification": category, "action": "preserve"}
+            if category == "owned-unchanged":
+                report.update({"sha256": owned[relative]["sha256"], "mode": owned[relative]["mode"]})
+            entries.append(report)
+    return {"entries": entries, "complete": not uncertainty, "uncertainty": sorted(set(uncertainty))}
+
+
 def _legacy_migration(target: Path) -> list[dict[str, str]]:
     """Report pre-rename stack files in target; the planner never removes them itself."""
     absolute = Path(os.path.abspath(target))
@@ -935,8 +1055,8 @@ def _legacy_migration(target: Path) -> list[dict[str, str]]:
             if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not _is_link_path(scripts / name):
                 found.append(f"scripts/{name}")
     return [
-        {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
-         "reason": "pre-Getzilla stack path; remove after the plan is applied"}
+        {"action": "PRESERVE", "path": path, "replacement": legacy_to_current_path(path),
+         "reason": "legacy candidate; ownership unproved; retain until an exact recoverable migration is approved"}
         for path in found
     ]
 
@@ -971,7 +1091,7 @@ def _make_plan(
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
 ) -> dict[str, object]:
-    selected_payload = payload if payload is not None else build_payload(source)
+    selected_payload = payload if payload is not None else _ownership_payload(build_payload(source))
     state = _target_state(target)
     kept = _kept_local(target) if state == "directory" else frozenset()
     kept_digests = _kept_local_digests(target) if state == "directory" else {}
@@ -1006,12 +1126,34 @@ def _make_plan(
         keep_reports.append({"action": "KEEP", "path": path, "state": keep_state,
                              "reason": "declared by target"})
     deliverable = tuple(entry for entry in selected_payload if entry.path not in kept)
+    reports = [entry.manifest() for entry in deliverable]
+    inventory = _consumer_inventory(target) if state == "directory" else {"entries": [], "complete": True, "uncertainty": []}
+    existing_paths = {row["path"] for row in inventory["entries"]}
+    for report in reports:
+        if report["path"] in existing_paths:
+            report["action"] = "preserve-conflict"
+    legacy = _legacy_migration(target) if state == "directory" else []
+    inventory_by_path = {row["path"]: row for row in inventory["entries"]}
+    quarantine_candidates = []
+    for row in legacy:
+        observed = inventory_by_path.get(row["path"], {})
+        row["classification"] = observed.get("classification", "unknown")
+        if observed.get("classification") == "owned-unchanged" and inventory["complete"]:
+            quarantine_candidates.append({"path": row["path"], "sha256": observed["sha256"],
+                                          "mode": observed["mode"],
+                                          "destination": ".getzilla/migration-quarantine/" + observed["sha256"] + "/" + row["path"]})
     return {
         "version": 1,
+        "consumer_inventory": inventory,
+        "consumer_git_status": _consumer_git_status(target) if state == "directory" else {"state": "absent", "records": []},
+        "quarantine_plan": {"action": "plan-only", "approval_required": True,
+                            "entries": quarantine_candidates,
+                            "restore": "Verify manifest hashes and modes; restore only to absent original paths; never overwrite conflicts.",
+                            "execution": "No quarantine executor exists. Obtain exact path approval and a recoverable manifest before any move."},
         "target_state": state,
         "kept": keep_reports,
-        "entries": [entry.manifest() for entry in deliverable],
-        "legacy_migration": _legacy_migration(target) if state == "directory" else [],
+        "entries": reports,
+        "legacy_migration": legacy,
         "dependency_advice": _dependency_advice(
             source,
             include_dependencies=include_dependencies,
@@ -1469,7 +1611,7 @@ def _materialize_new(
     include_dependencies: bool,
     include_optional: bool,
 ) -> dict[str, object]:
-    payload = build_payload(source)
+    payload = _ownership_payload(build_payload(source))
     plan = _make_plan(
         source,
         target,
