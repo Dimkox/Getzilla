@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -108,13 +109,24 @@ def _denial_fingerprints(
         'reason_sha256': hashlib.sha256(reason.encode('utf-8')).hexdigest(),
         'root_context': roots,
     })
-    objective = _fingerprint({
+    objective_material = {
         'session_id': session,
         'tool_name': tool,
         'reason': reason,
         'action': action,
         'root_context': roots,
-    })
+    }
+    if action == 'ambiguous-sensitive-shell':
+        command = input_data.get('command')
+        try:
+            command_identity = {'argv': shlex.split(command)} if isinstance(command, str) else {'raw': command}
+        except ValueError:
+            command_identity = {'raw': command}
+        command_identity['workdirs'] = context.command_workdirs
+        # Only the digest enters the ledger. Distinct local commands must not
+        # share a retry budget merely because root resolution failed equally.
+        objective_material['command_objective_sha256'] = _fingerprint(command_identity)
+    objective = _fingerprint(objective_material)
     return exact, objective
 
 

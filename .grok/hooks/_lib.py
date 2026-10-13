@@ -285,6 +285,57 @@ def _windows_control_flow(command: str) -> bool:
     return fsx.WINDOWS and len(_windows_sequence_split(command)) > 1
 
 
+def _has_dynamic_shell_dispatch(words: list[str]) -> bool:
+    # Arguments such as the Trivy target '.' are not shell builtins. Check
+    # executable positions, including commands following a literal sequence.
+    start = 0
+    for end in range(len(words) + 1):
+        if end < len(words) and words[end] not in {'&&', '||', ';', '|'}:
+            continue
+        command = words[start:end]
+        start = end + 1
+        while command and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command[0]):
+            command = command[1:]
+        if not command:
+            continue
+        command, ambiguous = _unwrap_execution_wrappers(command)
+        if ambiguous:
+            return True
+        if command and (command[0] in {'eval', 'source', '.'} or (
+            fsx.WINDOWS and command[0].lower() in _WINDOWS_DYNAMIC_COMMANDS
+        )):
+            return True
+    return False
+
+
+def _ambiguous_control_flow(command: str) -> bool:
+    if fsx.WINDOWS:
+        return bool(re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command)) or _windows_control_flow(command)
+    quote = ''
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = ''
+            index += 1
+            continue
+        if char == '\\':
+            index += 2
+            continue
+        if char == '`' or command.startswith('$(', index):
+            return True
+        if quote == '"':
+            if char == quote:
+                quote = ''
+        elif char in {"'", '"'}:
+            quote = char
+        elif char in '|;()':
+            return True
+        index += 1
+    return False
+
+
 def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
@@ -307,7 +358,7 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         return {'command.cdpath-environment': '<ambiguous>'}
     if any(word.startswith('CDPATH=') and word != 'CDPATH=' for word in words):
         return {'command.cdpath-assignment': '<ambiguous>'}
-    if re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command) or _windows_control_flow(command):
+    if _ambiguous_control_flow(command):
         return {'command.control-flow': '<ambiguous>'}
     assignment_index = 0
     while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
@@ -335,9 +386,7 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
     if _has_unsafe_dispatcher_composition(words):
         aliases['command.dispatcher-composition'] = '<ambiguous>'
         return aliases
-    if any(word in {'eval', 'source', '.'} for word in words) or (
-        fsx.WINDOWS and any(word.lower() in _WINDOWS_DYNAMIC_COMMANDS for word in words)
-    ):
+    if _has_dynamic_shell_dispatch(words):
         aliases['command.dynamic-shell'] = '<ambiguous>'
         return aliases
     if words and words[0] == 'exec':

@@ -154,6 +154,18 @@
       "from": "verifying",
       "reason": "Freeze corrected scanner ownership model before all four fresh reviews; exact-head observations follow commit",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-13T08:46:35+00:00",
+      "from": "reviewing",
+      "reason": "owner_requested_root_resolution_regression_repair",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-13T09:03:29+00:00",
+      "from": "implementing",
+      "reason": "bounded_root_resolution_and_denial_regressions_passed",
+      "to": "verifying"
     }
   ],
   "human_gates": [
@@ -163,7 +175,7 @@
   "human_gates_digest": "8ef42685118c54271357ecae3cb0c4a0750cef69610647e99833b617aa7e926c",
   "route_id": "43786cadd549",
   "schema_version": 1,
-  "status": "reviewing",
+  "status": "verifying",
   "title": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
-  "updated_at": "2026-10-13T00:49:31+00:00"
+  "updated_at": "2026-10-13T09:03:29+00:00"
 }
