@@ -373,10 +373,12 @@ class AgentLifecycleTests(unittest.TestCase):
             record = record_agent_start(root, 'writer-1', 'general_implementer')
             before = get_agent_state(root)
             run_hook(root, 'pre_tool_use.py', {'cwd': str(root), 'tool_name': 'Read',
+                                             'tool_input': {'path': 'README.md'},
                                              'agent_id': 'writer-1'})
             run_hook(root, 'subagent_start.py', {'cwd': str(root), 'agent_type': 'repo_explorer'})
             self.assertEqual(get_agent_state(root), before)
             run_hook(root, 'pre_tool_use.py', {'cwd': str(root), 'tool_name': 'Read',
+                                             'tool_input': {'path': 'README.md'},
                                              'subagentId': 'writer-1',
                                              'generation': record['generation']})
             updated = get_agent_state(root)['active']['writer-1']

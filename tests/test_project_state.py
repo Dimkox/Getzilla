@@ -242,9 +242,10 @@ class ProjectStateTests(unittest.TestCase):
         self.assertIsNone(prior['artifact'])
         self.assertFalse(published['operational_activation'])
         continuation = state['current_continuation']
-        self.assertEqual(continuation['issue'], 72)
-        self.assertEqual(continuation['branch'], 'fix/codex-cmd-hooks-20261011')
-        self.assertEqual(continuation['route_id'], '43786cadd549')
+        self.assertEqual(continuation['issue'], 78)
+        self.assertEqual(set(continuation['issues']), {78, 76, 75, 73, 72, 71, 63, 60, 42, 38, 37, 36})
+        self.assertEqual(continuation['branch'], 'fix/all-open-issues-20261013')
+        self.assertEqual(continuation['route_id'], 'e2e30c9f2878')
         self.assertTrue((ROOT / continuation['change_package'] / 'brief.md').is_file())
         self.assertEqual(continuation['target_version'], state['product_version'])
         self.assertIn('one final PR verifier', continuation['next_action'])

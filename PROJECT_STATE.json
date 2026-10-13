@@ -10,20 +10,34 @@
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
   "current_continuation": {
-    "issue": 72,
-    "route_id": "43786cadd549",
-    "branch": "fix/codex-cmd-hooks-20261011",
-    "pull_request": 79,
-    "change_package": "engineering/changes/20261012-task-43786c",
+    "issue": 78,
+    "route_id": "e2e30c9f2878",
+    "branch": "fix/all-open-issues-20261013",
+    "pull_request": null,
+    "change_package": "engineering/changes/20261013-task-e2e30c",
     "target_version": "2.2.2",
     "source_base": "540c12f93e798c2f483455a5086ab0018ac3216e",
-    "status": "source_candidate_pending_independent_review_and_exact_head_gates",
-    "next_action": "Prepare the 2.2.2 source candidate. Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
+    "status": "source_repairs_pending_clean_start_independent_review_and_exact_head_gates",
+    "next_action": "Finish bounded source controls and isolated fresh-install first-use/restart/failure recovery. Record actual native host interception limits. Persist independent exact-candidate reviews, commit/freeze, run one final PR verifier, then require public Actions linux/windows on the exact PR head. No issue is closed by source presence. Preserve immutable v2.2.1 artifacts. Paid and production execution remain disabled without exact owner authority and host evidence. Native harness loading needs observed host events. Production acceptance needs an exact owner target and separate scoped authority.",
     "release_candidate_origin": {
       "route_id": "65799e00561a",
       "branch": "release/2.2.2-20261011",
       "record_scope": "Preserved uncommitted release contour reused in PR79; not an additional delivered branch."
-    }
+    },
+    "issues": [
+      78,
+      76,
+      75,
+      73,
+      72,
+      71,
+      63,
+      60,
+      42,
+      38,
+      37,
+      36
+    ]
   },
   "historical_cleanup_continuation": {
     "pull_request": 241,

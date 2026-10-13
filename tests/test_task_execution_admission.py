@@ -123,6 +123,34 @@ class TaskExecutionAdmissionTests(unittest.TestCase):
             )
             self.assertFalse(evaluate_task_execution(root, "Read", {"path": "../outside.txt"})[0])
 
+    def test_read_tool_preprocessor_is_not_safe_observation(self):
+        from getzilla.execution_admission import evaluate_task_execution
+        with project_copy(git=True) as root:
+            self.fixture(root)
+            self.assertFalse(evaluate_task_execution(root, "Glob", {"pattern": "../outside/*.txt"})[0])
+            for command in ("rg --pre=worker.py pattern README.md", "rg --pre worker.py pattern README.md"):
+                self.assertFalse(evaluate_task_execution(root, "Bash", {"command": command})[0])
+
+    def test_fresh_native_read_works_without_route_grant_or_old_receipt(self):
+        with project_copy(git=True) as root:
+            runtime = root / ".getzilla/runtime"
+            self.assertFalse((runtime / "active-route.json").exists())
+            for name, inputs in [
+                ("functions.read_file", {"path": "README.md"}),
+                ("functions.exec_command", {"cmd": "git status --short"}),
+            ]:
+                code, data, _ = run_hook(root, "pre_tool_use.py", {
+                    "cwd": str(root), "tool_name": name, "tool_input": inputs,
+                })
+                self.assertEqual(code, 0)
+                self.assertEqual(data["decision"], "allow")
+            code, data, _ = run_hook(root, "pre_tool_use.py", {
+                "cwd": str(root), "tool_name": "functions.write_file",
+                "tool_input": {"path": "source.py", "content": "outside owner scope"},
+            })
+            self.assertEqual(data["decision"], "deny")
+            self.assertFalse((root / "source.py").exists())
+
     def test_runtime_claims_and_source_change_cannot_mint_or_reuse_authority(self):
         from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
 

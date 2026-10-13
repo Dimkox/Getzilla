@@ -51,6 +51,8 @@ def _safe_observation(root, tool, inputs):
 
     if tool in OBSERVATION_TOOLS:
         paths = _extract_paths(inputs)
+        if tool == "Glob" and "pattern" in inputs:
+            paths.append(inputs["pattern"])
         return all(_inside(root, path) for path in paths)
     if tool != "Bash":
         return False
@@ -74,6 +76,8 @@ def _safe_observation(root, tool, inputs):
     if words[0] in {"python3", "python", "py"}:
         return len(words) == 2 and words[1] in BOOTSTRAP_SCRIPTS
     if words[0] not in OBSERVATION_COMMANDS:
+        return False
+    if words[0] == "rg" and any(word == "--pre" or word.startswith("--pre=") for word in words[1:]):
         return False
     # Read operands stay inside the effective project. Existing policy still
     # blocks secrets before this observation exception can allow anything.

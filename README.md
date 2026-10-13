@@ -1,10 +1,14 @@
 # Getzilla
 
-Current source: **2.2.2 source candidate**, including the verifier child-test scope fix. Latest published: [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.2.2 source candidate**, including the verifier child-test scope fix, mandatory execution guards, paid landing budgets, safe install ownership, and locked Trust CI dependencies. Latest published: [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
-The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported. Generated hooks use the nearest installed project, so nested worktrees keep their own route and denial state. Task scratch stays under the canonical project root `.getzilla/runtime`.
+The local guard checks actual native and namespaced tool arguments before execution. Missing mandatory controls, malformed input and conflicting command fields deny. Opaque JavaScript dispatch denies until each inner call has a native admission event. Generated hooks use the nearest installed project. Installation does not prove that the host loaded or enforced the hooks; doctor reports those states separately. Task scratch stays under the canonical project root `.getzilla/runtime`.
+
+Paid landing executors require explicit task, provider, model, credential and cost authority in the existing SQLite store before HTTP or command dispatch. Retries and provider fallback share the account ceiling. Unknown outcomes retain their full reservation. Live defaults acquire no ambient credential authority. Independent Unix backend submission remains disabled until a shared reservation protocol has been verified. These source controls do not prove host-wide paid limits or incident attribution.
+
+Consumer install plans preserve requirements, evidence and unknown files. Fresh installs record exact file ownership. Migration cleanup remains a read-only plan. Trust CI images and public Linux CI consume frozen, hash-verified runtime, test and runner profiles from [trust-ci/DEPENDENCIES.md](trust-ci/DEPENDENCIES.md). Source checks, independent review and final exact-head gates remain pending for this candidate.
 
 ## The short version
 
@@ -102,7 +106,7 @@ Then follow [QUICKSTART.md](QUICKSTART.md).
 - `.getzilla/`: the engine that sorts tasks, runs checks and saves the evidence
 - `engineering/changes/`: one folder per task, with its plan, tests and reviews
 - `architecture/`: a map of the system ([system.yaml](architecture/system.yaml), [rules.yaml](architecture/rules.yaml), [diagrams](architecture/generated/))
-- `trust-ci/`: the optional outside checker, run as its own service
+- `trust-ci/`: the optional outside checker, run as its own service; its [locked dependency profiles](trust-ci/DEPENDENCIES.md) cover runtime, test, runner and build tools
 - `factory/`, `delivery/`, `pilot/`: bigger automation pieces, switched off by default
 
 ## What it is not

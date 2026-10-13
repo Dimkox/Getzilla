@@ -488,6 +488,14 @@
       "path": "schemas/workflow-convergence-report-v1.schema.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-PAID-EXECUTION-AUTHORITY-V1",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -1827,6 +1835,75 @@
       "sync_or_async": "synchronous",
       "to": "NODE-OSV-ADVISORY-BUCKET",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-PAID-EXECUTOR-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-PAID-ADMISSION",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PAID-ADMISSION",
+      "id": "EDGE-PAID-AUTHORITY-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-ROUTE-TASK-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-TASK-ADMISSION",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -2925,6 +3002,49 @@
       "secrets": [],
       "trust_domain": "TD-EXTERNAL-PLATFORM",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-FACTORY-LANDING-INPUT",
+      "id": "NODE-FACTORY-PAID-ADMISSION",
+      "owner": "explicit owning server authority",
+      "public_contracts": [
+        "CONTRACT-PAID-EXECUTION-AUTHORITY-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/paid_admission.py",
+        "factory/src/getzilla_factory/resources/landing-sqlite-003-paid-admission.sql",
+        "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+        "factory/tests/test_paid_admission.py",
+        "factory/tests/test_control_schema_bindings.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-TASK-ADMISSION",
+      "owner": "repository owner task delegation",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/execution_admission.py",
+        "tests/test_task_execution_admission.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
     }
   ],
   "schema_version": 1,

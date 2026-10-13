@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:paid-execution-authority:v1",
+  "description": "Persisted account, task and price facts. Owner installation and relational/time checks remain mandatory; schema validity grants no authority.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PaidAccountV1"
+    },
+    {
+      "$ref": "#/$defs/PaidTaskV1"
+    },
+    {
+      "$ref": "#/$defs/PaidPriceV1"
+    }
+  ],
+  "$defs": {
+    "PaidAccountV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_id",
+        "account_id",
+        "tenant_id",
+        "scheduler_id",
+        "policy_version",
+        "starts_at",
+        "expires_at",
+        "cost_limit_micros",
+        "max_attempts",
+        "max_inflight",
+        "max_per_minute"
+      ],
+      "properties": {
+        "owner_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "account_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "scheduler_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "starts_at": {
+          "type": "number"
+        },
+        "expires_at": {
+          "type": "number"
+        },
+        "cost_limit_micros": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_inflight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        }
+      }
+    },
+    "PaidTaskV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "repository_id",
+        "route_id",
+        "source_head",
+        "source_tree",
+        "source_identity",
+        "credential_ref",
+        "cost_limit_micros",
+        "max_attempts",
+        "max_input_units",
+        "max_output_units",
+        "scope",
+        "input_digest",
+        "deadline_at"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "repository_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "route_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "source_head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_identity": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "cost_limit_micros": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_input_units": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "max_output_units": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "scope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "prefixItems": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+              },
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+              },
+              {
+                "enum": [
+                  "paid-inference",
+                  "paid-image",
+                  "paid-video"
+                ]
+              }
+            ],
+            "items": false
+          }
+        },
+        "input_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "deadline_at": {
+          "type": "number"
+        }
+      }
+    },
+    "PaidPriceV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id",
+        "price_version",
+        "input_micros_per_unit",
+        "output_micros_per_unit",
+        "media_kinds",
+        "billable_input_ceiling"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "model_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "price_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+        },
+        "input_micros_per_unit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "output_micros_per_unit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740992
+        },
+        "media_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "text",
+              "docx",
+              "image",
+              "audio",
+              "pdf"
+            ]
+          }
+        },
+        "billable_input_ceiling": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740992
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
