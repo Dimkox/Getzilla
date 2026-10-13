@@ -1,0 +1,43 @@
+{
+  "change_id": "20261013-task-a89867",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261013-task-a89867",
+      "decided_at": "2026-10-13T01:26:17+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner explicitly orders all issues fixed first. Bounded isolated source repair and mock regressions approved; no production operation or security exposure change. Leaf UNVERIFIED until final parent gates.",
+      "resource": null,
+      "route_id": "a8986733d3c5",
+      "scope_digest": "0a9cd8818ffb9404a3dc80001b4057feeb122f6416bc595daf688a99a55f91aa"
+    },
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261013-task-a89867",
+      "decided_at": "2026-10-13T01:27:04+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner explicitly orders issue75 source repair and safe migration planning; exact four source analyses and isolated scope recorded. No real consumer write or production operation authorized.",
+      "resource": null,
+      "route_id": "a8986733d3c5",
+      "scope_digest": "8c5fd8c2a74b12198060831739c247487950fa9f6d467b591f8aac6e28fa0f74"
+    },
+    {
+      "action": "migration-plan",
+      "actor": "owner-standing-L5",
+      "change_id": "20261013-task-a89867",
+      "decided_at": "2026-10-13T01:27:05+00:00",
+      "decision": "approved",
+      "gate": "migration_or_external_write_approval",
+      "reason": "Owner requests issue75 fix. Approve source migration-plan design and harmless fixture tests only. Preserve all real consumer data; no actual quarantine, deletion, deployment or external write authorized.",
+      "resource": null,
+      "route_id": "a8986733d3c5",
+      "scope_digest": "8c5fd8c2a74b12198060831739c247487950fa9f6d467b591f8aac6e28fa0f74"
+    }
+  ],
+  "route_id": "a8986733d3c5",
+  "schema_version": 1
+}
