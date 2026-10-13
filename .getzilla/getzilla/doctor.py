@@ -10,7 +10,7 @@ from .manifest import verify_manifest
 from .repo import detect_repo
 from .router import build_route
 from .toolchain import check_toolchain
-from .util import load_json
+from .util import load_json, git_head, tree_fingerprint
 
 
 @dataclass
@@ -25,15 +25,24 @@ def execution_control_status(root: Path) -> dict[str, object]:
     installed = all((root / rel).is_file() for rel in (
         '.grok/hooks/pre_tool_use.py', '.grok/hooks/_lib.py',
         '.getzilla/getzilla/policy.py', '.getzilla/config/policy.json',
+        '.getzilla/getzilla/execution_admission.py',
     ))
-    return {'installed': installed, 'loaded': 'not-observed', 'host_verified': 'not-observed'}
+    try:
+        head = git_head(root)
+        identity = {'git_head': head, 'tree_fingerprint': tree_fingerprint(root) if head else None}
+    except (OSError, RuntimeError, ValueError):
+        identity = {'git_head': None, 'tree_fingerprint': None}
+    return {'installed': installed, 'loaded': 'not-observed', 'host_verified': 'not-observed',
+            'bounded_tests': 'not-observed', 'full_gate': 'not-observed', 'delivery': 'not-observed',
+            'source_identity': identity}
 
 
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
     control = execution_control_status(root)
     items.append(DoctorItem('info', 'native-enforcement',
-        f"installed={str(control['installed']).lower()}; loaded=not-observed; host_verified=not-observed. "
+        f"installed={str(control['installed']).lower()}; loaded=not-observed; host_verified=not-observed; "
+        "bounded_tests=not-observed; full_gate=not-observed; delivery=not-observed. "
         "Verify actual allowed and denied native events, including each inner tool, on the authorized host."))
 
     required = [

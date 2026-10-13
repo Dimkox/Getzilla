@@ -180,3 +180,21 @@ class MandatoryHookTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout)["decision"], "deny")
+
+    def test_control_status_keeps_tests_gate_and_delivery_distinct(self):
+        import sys
+
+        sys.path.insert(0, str(PROJECT / ".getzilla"))
+        from getzilla.doctor import execution_control_status
+
+        runtime = self.root / ".getzilla/runtime"
+        runtime.mkdir(exist_ok=True)
+        (runtime / "native-enforcement.json").write_text(
+            json.dumps({"loaded": True, "bounded_tests": "pass", "full_gate": "pass", "delivery": "pass"})
+        )
+        status = execution_control_status(self.root)
+        for stage in ("loaded", "host_verified", "bounded_tests", "full_gate", "delivery"):
+            self.assertEqual(status[stage], "not-observed")
+        self.assertIn("source_identity", status)
+        self.assertIn("git_head", status["source_identity"])
+        self.assertIn("tree_fingerprint", status["source_identity"])
