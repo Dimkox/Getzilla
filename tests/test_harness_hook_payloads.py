@@ -116,7 +116,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertEqual(data['decision'], 'deny', key)
             data = self._pre_tool(root, 'exec_command', {'cmd': 'x' * 131073})
             self.assertEqual(data['decision'], 'deny')
-            self.assertIn('longer', data['reason'])
+            self.assertIn('longer', data['hookSpecificOutput']['permissionDecisionReason'])
 
     def test_codex_legacy_and_equal_alias_commands_stay_supported(self) -> None:
         with project_copy() as root:
@@ -163,7 +163,9 @@ class HarnessHookPayloadTests(unittest.TestCase):
                     'tool_input': {'cmd': 'terraform destroy'},
                 }), text=True, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                output = json.loads(result.stdout)
+                self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
+                self.assertIn('Blocked destructive command by repository policy', output['hookSpecificOutput']['permissionDecisionReason'])
                 prompt_hook = consumer / '.grok/hooks/user_prompt_submit.py'
                 prompt_hook.write_text(prompt_hook.read_text().replace(
                     '    emit({', "    emit({'source_identity': __file__,"))
@@ -179,11 +181,25 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
 
     def test_codex_cmd_respects_command_workdir(self) -> None:
+        import sys
+        sys.path.insert(0, str(PROJECT / '.getzilla'))
+        from getzilla.state import add_approval, set_active_route
+        from getzilla.router import build_route
         with project_copy(git=True) as root:
+            subprocess.run(['git', 'remote', 'add', 'origin',
+                            'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
+            set_active_route(root, build_route(root, 'Fix policy tests', 'fixture').to_dict())
+            add_approval(root, 'production', 'Fixture branch transport only',
+                         actions=['git-push-branch'], resources=['feature'])
+            allowed = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git push origin feature', 'workdir': str(root),
+            })
+            self.assertEqual(allowed['decision'], 'allow', allowed)
             data = self._pre_tool(root, 'exec_command', {
                 'cmd': 'git push origin feature', 'workdir': str(root.parent),
             })
             self.assertEqual(data['decision'], 'deny', data)
+            self.assertIn('root resolution status is', data['hookSpecificOutput']['permissionDecisionReason'])
 
     def test_codex_read_only_cmd_is_allowed(self) -> None:
         with project_copy() as root:
@@ -292,7 +308,7 @@ class GeneratedHookCommandTests(unittest.TestCase):
             self.assertEqual(code, 0)
             data = json.loads(out)
             self.assertEqual(data['decision'], 'deny')
-            self.assertTrue(data['reason'])
+            self.assertTrue(data['hookSpecificOutput']['permissionDecisionReason'])
             self.assertNotIn('hookSpecificOutput', data)
             code, out = self._run(root, '.github/hooks/getzilla.json', {
                 'timestamp': 1, 'cwd': str(root), 'toolName': 'bash',

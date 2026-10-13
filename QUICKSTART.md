@@ -316,3 +316,5 @@ sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+
+For signature or holdout digest failures, stop and preserve safe evidence. Follow the [security and recovery handoff](engineering/runbooks/security-handoff.md). Do not change trusted digests to make a failed check pass.
