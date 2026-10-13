@@ -180,6 +180,18 @@
       "resource": null,
       "route_id": "43786cadd549",
       "scope_digest": "d54776b7b1d61d00b819466f40287378f8e9683b246d44dd8ef2aeb1abde756e"
+    },
+    {
+      "action": "git-push-branch",
+      "actor": "owner-chat-request",
+      "change_id": "20261012-task-43786c",
+      "decided_at": "2026-10-13T10:04:46+00:00",
+      "decision": "approved",
+      "gate": "production_action_approval",
+      "reason": "Owner-requested-publishing-local-PR79-repairs-UNVERIFIED-transport-only-no-merge",
+      "resource": null,
+      "route_id": "43786cadd549",
+      "scope_digest": "fa937de9467a48f105b48d0ea0f1424c7d9d213dd691fca9ea3e5e6c293c6183"
     }
   ],
   "route_id": "43786cadd549",
