@@ -30,3 +30,60 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 adaptive_trust_ci = ["resources/*.sql"]
+
+# Existing build and runner tools are part of the frozen installation graph.
+[dependency-groups]
+build = ["setuptools==84.0.0"]
+runner = [
+  "coverage==7.15.4", "pytest==9.1.1", "pytest-xdist==3.8.0", "pytest-cov==7.1.0",
+  "ruff==0.16.2", "bandit==1.9.4", "tomli==2.4.1",
+]
+
+[tool.uv]
+default-groups = []
+required-version = "==0.11.12"
+constraint-dependencies = [
+  "annotated-doc==0.0.5",
+  "annotated-types==0.8.0",
+  "anyio==4.15.1",
+  "bandit==1.9.4",
+  "certifi==2026.7.22",
+  "cffi==2.1.1",
+  "click==8.5.0",
+  "colorama==0.4.6",
+  "coverage==7.15.4",
+  "cryptography==50.0.2",
+  "execnet==2.1.2",
+  "fastapi==0.142.4",
+  "h11==0.16.0",
+  "httpcore==1.0.9",
+  "httpx==0.28.1",
+  "idna==3.20",
+  "iniconfig==2.3.1",
+  "markdown-it-py==4.2.0",
+  "mdurl==0.1.2",
+  "opentelemetry-api==1.45.1",
+  "packaging==26.3",
+  "pluggy==1.6.0",
+  "psycopg==3.3.4",
+  "psycopg-binary==3.3.4",
+  "pycparser==3.11",
+  "pydantic==2.14.1",
+  "pydantic-core==2.50.1",
+  "pygments==2.21.0",
+  "pypdf==6.19.0",
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "pytest-xdist==3.8.0",
+  "pyyaml==6.0.3",
+  "rich==15.0.0",
+  "ruff==0.16.2",
+  "setuptools==84.0.0",
+  "starlette==1.7.0",
+  "stevedore==5.9.1",
+  "tomli==2.4.1",
+  "typing-extensions==4.16.0",
+  "typing-inspection==0.4.4",
+  "tzdata==2026.3",
+  "uvicorn==0.48.0",
+]

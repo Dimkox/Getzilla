@@ -164,9 +164,13 @@ class OperationsTests(unittest.TestCase):
 
     def test_runner_tools_and_build_backend_are_exactly_pinned(self) -> None:
         runner = (ROOT / 'trust-ci/runner.Dockerfile').read_text(encoding='utf-8')
+        profile = (ROOT / 'trust-ci/requirements-runner.txt').read_text(encoding='utf-8')
+        self.assertIn('--require-hashes', runner)
+        self.assertIn('-r requirements-runner.txt', runner)
+        self.assertIn('--no-deps --no-build-isolation .', runner)
         for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
                     'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
-            self.assertIn(pin, runner)
+            self.assertIn(pin, profile)
         self.assertIn('ARG OPENGREP_VERSION=1.30.1', runner)
         self.assertRegex(runner, r'ARG OPENGREP_SHA256=[0-9a-f]{64}\n')
         self.assertIn('sha256sum -c -', runner)

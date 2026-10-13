@@ -15,15 +15,11 @@ RUN apt-get update \
 
 WORKDIR /opt/adaptive-trust-ci
 COPY pyproject.toml README.md ./
+COPY uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir ".[test]" \
-        coverage==7.15.4 \
-        pytest==9.1.1 \
-        pytest-xdist==3.8.0 \
-        pytest-cov==7.1.0 \
-        ruff==0.16.2 \
-        bandit==1.9.4 \
-        tomli==2.4.1
+RUN python lock_profiles.py --check \
+    && python -m pip install --no-cache-dir --require-hashes --only-binary=:all: --no-deps -r requirements-runner.txt \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 ARG OPENGREP_VERSION=1.30.1
 ARG OPENGREP_SHA256=d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4
