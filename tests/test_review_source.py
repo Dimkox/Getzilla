@@ -95,13 +95,18 @@ class ReviewSourceTests(unittest.TestCase):
     def test_micro_unsafe_selected_metadata_does_not_fall_back(self):
         self.route.update(complexity='micro', risk='low')
         set_active_route(self.root, self.route)
+        self.report = 'engineering/reviews/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent global report.\n')
+        self.commit()
+        self.source = self.git('rev-parse', 'HEAD').strip()
         selected = self.root / '.getzilla/runtime/active-change.json'
         selected.unlink()
         try:
             selected.symlink_to(self.root / 'source.py')
         except OSError:
             self.skipTest('symlinks unavailable')
-        with self.assertRaises((RuntimeError, ValueError)):
+        with self.assertRaisesRegex((RuntimeError, ValueError), 'selected active change'):
             self.record()
 
     def test_pass_requires_reviewed_identity(self):
@@ -158,9 +163,11 @@ class ReviewSourceTests(unittest.TestCase):
 
     def test_rejects_nonancestor(self):
         self.git('checkout', '--orphan', 'other')
-        (self.root / 'source.py').write_text('other history\n')
-        self.commit()
-        with self.assertRaises((RuntimeError, ValueError, OSError)):
+        self.git('add', '.')
+        self.git('commit', '-qm', 'unrelated identical tree')
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'),
+                         self.git('rev-parse', self.source + '^{tree}'))
+        with self.assertRaisesRegex(RuntimeError, 'not an ancestor'):
             self.record()
 
     def test_rejects_deleted_renamed_executable_or_symlink_evidence(self):

@@ -1,0 +1,10 @@
+# Leaf repository analysis — docs
+
+Source: all four leaves HEAD 6dd06ff5b96692a01812fbac6252fd08f6169f91; parent PR base 540c12f93e798c2f483455a5086ab0018ac3216e. Read-only source analysis; no tests/full gates/CI. Owner defers qualifying gates to final parent. Exact leaf tree shares parent source; prior reports are static observations, not reused PASS receipts.
+
+Route99b0ae. Owner docs/REFERENCE.md and related threat/keys/incident/SBOM/version/autonomy prose, tests/test_review_source.py discriminating ancestry fixture and documentation binding tests. #63 installer pipe-to-shell criterion already repaired: README/QUICKSTART use tag-pinned downloads with SHA-256 before execution; test_install_scripts.py directly derives installer bytes and checks fail-stop commands. Preserve this and installer identities; do not rebuild artifacts.
+Other #63 bullets require explicit source-grounded docs audit; distinguish key rotation instructions from agent authority, holdout mismatch containment from blind digest regeneration, model independence limitations from OS isolation claims, observed test counts from stale constants. No secret reads or deployed policy edits.
+#73 ancestry fixture still masked: test_review_source.test_rejects_nonancestor makes orphan commit AND changes source.py. Use unrelated identical-tree commit so only ancestry guard can reject; add bounded mutation kill evidence at review phase.
+#73 docs partly repaired: final section at line589 says freeze at reviewing, but older line298 still says verification/reviews -> ready -> PR. Align contradictory current instructions; preserve dated historical records. Core owns canonical delivery skill/mirrors (#71); docs must coordinate wording rather than edit them concurrently. Install owns consumer classification; lock owns dependency policy facts. Integrate after these facts settle, then parent performs one final coherent gate.
+
+Commands: bounded saved issue JSON inspection; rg/sed of named source/test files; git rev-parse HEAD for each leaf. Source candidates not modified.

@@ -1,0 +1,108 @@
+{
+  "change_id": "20261013-task-99b0ae",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/issues-docs-20261013",
+      "change_id": "20261013-task-99b0ae",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-13T01:22:04+00:00",
+      "route_id": "99b0aed4d02c"
+    },
+    {
+      "branch": "fix/issues-docs-20261013",
+      "change_id": "20261013-task-99b0ae",
+      "detached": false,
+      "dirty_product_paths": [
+        "docs/REFERENCE.md",
+        "engineering/runbooks/security-handoff.md",
+        "tests/test_harness_hook_payloads.py",
+        "tests/test_osv_endpoint_model.py",
+        "tests/test_review_source.py",
+        "tests/test_security_handoff_docs.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-13T01:32:13+00:00",
+      "route_id": "99b0aed4d02c"
+    }
+  ],
+  "created_at": "2026-10-13T01:22:04+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-13T01:22:04+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-13T01:26:18+00:00",
+      "from": "draft",
+      "reason": "Four selected source analyses complete; isolated ownership and bounded criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-13T01:26:18+00:00",
+      "from": "scoped",
+      "reason": "Owner all-issue scope mapped; deferred final-only gate sequencing recorded",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-13T01:32:13+00:00",
+      "from": "approved",
+      "reason": "Selected writer starts bounded docs and Low regression repairs",
+      "to": "implementing"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "8dc1d77c76f30ff6c1be9a1a70b42ce86559487c4f1ca4879c9b5a3a5699dfad",
+  "route_id": "99b0aed4d02c",
+  "schema_version": 1,
+  "status": "implementing",
+  "title": "Fix Getzilla issue #63 documentation checklist and every accumulated Low item in #73: accurate threat/key ownership and rotation without values, verified installer hashes, digest failure handling, review independence, recovery, SBOM/version policy, autonomy glossary/file map; discriminating ancestry identical-tree, malformed-metadata, native payload/workdir and endpoint-specific model regression fixtures. Preserve immutable releases and frozen reviewing sequence. Do not alter deployed policies, generate private keys or perform external operations. Isolated source leaf with bounded tests; no full gate before parent all-issue integration.",
+  "updated_at": "2026-10-13T01:32:13+00:00"
+}
