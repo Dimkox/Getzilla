@@ -1,0 +1,127 @@
+{
+  "change_id": "20261013-task-e2e30c",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/all-open-issues-20261013",
+      "change_id": "20261013-task-e2e30c",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-13T01:11:29+00:00",
+      "route_id": "e2e30c9f2878"
+    },
+    {
+      "branch": "fix/all-open-issues-20261013",
+      "change_id": "20261013-task-e2e30c",
+      "detached": false,
+      "dirty_product_paths": [
+        ".grok/hooks/_lib.py",
+        ".grok/hooks/pre_tool_use.py",
+        "tests/test_execution_admission.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-13T01:23:30+00:00",
+      "route_id": "e2e30c9f2878"
+    }
+  ],
+  "created_at": "2026-10-13T01:11:29+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-13T01:11:29+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-13T01:20:13+00:00",
+      "from": "draft",
+      "reason": "All five selected source analyses complete; exact issue scope, isolated ownership and final-only gate sequencing recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-13T01:20:14+00:00",
+      "from": "scoped",
+      "reason": "Explicit owner all-issue scope mapped; real live/provider/production steps remain separately gated",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-13T01:23:31+00:00",
+      "from": "approved",
+      "reason": "Selected sole writer adds RED guard and paid-boundary controls; no live execution",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-13T07:17:11+00:00",
+      "from": "implementing",
+      "reason": "Bounded source observations and clean installation checks complete; no qualifying full gate yet.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-13T07:17:11+00:00",
+      "from": "verifying",
+      "reason": "Prepare committed combined candidate for independent review; qualifying gate follows persisted reports.",
+      "to": "reviewing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "production_action_approval"
+  ],
+  "human_gates_digest": "344ff609198ad1091112c325faecfd464591e1e52c874027e9a3da3367d4e191",
+  "route_id": "e2e30c9f2878",
+  "schema_version": 1,
+  "status": "reviewing",
+  "title": "Fix every open Getzilla issue: #78 enforce execution admission and budgets outside LLM decisions, supported nested native tool paths and fail-closed mandatory controls; #76 separate paid AI inference/image/video budgets and credential authority with aggregate fallback/retry admission and redacted audit; #75 recoverable consumer installation/migration ownership and preserve requirements/evidence; #71 descriptor rename TOCTOU and classify before exactly one verifier; #60 relative module queue analysis; #42 lock complete Trust CI transitives; #73 all collected Low findings; #63 installer hashes, threat/keys/recovery/SBOM/autonomy documentation; revalidate delivered #36/#37/#38 and finish source evidence for #72. User orders issues first, bounded regression tests only while implementing, final full PR gate AFTER all issue repairs. No production writes, live paid calls, secret/key reads, deployed trust-policy changes or workflow dispatch. Isolated source candidate for final PR; required checks never bypassed.",
+  "updated_at": "2026-10-13T07:17:11+00:00"
+}
