@@ -112,6 +112,12 @@
       "from": "verifying",
       "reason": "Prepare committed combined candidate for independent review; qualifying gate follows persisted reports.",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-13T07:26:32+00:00",
+      "from": "reviewing",
+      "reason": "Independent code, test and security reviews found observation bypasses, paid deadline failure and masked critical regression coverage; repair one consolidated batch.",
+      "to": "implementing"
     }
   ],
   "human_gates": [
@@ -121,7 +127,7 @@
   "human_gates_digest": "344ff609198ad1091112c325faecfd464591e1e52c874027e9a3da3367d4e191",
   "route_id": "e2e30c9f2878",
   "schema_version": 1,
-  "status": "reviewing",
+  "status": "implementing",
   "title": "Fix every open Getzilla issue: #78 enforce execution admission and budgets outside LLM decisions, supported nested native tool paths and fail-closed mandatory controls; #76 separate paid AI inference/image/video budgets and credential authority with aggregate fallback/retry admission and redacted audit; #75 recoverable consumer installation/migration ownership and preserve requirements/evidence; #71 descriptor rename TOCTOU and classify before exactly one verifier; #60 relative module queue analysis; #42 lock complete Trust CI transitives; #73 all collected Low findings; #63 installer hashes, threat/keys/recovery/SBOM/autonomy documentation; revalidate delivered #36/#37/#38 and finish source evidence for #72. User orders issues first, bounded regression tests only while implementing, final full PR gate AFTER all issue repairs. No production writes, live paid calls, secret/key reads, deployed trust-policy changes or workflow dispatch. Isolated source candidate for final PR; required checks never bypassed.",
-  "updated_at": "2026-10-13T07:17:11+00:00"
+  "updated_at": "2026-10-13T07:26:32+00:00"
 }
