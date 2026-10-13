@@ -1373,6 +1373,33 @@ if __name__ == "__main__":
 
 
 class OwnershipPlanTests(unittest.TestCase):
+    def test_incident_paths_have_preserved_requirement_evidence_and_user_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target=Path(tmp)/'consumer'
+            target.mkdir()
+            expected={
+                'client-consent.factory.json':'requirements',
+                '_bmad-output/client-consent.factory.json':'requirements',
+                '.qwen/pr-draft.md':'user-change',
+                '.qwen/helper.py':'user-change',
+                'factory/src/adaptive_factory.egg-info/PKG-INFO':'generated-metadata',
+                'docs/test-evidence/claw/'+'a'*40+'/summary.json':'evidence',
+                '_bmad-output/other.factory.json':'unknown',
+            }
+            for name in expected:
+                path=target/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('synthetic retained bytes')
+            before=_snapshot(target)
+            plan=MODULE.plan_install(ROOT,target)
+            rows={row['path']:row for row in plan['consumer_inventory']['entries']}
+            for name,role in expected.items():
+                with self.subTest(path=name):
+                    self.assertEqual(rows[name]['classification'],role)
+                    self.assertEqual(rows[name]['action'],'preserve')
+            self.assertEqual(before,_snapshot(target))
+            self.assertEqual(plan['quarantine_plan']['entries'],[])
+
     def test_plan_preserves_requirements_evidence_metadata_and_user_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'consumer'

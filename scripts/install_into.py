@@ -1008,9 +1008,9 @@ def _consumer_inventory(target: Path) -> dict[str, object]:
                 metadata = os.lstat(path)
                 if fsx.is_link(metadata) or not stat.S_ISREG(metadata.st_mode):
                     uncertainty.append("unsafe-or-special-path")
-                elif "evidence" in parts or "scratch" in parts or "runtime" in parts:
+                elif "evidence" in parts or "test-evidence" in parts or "scratch" in parts or "runtime" in parts:
                     category = "evidence"
-                elif any(part.startswith("requirements") for part in parts):
+                elif relative in {"client-consent.factory.json", "_bmad-output/client-consent.factory.json"} or any(part.startswith("requirements") for part in parts):
                     category = "requirements"
                 elif any(part.endswith(".egg-info") or part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} for part in parts):
                     category = "generated-metadata"
@@ -1018,7 +1018,7 @@ def _consumer_inventory(target: Path) -> dict[str, object]:
                     content = _read_target_relative(target, relative, limit=MAX_SOURCE_FILE_BYTES)
                     row = owned[relative]
                     category = "owned-unchanged" if content is not None and hashlib.sha256(content).hexdigest() == row["sha256"] and _mode_matches(metadata.st_mode, row["mode"]) and _file_identity(metadata) == _file_identity(os.lstat(path)) else "user-change"
-                elif relative == "AGENTS.md" or relative.startswith(".github/"):
+                elif relative == "AGENTS.md" or relative.startswith((".github/", ".qwen/")):
                     category = "user-change"
             except (OSError, UnsafeInstallTarget):
                 uncertainty.append("unreadable-or-changing-path")
