@@ -1,0 +1,120 @@
+{
+  "allowed_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect",
+    "code_reviewer",
+    "test_reviewer",
+    "general_implementer"
+  ],
+  "analysis_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect"
+  ],
+  "base_commit": "540c12f93e798c2f483455a5086ab0018ac3216e",
+  "base_fingerprint": "0ea1784ce11e96df666f346a2a5abbb8f42c2dde8cd10756d24899f70e67d2ca",
+  "complexity": "standard",
+  "created_at": "2026-10-13T01:22:02+00:00",
+  "delivery_expected": true,
+  "domains": [
+    "infra",
+    "api"
+  ],
+  "human_gates": [],
+  "intent": "bugfix",
+  "matched_keywords": {
+    "infra": [
+      "docker"
+    ]
+  },
+  "primary_skill": "getzilla-delivery",
+  "quality_profiles": [
+    "base",
+    "contracts",
+    "infra"
+  ],
+  "rationale": [
+    "medium-risk integration, contract, data, AI, or modernization work",
+    "intent=bugfix",
+    "domains=infra,api",
+    "repository=generic",
+    "write-owner=general_implementer",
+    "analysis-wave=4/10"
+  ],
+  "repo": {
+    "bitrix_modules": [],
+    "detected_languages": [
+      "python"
+    ],
+    "domains": [
+      "api"
+    ],
+    "kind": "generic",
+    "language_scan": {
+      "bytes": 269360,
+      "directories": 432,
+      "entries": 4563,
+      "files": 4000,
+      "incomplete_reasons": [
+        "files:4000"
+      ],
+      "non_regular": 0,
+      "skipped_symlinks": 0,
+      "status": "incomplete",
+      "truncated": true,
+      "unknown": true,
+      "unknown_extensions": {
+        ".html": 1,
+        ".json": 786,
+        ".jsonl": 2,
+        ".patch": 1,
+        ".sha256": 3,
+        ".toml": 1,
+        ".yaml": 156
+      },
+      "unreadable": 0
+    },
+    "languages": [],
+    "package_scripts": [],
+    "signals": [
+      "contract:engineering/contracts/openapi",
+      "undetected-language",
+      "undetected-language:python=21",
+      "undetected-source-extension:.html=1",
+      "undetected-source-extension:.json=786",
+      "undetected-source-extension:.jsonl=2",
+      "undetected-source-extension:.patch=1",
+      "undetected-source-extension:.sha256=3",
+      "undetected-source-extension:.toml=1",
+      "undetected-source-extension:.yaml=156",
+      "language-scan:incomplete=files:4000"
+    ]
+  },
+  "required_evidence": [
+    "verification",
+    "code_review",
+    "test_review"
+  ],
+  "review_agents": [
+    "code_reviewer",
+    "test_reviewer"
+  ],
+  "risk": "medium",
+  "route_id": "07e734b12522",
+  "schema_version": 1,
+  "session_id": "manual",
+  "status": "routed",
+  "task": "Fix Getzilla issue #42: commit complete Trust CI transitive and build dependency locks with hashes; bind existing Dockerfiles and public CI installation consumers to locked profiles; ensure vulnerability inventory includes them. Use existing uv tooling, pinned versions and supported Python targets. No actual image builds, dependency installation, deployed policy edits or key reads. Isolated source leaf, bounded lock/consumer tests only; one final parent gate after all issues.",
+  "task_domains": [
+    "infra"
+  ],
+  "workflow_skills": [
+    "getzilla-delivery",
+    "bugfix-workflow",
+    "api-event-change"
+  ],
+  "write_agent": "general_implementer"
+}

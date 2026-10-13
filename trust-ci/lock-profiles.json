@@ -1,0 +1,12 @@
+{
+  "inputs": {
+    "pyproject.toml": "d67dd9136b34479d16fd54867ffff3be9b125404c4c4886bdcfe9502a2254c42",
+    "uv.lock": "7dd9e3ef0ed2999c48edf5fa1896d2da4a3d098542dda62b128d9466211ab2c7"
+  },
+  "profiles": {
+    "runner": "186f574dfe5f270992d274896ec86a5b49ee59aed222ca692ed305ab11c5f686",
+    "runtime": "17518c25c1169875cfae8820d7bca12d75be8ecee5dab2d8184cbdcd9e9611d7",
+    "test": "5dc1d68a15ac9cc8db145d24fc15c99f70ee503791ed20f5400a3c1e05d58e94"
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,9 @@
+# Leaf repository analysis — lock
+
+Source: all four leaves HEAD 6dd06ff5b96692a01812fbac6252fd08f6169f91; parent PR base 540c12f93e798c2f483455a5086ab0018ac3216e. Read-only source analysis; no tests/full gates/CI. Owner defers qualifying gates to final parent. Exact leaf tree shares parent source; prior reports are static observations, not reused PASS receipts.
+
+Route07e734. Owner trust-ci lock/export artifacts and Dockerfiles, dependency resolver/OSV scan integration tests; coordinate CI workflow edits. #42 is not fixed: trust-ci has pyproject.toml but no lock, while factory/uv.lock exists. Dockerfile.api/worker install '.', Dockerfile.test/runner install '.[test]' with pip, so transitive resolution still happens at install. GitHub getzilla.yml also pip-installs trust-ci-source[test]. Add resolved lock and ensure actual install paths consume it, including test extra; scanning lock without installing it is insufficient.
+Existing known-vulnerability implementation lives under .getzilla/getzilla; locate its parser tests by actual module names before edits (there is no tests/test_known_vulnerabilities.py). Full transitive scan must bind resolved versions and fail closed on invalid inventory. Keep API/worker minimal requirements while covering test/runner extras. Factory lock alone does not close trust-ci issue.
+Intersection: parent AI writer may touch dependency scanner/security verifier; agree exact files. docs leaf owns SBOM/dependency-policy prose. Core may edit architecture fitness; do not alter its model merely to bypass failing lock checks. No deployed images/keys/service state changes. Lock generation is local source work, not deploy.
+
+Commands: bounded saved issue JSON inspection; rg/sed of named source/test files; git rev-parse HEAD for each leaf. Source candidates not modified.
