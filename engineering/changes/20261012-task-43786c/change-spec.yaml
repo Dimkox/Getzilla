@@ -131,6 +131,24 @@
           "receipt": "verification"
         }
       ]
+    },
+    {
+      "id": "AC-009",
+      "statement": "Architecture assigns the existing OSV scanner to a narrow local component with its actual public package metadata and mirror HTTPS edges. Hook and runner network restrictions remain unchanged. Regression fails when scanner egress is removed or assigned to the no-network route-policy node.",
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
     }
   ],
   "approvals": {

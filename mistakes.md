@@ -1927,3 +1927,5 @@ The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child test
 - The relocation checked Git and file paths but omitted ancestor rename permissions. Group-write0775 caused the archive guard to reject canonical outputs; the coordinator removed only group-write from the exact owned ancestors and kept the source guard. Check both paths and permissions, then run real routing and archive controls after a move.
 
 - The vulnerability collector omitted build-system.requires, so vulnerable packaging backends were absent from the audit inventory. Include exact backend pins with manifest provenance and test build-only projects as well as runtime dependencies. The new wheel validation must respect delivery as a namespace package, not assume an __init__.py file.
+
+- Broad no-network route-policy ownership also covered the older OSV scanner. The build-parser edit exposed its inherited HTTPS client in exact changed-source fitness, which the earlier bounded suite did not run for this module. Give the scanner narrow ownership and declared metadata egress, then run the actual fitness contract before reviews; do not suppress old-import detection.

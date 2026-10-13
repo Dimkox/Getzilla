@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-10-13T00:48:34.838688+00:00",
+  "pid": 227051,
+  "session_id": 48325,
+  "source_head": "8c258151f65d2664b094f626758911b1a72bf17f",
+  "observed_process": "",
+  "reason": "Coordinator stops redundant intermediate full150-module observation; targeted regressions and actual fitness already pass; required final full PR suite remains mandatory.",
+  "status": "COMPLETED_BEFORE_TERMINATION",
+  "signal": "none",
+  "pass_observed": true,
+  "exit_code": 0
+}

@@ -136,6 +136,24 @@
       "from": "verifying",
       "reason": "Freeze combined2.2.2 and repairs before all fresh independent reviews; no ready mutation after freeze",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-13T00:41:15+00:00",
+      "from": "reviewing",
+      "reason": "Reopen for inherited scanner egress architecture ownership omission exposed by changed-source fitness",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-13T00:49:31+00:00",
+      "from": "implementing",
+      "reason": "Actual scanner regression,150 architecture tests, model/views and exact-base worktree fitness pass; final full gate still requires fresh reviews",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-13T00:49:31+00:00",
+      "from": "verifying",
+      "reason": "Freeze corrected scanner ownership model before all four fresh reviews; exact-head observations follow commit",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -147,5 +165,5 @@
   "schema_version": 1,
   "status": "reviewing",
   "title": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
-  "updated_at": "2026-10-13T00:26:58+00:00"
+  "updated_at": "2026-10-13T00:49:31+00:00"
 }

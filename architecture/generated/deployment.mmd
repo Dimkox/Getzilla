@@ -25,6 +25,9 @@ flowchart LR
   node_770cf3a1783e8525["NODE-LOCAL-ROUTE-POLICY | local_component | repository engineering"]
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
+  node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
+  node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
+  node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
   node_22df40caedcff532["NODE-PILOT-CODEX-SUPERVISOR | worker | single local pilot operator"]
   node_fd325b0205e2e68b["NODE-PILOT-CONTROL | local_component | single local pilot operator"]
   node_c439f662476a4d4b["NODE-PILOT-GITHUB-BROKER | local_component | single local pilot operator"]
@@ -71,6 +74,8 @@ flowchart LR
   node_22df40caedcff532 -->|"EDGE-PILOT-SYNTHETIC-UNIX-PROBE | control | unix_http"| node_22df40caedcff532
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-WORKFLOW-COMPILER | control | filesystem"| node_05e59b1e4a9cc0f9
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem"| node_0a0fe2f046a648e9
+  node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-MIRROR-DOWNLOAD | dependency | https"| node_7b13ed12e8efab1c
+  node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-QUERY | dependency | https"| node_8acae282d21dd9c2
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8
