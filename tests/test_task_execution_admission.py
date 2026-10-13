@@ -144,3 +144,21 @@ class TaskExecutionAdmissionTests(unittest.TestCase):
             )
             (root / "source.py").write_text("changed source")
             self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])
+
+    def test_exact_task_action_is_one_shot(self):
+        from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
+
+        with project_copy(git=True) as root:
+            self.fixture(root)
+            inputs = {"file_path": "source.py", "content": "approved"}
+            add_approval(
+                root,
+                "task-execution",
+                "Owner delegated one exact action",
+                5,
+                actions=["task-tool-execute"],
+                resources=[task_execution_resource("Write", inputs)],
+                source="explicit-user-consent",
+            )
+            self.assertTrue(evaluate_task_execution(root, "Write", inputs)[0])
+            self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])

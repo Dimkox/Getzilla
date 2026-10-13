@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import shlex
 
-from .state import approvals_path, get_active_route, has_valid_approval
-from .util import load_json
+from .state import approvals_path, get_active_route, has_valid_approval, runtime_lock
+from .util import load_json, dump_json
 
 SCOPE = "task-execution"
 ACTION = "task-tool-execute"
@@ -90,6 +91,11 @@ def _remaining(root, resource):
             continue
         if record.get("source") not in {"explicit-user-consent", "standing-user-consent"}:
             continue
+        if not isinstance(record.get("id"), str) or not re.fullmatch("[0-9a-f]{16}", record["id"]):
+            continue
+        used = record.get("consumed_resources", [])
+        if not isinstance(used, list) or any(not isinstance(item, str) for item in used) or resource in used:
+            continue
         try:
             created = datetime.fromisoformat(record["created_at"])
             expires = datetime.fromisoformat(record["expires_at"])
@@ -116,7 +122,7 @@ def _remaining(root, resource):
                 }.items()
             ) or ACTION not in record.get("actions", []):
                 continue
-            remaining.append((expires - now).total_seconds())
+            remaining.append(((expires - datetime.now(timezone.utc)).total_seconds(), record.get("id")))
         except (KeyError, TypeError, ValueError, RuntimeError):
             continue
     return max(remaining) if remaining else None
@@ -149,11 +155,24 @@ def evaluate_task_execution(
         return False, "Task execution denied: mandatory task route missing or invalid."
     try:
         resource = task_execution_resource(tool, inputs)
-        remaining = _remaining(root, resource)
+        # Persist one-shot consumption before the host side effect. A lost
+        # response cannot silently authorize a second write or grant renewal.
+        with runtime_lock(root, "approvals"):
+            admission = _remaining(root, resource)
+            if admission is None or admission[0] <= 0:
+                return (
+                    False,
+                    "Task execution denied: exact owner-delegated scope or time allowance missing, expired, consumed or stale.",
+                )
+            remaining, grant_id = admission
+            if tool == "Bash" and not _bounded_shell(inputs, remaining, raw_tool):
+                return False, "Task execution denied: actual shell timeout must fit the remaining owner time allowance."
+            records = load_json(approvals_path(root), [])
+            for record in records:
+                if record.get("id") == grant_id:
+                    record["consumed_resources"] = [*record.get("consumed_resources", []), resource]
+                    dump_json(approvals_path(root), records)
+                    return True, None
+            return False, "Task execution denied: delegated scope changed during admission."
     except (ValueError, TypeError, RuntimeError, OSError):
         return False, "Task execution denied: scope/time authority invalid."
-    if remaining is None or remaining <= 0:
-        return False, "Task execution denied: exact owner-delegated scope or time allowance missing, expired or stale."
-    if tool == "Bash" and not _bounded_shell(inputs, remaining, raw_tool):
-        return False, "Task execution denied: actual shell timeout must fit the remaining owner time allowance."
-    return True, None
