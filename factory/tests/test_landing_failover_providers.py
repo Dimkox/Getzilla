@@ -11,6 +11,8 @@ import tempfile
 
 import httpx
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
 from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_contracts import LandingContractError
 from getzilla_factory.landing_http import HttpLandingNormalizer, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingExecutionResult, HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION
@@ -20,7 +22,7 @@ from getzilla_factory.landing_provider import LandingNormalizationRequest, Landi
 from factory.tests.test_landing_normalizer import draft, source
 
 
-class ProviderObservationTests(unittest.TestCase):
+class ProviderObservationTests(PaidProtocolTestCase):
     def test_selected_file_reads_only_the_named_provider_and_rejects_shell_values(self):
         from getzilla_factory.landing_live_executors import PROVIDER_KEY_NAMES, provider_api_key
         from getzilla_factory.landing_provider import LandingProviderError
@@ -218,7 +220,7 @@ class ProviderObservationTests(unittest.TestCase):
         self.assertEqual("policy", observation.category)
 
 
-class AdditionalProviderTests(unittest.TestCase):
+class AdditionalProviderTests(PaidProtocolTestCase):
     def run_provider(self, profile_id, *, response=None):
         from getzilla_factory.landing_extra_providers import landing_provider_executor
 

@@ -41,7 +41,7 @@ class HookTests(unittest.TestCase):
             proc = subprocess.run(
                 ['python3', 'pre_tool_use.py'],
                 cwd=root,
-                input='{"tool_name":"Read","tool_input":{"path":"AGENTS.md"}}',
+                input=json.dumps({"cwd": str(root), "tool_name": "Read", "tool_input": {"path": "AGENTS.md"}}),
                 text=True,
                 capture_output=True,
                 check=False,
@@ -51,7 +51,7 @@ class HookTests(unittest.TestCase):
             decision = data.get('decision') or data.get('hookSpecificOutput', {}).get('permissionDecision')
             self.assertEqual(decision, 'allow')
 
-    def test_root_shim_fail_open_when_canonical_missing(self) -> None:
+    def test_root_shim_fails_closed_when_canonical_missing(self) -> None:
         with project_copy() as root:
             shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
@@ -64,8 +64,8 @@ class HookTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn('allow', proc.stdout)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)['decision'], 'deny')
 
     def test_user_prompt_submit_creates_route(self) -> None:
         with project_copy(git=True) as root:

@@ -27,6 +27,7 @@ class OwnedLandingRuntime:
 def compose_server_landing(
     settings: FactorySettings, *, repository_root: Path, qwen_env_file: Path | None = None,
     provider_env_file: Path | None = None,
+    configure_paid_authority=None,
 ) -> OwnedLandingRuntime | None:
     settings.validate_landing()
     if provider_env_file is not None and qwen_env_file is not None:
@@ -76,9 +77,6 @@ def compose_server_landing(
         else:
             from .landing_http import HttpLandingProfile
             from .landing_live_executors import (
-                GROK_API_KEY_ENV,
-                QWEN_API_KEY_ENV,
-                api_key_from_environ,
                 qwen_api_key,
                 compose_landing_live_grok,
                 compose_landing_live_qwen,
@@ -87,18 +85,25 @@ def compose_server_landing(
             )
 
             profile = HttpLandingProfile.for_provider(settings.landing_provider, available=True)
+            if configure_paid_authority is None:
+                raise SettingsError("explicit paid authority required")
+            if provider_env_file is None and (qwen_env_file is None or profile.provider_id != "qwen"):
+                raise SettingsError("scoped provider credential file required")
             compose = (
                 compose_landing_live_grok if settings.landing_provider in {"grok", "grok-vision"}
                 else compose_landing_live_qwen if profile.provider_id == "qwen"
                 else compose_landing_live_provider
             )
-            key_name = GROK_API_KEY_ENV if settings.landing_provider in {"grok", "grok-vision"} else QWEN_API_KEY_ENV
             # This is runtime-only opt-in acquisition, after all path/source
             # validation and ownership checks. Never persist or log the value.
+            admission = configure_paid_authority(owned_store, profile)
+            from .paid_admission import PaidExecutionAdmission
+            if type(admission) is not PaidExecutionAdmission or admission.store is not owned_store:
+                raise SettingsError("shared durable paid authority required")
             service = compose(
+                admission=admission,
                 api_key=(provider_api_key(profile.provider_id, env_file=provider_env_file)
-                         if provider_env_file is not None or profile.provider_id not in {"qwen", "grok"}
-                         else api_key_from_environ(key_name) if profile.provider_id == "grok"
+                         if provider_env_file is not None
                          else qwen_api_key(env_file=qwen_env_file)),
                 binding=implemented_live_binding(enabled=True),
                 profile=profile,

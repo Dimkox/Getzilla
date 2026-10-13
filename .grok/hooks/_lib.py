@@ -88,6 +88,13 @@ TOOL_ALIASES = {
     'shell': 'Bash',
     'local_shell': 'Bash',
     'exec_command': 'Bash',
+    'functions.exec_command': 'Bash',
+    'functions.apply_patch': 'apply_patch',
+    'functions.read_file': 'Read',
+    'functions.write_file': 'Write',
+    'functions.edit_file': 'Edit',
+    'collaboration.spawn_agent': 'Agent',
+    'functions.spawn_agent': 'Agent',
     'container.exec': 'Bash',
     'write_file': 'Write',
     'edit': 'Edit',
@@ -525,6 +532,8 @@ def prompt_text(payload: dict[str, Any]) -> str:
 
 def tool_name(payload: dict[str, Any]) -> str:
     raw = str(first(payload.get('tool_name'), payload.get('toolName'), '') or '')
+    if raw.startswith('functions.mcp__'):
+        return raw[len('functions.'):]
     return TOOL_ALIASES.get(raw, raw)
 
 
@@ -541,14 +550,34 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
         value = payload.get('toolArgs')
     raw_tool = str(first(payload.get('tool_name'), payload.get('toolName'), ''))
     if not isinstance(value, dict):
-        if raw_tool == 'exec_command':
-            return {'_getzilla_input_error': 'exec_command requires a command object.'}
-        return {}
+        if raw_tool in {'apply_patch', 'functions.apply_patch'} and isinstance(value, str) and value.strip():
+            value = {'input': value}
+        else:
+            return {'_getzilla_input_error': 'Tool requires an argument object.'}
+    # Alias envelopes are not alternate authorities. They must agree.
+    names = [payload[key] for key in ('tool_name', 'toolName') if key in payload]
+    if len(names) == 2 and TOOL_ALIASES.get(names[0],names[0]) != TOOL_ALIASES.get(names[1],names[1]):
+        return {'_getzilla_input_error': 'Conflicting tool names.'}
+    envelopes = []
+    for key in ('tool_input', 'toolInput', 'toolArgs'):
+        if key not in payload:
+            continue
+        item = payload[key]
+        if key == 'toolArgs' and isinstance(item, str):
+            try:
+                item = json.loads(item)
+            except ValueError:
+                item = None
+        if raw_tool in {'apply_patch','functions.apply_patch'} and isinstance(item,str):
+            item = {'input':item}
+        envelopes.append(item)
+    if any(item != value for item in envelopes):
+        return {'_getzilla_input_error': 'Conflicting tool argument envelopes.'}
     mapped = dict(value)
     mapped.pop('_getzilla_input_error', None)
     # Normalize only the known native contract. Validate without throwing into
-    # the soft hook's outer fail-open handler; main emits this explicit denial.
-    if raw_tool == 'exec_command':
+    # the mandatory hook handler; main emits an explicit denial.
+    if raw_tool in {'exec_command', 'functions.exec_command'}:
         if 'cmd' in mapped:
             cmd = mapped['cmd']
             if not isinstance(cmd, str) or not cmd.strip():
@@ -568,10 +597,19 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
                               and any(part.strip() for part in alias))
             if not valid:
                 mapped['_getzilla_input_error'] = 'exec_command requires cmd or a legacy command.'
-    if 'command' not in mapped and str(first(payload.get('tool_name'), payload.get('toolName'), '')) == 'apply_patch':
+    if 'command' not in mapped and str(first(payload.get('tool_name'), payload.get('toolName'), '')) in {'apply_patch', 'functions.apply_patch'}:
         patch = first(mapped.get('patch'), mapped.get('input'))
         if isinstance(patch, str):
             mapped['command'] = patch
+    if TOOL_ALIASES.get(raw_tool, raw_tool) == 'Bash' and raw_tool not in {'exec_command','functions.exec_command'}:
+        command_value = mapped.get('command')
+        if not ((isinstance(command_value,str) and command_value.strip()) or
+                (isinstance(command_value,list) and command_value and all(isinstance(v,str) for v in command_value))):
+            mapped['_getzilla_input_error'] = 'Shell transport requires an actual command.'
+    if raw_tool in {'apply_patch','functions.apply_patch'}:
+        patch_values=[mapped[k] for k in ('command','patch','input') if k in mapped]
+        if not patch_values or any(not isinstance(v,str) or not v.strip() or v != patch_values[0] for v in patch_values):
+            mapped['_getzilla_input_error'] = 'Invalid or conflicting patch arguments.'
     command = mapped.get('command')
     if isinstance(command, list) and command and all(isinstance(part, str) for part in command):
         mapped['command'] = shlex.join(command)

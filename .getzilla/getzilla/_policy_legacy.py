@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
@@ -2240,9 +2241,9 @@ def evaluate_pre_tool(
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     route = get_active_route(root)
-    config = load_json(root / '.getzilla/config/policy.json', {}) or {}
-    if not isinstance(config, dict):
-        config = {}
+    config = load_json(root / '.getzilla/config/policy.json', None)
+    if not isinstance(config, dict) or config.get('schema_version') != 2:
+        return False, 'Mandatory policy configuration missing or invalid.'
     control_plane = _configured_patterns(config, 'control_plane_paths', DEFAULT_CONTROL_PLANE)
     protected = _configured_patterns(config, 'protected_paths', DEFAULT_PROTECTED)
     secret_read = _configured_patterns(config, 'secret_read_paths', DEFAULT_SECRET_READ)
@@ -2293,6 +2294,13 @@ def evaluate_pre_tool(
                     )
         http_resource = _http_write_resource(command, root)
         if http_resource:
+            parsed_paid_target = urlsplit(http_resource)
+            paid_hosts = {'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai',
+                          'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'}
+            if ((parsed_paid_target.hostname or '').lower().rstrip('.') in paid_hosts
+                    or parsed_paid_target.path.rstrip('/').endswith((
+                        '/chat/completions', '/images/generations', '/videos/generations', '/responses'))):
+                return False, 'Direct paid provider dispatch requires durable paid-operation admission; generic external-write grants do not apply.'
             from .human_gates import gate_block_reason
 
             gate_reason = gate_block_reason(root, 'external-write', 'external-write', http_resource)
@@ -2359,6 +2367,11 @@ def evaluate_pre_tool(
 
     if tool == 'Agent' or lowered_tool in {'spawn_agent', 'agent'}:
         agent_type = _agent_type(tool_input)
+        if (not route or route.get('schema_version') != 1 or not isinstance(route.get('allowed_agents'), list)
+                or not route.get('route_id') or not agent_type
+                or not all(isinstance(item, str) and item for item in route['allowed_agents'])
+                or route.get('write_agent') not in route['allowed_agents']):
+            return False, 'Mandatory agent route missing or invalid.'
         if route and agent_type:
             allowed = set(route.get('allowed_agents', []))
             if agent_type not in allowed:
@@ -2371,6 +2384,9 @@ def evaluate_pre_tool(
                 active = active_write_agents(root, roles)
                 if active:
                     return False, f'Another write agent is already active: {active}'
+
+    if tool.startswith('mcp__') and re.search(r'(?:generate|imagegen|completion|inference|video|create_image|create_video)', tool, re.IGNORECASE):
+        return False, 'Paid inference, image and video tools require a separate durable paid-operation authority; generic external-write grants do not apply.'
 
     if tool.startswith('mcp__') and SIDE_EFFECT_TOOL.search(tool):
         from .human_gates import gate_block_reason

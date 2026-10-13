@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse — soft policy gate (fail-open)."""
+"""PreToolUse — mandatory execution gate (fail-closed)."""
 from __future__ import annotations
 
 import hashlib
@@ -33,9 +33,13 @@ try:
         tool_name,
     )
 except Exception:
-    # If even _lib is missing, never block the agent
-    print('{"decision":"allow"}')
-    raise SystemExit(0)
+    # The nonzero status is mandatory even if the host cannot parse this shape.
+    reason = 'Mandatory Getzilla authorization bootstrap unavailable.'
+    print(json.dumps({'decision': 'deny', 'reason': reason,
+        'permissionDecision': 'deny', 'permissionDecisionReason': reason,
+        'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                              'permissionDecision': 'deny', 'permissionDecisionReason': reason}}))
+    raise SystemExit(2)
 
 
 _DENIAL_WINDOW_SECONDS = 15 * 60
@@ -286,6 +290,22 @@ def main() -> None:
         payload = read_payload()
         current_tool = tool_name(payload)
         current_input = tool_input(payload)
+        if not payload or not current_tool:
+            _deny(payload, current_tool, current_input, 'Invalid mandatory tool event.', action='invalid-tool-input')
+            return
+        from _lib import TOOL_ALIASES
+        raw_tool = payload.get('tool_name', payload.get('toolName'))
+        supported = set(TOOL_ALIASES) | set(TOOL_ALIASES.values()) | {'Bash', 'Read', 'Agent', 'apply_patch', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch'}
+        if raw_tool in {'exec', 'functions.exec', 'parallel', 'multi_tool_use.parallel'}:
+            _deny(payload, current_tool, current_input,
+                  'Opaque orchestration denied. Emit an actual native pre-execution event for each inner tool.',
+                  action='unsupported-tool-transport')
+            return
+        if raw_tool not in supported and not isinstance(raw_tool, str):
+            raise ValueError('invalid tool name')
+        if raw_tool not in supported and not current_tool.startswith('mcp__'):
+            _deny(payload, current_tool, current_input, 'Unsupported tool transport.', action='unsupported-tool-transport')
+            return
         if current_input.get('_getzilla_input_error'):
             _deny(payload, current_tool, current_input, current_input['_getzilla_input_error'],
                   action='invalid-tool-input')
@@ -300,8 +320,7 @@ def main() -> None:
         try:
             from getzilla.policy import evaluate_pre_tool, sensitive_action
         except Exception:
-            # Soft: policy stack not importable → allow everything
-            emit(permission_output(True))
+            _deny(payload, current_tool, current_input, 'Mandatory policy unavailable.', action='policy-unavailable')
             return
 
         classification_root = context.effective_root or context.session_root or Path.cwd()
@@ -323,7 +342,7 @@ def main() -> None:
             allowed = False
             reason = f'Sensitive action {action} denied: root resolution status is {context.resolution_status}.'
         elif root is None:
-            allowed, reason = True, None
+            allowed, reason = False, 'Mandatory repository root unavailable.'
         else:
             try:
                 allowed, reason = evaluate_pre_tool(root, {
@@ -331,10 +350,7 @@ def main() -> None:
                     'tool_input': current_input,
                 })
             except Exception:
-                if action:
-                    allowed, reason = False, f'Sensitive action {action} denied: policy evaluation failed closed.'
-                else:
-                    raise
+                allowed, reason = False, 'Mandatory policy evaluation failed closed.'
         if allowed:
             emit(permission_output(True))
             return
@@ -342,8 +358,7 @@ def main() -> None:
         _deny(payload, current_tool, current_input, reason or 'Blocked by Getzilla policy',
               context=context, action=action or 'policy-denial')
     except Exception:
-        # Fail-open: never lock the agent on hook bugs
-        emit(permission_output(True))
+        emit(permission_output(False, 'Mandatory authorization failed closed.'))
 
 
 if __name__ == '__main__':

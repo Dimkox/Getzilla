@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from factory.tests.paid_fixture import configure_test_authority
 from getzilla_factory import landing_host
 from getzilla_factory.landing_contracts import LandingContractError
 from getzilla_factory.landing_renderer import (
@@ -209,7 +210,7 @@ class LandingHostCompositionTests(HostFixture):
         with patch.object(landing_host, "load_actors", return_value=self.actors), patch(
             "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("offline credential read")
         ):
-            app = landing_host.build_landing_app(config, qwen_env_file=self.root / "missing")
+            app = landing_host.build_landing_app(config, qwen_env_file=self.root / "missing", configure_paid_authority=configure_test_authority)
         app.state.owned_landing_runtime.close()
         self.assertTrue(self.reopen_store().database_path.is_file())
 
@@ -237,7 +238,7 @@ class LandingHostCompositionTests(HostFixture):
             "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")
         ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=load):
             with self.assertRaisesRegex(RuntimeError, "stop before HTTP"):
-                compose_server_landing(config.settings, repository_root=config.control_repository, qwen_env_file=path)
+                compose_server_landing(config.settings, repository_root=config.control_repository, qwen_env_file=path, configure_paid_authority=configure_test_authority)
         self.assertEqual(["source", "credential"], events)
         self.assertTrue(self.reopen_store().database_path.is_file())
 
@@ -254,9 +255,9 @@ class LandingHostCompositionTests(HostFixture):
             ), patch("getzilla_factory.landing_live_executors.api_key_from_environ", return_value=self.token), patch(
                 "getzilla_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("Grok selected")
             ):
-                with self.assertRaisesRegex(RuntimeError, "source invalid" if profile == "qwen-intl" else "Grok selected"):
+                with self.assertRaisesRegex(RuntimeError if profile == "qwen-intl" else SettingsError, "source invalid" if profile == "qwen-intl" else "scoped provider credential"):
                     compose_server_landing(config.settings, repository_root=config.control_repository,
-                                           qwen_env_file=self.root / "missing")
+                                           qwen_env_file=self.root / "missing", configure_paid_authority=configure_test_authority)
             self.reopen_store().close()
 
     def test_existing_writer_prevents_qwen_credential_read(self):
@@ -269,7 +270,7 @@ class LandingHostCompositionTests(HostFixture):
         ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("read before lock")):
             with self.assertRaises(LandingServiceError) as error:
                 compose_server_landing(config.settings, repository_root=config.control_repository,
-                                       qwen_env_file=self.root / "missing")
+                                       qwen_env_file=self.root / "missing", configure_paid_authority=configure_test_authority)
         self.assertEqual("store_writer_active", error.exception.code)
         writer.close()
 

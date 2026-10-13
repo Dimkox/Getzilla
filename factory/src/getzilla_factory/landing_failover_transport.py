@@ -65,12 +65,9 @@ class UnixLandingBackend:
             raise
 
     def submit(self, child_id, payload, media_type):
-        check_socket_ancestry(self.backend.socket_path)
-        return self._exchange("POST", "/v1/landing-inputs", expected=202, payload=payload, extra={
-            "Idempotency-Key": child_id, "Content-Type": media_type,
-            "X-Exact-Base-SHA": self.config.exact_base_sha, "X-Exact-Base-Tree": self.config.exact_base_tree,
-            "X-Expected-Actor-ID": self.config.actor_id, "X-Expected-Profile-Digest": self.backend.profile_digest,
-        })
+        # V1 independent backend POST carries no shared paid reservation.
+        # A credential/socket/capability is not aggregate spending authority.
+        raise BackendRejected("paid_shared_authority_required")
 
     def observe(self, child_id):
         return self._exchange("GET", "/v2/landing-jobs/" + child_id + "/attempt", expected=200)
@@ -88,6 +85,8 @@ class UnixLandingBackend:
         return asyncio.run(self._exchange_async(method, path, expected, payload, extra, deadline))
 
     async def _exchange_async(self, method, path, expected, payload, extra, deadline):
+        if method != "GET":
+            raise BackendRejected("paid_shared_authority_required")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BackendTimeout("deadline")

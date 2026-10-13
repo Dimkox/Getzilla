@@ -29,7 +29,9 @@ from .landing_service import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+from .paid_admission import SCHEMA as PAID_SCHEMA, COLUMNS as PAID_COLUMNS
+MIGRATION_003_EXPAND = PAID_SCHEMA
 MIGRATION_002_EXPAND = "ALTER TABLE landing_jobs ADD COLUMN observation_json BLOB"
 APPLICATION_ID = 0x4C354C35
 MAX_RECOVERY_BATCH = 100
@@ -63,6 +65,7 @@ CREATE TABLE IF NOT EXISTS landing_commands (
       REFERENCES landing_jobs (tenant_id, repository_id, job_id)
 ) STRICT;
 """
+_SCHEMA += PAID_SCHEMA
 _EXPECTED_COLUMNS = {
     "landing_jobs": (
         ("tenant_id", "TEXT", 1, 1),
@@ -89,6 +92,7 @@ _EXPECTED_COLUMNS = {
         ("created_at", "TEXT", 1, 0),
     ),
 }
+_EXPECTED_COLUMNS.update(PAID_COLUMNS)
 _EXPECTED_FOREIGN_KEY = (
     (0, "landing_jobs", "tenant_id", "tenant_id", "NO ACTION", "NO ACTION", "NONE"),
     (1, "landing_jobs", "repository_id", "repository_id", "NO ACTION", "NO ACTION", "NONE"),
@@ -337,6 +341,24 @@ class SQLiteLandingJobStore:
             )
             return cancelled
 
+    def install_paid_authority(self, account, task, prices):
+        from .paid_admission import install
+        return install(self, account, task, prices)
+
+    def reserve_paid(self, *args):
+        from .paid_admission import reserve
+        return reserve(self, *args)
+
+    def set_paid_kill_switch(self, account_id, disabled):
+        if type(disabled) is not bool:
+            raise LandingServiceError("paid_switch", 422, "invalid paid switch")
+        with self._transaction():
+            self._connection.execute("UPDATE paid_accounts SET disabled=? WHERE account_id=?", (int(disabled), account_id))
+
+    def paid_audit(self, account_id):
+        from .paid_admission import audit
+        return audit(self, account_id)
+
     def _configure(self, busy_timeout_ms: int) -> None:
         connection = self._connection
         connection.execute("PRAGMA foreign_keys = ON")
@@ -371,6 +393,16 @@ class SQLiteLandingJobStore:
                 _validate_schema(self._connection, version=1)
                 with self._transaction():
                     self._connection.execute(MIGRATION_002_EXPAND)
+                    for statement in PAID_SCHEMA.split(";"):
+                        if statement.strip():
+                            self._connection.execute(statement)
+                    self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            elif identity == (2, APPLICATION_ID):
+                _validate_schema(self._connection, version=2)
+                with self._transaction():
+                    for statement in PAID_SCHEMA.split(";"):
+                        if statement.strip():
+                            self._connection.execute(statement)
                     self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif identity != (SCHEMA_VERSION, APPLICATION_ID):
                 raise _schema_error()
@@ -582,10 +614,8 @@ def _schema_inventory(connection: sqlite3.Connection) -> tuple[tuple[str, str], 
 
 
 def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VERSION) -> None:
-    if _schema_inventory(connection) != (
-        ("table", "landing_commands"),
-        ("table", "landing_jobs"),
-    ):
+    expected_tables = tuple(sorted(("table", name) for name in _EXPECTED_COLUMNS if version >= 3 or name not in PAID_COLUMNS))
+    if _schema_inventory(connection) != expected_tables:
         raise _schema_error()
     table_list = {
         row[1]: (row[2], row[3], row[4], row[5])
@@ -593,6 +623,8 @@ def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VE
         if row[0] == "main" and row[1] in _EXPECTED_COLUMNS
     }
     for table, expected in _EXPECTED_COLUMNS.items():
+        if version < 3 and table in PAID_COLUMNS:
+            continue
         if version == 1 and table == "landing_jobs":
             expected = expected[:-1]
         columns = tuple(
@@ -613,6 +645,19 @@ def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VE
     )
     if foreign_keys != _EXPECTED_FOREIGN_KEY:
         raise _schema_error()
+    if version >= 3:
+        expected_paid_keys = {
+            'paid_accounts': (),
+            'paid_tasks': ((0,'paid_accounts','account_id','account_id','NO ACTION','NO ACTION','NONE'),),
+            'paid_prices': ((0,'paid_accounts','account_id','account_id','NO ACTION','NO ACTION','NONE'),),
+            'paid_reservations': ((0,'paid_tasks','account_id','account_id','NO ACTION','NO ACTION','NONE'),
+                                  (1,'paid_tasks','task_id','task_id','NO ACTION','NO ACTION','NONE')),
+        }
+        for table, expected in expected_paid_keys.items():
+            keys=tuple(tuple(row[1:]) for row in connection.execute(f"PRAGMA foreign_key_list({table})"))
+            if keys != expected:
+                raise _schema_error()
+
 
 
 def _schema_error() -> LandingServiceError:

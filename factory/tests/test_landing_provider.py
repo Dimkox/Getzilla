@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
 from getzilla_factory.landing_contracts import LandingInputV1
 from getzilla_factory.landing_provider import (
     FixedCommandLandingProvider,
@@ -87,7 +89,7 @@ def clock():
     return lambda: next(values)
 
 
-class LandingProviderTests(unittest.TestCase):
+class LandingProviderTests(PaidProtocolTestCase):
     def test_outcome_state_spec_and_evidence_disposition_are_closed(self):
         payload = b"bounded"
         source = landing_input(payload)

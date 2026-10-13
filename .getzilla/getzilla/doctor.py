@@ -20,8 +20,21 @@ class DoctorItem:
     message: str
 
 
+def execution_control_status(root: Path) -> dict[str, object]:
+    """File inventory is not a host attestation. Ignore local loaded markers."""
+    installed = all((root / rel).is_file() for rel in (
+        '.grok/hooks/pre_tool_use.py', '.grok/hooks/_lib.py',
+        '.getzilla/getzilla/policy.py', '.getzilla/config/policy.json',
+    ))
+    return {'installed': installed, 'loaded': 'not-observed', 'host_verified': 'not-observed'}
+
+
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
+    control = execution_control_status(root)
+    items.append(DoctorItem('info', 'native-enforcement',
+        f"installed={str(control['installed']).lower()}; loaded=not-observed; host_verified=not-observed. "
+        "Verify actual allowed and denied native events, including each inner tool, on the authorized host."))
 
     required = [
         'AGENTS.md', '.grok/config.toml', '.grok/hooks.json',
