@@ -2079,19 +2079,36 @@ def _resolve_import_module(current_package: str, module: str | None, level: int)
         return module or ""
     package = current_package.split(".") if current_package else []
     remove = level - 1
-    if remove > len(package):
+    if level and (not package or remove >= len(package)):
         raise ArchitectureError("relative queue adapter import escapes its package", code="fitness")
     prefix = package[: len(package) - remove] if remove else package
     suffix = module.split(".") if module else []
     return ".".join((*prefix, *suffix))
 
 
-def _module_package(path: str, source_roots: tuple[str, ...] = ()) -> str:
+def _module_package(path: str, source_roots: tuple[str, ...] = (),
+                    package_paths: tuple[str, ...] = ()) -> str:
     relative = path
     matching_roots = [
         root for root in source_roots if root and _matches(path, (root,))
     ]
-    if matching_roots:
+    directories = PurePosixPath(path).parent.parts
+    # Ownership roots can name a package itself. Preserve the actual package
+    # ancestry from this snapshot rather than stripping its ownership prefix.
+    src = [index + 1 for index, part in enumerate(directories) if part == 'src']
+    if len(src) > 1:
+        raise ArchitectureError('ambiguous relative source root', code='fitness')
+    if src:
+        relative = '/'.join((*directories[src[0]:], PurePosixPath(path).name))
+    elif package_paths:
+        start = len(directories)
+        while start and '/'.join((*directories[:start], '__init__.py')) in package_paths:
+            start -= 1
+        if start < len(directories):
+            relative = '/'.join((*directories[start:], PurePosixPath(path).name))
+        elif matching_roots:
+            relative = path[len(max(matching_roots, key=len)) + 1:]
+    elif matching_roots:
         relative = path[len(max(matching_roots, key=len)) + 1:]
     module = relative.rsplit(".", 1)[0].replace("/", ".")
     if module.endswith(".__init__"):
@@ -2421,7 +2438,7 @@ def _new_queue_sources(
     base_cache = _queue_module_inventory(root, diff, "base", source_roots)
     for path in _python_paths(diff):
         try:
-            current_package = _module_package(path, source_roots)
+            current_package = _module_package(path, source_roots, head_cache.paths)
             head = _queue_signals(
                 root,
                 diff,
@@ -2443,7 +2460,7 @@ def _new_queue_sources(
                     base_tree,
                     "base",
                     base_cache,
-                    current_package,
+                    _module_package(path, source_roots, base_cache.paths),
                     source_roots,
                 )
             delta = set(head.signals) - set(base.signals)

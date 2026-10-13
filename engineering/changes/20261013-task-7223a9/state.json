@@ -1,0 +1,122 @@
+{
+  "change_id": "20261013-task-7223a9",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/issues-core-20261013",
+      "change_id": "20261013-task-7223a9",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-13T01:21:58+00:00",
+      "route_id": "7223a929fd61"
+    },
+    {
+      "branch": "fix/issues-core-20261013",
+      "change_id": "20261013-task-7223a9",
+      "detached": false,
+      "dirty_product_paths": [
+        ".agents/skills/getzilla-delivery/SKILL.md",
+        ".agents/skills/verification-evidence/SKILL.md",
+        ".claude/settings.json",
+        ".claude/skills/getzilla-delivery/SKILL.md",
+        ".claude/skills/verification-evidence/SKILL.md",
+        ".codex/hooks.json",
+        ".gemini/settings.json",
+        ".gemini/skills/getzilla-delivery/SKILL.md",
+        ".gemini/skills/verification-evidence/SKILL.md",
+        ".getzilla/getzilla/architecture_fitness.py",
+        ".getzilla/getzilla/fsx.py",
+        ".getzilla/getzilla/harnesses.py",
+        ".github/hooks/getzilla.json",
+        ".grok/skills/getzilla-delivery/SKILL.md",
+        ".grok/skills/verification-evidence/SKILL.md",
+        ".qwen/settings.json",
+        ".qwen/skills/getzilla-delivery/SKILL.md",
+        ".qwen/skills/verification-evidence/SKILL.md",
+        "tests/test_architecture_fitness.py",
+        "tests/test_harnesses.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-13T01:32:50+00:00",
+      "route_id": "7223a929fd61"
+    }
+  ],
+  "created_at": "2026-10-13T01:21:58+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-13T01:21:58+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-13T01:26:16+00:00",
+      "from": "draft",
+      "reason": "Four selected source analyses complete; isolated ownership and bounded criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-13T01:26:16+00:00",
+      "from": "scoped",
+      "reason": "Owner all-issue scope mapped; deferred final-only gate sequencing recorded",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-13T01:32:50+00:00",
+      "from": "approved",
+      "reason": "Approved isolated core leaf; RED regressions reproduced; bounded source repair in progress",
+      "to": "implementing"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "bbf018e2737731e8852429d6d6bb5f69facfd899673fc041c514f640777babab",
+  "route_id": "7223a929fd61",
+  "schema_version": 1,
+  "status": "implementing",
+  "title": "Fix Getzilla issues #60 and #71: preserve real package identity for package-relative whole-module import resolution; close descriptor parent rename and replacement races during harness writes; classify inventory before selecting exactly one final verifier. Preserve fail-closed uncertainty and protected path guards. Source-only isolated leaf for integration into all-issues candidate; bounded changed regressions only, no full PR run/push/merge/release before parent all-issue repairs.",
+  "updated_at": "2026-10-13T01:32:50+00:00"
+}

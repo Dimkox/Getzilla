@@ -1,0 +1,49 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Core package-relative import resolution, descriptor rename safety, one final verifier and mandatory PreToolUse launcher fail-closed.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261013-task-7223a9",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [],
+  "invariants": [],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix Getzilla issues #60 and #71: preserve real package identity for package-relative whole-module import resolution; close descriptor parent rename and replacement races during harness writes; classify inventory before selecting exactly one final verifier. Preserve fail-closed uncertainty and protected path guards. Source-only isolated leaf for integration into all-issues candidate; bounded changed regressions only, no full PR run/push/merge/release before parent all-issue repairs.",
+    "success_metric": "UNKNOWN",
+    "target": "UNKNOWN"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "integration"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

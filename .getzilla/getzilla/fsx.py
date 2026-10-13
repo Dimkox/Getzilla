@@ -105,6 +105,38 @@ def open_dir_at(parent: DirHandle, name: str, *, flags: int = 0) -> DirHandle:
     return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | flags, dir_fd=parent)
 
 
+def validate_directory_path(root: str | os.PathLike[str], relative_parent: str,
+                            opened_handle: DirHandle, *,
+                            opened_ancestors: tuple[DirHandle, ...] | None = None) -> None:
+    """Reopen a root-relative directory without links and compare its identity.
+
+    Call immediately before a mutation. This detects a moved or replaced parent;
+    it does not lock the namespace against a rename after the check.
+    """
+    parts = relative_parent.split('/') if relative_parent else []
+    handles = [open_dir(root)]
+    try:
+        for part in parts:
+            _check_name(part)
+            handles.append(open_dir_at(handles[-1], part))
+        originals = opened_ancestors if opened_ancestors is not None else (opened_handle,)
+        current = handles if opened_ancestors is not None else handles[-1:]
+        if len(originals) != len(current):
+            raise OSError(errno.ESTALE, 'directory ancestry changed', relative_parent)
+        for opened, fresh in zip(originals, current):
+            expected = fstat_dir(opened)
+            named = fstat_dir(fresh)
+            if (expected.st_dev, expected.st_ino, stat.S_IFMT(expected.st_mode)) != (
+                    named.st_dev, named.st_ino, stat.S_IFMT(named.st_mode)):
+                raise OSError(errno.ESTALE, 'directory moved or replaced', relative_parent)
+            if isinstance(opened, WindowsDirectory) and (
+                    expected.st_dev, expected.st_ino) != (opened.info.st_dev, opened.info.st_ino):
+                raise OSError(errno.ESTALE, 'directory replaced since opening', relative_parent)
+    finally:
+        for handle in reversed(handles):
+            close_dir(handle)
+
+
 def lstat_at(parent: DirHandle, name: str) -> os.stat_result:
     """``lstat`` of ``name`` in ``parent``.
 

@@ -1,0 +1,11 @@
+# Leaf repository analysis — core
+
+Source: all four leaves HEAD 6dd06ff5b96692a01812fbac6252fd08f6169f91; parent PR base 540c12f93e798c2f483455a5086ab0018ac3216e. Read-only source analysis; no tests/full gates/CI. Owner defers qualifying gates to final parent. Exact leaf tree shares parent source; prior reports are static observations, not reused PASS receipts.
+
+Route 7223a9. Owner files: architecture_fitness.py, harnesses.py/fsx.py and related tests; delivery skill only for #71 verifier ordering. #60 remains: _module_package still picks longest source root and can erase getzilla package context. Add relative whole-module import positive no-queue regression plus genuine relative queue negative control in test_architecture_fitness.py; existing package-aware provenance tests are nearby, not proof this exact delta is repaired.
+#71 parent relocation remains: _parent holds descriptors; _write uses open_at/replace_at without fresh root-relative identity validation. tests/test_harnesses.py existing linked-parent/file-parent guards do not discriminate post-open relocation. Installer has similar tested safe parent-binding helpers; coordinate any shared fsx.py edits with install leaf, never let both own same mutable file.
+#71 one-gate skill clause remains: getzilla-delivery lines102+ presents PR command before focused exception. Classify first and select one command; regenerate skill mirrors. Core owns canonical skill and mirror generation; docs leaf must not edit same files.
+Already repaired at 6dd: nearest complete-project launcher search (d,*d.parents, .getzilla marker) and malformed cmd ledger path from earlier parent repair. Missing expected hook must fail closed at nearest complete root: current search can skip it and find outer root. Preserve anti-planting, explicit root semantics, consumer/root isolation; test_harness_hook_payloads.py is parent AI/security writer territory, so coordinate source/test ownership before integration.
+Integrate shared fsx/helper decisions before install final repair; regenerate mirrors once after all canonical skills/hooks changes. No broad launcher rewrite beyond confirmed guard.
+
+Commands: bounded saved issue JSON inspection; rg/sed of named source/test files; git rev-parse HEAD for each leaf. Source candidates not modified.

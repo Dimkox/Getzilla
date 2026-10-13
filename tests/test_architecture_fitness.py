@@ -3032,6 +3032,43 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(self._results(report)["background_job"].status, "unsupported")
         self.assertIn("new_queue", report.triggers)
 
+    def test_relative_whole_module_keeps_real_package_identity(self) -> None:
+        cases = (
+            ('harnesses.py', 'from . import fsx\n', 'fsx'),
+            ('harnesses.py', 'from . import fsx as local_fsx\n', 'local_fsx'),
+            ('commands/harnesses.py', 'from .. import fsx\n', 'fsx'),
+        )
+        for queue, (relative, imported, binding) in ((queue, case) for queue in (False, True) for case in cases):
+            with self.subTest(queue=queue, imported=imported):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['type'] = 'worker'
+                system['nodes'][0]['repository_paths'] = ['.getzilla/getzilla']
+                rules = _rules()
+                rules['background_job_policies'] = [{
+                    'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+                    'require_idempotency': True, 'require_correlation_id': True,
+                    'terminal_actions': ['dead_letter'], 'severity': 'error',
+                }]
+                repo.model(system, rules)
+                repo.write_text('.getzilla/getzilla/__init__.py', '')
+                repo.write_text('.getzilla/getzilla/fsx.py',
+                                "import celery\napp = celery.Celery('jobs')\n" if queue else
+                                'def open_dir(path): return path\n')
+                if relative.startswith('commands/'):
+                    repo.write_text('.getzilla/getzilla/commands/__init__.py', '')
+                importer = '.getzilla/getzilla/' + relative
+                repo.write_text(importer, '')
+                base = repo.commit('package baseline')
+                repo.write_text(importer, imported +
+                                (f'{binding}.app.delay(task)\n' if queue else
+                                 f'{binding}.open_dir(path)\n'))
+                head = repo.commit('relative whole module call')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                self.assertEqual(self._results(report)['background_job'].status,
+                                 'unsupported' if queue else 'not_applicable')
+                self.assertEqual('new_queue' in report.triggers, queue)
+
     def test_mixed_local_module_exports_are_member_specific(self) -> None:
         system = _system()
         system["nodes"][0]["type"] = "worker"

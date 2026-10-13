@@ -83,7 +83,7 @@ Do not spawn a second write agent for the same route. Review fixes return to the
 
 ## 5. Bounded observations
 
-Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying `python3 scripts/getzilla_verify.py --mode pr`.
+Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. classify the final product inventory and select exactly one qualifying verifier.
 
 Run change-relevant checks during implementation and repair. On a clean committed HEAD, a named smoke may use the contract's `--mode fast --no-record --test tests.test_module --budget 180` form. These observations create no verification receipt or scope admission; do not run a preliminary full qualifying gate before reviews.
 
@@ -99,21 +99,23 @@ Reports list source identity, scratch path, literal `reviewed-tree-modified: no`
 
 ## 7. Final verification and receipts
 
-After all selected independent reports are complete and persisted, commit and freeze the candidate. The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; any other difference makes every review stale. Run one final qualifying local PR gate on that exact candidate using the measured CPU allocation:
+After all selected independent reports are complete and persisted, commit and freeze the candidate. The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; any other difference makes every review stale.
 
-```bash
-python3 scripts/getzilla_verify.py --mode pr
-```
+Classify the final product inventory before choosing the final command. Select exactly one qualifying verifier. Do not run a preliminary full PR gate before a focused gate.
 
-The existing fail-closed selector, not a route label or the agent's assertion, determines admissible verification scope inside the run. Record the exact base/head, changed-path digest, profile/reason and all skipped checks. A skip is not a pass; historical component evidence is not fresh verification.
-
-For a positively established product change confined to `side-projects/seo-landings/**` plus one explicitly named focused landing test in one landing directory, preserve the separate explicit focused contract:
+For a positively established product change confined to `side-projects/seo-landings/**` plus one explicitly named focused landing test in exactly one landing directory, select the separate explicit focused contract:
 
 ```bash
 python3 scripts/getzilla_verify.py --mode focused-static-seo-landing
 ```
 
-The active `engineering/changes/<id>/` package is workflow evidence, not product scope. Mixed or unknown paths, multiple landing directories, missing/ambiguous tests, invalid/incomplete route or range inventory, and runtime, contracts, Trust CI, packages, architecture, workflow/configuration, SEO-skill or showcase changes require the PR path. This instruction creates no additional fast path or permission to downgrade scope.
+The active `engineering/changes/<id>/` package is workflow evidence, not product scope. Mixed or unknown paths, multiple landing directories, missing or ambiguous tests, invalid or incomplete route or range inventory, and runtime, contracts, Trust CI, packages, architecture, workflow/configuration, SEO-skill or showcase changes require the PR command:
+
+```bash
+python3 scripts/getzilla_verify.py --mode pr
+```
+
+Run the selected command once on the frozen candidate with the measured CPU allocation. For the PR command, the existing fail-closed selector determines admissible verification scope inside that run. A route label or an agent assertion creates no scope admission. Record exact base/head, changed-path digest, profile/reason and all skipped checks. A skip is not a pass; historical component evidence is not fresh verification. This instruction creates no additional fast path or permission to downgrade scope.
 
 For every genuinely passing independent report, after the qualifying gate succeeds, record its exact evidence kind with fresh fingerprint-bound receipts that cover the persisted reports and final tree:
 

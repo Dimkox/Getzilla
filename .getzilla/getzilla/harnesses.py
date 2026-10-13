@@ -7,9 +7,9 @@ import secrets
 import tomllib
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
-from typing import Iterator
+from typing import Callable, Iterator
 
-from getzilla import fsx  # absolute like install_into.py; FIT-BOUNDED-WORKER-JOBS misreads `from . import fsx` (#60)
+from . import fsx
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
@@ -68,25 +68,49 @@ def _command(script: str, harness: str) -> str:
 
     The project directory the agent reports (CLAUDE_PROJECT_DIR, QWEN_PROJECT_DIR or
     GEMINI_PROJECT_DIR) wins; otherwise the nearest installed project at cwd or an ancestor is used.
-    An installed project has `.getzilla` and the requested canonical hook, so a
+    An installed project has `.getzilla`; a missing required guard denies tools. A
     hook-only subdirectory cannot replace its project. A relative path would also fail from a subdirectory with exit code
     2, which Claude-compatible agents treat as a blocking error. The hook learns which
     agent launched it through --harness. Only single quotes are used inside, so the
     same text works in sh, cmd and PowerShell.
     """
     target = f".grok/hooks/{script}"
-    code = (
-        "import os,pathlib,runpy,sys;"
-        f"t='{target}';"
-        "p=pathlib.Path;"
-        "d=p.cwd();"
-        "e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];"
-        "f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());"
-        "sys.path.insert(0,str(f.parent));"
-        f"sys.argv=[str(f),'--harness','{harness}'];"
-        "runpy.run_path(str(f),run_name='__main__')"
-    )
-    return f'python3 -c "{code}" || python -c "{code}"'
+    guard = script == 'pre_tool_use.py'
+    code = f"""import contextlib,io,json,os,pathlib,runpy,sys
+out=io.StringIO()
+try:
+    p=pathlib.Path
+    d=p.cwd()
+    e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)]
+    q=e[0] if e else next(q for q in (d,*d.parents) if (q/'.getzilla').is_dir())
+    f=q/'{target}'
+    if not (q/'.getzilla').is_dir() or not f.is_file():
+        raise RuntimeError('required project hook missing')
+    sys.path.insert(0,str(f.parent))
+    sys.argv=[str(f),'--harness','{harness}']
+    with contextlib.redirect_stdout(out):
+        try:
+            runpy.run_path(str(f),run_name='__main__')
+        except SystemExit as exc:
+            if exc.code not in (None,0):
+                raise RuntimeError('project hook failed') from exc
+except BaseException:
+    if {guard!r}:
+        reason='Getzilla required PreToolUse guard failed; repair the project hooks'
+        specific={{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':reason}}
+        verdict={{'permissionDecision':'deny','permissionDecisionReason':reason}} if '{harness}'=='copilot' else {{'decision':'deny','reason':reason}} if '{harness}'=='gemini' else {{'hookSpecificOutput':specific}}
+        print(json.dumps(verdict))
+    else:
+        print('{{}}')
+else:
+    sys.stdout.write(out.getvalue())
+"""
+    # Encode the program into a single quoted Python literal inside shell double
+    # quotes. A hook failure is handled here, so the shell's fallback is only for
+    # an unavailable interpreter, never a second execution of a failed hook.
+    literal = "'" + code.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n') + "'"
+    launcher = f'exec({literal})'
+    return f'python3 -c "{launcher}" || python -c "{launcher}"'
 
 
 def _hooks_block(events: list[tuple[str, str, int]], *, harness: str, milliseconds: bool,
@@ -288,34 +312,47 @@ def drift(root: Path) -> list[str]:
 
 
 @contextmanager
-def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str]]:
-    """Walk to rel's directory by descriptor, never following a link (no check-then-use race)."""
+def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str, Callable[[], None]]]:
+    """Walk without links; revalidate each parent before creating a child."""
     *directories, name = rel.split('/')
     handles = [fsx.open_dir(root)]
     try:
+        walked: list[str] = []
         for part in directories:
             if create:
+                fsx.validate_directory_path(root, '/'.join(walked), handles[-1],
+                                            opened_ancestors=tuple(handles))
                 with suppress(FileExistsError):
                     fsx.mkdir_at(handles[-1], part, 0o755)
             handles.append(fsx.open_dir_at(handles[-1], part))
-        yield handles[-1], name
+            walked.append(part)
+        def validate() -> None:
+            fsx.validate_directory_path(root, '/'.join(directories), handles[-1],
+                                        opened_ancestors=tuple(handles))
+        yield handles[-1], name, validate
     finally:
         for handle in reversed(handles):
             fsx.close_dir(handle)
 
 
 def _write_file(root: Path, rel: str, content: bytes) -> None:
-    with _parent(root, rel, create=True) as (parent, name):
+    with _parent(root, rel, create=True) as (parent, name, validate):
         temporary = f'.{name}.{secrets.token_hex(6)}.tmp'
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC
+        validate()
         descriptor = fsx.open_at(parent, temporary, flags, 0o644)
         try:
             with os.fdopen(descriptor, 'wb') as stream:
+                validate()
                 fsx.fchmod(stream.fileno(), 0o644)
+                validate()
                 stream.write(content)
+            validate()
             fsx.replace_at(parent, temporary, parent, name)
         except BaseException:
-            with suppress(FileNotFoundError):
+            # Preserve a detached temporary as evidence; never clean outside root.
+            with suppress(OSError):
+                validate()
                 fsx.unlink_at(parent, temporary)
             raise
 
@@ -329,11 +366,13 @@ def write(root: Path) -> list[str]:
     for path in _generated(root):
         rel = path.relative_to(root).as_posix()
         if _unexpected(path, rel, expected):
-            with _parent(root, rel) as (parent, name):
+            with _parent(root, rel) as (parent, name, validate):
+                validate()
                 fsx.unlink_at(parent, name)
             changed.append(f'removed {rel}')
         elif path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
-            with _parent(root, rel) as (parent, name):
+            with _parent(root, rel) as (parent, name, validate):
+                validate()
                 fsx.rmdir_at(parent, name)
     for rel, content in sorted(expected.items()):
         path = root / rel

@@ -1,0 +1,10 @@
+# core integration analysis
+
+Source: common HEAD6dd06ff5b96692a01812fbac6252fd08f6169f91, base540c12f93e798c2f483455a5086ab0018ac3216e. Read-only selected analysis. Reuses controller analysis-install-lock.md and current issue bodies; no repeated broad inspection, installs, image builds, paid calls or full tests. Leaves remain UNVERIFIED until combined parent reviews and one final qualifying gate under owner sequencing override.
+
+Route7223a9; #60/#71. Producer boundary: architecture source/import resolution feeds queue fitness; generated harnesses feed agent hook execution; delivery skill selects one final verifier. Correct package context using actual package roots without converting uncertain local imports into benign signals. Regression must prove new relative fsx import has no queue finding AND a real relative-import queue adapter remains detected. Parent rename checks must bind root-to-parent descriptor identity immediately before every write/publication boundary, not just before opening. Refuse success on moved parents; do not delete files outside the originally verified contour during cleanup. Race fixture must rename between open and write and observe no successful outside publication. Preserve cross-platform fsx behavior and explicit env root precedence.
+
+Minimal files: architecture_fitness.py plus focused module-resolution tests; harnesses.py plus mutation-boundary race tests; canonical getzilla-delivery skill and regenerated mirrors plus source-binding tests. PreToolUse launcher selection overlaps parent AI contour: parent owns _lib/prehook; leaf writer must coordinate generator/source overlap before edits. Do not let core overwrite AI root normalization. Classify inventory before selecting exactly one verifier: focused landing contract only when positively admitted; otherwise PR. No unconditional preliminary PR gate. Recovery is safe refusal and preserved evidence; no destructive restore of another writer's files.
+
+No candidate writes. Static design findings only; no PASS review or gate.
+reviewed-tree-modified: no
