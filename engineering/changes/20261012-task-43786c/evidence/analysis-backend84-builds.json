@@ -1,0 +1,32 @@
+{
+  "backend": "setuptools84.0.0",
+  "scratch": "/home/pall/projects/getzilla/.getzilla/runtime/reviews/20261012-codex/backend84-96nyw91y",
+  "builds": [
+    {
+      "project": "factory",
+      "exit_code": 0
+    },
+    {
+      "project": "delivery",
+      "exit_code": 0
+    }
+  ],
+  "wheels": [
+    {
+      "name": "getzilla_factory-0.1.0-py3-none-any.whl",
+      "sha256": "8ac2d1f0dd01df386e09a0eaf2ab727917eaa36c1f3d8fcc0df947713a446959",
+      "members": 107,
+      "source_modules_preserved": 76,
+      "resources_preserved": 28,
+      "namespace_package": false
+    },
+    {
+      "name": "getzilla_delivery-0.1.0-py3-none-any.whl",
+      "sha256": "4d840bc460125ee46a6daf2e1600a042344edd0d238712fa33c90d1d57d85ed4",
+      "members": 14,
+      "source_modules_preserved": 10,
+      "resources_preserved": null,
+      "namespace_package": true
+    }
+  ]
+}

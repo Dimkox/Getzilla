@@ -41,6 +41,96 @@
           "receipt": "verification"
         }
       ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Generated hook fallback selects nearest installed project root for nestedworktrees/consumer and preserves explicit project-directory precedence and planted-subdirectory protection",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "test": "tests/test_harnesses.py"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Malformed native-command denials enter existing retry ledger and trigger exact/objective circuit breaker; bookkeeping failures cannot allow execution",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "test": "tests/test_hooks.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-006",
+      "statement": "Canonical rules retain task-owned data within canonical project runtime with private reviewer scratch outside nested candidate, mirrored consumer/harness instructions stay consistent",
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        },
+        {
+          "test": "tests/test_harnesses.py"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Pinned build-system requirements enter vulnerability inventory. Factory and delivery use setuptools 84.0.0, which is already pinned in Trust CI. Exact source and provider coverage are disclosed; unavailable paid databases never receive PASS.",
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "One final PR contains the repaired source and preserved 2.2.2 release candidate. README and source identities match the tree, published 2.2.1 records stay immutable, and unperformed publication or production acceptance remains pending. All legacy remote branches are accounted without restoring superseded source.",
+      "evidence": [
+        {
+          "test": "tests/test_project_state.py"
+        },
+        {
+          "test": "tests/test_manifest_package.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        },
+        {
+          "receipt": "release_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
     }
   ],
   "approvals": {

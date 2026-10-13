@@ -67,9 +67,9 @@ def _command(script: str, harness: str) -> str:
     """A launcher that runs the project's own hook wherever the agent was started.
 
     The project directory the agent reports (CLAUDE_PROJECT_DIR, QWEN_PROJECT_DIR or
-    GEMINI_PROJECT_DIR) wins; otherwise the outermost `.grok/hooks/<script>` above the
-    working directory is used, so a hook planted in a subdirectory can never replace
-    the project's. A relative path would also fail from a subdirectory with exit code
+    GEMINI_PROJECT_DIR) wins; otherwise the nearest installed project at cwd or an ancestor is used.
+    An installed project has `.getzilla` and the requested canonical hook, so a
+    hook-only subdirectory cannot replace its project. A relative path would also fail from a subdirectory with exit code
     2, which Claude-compatible agents treat as a blocking error. The hook learns which
     agent launched it through --harness. Only single quotes are used inside, so the
     same text works in sh, cmd and PowerShell.
@@ -81,7 +81,7 @@ def _command(script: str, harness: str) -> str:
         "p=pathlib.Path;"
         "d=p.cwd();"
         "e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];"
-        "f=next(q/t for q in (*e,*reversed(d.parents),d) if (q/t).is_file());"
+        "f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());"
         "sys.path.insert(0,str(f.parent));"
         f"sys.argv=[str(f),'--harness','{harness}'];"
         "runpy.run_path(str(f),run_name='__main__')"

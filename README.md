@@ -1,10 +1,10 @@
 # Getzilla
 
-Current source: **2.2.1 source candidate** for [issue72](https://github.com/Dimkox/Getzilla/issues/72). Latest published: [v2.2.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0), source `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`, with no uploaded assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.2.2 source candidate**, including the verifier child-test scope fix. Latest published: [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
-The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported.
+The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported. Generated hooks use the nearest installed project, so nested worktrees keep their own route and denial state. Task scratch stays under the canonical project root `.getzilla/runtime`.
 
 ## The short version
 
@@ -53,25 +53,25 @@ Windows (PowerShell):
 
 ```powershell
 $f = Join-Path $env:TEMP 'getzilla-install.ps1'
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.ps1 -OutFile $f
-if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '32F5DFD05E8B19CF327BEF6EA2B7DA1F677675573A0ECEB27C17AAB8ACA73987') { $env:GETZILLA_REF = 'v2.2.0'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.1/scripts/install.ps1 -OutFile $f
+if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '32F5DFD05E8B19CF327BEF6EA2B7DA1F677675573A0ECEB27C17AAB8ACA73987') { $env:GETZILLA_REF = 'v2.2.1'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
 ```
 
 Linux:
 
 ```bash
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.sh
-echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.2.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.1/scripts/install.sh
+echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.2.1 bash getzilla-install.sh
 ```
 
 macOS:
 
 ```bash
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.0/scripts/install.sh
-echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.2.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.2.1/scripts/install.sh
+echo "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.2.1 bash getzilla-install.sh
 ```
 
-The installer is verified before it runs: the commands download it from the `v2.2.0` release tag, compare its SHA-256 with the digest published here (the test suite keeps this digest equal to the shipped `scripts/install.sh` / `scripts/install.ps1`), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
+The installer is verified before it runs: the commands download it from the `v2.2.1` release tag, compare its SHA-256 with the digest published here (the test suite keeps this digest equal to the shipped `scripts/install.sh` / `scripts/install.ps1`), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder.
 

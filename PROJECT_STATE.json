@@ -2,23 +2,28 @@
   "schema_version": 2,
   "repository": "Dimkox/Getzilla",
   "default_branch": "main",
-  "observed_at": "2026-10-09T02:19:00Z",
-  "observed_main_sha": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
-  "product_version": "2.2.1",
-  "latest_published_release": "v2.2.0",
+  "observed_at": "2026-10-11T02:13:17+00:00",
+  "observed_main_sha": "540c12f93e798c2f483455a5086ab0018ac3216e",
+  "product_version": "2.2.2",
+  "latest_published_release": "v2.2.1",
   "bootstrap_entrypoint": "START_HERE.md",
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
   "current_continuation": {
     "issue": 72,
-    "route_id": "37371d21accb",
-    "branch": "readiness/72-production-20261009",
-    "pull_request": 74,
-    "change_package": "engineering/changes/20261009-task-37371d",
-    "target_version": "2.2.1",
-    "source_base": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
-    "status": "repair_candidate_pending_fresh_independent_reviews_and_exact_head_gates",
-    "next_action": "Continue issue72 production readiness. Bind each independent review to its exact reviewed commit, save only active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional AGENTS L5, record exact grants for merge/tag/release after checks and resolved threads. Keep v2.2.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority."
+    "route_id": "43786cadd549",
+    "branch": "fix/codex-cmd-hooks-20261011",
+    "pull_request": 79,
+    "change_package": "engineering/changes/20261012-task-43786c",
+    "target_version": "2.2.2",
+    "source_base": "540c12f93e798c2f483455a5086ab0018ac3216e",
+    "status": "source_candidate_pending_independent_review_and_exact_head_gates",
+    "next_action": "Prepare the 2.2.2 source candidate. Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
+    "release_candidate_origin": {
+      "route_id": "65799e00561a",
+      "branch": "release/2.2.2-20261011",
+      "record_scope": "Preserved uncommitted release contour reused in PR79; not an additional delivered branch."
+    }
   },
   "historical_cleanup_continuation": {
     "pull_request": 241,
@@ -121,15 +126,37 @@
   ],
   "published_release": {
     "repository": "Dimkox/Getzilla",
-    "tag": "v2.2.0",
-    "published_at": "2026-10-09T01:57:09Z",
-    "tag_object": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
-    "tag_kind": "lightweight",
-    "merge_commit": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
-    "tree": "0f6fa49b00519f67260492320e40b1656c850549",
-    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0",
-    "assets": [],
-    "artifact": null,
+    "tag": "v2.2.1",
+    "published_at": "2026-10-09T03:47:35Z",
+    "tag_object": "5bec32144e82bec3c4a789a4b9cb3ce75dc97024",
+    "tag_kind": "annotated",
+    "merge_commit": "05f85f12b72b3a897c45c24e172fac8317120b7c",
+    "tree": "ea0e67c678c90764196dadce09910954d6be0371",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1",
+    "assets": [
+      {
+        "name": "getzilla-2.2.1.zip",
+        "size": 20713122,
+        "sha256": "0eb872f02f96f246965004637c2c1d6b32cadb988b6c84513a55b251f7fefc68",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip"
+      },
+      {
+        "name": "getzilla-2.2.1.zip.sha256",
+        "size": 85,
+        "sha256": "06b509fbe50bbff2d37af6376c309221ed4bd584a9f58d0567b484ca7989718a",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256"
+      }
+    ],
+    "artifact": {
+      "path": "packages/getzilla-2.2.1.zip",
+      "sha256": "0eb872f02f96f246965004637c2c1d6b32cadb988b6c84513a55b251f7fefc68",
+      "sidecar_path": "packages/getzilla-2.2.1.zip.sha256",
+      "sidecar_sha256": "06b509fbe50bbff2d37af6376c309221ed4bd584a9f58d0567b484ca7989718a",
+      "binding": "immutable_release_tag",
+      "storage": "github_release_asset",
+      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip",
+      "sidecar_url": "https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256"
+    },
     "operational_activation": false,
     "qualification_status": "publication_only_not_production_acceptance",
     "installers": {
@@ -2834,5 +2861,66 @@
     "source": "engineering/changes/20261009-task-37371d/evidence/analysis-integration_architect.md",
     "current_candidate_verified": false
   },
-  "historical_predecessor_m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/grok_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification."
+  "historical_predecessor_m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/grok_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification.",
+  "historical_getzilla_v2_2_0_published_release": {
+    "repository": "Dimkox/Getzilla",
+    "tag": "v2.2.0",
+    "published_at": "2026-10-09T01:57:09Z",
+    "tag_object": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+    "tag_kind": "lightweight",
+    "merge_commit": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+    "tree": "0f6fa49b00519f67260492320e40b1656c850549",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0",
+    "assets": [],
+    "artifact": null,
+    "operational_activation": false,
+    "qualification_status": "publication_only_not_production_acceptance",
+    "installers": {
+      "scripts/install.sh": {
+        "sha256": "39e64ee54b2f3966500311aa454d920e65c1f69b2dab0ab2ea0a255c266d63b9"
+      },
+      "scripts/install.ps1": {
+        "sha256": "32f5dfd05e8b19cf327bef6ea2b7da1f677675573a0eceb27c17aab8aca73987"
+      }
+    }
+  },
+  "historical_issue72_continuation": {
+    "issue": 72,
+    "route_id": "37371d21accb",
+    "branch": "readiness/72-production-20261009",
+    "pull_request": 74,
+    "change_package": "engineering/changes/20261009-task-37371d",
+    "target_version": "2.2.1",
+    "source_base": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+    "status": "repair_candidate_pending_fresh_independent_reviews_and_exact_head_gates",
+    "next_action": "Continue issue72 production readiness. Bind each independent review to its exact reviewed commit, save only active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional AGENTS L5, record exact grants for merge/tag/release after checks and resolved threads. Keep v2.2.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
+    "record_scope": "historical"
+  },
+  "publication_observation_20261012": {
+    "record_scope": "Dated observed publication and exact-source public Actions; historical evidence, not current candidate qualification.",
+    "tag": "v2.2.1",
+    "tag_signed": false,
+    "tag_object": "5bec32144e82bec3c4a789a4b9cb3ce75dc97024",
+    "pull_request": 74,
+    "checked_head": "89b131e7b20afeafc02bf859131e449fa618c702",
+    "merge_commit": "05f85f12b72b3a897c45c24e172fac8317120b7c",
+    "merged_at": "2026-10-09T03:37:15Z",
+    "published_at": "2026-10-09T03:47:35Z",
+    "asset_ids": [
+      623809907,
+      623809916
+    ],
+    "run_ids": [
+      37879027380,
+      37880115150
+    ],
+    "github_app_id": 15368,
+    "required_checks": [
+      "linux",
+      "windows"
+    ],
+    "conclusion": "SUCCESS",
+    "current_verification": false,
+    "sidecar_digest_scope": "SHA-256 of sidecar bytes; not the ZIP digest"
+  }
 }

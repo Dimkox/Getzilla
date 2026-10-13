@@ -118,6 +118,24 @@
       "from": "verifying",
       "reason": "Freeze tracked lifecycle before committed-source independent reviews; no ready mutation after freeze",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-13T00:16:44+00:00",
+      "from": "reviewing",
+      "reason": "Reopen for confirmed P2 denial-recording and nested installed-hook routing repair",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-13T00:26:58+00:00",
+      "from": "implementing",
+      "reason": "Complete combined source repairs and bounded controls; qualifying full gate deferred until fresh independent reports",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-13T00:26:58+00:00",
+      "from": "verifying",
+      "reason": "Freeze combined2.2.2 and repairs before all fresh independent reviews; no ready mutation after freeze",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -129,5 +147,5 @@
   "schema_version": 1,
   "status": "reviewing",
   "title": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
-  "updated_at": "2026-10-12T23:36:57+00:00"
+  "updated_at": "2026-10-13T00:26:58+00:00"
 }

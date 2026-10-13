@@ -153,6 +153,8 @@ class HarnessHookPayloadTests(unittest.TestCase):
         with project_copy() as root:
             target = root.parent / 'installed'
             module.materialize_new(PROJECT, target)
+            self.assertIn('canonical project root', (target / 'AGENTS.md').read_text())
+            self.assertIn('outside the reviewed candidate', (target / 'AGENTS.md').read_text())
             for consumer, configuration in ((root, PROJECT), (target, target)):
                 hooks = json.loads((configuration / '.codex/hooks.json').read_text())
                 launcher = hooks['hooks']['PreToolUse'][0]['hooks'][0]['command']
@@ -162,6 +164,19 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 }), text=True, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                prompt_hook = consumer / '.grok/hooks/user_prompt_submit.py'
+                prompt_hook.write_text(prompt_hook.read_text().replace(
+                    '    emit({', "    emit({'source_identity': __file__,"))
+                prompt = subprocess.run(hooks['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'],
+                    shell=True, cwd=consumer, input=json.dumps({'cwd': str(consumer),
+                    'session_id': 'installed-routing', 'prompt': 'Fix security policy tests'}),
+                    text=True, capture_output=True, timeout=30)
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                output = json.loads(prompt.stdout)
+                self.assertEqual(Path(output.get('source_identity', '')).resolve(), prompt_hook.resolve())
+                route = json.loads((consumer / '.getzilla/runtime/active-route.json').read_text())
+                self.assertIn(route['write_agent'], route['allowed_agents'])
+                self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
 
     def test_codex_cmd_respects_command_workdir(self) -> None:
         with project_copy(git=True) as root:
@@ -307,6 +322,53 @@ class GeneratedHookCommandTests(unittest.TestCase):
                     'tool_input': {'command': 'terraform destroy'},
                 })
                 self.assertEqual(json.loads(out)['hookSpecificOutput']['permissionDecision'], 'deny', settings)
+
+    def test_nested_real_worktree_uses_its_own_route_and_denial_state(self) -> None:
+        import os
+        import sys
+        sys.path.insert(0, str(PROJECT / '.getzilla'))
+        with project_copy(git=True) as outer:
+            from getzilla.harnesses import write
+            write(outer)
+            subprocess.run(['git', 'add', '.'], cwd=outer, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-qm', 'generated launchers'], cwd=outer, check=True)
+            inner = outer / '.getzilla/runtime/worktrees/inner'
+            subprocess.run(['git', 'worktree', 'add', '--detach', str(inner), 'HEAD'],
+                           cwd=outer, check=True, capture_output=True)
+            inner_hook = inner / '.grok/hooks/user_prompt_submit.py'
+            inner_hook.write_text(inner_hook.read_text().replace('    emit({', "    emit({'source_identity': __file__,"))
+            outer_hook = outer / '.grok/hooks/user_prompt_submit.py'
+            outer_hook.write_text('print(' + repr(json.dumps({'outer-hook': True})) + ')\n')
+            config = json.loads((inner / '.codex/hooks.json').read_text())['hooks']
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ('CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'GEMINI_PROJECT_DIR')}
+            deep = inner / 'src/deep'
+            deep.mkdir(parents=True)
+            for directory in (inner, deep):
+                prompt = subprocess.run(config['UserPromptSubmit'][0]['hooks'][0]['command'],
+                    shell=True, cwd=directory, env=environment, text=True, capture_output=True,
+                    input=json.dumps({'cwd': str(inner), 'session_id': 'nested-route',
+                                      'prompt': 'Fix command security policy tests'}), timeout=30)
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                output = json.loads(prompt.stdout)
+                self.assertEqual(Path(output.get('source_identity', '')).resolve(), inner_hook.resolve())
+                self.assertIn('additionalContext', output['hookSpecificOutput'])
+                route = json.loads((inner / '.getzilla/runtime/active-route.json').read_text())
+                self.assertIn(route['write_agent'], route['allowed_agents'])
+                self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
+            self.assertFalse((outer / '.getzilla/runtime/active-route.json').exists())
+            denial = subprocess.run(config['PreToolUse'][0]['hooks'][0]['command'], shell=True,
+                cwd=deep, env=environment, text=True, capture_output=True,
+                input=json.dumps({'cwd': str(inner), 'tool_name': 'exec_command',
+                                  'tool_input': {'cmd': 'terraform destroy'}}), timeout=30)
+            self.assertEqual(json.loads(denial.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertTrue((inner / '.getzilla/runtime/tool-denials.json').is_file())
+            self.assertFalse((outer / '.getzilla/runtime/tool-denials.json').exists())
+            environment['CLAUDE_PROJECT_DIR'] = str(outer)
+            explicit = subprocess.run(config['UserPromptSubmit'][0]['hooks'][0]['command'],
+                shell=True, cwd=deep, env=environment, text=True, capture_output=True,
+                input='{}', timeout=30)
+            self.assertTrue(json.loads(explicit.stdout)['outer-hook'])
 
     def test_nested_harness_directories_are_protected(self) -> None:
         with project_copy() as root:

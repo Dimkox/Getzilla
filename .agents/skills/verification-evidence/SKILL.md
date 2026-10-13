@@ -23,3 +23,8 @@ An explicit owner override of a local workflow rule is acceptable. Record the ex
 Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+
+
+## Task workspace
+
+Use one canonical project root for the task. Put task-owned worktrees, private scratch, reports, archives and temporary outputs only under that root's `.getzilla/runtime`. Do not use home-level defaults or sibling project directories. Keep reviewer private scratch outside the reviewed candidate as a sibling beneath that runtime root. Use a trusted non-sticky parent and mode `0700`. Do not treat a nested worktree as a new canonical project root. Durable specs and final evidence remain in the tracked change package. This rule is workflow discipline, not OS isolation.

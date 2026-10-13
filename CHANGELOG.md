@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.2.2 — 2026-10-11 (source candidate)
+
+- PR #79 candidate: inspect native Codex commands, record malformed/oversize denials with circuit guidance, and select the nearest installed project for generated hooks. Keep task workspaces under the canonical runtime directory.
+- Audit exact build-system dependency pins. Upgrade factory and delivery setuptools to84.0.0 to remove the two confirmed backend advisory matches. This source remains unpublished and does not establish production acceptance.
+
+- Isolate GETZILLA_VERIFY_FORCE_FULL at the shared child-test environment boundary. Parent full-scope selection and explicit test-owned overrides remain effective; worker, capability, plugin and coverage controls remain intact.
+- Align current source identity and record the observed immutable v2.2.1 ZIP/checksum publication. Installer examples stay pinned to published v2.2.1 with unchanged script digests.
+
+## Observed v2.2.1 publication — 2026-10-12
+
+Getzilla v2.2.1 was published on 2026-10-09T03:47:35Z from PR #74 merge `05f85f12b72b3a897c45c24e172fac8317120b7c`. Unsigned annotated tag object: `5bec32144e82bec3c4a789a4b9cb3ce75dc97024`. ZIP SHA-256: `0eb872f02f96f246965004637c2c1d6b32cadb988b6c84513a55b251f7fefc68`. Sidecar file SHA-256: `06b509fbe50bbff2d37af6376c309221ed4bd584a9f58d0567b484ca7989718a`. These assets are immutable. Historical source notes below describe their original pre-publication state. They do not establish production target/task acceptance or current 2.2.2 verification.
+
 ## 2.2.1 — 2026-10-09 (source candidate)
 
 - Bind PASS review receipts to the exact reviewed commit/tree and a clean frozen candidate; permit only saved non-executable Markdown reports in active change evidence. Recheck this binding when receipts are consumed.

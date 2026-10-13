@@ -121,8 +121,16 @@ def _pairs_from_toml_packages(text: str, *, registry_only: bool) -> Iterable[tup
 def _pairs_from_pyproject(text: str) -> Iterable[tuple[str, str]]:
     if tomllib is None:
         raise ValueError('pyproject.toml needs Python 3.11 or newer')
-    project = tomllib.loads(text).get('project') or {}
+    data = tomllib.loads(text)
+    project = data.get('project') or {}
+    build_system = data.get('build-system', {})
+    if not isinstance(build_system, dict):
+        raise ValueError('build-system must be a table')
+    build_requires = build_system.get('requires', [])
+    if not isinstance(build_requires, list) or not all(isinstance(item, str) for item in build_requires):
+        raise ValueError('build-system.requires must be a list of strings')
     requirements = list(project.get('dependencies') or [])
+    requirements.extend(build_requires)
     for group in (project.get('optional-dependencies') or {}).values():
         requirements.extend(group or [])
     yield from _pairs_from_requirements('\n'.join(str(item) for item in requirements))
