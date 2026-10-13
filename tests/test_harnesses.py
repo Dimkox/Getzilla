@@ -60,14 +60,57 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(set(gemini['hooks']), {GEMINI_EVENTS[event] for event in grok if event in GEMINI_EVENTS})
         self.assertEqual(gemini['hooks']['BeforeTool'][0]['hooks'][0]['timeout'],
                          grok['PreToolUse'][0]['hooks'][0]['timeout'] * 1000)
-        self.assertIn("'--harness','gemini'", gemini['hooks']['BeforeTool'][0]['hooks'][0]['command'])
+        self.assertIn("'--harness','gemini'", gemini['hooks']['BeforeTool'][0]['hooks'][0]['command'].replace("\\'", "'"))
         copilot = json.loads((ROOT / '.github/hooks/getzilla.json').read_text(encoding='utf-8'))
         self.assertEqual(copilot['version'], 1)
         self.assertEqual(set(copilot['hooks']), {COPILOT_EVENTS[event] for event in grok if event in COPILOT_EVENTS})
         pre = copilot['hooks']['preToolUse'][0]
         self.assertEqual(pre['bash'], pre['powershell'])
-        self.assertIn("'--harness','copilot'", pre['bash'])
+        self.assertIn("'--harness','copilot'", pre['bash'].replace("\\'", "'"))
         self.assertEqual(pre['timeoutSec'], grok['PreToolUse'][0]['hooks'][0]['timeout'])
+
+    def test_delivery_classifies_before_selecting_one_final_verifier(self) -> None:
+        for skill in ('getzilla-delivery', 'verification-evidence'):
+            text = (ROOT / '.agents/skills' / skill / 'SKILL.md').read_text()
+            self.assertIn('classify the final product inventory', text.lower())
+            self.assertIn('exactly one qualifying verifier', text)
+            self.assertLess(text.index('--mode focused-static-seo-landing'),
+                            text.index('--mode pr'))
+            self.assertIn('do not run a full PR gate before a focused gate' if
+                          skill == 'verification-evidence' else
+                          'Do not run a preliminary full PR gate before a focused gate', text)
+
+    def test_pretool_launcher_denies_missing_or_failed_guard_without_retry(self) -> None:
+        for agent in ('claude', 'codex', 'qwen', 'gemini', 'copilot'):
+            for fault in ('missing', 'exit', 'import', 'partial'):
+                with self.subTest(agent=agent, fault=fault), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / '.getzilla').mkdir()
+                    hooks = root / '.grok/hooks'
+                    hooks.mkdir(parents=True)
+                    count = root / 'count'
+                    if fault != 'missing':
+                        source = "from pathlib import Path\np=Path('count')\np.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
+                        source += {
+                            'exit': 'raise SystemExit(2)\n',
+                            'import': 'import missing_guard_module\n',
+                            'partial': "print('{}')\nraise RuntimeError('broken')\n",
+                        }[fault]
+                        (hooks / 'pre_tool_use.py').write_text(source)
+                    result = subprocess.run(harnesses._command('pre_tool_use.py', agent),
+                                            shell=True, cwd=root, text=True, capture_output=True,
+                                            env={k: v for k, v in os.environ.items()
+                                                 if k not in ('CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'GEMINI_PROJECT_DIR')})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    data = json.loads(result.stdout)
+                    if agent == 'gemini':
+                        self.assertEqual(data['decision'], 'deny')
+                    elif agent == 'copilot':
+                        self.assertEqual(data['permissionDecision'], 'deny')
+                    else:
+                        self.assertEqual(data['hookSpecificOutput']['permissionDecision'], 'deny')
+                    if fault != 'missing':
+                        self.assertEqual(count.read_text(), 'x')
 
     def test_qwen_timeouts_are_milliseconds_and_others_seconds(self) -> None:
         grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
@@ -245,6 +288,120 @@ class CursorRuleTests(unittest.TestCase):
         self.assertTrue(stale.exists())
         self.assertEqual(write(root), [f'removed {CURSOR_OUTPUT}/90-retired.mdc'])
         self.assertFalse(stale.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'open directory rename requires POSIX')
+    def test_parent_relocation_before_temp_creation_fails_closed(self) -> None:
+        root = self.fixture()
+        parent = root / '.qwen'
+        parent.mkdir()
+        moved = root.parent / 'moved'
+        original = harnesses.fsx.open_dir_at
+        relocated = False
+        def relocate(handle, name, **kwargs):
+            nonlocal relocated
+            opened = original(handle, name, **kwargs)
+            if name == '.qwen' and not relocated:
+                relocated = True
+                parent.rename(moved)
+                parent.mkdir()
+            return opened
+        with mock.patch.object(harnesses.fsx, 'open_dir_at', side_effect=relocate):
+            with self.assertRaises(OSError):
+                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        self.assertEqual(list(moved.iterdir()), [])
+        self.assertEqual(list(parent.iterdir()), [])
+
+    @unittest.skipIf(os.name == 'nt', 'open directory rename requires POSIX')
+    def test_replaced_root_with_same_parent_identity_fails_closed(self) -> None:
+        root = self.fixture()
+        parent = root / '.qwen'
+        parent.mkdir()
+        moved_root = root.parent / 'old-root'
+        original = harnesses.fsx.open_dir_at
+        relocated = False
+        def relocate(handle, name, **kwargs):
+            nonlocal relocated
+            opened = original(handle, name, **kwargs)
+            if name == '.qwen' and not relocated:
+                relocated = True
+                root.rename(moved_root)
+                root.mkdir()
+                (moved_root / '.qwen').rename(parent)
+            return opened
+        with mock.patch.object(harnesses.fsx, 'open_dir_at', side_effect=relocate):
+            with self.assertRaises(OSError):
+                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        self.assertEqual(list(parent.iterdir()), [])
+
+    @unittest.skipIf(os.name == 'nt', 'open directory rename requires POSIX')
+    def test_parent_relocation_after_content_write_blocks_publication(self) -> None:
+        root = self.fixture()
+        parent = root / '.qwen'
+        parent.mkdir()
+        (parent / 'settings.json').write_bytes(b'old')
+        moved = root.parent / 'moved'
+        fdopen = os.fdopen
+        class MovingStream:
+            def __init__(self, descriptor, mode):
+                self.stream = fdopen(descriptor, mode)
+            def __enter__(self):
+                self.stream.__enter__()
+                return self
+            def __exit__(self, *args):
+                return self.stream.__exit__(*args)
+            def fileno(self):
+                return self.stream.fileno()
+            def write(self, content):
+                self.stream.write(content)
+                parent.rename(moved)
+                parent.mkdir()
+        with mock.patch.object(harnesses.os, 'fdopen', MovingStream):
+            with self.assertRaises(OSError):
+                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        self.assertEqual((moved / 'settings.json').read_bytes(), b'old')
+        self.assertEqual(list(parent.iterdir()), [])
+        # A detached owned temp is retained; do not mutate the moved contour.
+        temps = list(moved.glob('.*.tmp'))
+        self.assertEqual(len(temps), 1)
+        self.assertEqual(temps[0].read_bytes(), b'new')
+
+    @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
+    def test_parent_replaced_by_link_before_publication_fails_closed(self) -> None:
+        root = self.fixture()
+        parent = root / '.qwen'
+        parent.mkdir()
+        moved = root.parent / 'moved'
+        outside = root.parent / 'outside'
+        outside.mkdir()
+        original = harnesses.fsx.fchmod
+        def relocate(descriptor, mode):
+            original(descriptor, mode)
+            parent.rename(moved)
+            parent.symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(harnesses.fsx, 'fchmod', side_effect=relocate):
+            with self.assertRaises(OSError):
+                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((moved / 'settings.json').exists())
+        self.assertTrue(all(path.read_bytes() == b'' for path in moved.iterdir()))
+
+    @unittest.skipIf(os.name == 'nt', 'open directory rename requires POSIX')
+    def test_parent_relocation_before_publication_preserves_old_file(self) -> None:
+        root = self.fixture()
+        parent = root / '.qwen'
+        parent.mkdir()
+        (parent / 'settings.json').write_bytes(b'old')
+        moved = root.parent / 'moved'
+        original = harnesses.fsx.fchmod
+        def relocate(descriptor, mode):
+            original(descriptor, mode)
+            parent.rename(moved)
+            parent.mkdir()
+        with mock.patch.object(harnesses.fsx, 'fchmod', side_effect=relocate):
+            with self.assertRaises(OSError):
+                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        self.assertEqual((moved / 'settings.json').read_bytes(), b'old')
+        self.assertEqual(list(parent.iterdir()), [])
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
     def test_write_never_follows_a_symlinked_directory(self) -> None:

@@ -110,6 +110,21 @@ class FsxTests(unittest.TestCase):
         finally:
             os.close(descriptor)
 
+    def test_fresh_directory_validation_binds_ancestors_and_rejects_escape(self) -> None:
+        fsx.validate_directory_path(self.root_path, 'sub', self.sub,
+                                    opened_ancestors=(self.root, self.sub))
+        for relative in ('../sub', '/sub', 'sub/..', 'sub//child'):
+            with self.subTest(relative=relative), self.assertRaises(OSError):
+                fsx.validate_directory_path(self.root_path, relative, self.sub)
+
+    def test_windows_path_handle_refuses_replacement_identity(self) -> None:
+        path = self.root_path / 'sub'
+        opened = fsx.WindowsDirectory(str(path), path.stat())
+        path.rename(self.root_path / 'old-sub')
+        path.mkdir()
+        with self.assertRaises(OSError):
+            fsx.validate_directory_path(self.root_path, 'sub', opened)
+
     def test_directory_identity_and_removal(self) -> None:
         before = fsx.fstat_dir(self.sub)
         _write(self.sub, 'a.txt', b'a')

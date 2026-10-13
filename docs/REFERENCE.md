@@ -566,7 +566,7 @@ Lifecycle adapters live in `.grok/hooks/` and are registered in both:
 - `.grok/hooks.json` — doctor/structure contract (`command` + `commandWindows`)
 - `.grok/hooks/adaptive.json` — Grok project-hook discovery
 
-Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts and enforce local policy (secrets, Bitrix core, destructive commands, control-plane mutations, and exact delegated side-effect grants). Hook failure remains fail-open to avoid locking an interactive agent; this is why hooks are not merge authority. External Trust CI remains fail-closed for the App-owned required Check Run.
+Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts and enforce local policy (secrets, Bitrix core, destructive commands, control-plane mutations, and exact delegated side-effect grants). Generated PreToolUse launchers deny tool use when the required project hook is missing, exits with an error, or fails to import. They emit the launching harness verdict and do not retry a failed hook with another interpreter. Other lifecycle hooks keep their existing failure behavior. Local hooks are not merge authority. External Trust CI remains fail-closed for the App-owned required Check Run.
 
 ## Package
 
