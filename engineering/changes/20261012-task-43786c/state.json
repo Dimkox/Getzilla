@@ -166,6 +166,12 @@
       "from": "implementing",
       "reason": "bounded_root_resolution_and_denial_regressions_passed",
       "to": "verifying"
+    },
+    {
+      "at": "2026-10-13T09:03:59+00:00",
+      "from": "verifying",
+      "reason": "committed_bounded_controls_passed_fresh_independent_reviews_required",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -175,7 +181,7 @@
   "human_gates_digest": "8ef42685118c54271357ecae3cb0c4a0750cef69610647e99833b617aa7e926c",
   "route_id": "43786cadd549",
   "schema_version": 1,
-  "status": "verifying",
+  "status": "reviewing",
   "title": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
-  "updated_at": "2026-10-13T09:03:29+00:00"
+  "updated_at": "2026-10-13T09:03:59+00:00"
 }
