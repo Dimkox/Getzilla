@@ -22,19 +22,15 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 continue
             def ignore(directory: str, names: list[str]) -> set[str]:
                 omitted = set(shutil.ignore_patterns('__pycache__', '*.pyc')(directory, names))
+                if Path(directory) == PROJECT / '.getzilla':
+                    omitted.add('runtime')
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
                     omitted.update(name for name in names if name != '__init__.py')
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore)
         runtime = root / '.getzilla/runtime'
-        if runtime.exists():
-            for child in runtime.iterdir():
-                if child.name == '.gitkeep':
-                    continue
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
+        runtime.mkdir(parents=True, exist_ok=True)
+        (runtime / '.gitkeep').touch()
         for rel in ('AGENTS.md', 'VERSION', 'ruff.toml', 'bandit.yaml', '.coveragerc'):
             src = PROJECT / rel
             if src.is_file():
