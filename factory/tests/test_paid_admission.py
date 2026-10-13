@@ -33,7 +33,7 @@ class PaidAdmissionTests(unittest.TestCase):
         repo.mkdir()
         self.now = datetime(2026, 10, 13, tzinfo=timezone.utc)
         self.store = SQLiteLandingJobStore(Path(self.tmp.name) / "state", repository_root=repo, clock=lambda: self.now)
-        self.addCleanup(self.store.close)
+        self.addCleanup(lambda: self.store.close())
         self.account = PaidAccountV1(
             "owner",
             "account",
@@ -290,3 +290,30 @@ class PaidAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(LandingProviderError, "paid_scope"):
                 self.admission.dispatch(r, inp, digest, provider, model)
         self.assertEqual(self.store.paid_audit("account")[0]["state"], "reserved")
+
+    def test_version_one_upgrade_preserves_existing_job_and_has_no_paid_authority(self):
+        import sqlite3
+        from factory.tests.test_landing_sqlite_store import source
+        from getzilla_factory.landing_service import LandingJobRecord
+
+        existing = source(job_id="old-job")
+        record = LandingJobRecord(existing, "accepted", None, None)
+        self.store.create_or_replay(record, command_key="old-command", request_digest=existing.input_digest)
+        self.store.close()
+        path = Path(self.tmp.name) / "state/landing.sqlite3"
+        with sqlite3.connect(path) as db:
+            for table in ("paid_reservations", "paid_prices", "paid_tasks", "paid_accounts"):
+                db.execute("DROP TABLE " + table)
+            db.execute("ALTER TABLE landing_jobs DROP COLUMN observation_json")
+            db.execute("PRAGMA user_version=1")
+        self.store = SQLiteLandingJobStore(
+            path.parent, repository_root=Path(self.tmp.name) / "repo", recovery_limit=0, clock=lambda: self.now
+        )
+        recovered = self.store.get(existing.tenant_id, existing.repository_id, existing.job_id)
+        self.assertEqual(recovered.source, existing)
+        self.assertEqual(recovered.state, "accepted")
+        self.assertEqual(self.store.paid_audit("account"), [])
+        with self.assertRaisesRegex(LandingProviderError, "paid_authority_required"):
+            self.store.reserve_paid(
+                "account", "task", "consumer-key", "c" * 64, "qwen", "qwen-plus", "paid-inference", "d" * 64, 50, 20
+            )
