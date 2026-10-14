@@ -1,0 +1,17 @@
+# Workspace rule impact
+
+Source: 4bf48f5832bac54d08b9666a2354703ce2a03e9d, route43786cadd549. Static read-only analysis; no tests. reviewed-tree-modified: no.
+
+Minimum canonical rule surfaces: root AGENTS.md; .getzilla/templates/consumer-AGENTS.md.tmpl; .agents/skills/getzilla-delivery/SKILL.md. Add the sibling private-scratch qualification in .agents/skills/verification-evidence/SKILL.md and canonical .grok/agents/code_reviewer.toml and test_reviewer.toml so delegated reviewers receive the same rule directly. Existing outside-reviewed-worktree wording remains valid: scratch can be a sibling of the nested candidate beneath the owner-selected repository runtime root.
+
+Use a repository-relative rule, not /home/pall literals: establish the owner-selected task workspace root once; keep task worktrees, private review scratch/reports, archives and temporary outputs within its .getzilla/runtime; do not derive a new outer task root from each nested worktree and do not create artifacts in home/global worktree defaults. Reviewer scratch remains outside the reviewed candidate, under a trusted non-sticky parent, mode0700. The current explicit owner path wins. Consumer instructions must use their own repository root, not this owner machine path. This remains workflow discipline, not OS isolation.
+
+Generated copies: normal getzilla_harness --write copies canonical skills to .grok/skills, .qwen/skills, .claude/skills, .gemini/skills; generated agents go to qwen/claude/codex/gemini/github. Codex/Copilot use shared canonical skills. Do not hand-edit mirrors. Installer delivers canonical .grok, .agents and generated harnesses, and renders consumer AGENTS from consumer-AGENTS.md.tmpl; root source AGENTS is not the consumer template.
+
+Binding tests: tests/test_structure.py existing scratch-contract checks can bind root contract, consumer template, delivery/verification skill and reviewer canonical instructions to the new repository-local runtime rule. tests/test_harnesses.py existing drift/parity checks bind generated copies. tests/test_installer.py managed consumer template/payload checks should ensure instructions survive actual consumer materialization without machine-specific paths. No tests executed in this analysis.
+
+Root lookup: harnesses._command currently searches (*explicit_env_roots,*reversed(cwd.parents),cwd). This selects the outer Getzilla hook when candidate is nested under its runtime. Simply using nearest hook would defeat tests/test_harness_hook_payloads.py::test_a_hook_planted_in_a_subdirectory_is_never_run. Select a validated repository/worktree boundary first, then that boundary canonical hook; preserve explicit trusted project context and fail closed for ambiguous/mismatched roots. Tests must exercise nested actual worktree plus outer competing hook, deep working directory, planted non-repository hook, explicit context and installed consumer path. Do not treat arbitrary .grok presence as a new authoritative project.
+
+P2 ledger and bootstrap must consume the same selected task repository identity; do not clear or relax denials to work around the outer-root selection. Historical denial entries need exact scope retention, not global reset. No ledger internals or global config were read for this narrow analysis.
+
+Commands: rg/sed source and test inspections; git rev-parse HEAD. Sole artifact is this report at the explicit owner runtime destination.

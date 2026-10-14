@@ -1,4 +1,4 @@
-# Getzilla v2.2.1
+# Getzilla v2.2.2
 
 > **Origin.** Getzilla is the renamed successor of the [predecessor project](https://github.com/Dimkox/adaptive-grok-build-pro/tree/c4e506f3d3a45e000f5b9f9121f698c1d16814e3). This repository was started on 2026-10-05 from that project's final PR #242 head (identical to its merged main commit `f97966c`) `c4e506f3d3a45e000f5b9f9121f698c1d16814e3` without its git history. Pull-request numbers, releases, tags and checks mentioned in historical sections below belong to the predecessor repository. Renamed: the core package and stack (`.getzilla/getzilla`), `scripts/getzilla_*.py`, `getzilla_factory`, `getzilla_delivery` and the `GETZILLA_*` test variables. Kept on purpose: the Grok Build CLI contract (`.grok/`), Grok provider settings, the deployed Trust CI identity (`adaptive-trust-ci/verified`, App `adaptive-trust-ci`) and L5 runtime paths (`adaptive-l5`). Installs made before the rename are upgraded through `scripts/install_into.py --plan`, which reports the pre-rename stack files for retirement.
 
@@ -97,9 +97,11 @@ The observed **controller + 12 child-agent slots**, routing cap `max_parallel_an
 
 ## Current state
 
-Identity: **2.2.1 source candidate** for Getzilla issue72. Latest published [v2.2.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.0) is immutable: published 2026-10-09T01:57:09Z, commit `5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9`, tree `0f6fa49b00519f67260492320e40b1656c850549`, no uploaded assets. This publication does not establish installation, provider activation or production acceptance.
+Identity: **2.2.2 source candidate**, including the verifier child-test scope fix. Latest published [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1) is immutable: published 2026-10-09T03:47:35Z, annotated tag `5bec32144e82bec3c4a789a4b9cb3ce75dc97024`, commit `05f85f12b72b3a897c45c24e172fac8317120b7c`, tree `ea0e67c678c90764196dadce09910954d6be0371`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
 
-Continue `readiness/72-production-20261009`, route `37371d21accb`, through the [issue72 package](../engineering/changes/20261009-task-37371d/brief.md) and `PROJECT_STATE.json.current_continuation`. Use bounded controls, independent reviews of a committed candidate, saved active evidence Markdown reports, commit/freeze and one final PR verifier. PASS receipts require `--reviewed-commit <exact-full-sha>`; consumers recheck the reviewed tree, ancestry and report-only delta. Public Actions linux/windows provide the required exact-head checks. The historical private Trust CI identity is `adaptive-trust-ci/verified@06ecf1c875bc`, App ID `<redacted-app-id>`; this record is not fresh verification. Conditional AGENTS L5 covers exact-grant merge/tag/release after checks, independent review and resolved threads; production mutation, deploy, external writes and human security approvals remain separate.
+Observed main on 2026-10-12: `540c12f93e798c2f483455a5086ab0018ac3216e`. This is the release contour comparison base. PR #79 contains the command-policy and routing repairs plus this release candidate. It remains unmerged; current source checks must qualify this exact candidate.
+
+Continue `fix/codex-cmd-hooks-20261011`, route `43786cadd549`, through the [2.2.2 source package](../engineering/changes/20261012-task-43786c/brief.md) and `PROJECT_STATE.json.current_continuation`. Use bounded controls, independent reviews of a committed candidate, saved active evidence Markdown reports, commit/freeze and one final PR verifier. PASS receipts require `--reviewed-commit <exact-full-sha>`; consumers recheck the reviewed tree, ancestry and report-only delta. Public Actions linux/windows provide the required exact-head checks. The historical private Trust CI identity is `adaptive-trust-ci/verified@06ecf1c875bc`, App ID `<redacted-app-id>`; this record is not fresh verification. Conditional AGENTS L5 covers exact-grant merge/tag/release after checks, independent review and resolved threads; production mutation, deploy, external writes and human security approvals remain separate.
 
 The native harness executes local tasks. Do not add a daemon or enable providers to complete this source repair. The [historical M8 package](../engineering/changes/20261004-task-b25860/brief.md) and predecessor release records remain dated provenance.
 
@@ -134,7 +136,7 @@ On Linux, `auto` uses the minimum of 28, process affinity or CPU-count fallback,
 
 Where this runner cannot provide its required parallel-process cleanup, a positive request selects the existing `unittest-degraded` engine before execution. Supported parallel execution retains its strict pins; measured serial execution retains pinned coverage. An actual failed parallel run is never retried serially. The implementation lives in `.getzilla/getzilla/python_test_runner.py` and its private `_cpu_capacity.py` helper; native Windows and older-interpreter qualification remain separate from fixture-based evidence.
 
-## Bounded local M8 in the 2.2.0 source candidate
+## Bounded local M8
 
 The owner-approved policy requires **one** completed owner-accepted factory task; Liqvera supplies that case with immutable product/factory provenance. `factory/src/getzilla_factory/owner_autonomy.py` consumes the typed policy, case and activation contracts in `factory/contracts/jsonschema/owner-autonomy.v1.schema.json`; `scripts/getzilla_m8.py` invokes the actual admission consumer. This is an additive offline control. It does not invoke providers or execute arbitrary commands. Owner-confirmed accounting and human readiness are not external signed Trust CI approvals; unavailable cost/intervention totals remain `null`.
 
@@ -155,7 +157,7 @@ The first status denies with L0 if activation is absent; activate and eligible a
 
 M9 already evaluates one-step preview/staging/bounded-canary decisions with an in-memory adapter and stop/reduce/previous-artifact recovery. Actual M9 qualification still requires signed artifact inputs, the applicable environment/provider deployment, exercised recovery and human production authority; this M8 change does not activate M9.
 
-2.2.0 is a release candidate until its exact merged tested source passes the required gates and GitHub Release publication is separately authorized. ZIP/checksum assets are published through GitHub Releases; ZIPs are not source Git content. Published `v2.1.1` and its checksums remain immutable history.
+The current 2.2.2 source remains a release candidate until its exact merged tested source passes the required gates and GitHub Release publication occurs. ZIP/checksum assets are published through GitHub Releases; ZIPs are not source Git content. Published releases and their checksums remain immutable history.
 
 ## Как пользоваться опубликованной версией 2.1.1
 

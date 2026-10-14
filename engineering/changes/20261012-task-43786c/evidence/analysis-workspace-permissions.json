@@ -1,0 +1,43 @@
+{
+  "changes": [
+    {
+      "path": "/home/pall/projects",
+      "old_mode": "0o775",
+      "new_mode": "0o755",
+      "uid": 1000,
+      "gid": 1000,
+      "observed_mode": "0o755"
+    },
+    {
+      "path": "/home/pall/projects/getzilla",
+      "old_mode": "0o775",
+      "new_mode": "0o755",
+      "uid": 1000,
+      "gid": 1000,
+      "observed_mode": "0o755"
+    },
+    {
+      "path": "/home/pall/projects/getzilla/.getzilla",
+      "old_mode": "0o775",
+      "new_mode": "0o755",
+      "uid": 1000,
+      "gid": 1000,
+      "observed_mode": "0o755"
+    },
+    {
+      "path": "/home/pall/projects/getzilla/.getzilla/runtime",
+      "old_mode": "0o775",
+      "new_mode": "0o755",
+      "uid": 1000,
+      "gid": 1000,
+      "observed_mode": "0o755"
+    },
+    {
+      "path": "/home/pall/projects/getzilla/.getzilla/runtime/worktrees/fix-codex-cmd-20261011",
+      "old_mode": "0o775",
+      "new_mode": "0o755",
+      "reason": "Task-owned candidate output ancestor"
+    }
+  ],
+  "reason": "Bounded reversible host permission repair; no source guard weakening."
+}

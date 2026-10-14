@@ -1913,3 +1913,19 @@ A new negative handoff assertion contained the obsolete predecessor script name 
 
 ## 2026-10-11 — Inherited verifier control changed child scope
 The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child tests, so the parent scope choice overrode child test fixtures. Remove this controller flag only from the shared child-test environment copy and preserve parent scope selection. A bounded check also set GETZILLA_TEST_WORKERS for a test that requires absent opt-in; unset that override and use child CPU affinity to bound the run.
+
+- The command hook mapped exec_command to Bash but did not map its native cmd field, so policy scanned no executed command. Normalize known native input before root, size and policy checks; reject conflicting fields explicitly before the broad soft-hook exception handler. The first new launcher test also assumed Grok output for Codex; assert the actual hookSpecificOutput contract instead.
+
+- The coordinator started a duplicate release handoff before checking all local worktrees. Equal branch tips hid the prepared, uncommitted 2.2.2 release; committed refs and PR inventory did not show dirty worktree content. Check every worktree status before creating a successor contour and preserve existing work.
+
+- The coordinator omitted conditional delivery gate records before the first command-repair review, so adding them required fresh independent reviews. The cause was freezing before listing each named operation prerequisite. Record conditional standing consent and exact action targets before the first source freeze; create final exact grants only after gates pass.
+
+- Native input validation returned a denial before the shared denial ledger, so retries had no circuit guidance. The generated launcher also chose the outermost hook, which selected another repository after nested relocation. Test the real launcher source, route and ledger in nested worktrees; route every established denial through guarded recording.
+
+- Denial bookkeeping initially parsed commands already refused for size or invalid type. That broke the size budget and split equivalent invalid-input objectives. Resolve only directory metadata for those ledger contexts and retain the full normalized input only in bounded fingerprints.
+
+- The relocation checked Git and file paths but omitted ancestor rename permissions. Group-write0775 caused the archive guard to reject canonical outputs; the coordinator removed only group-write from the exact owned ancestors and kept the source guard. Check both paths and permissions, then run real routing and archive controls after a move.
+
+- The vulnerability collector omitted build-system.requires, so vulnerable packaging backends were absent from the audit inventory. Include exact backend pins with manifest provenance and test build-only projects as well as runtime dependencies. The new wheel validation must respect delivery as a namespace package, not assume an __init__.py file.
+
+- Broad no-network route-policy ownership also covered the older OSV scanner. The build-parser edit exposed its inherited HTTPS client in exact changed-source fitness, which the earlier bounded suite did not run for this module. Give the scanner narrow ownership and declared metadata egress, then run the actual fitness contract before reviews; do not suppress old-import detection.

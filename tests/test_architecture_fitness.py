@@ -3710,6 +3710,35 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(result.status, "not_applicable")
         self.assertNotIn("new_network_client", report.triggers)
 
+    def test_repository_vulnerability_scanner_requires_its_own_declared_https_edges(self) -> None:
+        snapshot = ARCHITECTURE.load_architecture(ROOT)
+        scanner_id = 'NODE-LOCAL-VULNERABILITY-SCANNER'
+        self.assertIn(scanner_id, {node['id'] for node in snapshot.system['nodes']})
+        for mutation, expected in (('declared', 'pass'), ('removed-edge', 'fail'), ('route-owner', 'fail')):
+            with self.subTest(mutation=mutation):
+                system = copy.deepcopy(snapshot.system)
+                if mutation == 'removed-edge':
+                    system['edges'] = [edge for edge in system['edges'] if edge['from'] != scanner_id]
+                elif mutation == 'route-owner':
+                    scanner = next(node for node in system['nodes'] if node['id'] == scanner_id)
+                    scanner['repository_paths'].remove('.getzilla/getzilla/known_vulns.py')
+                repo = GitArchitectureRepo(self)
+                repo.model(system, copy.deepcopy(snapshot.rules))
+                documents = {document for contract in system['contracts']
+                             for document in (ROOT / contract['path']).parent.rglob('*.json')}
+                for document in documents:
+                    repo.write_bytes(document.relative_to(ROOT).as_posix(), document.read_bytes())
+                base = repo.commit('real model and contract snapshot')
+                repo.write_text('.getzilla/getzilla/known_vulns.py', (ROOT / '.getzilla/getzilla/known_vulns.py').read_text())
+                head = repo.commit('actual scanner network source')
+                diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                model = FIT.load_architecture(repo.root)
+                result = FIT._network_clients(model, diff, FIT._PythonInventory(repo.root, diff))
+                self.assertEqual(result.status, expected, result.findings)
+                self.assertIn('FIT-DECLARED-NETWORK-ONLY', result.rule_ids)
+                policy = next(node for node in model.system['nodes'] if node['id'] == 'NODE-LOCAL-ROUTE-POLICY')
+                self.assertEqual(policy['runtime']['network'], 'none')
+
     def test_network_analysis_ignores_pure_urllib_parse(self) -> None:
         system = _system()
         system["nodes"][0]["type"] = "service"

@@ -580,6 +580,18 @@
       "contains_secret": false,
       "id": "DATA-PILOT-STATE",
       "tenant_scoped": false
+    },
+    {
+      "classification": "internal",
+      "contains_secret": false,
+      "id": "DATA-PACKAGE-IDENTITY",
+      "tenant_scoped": false
+    },
+    {
+      "classification": "public",
+      "contains_secret": false,
+      "id": "DATA-VULNERABILITY-ADVISORY",
+      "tenant_scoped": false
     }
   ],
   "edges": [
@@ -1768,6 +1780,53 @@
       "sync_or_async": "synchronous",
       "to": "NODE-SUPPLY-CHAIN-REGISTRY",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
+      "id": "EDGE-SCANNER-OSV-QUERY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-API",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
+      "id": "EDGE-SCANNER-OSV-MIRROR-DOWNLOAD",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-ADVISORY-BUCKET",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -2815,6 +2874,57 @@
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
       "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-PACKAGE-IDENTITY",
+      "id": "NODE-LOCAL-VULNERABILITY-SCANNER",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/known_vulns.py",
+        "scripts/getzilla_vulns.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-OSV-API",
+      "owner": "OSV public advisory service",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-OSV-ADVISORY-BUCKET",
+      "owner": "OSV public advisory service",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
     }
   ],
   "schema_version": 1,

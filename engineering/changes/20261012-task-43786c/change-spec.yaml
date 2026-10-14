@@ -1,0 +1,206 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Native executedcmd reaches policy/root/oversize/grant checks, including alternate envelopes and directoryscope",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Malformedpresentcmd and conflictingcommand aliases produceexplicitdenial without failopen, legacycommand remainscompatible",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "GeneratedCodexlauncher and installedconsumer enforce same boundary; no mutation/retry authorityadded",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "receipt": "release_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Generated hook fallback selects nearest installed project root for nestedworktrees/consumer and preserves explicit project-directory precedence and planted-subdirectory protection",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "test": "tests/test_harnesses.py"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Malformed native-command denials enter existing retry ledger and trigger exact/objective circuit breaker; bookkeeping failures cannot allow execution",
+      "evidence": [
+        {
+          "test": "tests/test_harness_hook_payloads.py"
+        },
+        {
+          "test": "tests/test_hooks.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-006",
+      "statement": "Canonical rules retain task-owned data within canonical project runtime with private reviewer scratch outside nested candidate, mirrored consumer/harness instructions stay consistent",
+      "evidence": [
+        {
+          "test": "tests/test_structure.py"
+        },
+        {
+          "test": "tests/test_harnesses.py"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Pinned build-system requirements enter vulnerability inventory. Factory and delivery use setuptools 84.0.0, which is already pinned in Trust CI. Exact source and provider coverage are disclosed; unavailable paid databases never receive PASS.",
+      "evidence": [
+        {
+          "test": "tests/test_known_vulns.py"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "One final PR contains the repaired source and preserved 2.2.2 release candidate. README and source identities match the tree, published 2.2.1 records stay immutable, and unperformed publication or production acceptance remains pending. All legacy remote branches are accounted without restoring superseded source.",
+      "evidence": [
+        {
+          "test": "tests/test_project_state.py"
+        },
+        {
+          "test": "tests/test_manifest_package.py"
+        },
+        {
+          "test": "tests/test_structure.py"
+        },
+        {
+          "receipt": "release_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    },
+    {
+      "id": "AC-009",
+      "statement": "Architecture assigns the existing OSV scanner to a narrow local component with its actual public package metadata and mirror HTTPS edges. Hook and runner network restrictions remain unchanged. Regression fails when scanner egress is removed or assigned to the no-network route-policy node.",
+      "evidence": [
+        {
+          "test": "tests/test_architecture_fitness.py"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": [
+      "scope_and_design_approval"
+    ]
+  },
+  "change_id": "20261012-task-43786c",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "No productionwrite,secretread or trustpolicy modification; no harmfulpayload execution",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Existinggrant/rootpolicy/providerdefaults and priorpublications unchanged",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix security policy hook normalization for native Codex exec_command cmd payloads. Reproduce and validate existing pending two-file repair; preserve command authority and workdir, conflicting fields fail closed; regenerate owned harness mirrors if required. Deliver bounded security bugfix through isolated PR, no production deployment.",
+    "success_metric": "Executednativecmd cannot evade existing policy/root checks; malformed/conflictingpayloadsdeny; legacy and installedconsumers remain usable",
+    "target": "Canonicalhook and change-relevantregressions"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

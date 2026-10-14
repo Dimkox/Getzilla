@@ -1158,3 +1158,5 @@ Compare old open issue claims against delivered source before treating them as p
 - 2026-10-09: The owner accepts an explicit manual override of local workflow rules, followed by validation. Record the exact rule, scope, reason, deferred checks and follow-up; keep the result UNVERIFIED until checks run. This grants no fake PASS, external attestation, branch-protection bypass or human-key access.
 
 - 2026-10-09: Restrict saved-report deltas to six conventional independent report names; analysis, index and checkpoint Markdown cannot be used to hide source changes. Freeze tracked lifecycle state at reviewing before review; final receipts, zero gaps and exact-head gates record completion without a later ready mutation. This preserves the reviewed-source contract without a lifecycle redesign.
+
+- Preserve legacy exec_command command-only string/list inputs while validating present native cmd and rejecting conflicts. Existing harness tests establish those legacy contracts, so this fixes native inspection without expanding permissions or breaking other callers.

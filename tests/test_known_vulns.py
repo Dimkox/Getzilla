@@ -100,6 +100,36 @@ class CollectTests(unittest.TestCase):
         })
         self.assertNotIn('tests/fixtures/requirements.txt', manifests)
 
+    def test_build_system_exact_pins_keep_manifest_provenance(self) -> None:
+        tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ["setuptools==75.8.0", "wheel>=0.40"]\n[project]\ndependencies = ["httpx==0.28.1", "setuptools==75.8.0"]\n[project.optional-dependencies]\ntest = ["pytest==8.3.0"]\n'})
+        with tmp:
+            deps, manifests = KV.collect_dependencies(root)
+        self.assertEqual(manifests, ['pyproject.toml'])
+        self.assertEqual({(item.name, item.version, item.manifest) for item in deps}, {
+            ('setuptools', '75.8.0', 'pyproject.toml'), ('httpx', '0.28.1', 'pyproject.toml'),
+            ('pytest', '8.3.0', 'pyproject.toml'),
+        })
+        self.assertEqual(len(deps), 3)
+
+    def test_build_only_backend_pin_is_collected(self) -> None:
+        tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ["setuptools==75.8.0"]\n'})
+        with tmp:
+            deps, manifests = KV.collect_dependencies(root)
+        self.assertEqual([(item.name, item.version, item.manifest) for item in deps],
+                         [('setuptools', '75.8.0', 'pyproject.toml')])
+        self.assertEqual(manifests, ['pyproject.toml'])
+
+    def test_current_backend_pins_are_in_the_audit_inventory(self) -> None:
+        dependencies, _ = KV.collect_dependencies(ROOT)
+        for manifest in ('factory/pyproject.toml', 'delivery/pyproject.toml', 'trust-ci/pyproject.toml'):
+            self.assertIn(KV.Dependency('PyPI', 'setuptools', '84.0.0', manifest), dependencies)
+
+    def test_malformed_build_requirements_fail_closed(self) -> None:
+        for value in ('"setuptools==84.0.0"', '7', 'true', '["setuptools==84.0.0", 7]'):
+            tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ' + value + '\n'})
+            with tmp, self.subTest(value=value), self.assertRaises(KV.VulnerabilityError):
+                KV.collect_dependencies(root)
+
     def test_unparseable_manifest_fails_closed(self) -> None:
         tmp, root = _repo({'package-lock.json': '{not json'})
         with tmp, self.assertRaisesRegex(KV.VulnerabilityError, 'cannot parse package-lock.json'):
@@ -121,6 +151,26 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual((jinja['severity'], jinja['fixed'], jinja['aliases']), ('MODERATE', ['3.1.3'], ['CVE-2024-22195']))
         lodash = next(item for item in report['findings'] if item['package'] == 'lodash')
         self.assertEqual(lodash['severity'], 'CRITICAL')
+
+    def test_build_backend_advisories_detect_old_pin_and_exclude_fixed_pin(self) -> None:
+        records = [
+            {'id': advisory, 'database_specific': {'severity': severity}, 'affected': [{
+                'package': {'ecosystem': 'PyPI', 'name': 'setuptools'},
+                'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}, {'fixed': fixed}]}],
+            }]}
+            for advisory, severity, fixed in (
+                ('GHSA-5rjg-fvgr-3xxf', 'HIGH', '78.1.1'),
+                ('GHSA-h35f-9h28-mq5c', 'MODERATE', '83.0.0'),
+            )
+        ]
+        for version in ('75.8.0', '84.0.0'):
+            tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ["setuptools==' + version + '"]\n'})
+            with tmp, tempfile.TemporaryDirectory() as database, self.subTest(version=version):
+                _mirror(Path(database), 'PyPI', records)
+                report = KV.scan(root, environ={'GETZILLA_OSV_DB': database})
+            expected = {'HIGH', 'MODERATE'} if version == '75.8.0' else set()
+            self.assertEqual({item['severity'] for item in report['findings']}, expected)
+            self.assertEqual(report['status'], 'fail' if expected else 'pass')
 
     def test_missing_ecosystem_archive_fails_closed(self) -> None:
         tmp, root = _repo({'requirements.txt': 'jinja2==2.11.0\n'})

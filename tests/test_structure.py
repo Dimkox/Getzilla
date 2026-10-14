@@ -304,6 +304,18 @@ class StructureTests(unittest.TestCase):
         self.assertIn("decisions.md", text)
         self.assertIn("mistakes.md", text)
 
+    def test_task_workspace_rule_is_canonical_and_consumer_safe(self) -> None:
+        for relative in ('AGENTS.md', '.getzilla/templates/consumer-AGENTS.md.tmpl',
+                         '.agents/skills/getzilla-delivery/SKILL.md',
+                         '.agents/skills/verification-evidence/SKILL.md',
+                         '.grok/agents/code_reviewer.md', '.grok/agents/code_reviewer.toml',
+                         '.grok/agents/test_reviewer.md', '.grok/agents/test_reviewer.toml'):
+            text = (ROOT / relative).read_text()
+            self.assertIn('canonical project root', text, relative)
+            self.assertIn('.getzilla/runtime', text, relative)
+            self.assertIn('outside the reviewed candidate', text, relative)
+            self.assertNotIn('/home/pall/', text, relative)
+
     def test_reviewer_mutation_probes_are_scratch_only_and_reported(self) -> None:
         common_requirements = (
             "private scratch",
@@ -417,14 +429,14 @@ class StructureTests(unittest.TestCase):
         readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
-        self.assertEqual(version, "2.2.1")
+        self.assertEqual(version, "2.2.2")
         self.assertTrue(readme.startswith(f"# Getzilla v{version}\n"))
-        self.assertIn("Identity: **2.2.1 source candidate**", readme)
+        self.assertIn("Identity: **2.2.2 source candidate**", readme)
         self.assertTrue(
-            changelog.startswith("# Changelog\n\n## 2.2.1 — 2026-10-09 (source candidate)\n")
+            changelog.startswith("# Changelog\n\n## 2.2.2 — 2026-10-11 (source candidate)\n")
         )
         self.assertIn(
-            "product version: 2.2.1 source candidate (latest published release: v2.2.0; U5/U6 default-off and not live-qualified)",
+            "product version: 2.2.2 source candidate (latest published release: v2.2.1; U5/U6 default-off and not live-qualified)",
             roadmap,
         )
         sys.path.insert(0, str(ROOT / ".getzilla"))

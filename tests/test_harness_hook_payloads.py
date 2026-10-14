@@ -75,6 +75,123 @@ class HarnessHookPayloadTests(unittest.TestCase):
             data = self._pre_tool(root, 'run_shell_command', {'command': 'ls', 'description': 'list'})
             self.assertEqual(data['decision'], 'allow')
 
+    def test_codex_cmd_payload_reaches_sensitive_command_policy(self) -> None:
+        with project_copy() as root:
+            for command in ('git push origin main', 'terraform destroy', 'cat .env',
+                            'printf x >> AGENTS.md'):
+                with self.subTest(command=command):
+                    data = self._pre_tool(root, 'exec_command', {
+                        'cmd': command, 'workdir': str(root),
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_cmd_is_authoritative_for_exec_command(self) -> None:
+        with project_copy() as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git push origin main', 'command': 'ls', 'workdir': str(root),
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_conflicting_and_malformed_commands_are_denied(self) -> None:
+        with project_copy() as root:
+            for inputs in (
+                {'cmd': 'ls', 'command': 'terraform destroy'},
+                {'cmd': 'terraform destroy', 'command': 'ls'},
+                {}, {'cmd': None}, {'cmd': ''}, {'cmd': '   '},
+                {'cmd': 1}, {'cmd': False}, {'cmd': ['ls']},
+                {'cmd': {}, 'command': 'ls'}, None, [],
+            ):
+                with self.subTest(inputs=inputs):
+                    self.assertEqual(self._pre_tool(root, 'exec_command', inputs)['decision'], 'deny')
+
+    def test_codex_envelopes_and_oversize_commands_are_checked(self) -> None:
+        with project_copy() as root:
+            for key in ('tool_input', 'toolInput', 'toolArgs'):
+                inputs = {'cmd': 'terraform destroy', 'workdir': str(root)}
+                code, data, stderr = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root), 'toolName': 'exec_command',
+                    key: json.dumps(inputs) if key == 'toolArgs' else inputs,
+                })
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(data['decision'], 'deny', key)
+            data = self._pre_tool(root, 'exec_command', {'cmd': 'x' * 131073})
+            self.assertEqual(data['decision'], 'deny')
+            self.assertIn('longer', data['reason'])
+
+    def test_codex_legacy_and_equal_alias_commands_stay_supported(self) -> None:
+        with project_copy() as root:
+            for inputs in ({'command': 'ls'}, {'command': ['ls']},
+                           {'cmd': 'ls', 'command': 'ls'}, {'cmd': 'ls', 'command': ['ls']}):
+                self.assertEqual(self._pre_tool(root, 'exec_command', inputs)['decision'], 'allow')
+
+    def test_normalization_preserves_input_and_does_not_invent_alias_contracts(self) -> None:
+        import copy
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location('cmd_hook_fixture', PROJECT / '.grok/hooks/_lib.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        inputs = {'cmd': 'ls', 'workdir': '/somewhere', 'extra': ['value']}
+        payload = {'tool_name': 'exec_command', 'tool_input': inputs}
+        before = copy.deepcopy(payload)
+        result = module.tool_input(payload)
+        self.assertEqual(result['command'], 'ls')
+        self.assertEqual(result['workdir'], '/somewhere')
+        self.assertEqual(payload, before)
+        self.assertIsNot(result, inputs)
+        unknown = module.tool_input({'tool_name': 'shell', 'tool_input': {'cmd': 'ls'}})
+        self.assertNotIn('command', unknown)
+
+    def test_installed_codex_launcher_checks_native_cmd(self) -> None:
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location('cmd_install_fixture', PROJECT / 'scripts/install_into.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        with project_copy() as root:
+            target = root.parent / 'installed'
+            module.materialize_new(PROJECT, target)
+            self.assertIn('canonical project root', (target / 'AGENTS.md').read_text())
+            self.assertIn('outside the reviewed candidate', (target / 'AGENTS.md').read_text())
+            for consumer, configuration in ((root, PROJECT), (target, target)):
+                hooks = json.loads((configuration / '.codex/hooks.json').read_text())
+                launcher = hooks['hooks']['PreToolUse'][0]['hooks'][0]['command']
+                result = subprocess.run(launcher, shell=True, cwd=consumer, input=json.dumps({
+                    'cwd': str(consumer), 'tool_name': 'exec_command',
+                    'tool_input': {'cmd': 'terraform destroy'},
+                }), text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                prompt_hook = consumer / '.grok/hooks/user_prompt_submit.py'
+                prompt_hook.write_text(prompt_hook.read_text().replace(
+                    '    emit({', "    emit({'source_identity': __file__,"))
+                prompt = subprocess.run(hooks['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'],
+                    shell=True, cwd=consumer, input=json.dumps({'cwd': str(consumer),
+                    'session_id': 'installed-routing', 'prompt': 'Fix security policy tests'}),
+                    text=True, capture_output=True, timeout=30)
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                output = json.loads(prompt.stdout)
+                self.assertEqual(Path(output.get('source_identity', '')).resolve(), prompt_hook.resolve())
+                route = json.loads((consumer / '.getzilla/runtime/active-route.json').read_text())
+                self.assertIn(route['write_agent'], route['allowed_agents'])
+                self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
+
+    def test_codex_cmd_respects_command_workdir(self) -> None:
+        with project_copy(git=True) as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git push origin feature', 'workdir': str(root.parent),
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_codex_read_only_cmd_is_allowed(self) -> None:
+        with project_copy() as root:
+            data = self._pre_tool(root, 'exec_command', {
+                'cmd': 'git status --short', 'workdir': str(root),
+            })
+            self.assertEqual(data['decision'], 'allow', data)
+
     def test_structured_writes_to_protected_paths_need_a_grant(self) -> None:
         with project_copy() as root:
             for tool, tool_input in (
@@ -205,6 +322,53 @@ class GeneratedHookCommandTests(unittest.TestCase):
                     'tool_input': {'command': 'terraform destroy'},
                 })
                 self.assertEqual(json.loads(out)['hookSpecificOutput']['permissionDecision'], 'deny', settings)
+
+    def test_nested_real_worktree_uses_its_own_route_and_denial_state(self) -> None:
+        import os
+        import sys
+        sys.path.insert(0, str(PROJECT / '.getzilla'))
+        with project_copy(git=True) as outer:
+            from getzilla.harnesses import write
+            write(outer)
+            subprocess.run(['git', 'add', '.'], cwd=outer, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-qm', 'generated launchers'], cwd=outer, check=True)
+            inner = outer / '.getzilla/runtime/worktrees/inner'
+            subprocess.run(['git', 'worktree', 'add', '--detach', str(inner), 'HEAD'],
+                           cwd=outer, check=True, capture_output=True)
+            inner_hook = inner / '.grok/hooks/user_prompt_submit.py'
+            inner_hook.write_text(inner_hook.read_text().replace('    emit({', "    emit({'source_identity': __file__,"))
+            outer_hook = outer / '.grok/hooks/user_prompt_submit.py'
+            outer_hook.write_text('print(' + repr(json.dumps({'outer-hook': True})) + ')\n')
+            config = json.loads((inner / '.codex/hooks.json').read_text())['hooks']
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ('CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'GEMINI_PROJECT_DIR')}
+            deep = inner / 'src/deep'
+            deep.mkdir(parents=True)
+            for directory in (inner, deep):
+                prompt = subprocess.run(config['UserPromptSubmit'][0]['hooks'][0]['command'],
+                    shell=True, cwd=directory, env=environment, text=True, capture_output=True,
+                    input=json.dumps({'cwd': str(inner), 'session_id': 'nested-route',
+                                      'prompt': 'Fix command security policy tests'}), timeout=30)
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                output = json.loads(prompt.stdout)
+                self.assertEqual(Path(output.get('source_identity', '')).resolve(), inner_hook.resolve())
+                self.assertIn('additionalContext', output['hookSpecificOutput'])
+                route = json.loads((inner / '.getzilla/runtime/active-route.json').read_text())
+                self.assertIn(route['write_agent'], route['allowed_agents'])
+                self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
+            self.assertFalse((outer / '.getzilla/runtime/active-route.json').exists())
+            denial = subprocess.run(config['PreToolUse'][0]['hooks'][0]['command'], shell=True,
+                cwd=deep, env=environment, text=True, capture_output=True,
+                input=json.dumps({'cwd': str(inner), 'tool_name': 'exec_command',
+                                  'tool_input': {'cmd': 'terraform destroy'}}), timeout=30)
+            self.assertEqual(json.loads(denial.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertTrue((inner / '.getzilla/runtime/tool-denials.json').is_file())
+            self.assertFalse((outer / '.getzilla/runtime/tool-denials.json').exists())
+            environment['CLAUDE_PROJECT_DIR'] = str(outer)
+            explicit = subprocess.run(config['UserPromptSubmit'][0]['hooks'][0]['command'],
+                shell=True, cwd=deep, env=environment, text=True, capture_output=True,
+                input='{}', timeout=30)
+            self.assertTrue(json.loads(explicit.stdout)['outer-hook'])
 
     def test_nested_harness_directories_are_protected(self) -> None:
         with project_copy() as root:

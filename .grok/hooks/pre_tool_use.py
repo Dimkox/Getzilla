@@ -251,16 +251,50 @@ def _oversize_bash_command(current_tool: str, current_input: Any) -> bool:
     return size > MAX_BASH_COMMAND_CHARS
 
 
+def _deny(payload: dict[str, Any], current_tool: str, current_input: dict[str, Any],
+          reason: str, *, context: RootContext | None = None,
+          action: str = 'policy-denial') -> None:
+    """An established denial stays denied when context or recording fails."""
+    message = reason
+    try:
+        message = _actionable_reason(reason)
+        if context is None:
+            context_input = current_input
+            if action in {'invalid-tool-input', 'oversize-command'}:
+                # Refused commands are not parsed to establish ledger identity.
+                context_input = {key: value for key, value in current_input.items()
+                                 if key not in {'command', 'cmd'}}
+            context = root_context(payload, context_input, current_tool)
+        ledger_root = context.ledger_root
+        if ledger_root is None:
+            raise RuntimeError('no recognized repository root for denial ledger')
+        exact_count, objective_count = _record_denial(
+            ledger_root, session_id(payload), current_tool, current_input,
+            message, context, action,
+        )
+        if exact_count >= 2:
+            message = f'{_EXACT_CIRCUIT_BREAKER_GUIDANCE} Original denial: {message}'
+        elif objective_count >= 2:
+            message = f'{_OBJECTIVE_CIRCUIT_BREAKER_GUIDANCE} Original denial: {message}'
+    except Exception:
+        message = f'{message} Denial recording unavailable; repeat counts are not established.'
+    emit(permission_output(False, message))
+
+
 def main() -> None:
     try:
         payload = read_payload()
         current_tool = tool_name(payload)
         current_input = tool_input(payload)
+        if current_input.get('_getzilla_input_error'):
+            _deny(payload, current_tool, current_input, current_input['_getzilla_input_error'],
+                  action='invalid-tool-input')
+            return
         if _oversize_bash_command(current_tool, current_input):
-            emit(permission_output(False, (
+            _deny(payload, current_tool, current_input, (
                 f'Blocked a Bash command longer than {MAX_BASH_COMMAND_CHARS} characters; '
                 'split it or write the payload to a file first.'
-            )))
+            ), action='oversize-command')
             return
         context = root_context(payload, current_input, current_tool)
         try:
@@ -305,28 +339,8 @@ def main() -> None:
             emit(permission_output(True))
             return
 
-        message = _actionable_reason(reason or 'Blocked by Getzilla policy')
-        try:
-            ledger_root = context.ledger_root
-            if ledger_root is None:
-                raise RuntimeError('no recognized repository root for denial ledger')
-            exact_count, objective_count = _record_denial(
-                ledger_root,
-                session_id(payload),
-                current_tool,
-                current_input,
-                message,
-                context,
-                action or 'policy-denial',
-            )
-        except Exception:
-            exact_count, objective_count = 1, 1
-        if exact_count >= 2:
-            message = f'{_EXACT_CIRCUIT_BREAKER_GUIDANCE} Original denial: {message}'
-        elif objective_count >= 2:
-            message = f'{_OBJECTIVE_CIRCUIT_BREAKER_GUIDANCE} Original denial: {message}'
-
-        emit(permission_output(False, message))
+        _deny(payload, current_tool, current_input, reason or 'Blocked by Getzilla policy',
+              context=context, action=action or 'policy-denial')
     except Exception:
         # Fail-open: never lock the agent on hook bugs
         emit(permission_output(True))

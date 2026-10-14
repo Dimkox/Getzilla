@@ -39,14 +39,14 @@ original baseline SHA: 73e4ae7c68a95d3a7440378964b8cc1879df9b89 (PR #2 merge, 20
 publication snapshot main SHA: 1751b5855e46782b9a1bfceb6e1ab0102cba03b0 (2026-09-04T16:58:48Z; not a perpetual current-ref assertion)
 v2.0.15 publication snapshot tag target: fd51dcfed6b33f4a8707c0db602328146df17cc9 (GitHub Release published 2026-09-05T20:17:20Z; not a perpetual current-ref assertion)
 L5 landing main SHA: eb9df64bca333f30ec58f8c725a021360e22ed92 (PR #75 union of slices #65-#71, merged 2026-09-13T17:35:51Z; its landed evidence follow-up merged as e737dd5c338793e274285d657354e74ecc812f89 at 2026-09-13T18:26:32Z)
-product version: 2.2.1 source candidate (latest published release: v2.2.0; U5/U6 default-off and not live-qualified)
+product version: 2.2.2 source candidate (latest published release: v2.2.1; U5/U6 default-off and not live-qualified)
 Trust CI service version: 2.1.0
 required check: adaptive-trust-ci/verified@06ecf1c875bc
 ```
 
 Before implementing any milestone, compare the current `main` SHA with the recorded observation and update the milestone plan for intervening changes. Do not reset or discard newer work merely to match either historical identity.
 
-Current delivery is the bounded owner-local M8 2.2.0 source successor to accepted-product PR #244. One accepted Liqvera case and explicit accounting/human readiness qualify it; per-clone activation and each local admission use the offline consumer. F durable evidence and separate G Trust CI authority remain unaccepted successors, and general M9 qualification remains separate. The [release-wide ledger](engineering/changes/20261002-assemble-2-1-1-factory-source-with-heartbeat-and-ffb3d8/release-scope-ledger.md) preserves its original dated scope rather than imposing that old release ordering on this bounded additive source.
+Current delivery prepares the 2.2.2 release candidate with the merged verifier child-test scope fix. The bounded owner-local M8 policy introduced in 2.2.0 remains the successor to accepted-product PR #244. One accepted Liqvera case and explicit accounting/human readiness qualify it; per-clone activation and each local admission use the offline consumer. F durable evidence and separate G Trust CI authority remain unaccepted successors, and general M9 qualification remains separate. The [release-wide ledger](engineering/changes/20261002-assemble-2-1-1-factory-source-with-heartbeat-and-ffb3d8/release-scope-ledger.md) preserves its original dated scope rather than imposing that old release ordering on this bounded additive source.
 
 ## 3. What already exists
 
@@ -224,7 +224,7 @@ M1 + M2 + M3
 
 Milestones M1, M2, and M3 may be developed in parallel only after M0 has a live proof or an explicitly documented bootstrap exception approved by the user. M4 must consume their stable interfaces rather than inventing replacements.
 
-The dependency-ordered M4 `67dc4ddf` → M5 `85cd4343` → M6 `c6d48ffd` → M7 `00e0e4f9` → corrected M8 `a937ac8d` → M9 `64b10689` source was delivered by PR #22 in `v2.0.13`. That historical empirical evaluator remains recommendation-only. The current 2.2.0 owner-local path uses one accepted product with executable bounded activation; no M4/M5/M6 producer evidence is invented. M9 remains non-operational pending signed input, environment/provider deployment, exercised recovery and human production authority.
+The dependency-ordered M4 `67dc4ddf` → M5 `85cd4343` → M6 `c6d48ffd` → M7 `00e0e4f9` → corrected M8 `a937ac8d` → M9 `64b10689` source was delivered by PR #22 in `v2.0.13`. That historical empirical evaluator remains recommendation-only. The owner-local path introduced in 2.2.0 uses one accepted product with executable bounded activation; no M4/M5/M6 producer evidence is invented. M9 remains non-operational pending signed input, environment/provider deployment, exercised recovery and human production authority.
 
 ## 7.1 Exact milestone handoff contracts
 
@@ -937,7 +937,7 @@ Current status: 2.2.0 adds enabled owner-local M8 qualification, activation, adm
 
 Completed-product case: **DONE — Liqvera Mezo Buildathon demo**, accepted by its owner as a completed working product built by this factory. Observed main is `97484401d50fa3fb28ebd813cc8320e7e51c72f5`; published `v0.0.5` resolves to `19284fb07fedd4909672c7e9a641cb066efbb7cc`, whose tooling pins factory `v2.0.19` / `cb9af4073ba6c3d515145164d771c75ebdfa3224`. [PROJECT_STATE.json](PROJECT_STATE.json) records owner-confirmation provenance and all satisfied accepted-product dependencies: first completed factory product, external accepted product, M8 follow-up planning and M9 follow-up planning. No duplicate first pilot is required.
 
-The owner confirms completed cost/intervention accounting and human readiness for this case; unknown numeric telemetry remains null. That qualifies the one-case local policy without synthetic producer records. Per-clone activation binds current source/profile/repository/policy/case, expires within one hour and is revalidated each use; [offline CLI commands](README.md#bounded-local-m8-in-the-220-source-candidate) exercise the actual consumer. Empirical M7 durable currentness, general M9 signed environment/recovery authority, complete F7 validation and factory-runtime site publication remain separate. Historical milestones and old pilot metrics remain unchanged.
+The owner confirms completed cost/intervention accounting and human readiness for this case; unknown numeric telemetry remains null. That qualifies the one-case local policy without synthetic producer records. Per-clone activation binds current source/profile/repository/policy/case, expires within one hour and is revalidated each use; [offline CLI commands](docs/REFERENCE.md#bounded-local-m8) exercise the actual consumer. Empirical M7 durable currentness, general M9 signed environment/recovery authority, complete F7 validation and factory-runtime site publication remain separate. Historical milestones and old pilot metrics remain unchanged.
 
 ## Objective
 
