@@ -28,10 +28,11 @@
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
-# At the end of every run (first install or re-run) the installer offers to update
-# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec Kit,
-# vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only after you
-# answer yes. Without an interactive console it only prints that command.
+# At the end of every run (first install or re-run) the installer always updates the
+# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers to
+# update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their
+# latest versions and runs scripts/getzilla_update.py for them only after you answer yes.
+# Without an interactive console it only prints that command.
 #
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
@@ -110,6 +111,7 @@ function Install-Getzilla {
         Pop-Location
     }
 
+    Update-SecurityData $Python $GetzillaHome
     Request-ToolUpdate $Python $GetzillaHome
 
     $PythonText = $Python -join ' '
@@ -129,6 +131,14 @@ function Install-Getzilla {
 
 function Write-Step([string]$Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Get-InstallLogDir {
+    # Third-party installer logs, so a failed or stuck step can be diagnosed afterwards.
+    $dir = $env:GETZILLA_LOG_DIR
+    if (-not $dir) { $dir = Join-Path $env:LOCALAPPDATA 'Getzilla\logs' }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    return $dir
 }
 
 function Test-IsWindowsHost {
@@ -176,7 +186,12 @@ function Test-WingetInstalls {
 function Invoke-Winget([string]$Id, [string[]]$Extra) {
     # The winget community source only: the msstore source fails in some regions (0x8a15003b) and,
     # matching the same id, makes winget refuse to choose a package at all.
-    $arguments = @('install', '-e', '--id', $Id, '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
+    $logDir = Get-InstallLogDir
+    $installerLog = Join-Path $logDir "winget-$Id.log"
+    # --verbose-logs: winget's own diagnostic log; --log: the package installer's log (MSI, Inno, ...).
+    $arguments = @('install', '-e', '--id', $Id, '--source', 'winget', '--silent', '--accept-package-agreements',
+        '--accept-source-agreements', '--verbose-logs', '--log', $installerLog) + $Extra
+    Write-Step "winget logs: $installerLog and $logDir\winget-diag"
     # winget writes UTF-8; Windows PowerShell decodes piped native output with the OEM code page,
     # which turns localized (for example Russian) messages into mojibake.
     $previousEncoding = [Console]::OutputEncoding
@@ -186,6 +201,13 @@ function Invoke-Winget([string]$Id, [string[]]$Extra) {
         $exitCode = $LASTEXITCODE
     } finally {
         [Console]::OutputEncoding = $previousEncoding
+        $diag = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+        if (Test-Path $diag) {
+            $target = Join-Path $logDir 'winget-diag'
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Get-ChildItem -Path $diag -Filter '*.log' | Sort-Object LastWriteTime | Select-Object -Last 3 |
+                Copy-Item -Destination $target -Force -ErrorAction SilentlyContinue
+        }
     }
     return ($exitCode -eq 0)
 }
@@ -247,9 +269,9 @@ function Install-Winget {
     $paths = @(Select-WingetDependencies $folder (Get-WindowsArchitecture))
     $package = Get-PinnedDownload 'winget'
     if ($paths.Count) {
-        Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop
+        Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop -Verbose
     } else {
-        Add-AppxPackage -Path $package -ErrorAction Stop
+        Add-AppxPackage -Path $package -ErrorAction Stop -Verbose
     }
     Remove-Item -Force $package
     $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
@@ -362,18 +384,33 @@ function Install-Python {
     $installer = Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))
     # Not Start-Process -Wait: Windows PowerShell then waits for the whole process tree, and the
     # Python installer leaves a background child running, so the installer hung after Python was in.
+    $log = Join-Path (Get-InstallLogDir) 'python-install.log'
+    Write-Step "Python installer log: $log"
+    # Only the packages Getzilla needs: every MSI's signature check can wait about two minutes on a
+    # fresh Windows without cached revocation data (seen in Windows Sandbox), and the py launcher
+    # is not needed because PrependPath puts python.exe on PATH.
+    # Start-Process joins arguments with spaces and does not quote them in Windows PowerShell.
     $process = Start-Process -FilePath $installer -PassThru -ArgumentList @(
-        '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=1',
-        'InstallLauncherAllUsers=0', 'Include_test=0', 'Include_doc=0'
+        '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=0', 'InstallLauncherAllUsers=0',
+        'Include_tcltk=0', 'Include_test=0', 'Include_doc=0', '/log', ('"' + $log + '"')
     )
     $null = $process.Handle  # keeps ExitCode readable after exit in Windows PowerShell
-    if (-not $process.WaitForExit(600000)) {
-        try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
-        Remove-Item -Force $installer -ErrorAction SilentlyContinue
-        throw 'The Python installer did not finish within 10 minutes (it may be waiting on a hidden prompt). Install Python 3.13 for the current user from https://www.python.org/downloads/ and run this installer again.'
+    $started = Get-Date
+    $limit = New-TimeSpan -Minutes 30
+    while (-not $process.WaitForExit(30000)) {
+        $elapsed = (Get-Date) - $started
+        if ($elapsed -gt $limit) {
+            try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
+            Remove-Item -Force $installer -ErrorAction SilentlyContinue
+            throw "The Python installer did not finish within 30 minutes; see $log and the python-install_*.log files next to it. Install Python 3.13 for the current user from https://www.python.org/downloads/ and run this installer again."
+        }
+        $current = Select-String -Path $log -Pattern 'Applying execute package: (\w+?)_' -ErrorAction SilentlyContinue |
+            Select-Object -Last 1
+        $component = if ($current) { $current.Matches[0].Groups[1].Value } else { 'preparing' }
+        Write-Step ("Python: installing {0} ({1:N0} min so far; slow signature checks are normal on a fresh Windows)" -f $component, $elapsed.TotalMinutes)
     }
     Remove-Item -Force $installer
-    if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode)." }
+    if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode); see $log." }
     Update-SessionPath
 }
 
@@ -416,22 +453,38 @@ function Install-PowerShell7 {
     }
 }
 
+function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
+    # Not optional: without fresh vulnerability data the first gates would scan against an empty
+    # or stale CVE database. A network failure warns instead of failing the install.
+    Write-Step 'Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner...'
+    Push-Location $GetzillaHome
+    try {
+        Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ('WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "' + $GetzillaHome + '"; ' +
+                ($Python -join ' ') + ' scripts/getzilla_update.py --only osv --only opengrep') -ForegroundColor Yellow
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Request-ToolUpdate([string[]]$Python, [string]$GetzillaHome) {
     $answer = 'n'
     if (Test-CanAsk) {
-        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]' 'n'
+        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]' 'n'
     }
     if ($answer -in @('y', 'Y', 'yes', 'Yes', 'YES')) {
         Write-Step 'Updating third-party tools...'
         Push-Location $GetzillaHome
         try {
-            Invoke-Python $Python @('scripts/getzilla_update.py')
+            Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'agents', '--only', 'sources')
             if ($LASTEXITCODE -ne 0) { Write-Step 'Some updates failed (FAIL lines above); run the same command again later.' }
         } finally {
             Pop-Location
         }
     } else {
-        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py')
+        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py --only agents --only sources')
     }
 }
 

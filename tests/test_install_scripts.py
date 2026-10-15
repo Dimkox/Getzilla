@@ -146,9 +146,11 @@ class InstallScriptContractTests(unittest.TestCase):
         # install waited on a hidden elevation prompt in a clean Windows Sandbox.
         self.assertNotRegex(text, r"Invoke-Winget 'Python\.Python")
         self.assertIn('/python-3.13.16-amd64.exe', text)
-        for switch in ('InstallAllUsers=0', 'InstallLauncherAllUsers=0'):
+        # Only needed MSI packages (each signature check can wait ~2 minutes on a fresh Windows), a
+        # 30-minute ceiling with progress, and a log for diagnosis.
+        for switch in ('InstallAllUsers=0', 'Include_launcher=0', 'InstallLauncherAllUsers=0', 'Include_tcltk=0',
+                       "'/log'", 'while (-not $process.WaitForExit(30000))', 'New-TimeSpan -Minutes 30'):
             self.assertIn(switch, text)
-        self.assertIn('$process.WaitForExit(600000)', text)
         self.assertNotIn('Start-Process -FilePath $installer -Wait', text)
 
     def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
@@ -183,6 +185,20 @@ class InstallScriptContractTests(unittest.TestCase):
                        'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip'):
             self.assertIn(needle, text)
         self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
+
+    def test_both_installers_always_refresh_vulnerability_data(self) -> None:
+        # The CVE database and OpenGrep are part of a working install: refreshed on every run
+        # without a question, before the optional [y/N] update of the other tools.
+        shell = SHELL.read_text(encoding='utf-8')
+        powershell = POWERSHELL.read_text(encoding='utf-8')
+        self.assertIn('scripts/getzilla_update.py --only osv --only opengrep', shell)
+        self.assertIn("@('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')", powershell)
+        self.assertLess(shell.index('  update_security_data "$home" "$python"\n'),
+                        shell.index('  offer_tool_update "$home" "$python"\n'))
+        self.assertLess(powershell.index('    Update-SecurityData $Python $GetzillaHome\n'),
+                        powershell.index('    Request-ToolUpdate $Python $GetzillaHome\n'))
+        for text in (shell, powershell):
+            self.assertNotIn('vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]', text)
 
     def test_powershell_fallback_downloads_are_pinned_and_verified(self) -> None:
         # Unauthenticated GitHub API calls hit the 60/hour per-IP limit behind shared NAT and fetched

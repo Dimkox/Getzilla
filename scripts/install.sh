@@ -33,9 +33,10 @@
 #   GETZILLA_SKIP_GROK=1  do not install the Grok Build CLI (when the agent is grok)
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
-# At the end of every run (first install or re-run) the installer offers to update
-# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec
-# Kit, vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only
+# At the end of every run (first install or re-run) the installer always updates the
+# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers
+# to update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit,
+# vibevm) to their latest versions and runs scripts/getzilla_update.py for them only
 # after you answer yes. Without a terminal it only prints that command.
 #
 # Everything runs inside main(), so a partially downloaded script does nothing.
@@ -85,6 +86,7 @@ main() {
     (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
   fi
 
+  update_security_data "$home" "$python"
   offer_tool_update "$home" "$python"
 
   if [ "$doctor_status" -eq 0 ]; then
@@ -377,19 +379,28 @@ configure_agent() {
   fi
 }
 
+update_security_data() {
+  # Not optional: without fresh vulnerability data the first gates would scan against an
+  # empty or stale CVE database. A network failure warns instead of failing the install.
+  local home="$1" python="$2"
+  say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
+  (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
+    || printf 'WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "%s" && %s scripts/getzilla_update.py --only osv --only opengrep\n' "$home" "$python" >&2
+}
+
 offer_tool_update() {
   local home="$1" python="$2" answer=""
   if can_ask; then
-    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]: ' n)"
+    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]: ' n)"
   fi
   case "$answer" in
     y|Y|yes|YES|Yes)
       say "Updating third-party tools..."
-      (cd "$home" && "$python" scripts/getzilla_update.py) \
+      (cd "$home" && "$python" scripts/getzilla_update.py --only agents --only sources) \
         || say "Some updates failed (FAIL lines above); run the same command again later."
       ;;
     *)
-      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py"
+      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py --only agents --only sources"
       ;;
   esac
 }

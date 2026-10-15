@@ -759,7 +759,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertFalse((target / authority).exists(), authority)
             self.assertEqual(_stage_names(parent), [])
             result = subprocess.run(
-                ["python3", "scripts/getzilla_architecture.py", "--help"],
+                [sys.executable, "scripts/getzilla_architecture.py", "--help"],
                 cwd=target,
                 text=True,
                 capture_output=True,
@@ -1311,14 +1311,14 @@ class InstallerTests(unittest.TestCase):
             sentinel.write_bytes(b"unchanged\n")
             before = _snapshot(existing)
             default = subprocess.run(
-                ["python3", "scripts/install_into.py", str(existing)],
+                [sys.executable, "scripts/install_into.py", str(existing)],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
                 check=False,
             )
             explicit = subprocess.run(
-                ["python3", "scripts/install_into.py", "--plan", str(existing)],
+                [sys.executable, "scripts/install_into.py", "--plan", str(existing)],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -1326,7 +1326,7 @@ class InstallerTests(unittest.TestCase):
             )
             target = root / "new"
             materialized = subprocess.run(
-                ["python3", "scripts/install_into.py", "--materialize-new", str(target)],
+                [sys.executable, "scripts/install_into.py", "--materialize-new", str(target)],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -1345,7 +1345,7 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((target / ".getzilla/runtime/agent-state.json").exists())
             self.assertFalse((target / ".getzilla/runtime/.agents.guard").exists())
             command = subprocess.run(
-                ["python3", "scripts/getzilla_agent.py", "watchdog"], cwd=target,
+                [sys.executable, "scripts/getzilla_agent.py", "watchdog"], cwd=target,
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(command.returncode, 0, command.stderr)
