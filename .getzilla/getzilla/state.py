@@ -152,8 +152,43 @@ def get_active_route(root: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+CLOSED_CHANGE_STATUSES = frozenset({'released', 'archived', 'cancelled'})
+
+
+class ActiveChangeConflict(RuntimeError):
+    """A new route would orphan the open change package bound to another route."""
+
+    def __init__(self, change_id: str, change_route_id: str, route_id: str) -> None:
+        self.change_id = change_id
+        self.change_route_id = change_route_id
+        self.route_id = route_id
+        super().__init__(
+            f'open change package {change_id} is bound to route {change_route_id}; '
+            f'refusing to activate route {route_id}. Finish or cancel the change first.'
+        )
+
+
+def open_change_binding(root: Path) -> tuple[str, str] | None:
+    """Return (change_id, route_id) of the active change package while it is still open."""
+    change = get_active_change(root) or {}
+    change_id, rel = change.get('change_id'), change.get('path')
+    if not isinstance(change_id, str) or not isinstance(rel, str) or not rel:
+        return None
+    package = (root / rel).resolve()
+    if not package.is_relative_to((root / 'engineering/changes').resolve()):
+        return None
+    state = load_json(package / 'state.json')
+    if not isinstance(state, dict) or state.get('status') in CLOSED_CHANGE_STATUSES:
+        return None
+    route_id = state.get('route_id')
+    return (change_id, route_id) if isinstance(route_id, str) and route_id else None
+
+
 def set_active_route(root: Path, route: dict[str, Any]) -> None:
     with runtime_lock(root, 'route'):
+        binding = open_change_binding(root)
+        if binding and binding[1] != route['route_id']:
+            raise ActiveChangeConflict(binding[0], binding[1], route['route_id'])
         dump_json(active_route_path(root), route)
         route_dir = runtime_dir(root) / 'routes'
         route_dir.mkdir(parents=True, exist_ok=True)

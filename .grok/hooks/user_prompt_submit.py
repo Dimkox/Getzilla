@@ -7,7 +7,7 @@ import sys
 try:
     from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
     from getzilla.router import build_route, can_reuse_active_route, route_context
-    from getzilla.state import get_active_route, set_active_route
+    from getzilla.state import ActiveChangeConflict, get_active_route, set_active_route
 except Exception:
     if os.name != 'nt':
         raise
@@ -27,8 +27,13 @@ def main() -> None:
         context = route_context(existing)
     else:
         route = build_route(root, prompt or 'development task', session_id(payload))
-        set_active_route(root, route.to_dict())
-        context = route_context(route)
+        try:
+            set_active_route(root, route.to_dict())
+            context = route_context(route)
+        except ActiveChangeConflict as conflict:
+            # Keep the open change package's route; a new prompt must not orphan it.
+            context = (route_context(existing) + '\n\n') if existing else ''
+            context += f'Getzilla kept the active route: {conflict}'
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'UserPromptSubmit',

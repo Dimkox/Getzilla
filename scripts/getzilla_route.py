@@ -10,7 +10,7 @@ import argparse
 import json
 
 from getzilla.router import build_route, route_context
-from getzilla.state import get_active_route, set_active_route, update_route
+from getzilla.state import ActiveChangeConflict, get_active_route, set_active_route, update_route
 from getzilla.util import find_root
 
 parser = argparse.ArgumentParser(description='Create or inspect an adaptive task route.')
@@ -29,7 +29,10 @@ elif args.cancel:
 elif args.task:
     route = build_route(root, args.task, args.session)
     data = route.to_dict()
-    set_active_route(root, data)
+    try:
+        set_active_route(root, data)
+    except ActiveChangeConflict as conflict:
+        raise SystemExit(f'Route not changed: {conflict}')
 else:
     data = get_active_route(root)
 if not data:
