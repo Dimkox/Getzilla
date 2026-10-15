@@ -373,11 +373,15 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def tree_fingerprint(root: Path) -> str:
+def tree_fingerprint(root: Path, exclude: Iterable[str] = ()) -> str:
+    """HEAD plus the content of every changed path, except the exact repository paths in ``exclude``."""
+    skipped = {str(item).replace('\\', '/') for item in exclude}
     digest = hashlib.sha256()
     head = git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
     for rel in changed_files(root):
+        if rel.replace('\\', '/') in skipped:
+            continue
         digest.update(os.fsencode(rel))
         path = root / rel
         try:

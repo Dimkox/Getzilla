@@ -23,6 +23,9 @@ from .util import (
 
 APPROVAL_SCOPES = {'production', 'external-write', 'protected-path'}
 APPROVAL_SOURCES = {'standing-user-consent', 'explicit-user-consent'}
+# A protected-path grant authorizes writing its exact files, so their own content is not part of
+# its tree binding; every other tree or commit change still invalidates it.
+GRANTED_RESOURCES_BINDING = 'tree-except-granted-resources'
 SCOPE_ACTIONS = {
     'production': {
         'git-push-branch',
@@ -387,7 +390,10 @@ def add_approval(
         'route_id': route.get('route_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
-        'grant_binding_digest': tree_fingerprint(root),
+        **({'binding': GRANTED_RESOURCES_BINDING} if normalized_scope == 'protected-path' else {}),
+        'grant_binding_digest': tree_fingerprint(
+            root, normalized_resources if normalized_scope == 'protected-path' else (),
+        ),
         'created_at': now.isoformat(timespec='seconds'),
         'expires_at': (now + timedelta(minutes=ttl_minutes)).isoformat(timespec='seconds'),
     }
@@ -456,7 +462,14 @@ def has_valid_approval(
         legacy_tree_fingerprint = approval.get('tree_fingerprint')
         if grant_binding_digest is not None and legacy_tree_fingerprint is not None:
             continue
-        if (grant_binding_digest or legacy_tree_fingerprint) != current_binding_digest:
+        binding = approval.get('binding')
+        if binding is None:
+            expected_digest = current_binding_digest
+        elif binding == GRANTED_RESOURCES_BINDING and approval.get('scope') == 'protected-path':
+            expected_digest = tree_fingerprint(root, approval.get('resources') or [])
+        else:
+            continue
+        if (grant_binding_digest or legacy_tree_fingerprint) != expected_digest:
             continue
         if action and action not in set(approval.get('actions') or []):
             continue
