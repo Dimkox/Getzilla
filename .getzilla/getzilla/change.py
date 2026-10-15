@@ -93,6 +93,7 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
     (path / 'change-spec.yaml').write_text(
         dump_canonical_spec(generate_spec(generated_route)),
         encoding='utf-8',
+        newline='\n',
     )
     replacements = {
         '{{CHANGE_ID}}': change_id,
@@ -114,7 +115,7 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
                 continue
             for key, value in replacements.items():
                 content = content.replace(key, str(value))
-            file.write_text(content, encoding='utf-8')
+            file.write_text(content, encoding='utf-8', newline='\n')
     dump_json(path / 'route.json', route)
     from .human_gates import route_gate_digest
 
