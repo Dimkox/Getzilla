@@ -185,28 +185,73 @@ composer test
 
 Dedicated Linux CI host with Docker Engine and Compose v2. Do not colocate privileged rootless DinD with production workloads. Terminate TLS in a reverse proxy (none is in-tree). Full operator contract: [`trust-ci/README.md`](trust-ci/README.md) and [`engineering/runbooks/trust-ci-rollout.md`](engineering/runbooks/trust-ci-rollout.md). Commands below match the Makefile; do not build against `compose.yaml` alone.
 
+### One command
+
+From a Getzilla checkout on the CI host:
+
+```bash
+getzilla trust-ci init
+```
+
+`init` does every machine-side step. You can run it again at any time: it fills only what is missing and never overwrites a secret, a key or an image pin that exists. It never prints a secret value.
+
+1. Creates `trust-ci/.env` and `trust-ci/env/*.env` from their templates (mode `0600`, untracked). It generates each machine secret with `secrets.token_urlsafe`: the PostgreSQL admin password, the four role passwords (URL-encoded into each role's database URL), the webhook secret and the read token.
+2. Pins the Python, PostgreSQL and rootless DinD base images by digest. It pulls an image only when it is not local.
+3. Builds api, worker and runner with `compose.build.yaml`. It pins their digests into `.env` and the runner digest into `runtime/policy.json` `sandbox.image`. `runtime/policy.json` and `runtime/trust-store.json` start as copies of `config/*.example.json`.
+4. Generates the CI attestation key with `adaptive-trust-ci keygen` into `runtime/trust-ci-signing-key.pem` (`0600`, worker only).
+5. Starts PostgreSQL, waits until it is healthy, applies the migrations with the migrator role and runs the live harness `trust-ci/scripts/postgres-integration.sh` on a disposable database.
+6. Prints the human steps that are still open.
+
+Options:
+
+- `--project-name <name>`: use when a Compose project with the default name `adaptive-trust-ci` already runs from another directory. `init` refuses to touch that project. The name goes into `.env` as `COMPOSE_PROJECT_NAME`, so plain `docker compose` in `trust-ci/` and later runs use it.
+- `--public-url https://<ci-host>`: sets `TRUST_CI_PUBLIC_BASE_URL` (the webhook goes to `<public-url>/webhooks/github`).
+- `--rebuild`: rebuilds and re-pins the three images. This starts a new policy epoch.
+- `--skip-harness`: does not run the live harness.
+
+Each command's output is kept in `trust-ci/runtime/logs/`, with secrets redacted. Before `init` makes a new database password, it looks for the volume `<project>_trust-ci-postgres`. If that volume exists, the roles keep their old passwords, so `init` stops: restore the previous `env/postgres.env`, or remove the volume on purpose.
+
+### Human steps
+
+Only these three need a person. `init` and agents never do them.
+
+1. **GitHub App (worker only).** Create a GitHub App with Checks read and write, Contents read-only and Pull requests read-only, subscribed to Pull request events. Webhook URL: `https://<ci-host>/webhooks/github`. Webhook secret: read it on the host with `sed -n 's/^TRUST_CI_WEBHOOK_SECRET=//p' trust-ci/env/api.env`. Install the App and generate its private key. Then, on the host:
+
+   ```bash
+   getzilla trust-ci github-app --app-id <APP_ID> --installation-id <INSTALLATION_ID|auto> --private-key <downloaded.pem>
+   ```
+
+   It writes `env/worker.env` and `runtime/github-app-private-key.pem` (`0600`) only. The API never receives the App ID, the installation ID or the private key.
+2. **Human approval key**, on your own workstation. Never make it on the CI host or in an agent workspace. An agent must not generate, read or submit it:
+
+   ```bash
+   adaptive-trust-ci keygen \
+     --private ~/.config/adaptive-trust-ci/operator.pem \
+     --public ~/.config/adaptive-trust-ci/operator.pub.pem
+   ```
+
+   Keep the private key on the workstation. Note the printed `key_id`. Copy only `operator.pub.pem` to the host.
+3. **Trust the public key**, on the host:
+
+   ```bash
+   getzilla trust-ci trust-key --public-key operator.pub.pem --key-id <key_id> --actor operator
+   ```
+
+   It checks the `key_id` against the key, refuses a private key and adds the entry to `runtime/trust-store.json` (mounted into the API only).
+
+Then:
+
+```bash
+getzilla trust-ci status
+```
+
+`status` is read-only and never prints a secret. Exit `0`: ready to start the services. Exit `3`: a step is still open; the output names it. Exit `1`: something is broken, for example a role password that differs from its database URL, or a GitHub App value in `env/api.env`. `--json` gives the same report for automation. `status` also reports the external holdout bundle at `TRUST_CI_HOLDOUT_SOURCE_PATH`; the operator installs it from a reviewed source ([`trust-ci/README.md`](trust-ci/README.md), "Install the external holdout bundle").
+
 ### PostgreSQL
 
 One logical database `trust_ci`. Four login roles (`trust_ci_api`, `trust_ci_worker`, `trust_ci_migrator`, `trust_ci_backup`) are created by `trust-ci/postgres/init/001_roles.sh`. Schema is `sql/001_schema.sql` + `002_operational_indexes.sql` + `003_database_roles.sql`, applied by the `migrate` oneshot. The admin password is not the API/worker/migrator/backup password. The server is the Compose image `postgres:17.6-bookworm` (digest pinned at deploy), not a host `postgresql` package. Durable volume: `trust-ci-postgres`.
 
-Copy templates. Do not commit filled files:
-
-```bash
-cd trust-ci
-mkdir -p runtime/control runtime/holdout
-cp .env.example .env
-cp env/common.env.example env/common.env
-cp env/api.env.example env/api.env
-cp env/worker.env.example env/worker.env
-cp env/migration.env.example env/migration.env
-cp env/postgres.env.example env/postgres.env
-cp env/backup.env.example env/backup.env
-cp config/policy.example.json runtime/policy.json
-cp config/trust-store.example.json runtime/trust-store.json
-chmod 600 env/*.env .env 2>/dev/null || true
-```
-
-Replace every `REPLACE_WITH_*` placeholder, including image `name@sha256:` pins in `.env`. `runtime/trust-store.json` stays invalid until a real human public key is inserted.
+`getzilla trust-ci init` creates and fills the env files. Do not commit them; `.gitignore` excludes them.
 
 ### Live harness
 
@@ -221,7 +266,7 @@ make trust-ci-postgres-test
 
 ### Build and pin images
 
-From the `trust-ci/` directory. `compose.yaml` has no `build:`; merge the build override:
+`init` (and `init --rebuild`) does this step. The commands are here for audit and manual recovery. From the `trust-ci/` directory. `compose.yaml` has no `build:`; merge the build override:
 
 ```bash
 docker compose -f compose.yaml -f compose.build.yaml --profile build build api worker runner-image
@@ -237,33 +282,23 @@ Inspect `$TRUST_CI_*_IMAGE`. Do not inspect `adaptive-trust-ci-api:2.1.0` / `ada
 
 Keep the split. Never commit private keys.
 
-- CI attestation key: worker-only (`adaptive-trust-ci keygen`).
-- GitHub App RSA key: worker-only. The API must not receive App ID, installation ID, or the App private key.
-- Human Ed25519 approval key: human workstation only. An agent must not generate, read, or submit it.
-
-```bash
-adaptive-trust-ci keygen \
-  --private runtime/trust-ci-signing-key.pem \
-  --public runtime/trust-ci-signing-key.pub.pem
-chmod 600 runtime/trust-ci-signing-key.pem
-```
-
-Human key (on the human machine, not in an agent workspace):
-
-```bash
-adaptive-trust-ci keygen \
-  --private ~/.config/adaptive-trust-ci/operator.pem \
-  --public ~/.config/adaptive-trust-ci/operator.pub.pem
-```
-
-Copy only the public key and printed `key_id` into server-side `runtime/trust-store.json`.
+- CI attestation key: worker-only. `init` generates it with `adaptive-trust-ci keygen` (`0600`).
+- GitHub App RSA key: worker-only. The API must not receive App ID, installation ID, or the App private key. Human step 1 installs it.
+- Human Ed25519 approval key: human workstation only. An agent must not generate, read, or submit it. Human steps 2 and 3 make it and trust its public key.
 
 ### Start and health
 
+The worker runs as uid `10001` and reads its two keys through bind mounts. Before the first start, give the keys to that uid (`status` reminds you):
+
 ```bash
+cd trust-ci
+sudo chown 10001:10001 runtime/trust-ci-signing-key.pem runtime/github-app-private-key.pem
+sudo chmod 0400 runtime/trust-ci-signing-key.pem runtime/github-app-private-key.pem
 docker compose -f compose.yaml up -d postgres migrate api worker
 curl -fsS http://<loopback-trust-ci>/health/ready
 ```
+
+The API listens on `127.0.0.1:${TRUST_CI_API_HOST_PORT:-18080}`; set `TRUST_CI_API_HOST_PORT` in `.env` when another deployment holds that port.
 
 `/health/ready` stays **503** until PostgreSQL is up **and** the trust store has an active human public key. The systemd unit `trust-ci/systemd/adaptive-trust-ci-compose.service` also starts `docker-engine` + `runner-loader` after `verify-supply-chain.sh`. Manual `up` of `postgres migrate api worker` is enough to exercise API readiness; jobs that need a runner require the systemd set (or `docker-engine` and `runner-loader` as well).
 
