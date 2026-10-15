@@ -158,8 +158,17 @@ function Test-Winget {
 
 function Invoke-Winget([string]$Id, [string[]]$Extra) {
     $arguments = @('install', '-e', '--id', $Id, '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
-    & winget @arguments | Out-Host
-    return ($LASTEXITCODE -eq 0)
+    # winget writes UTF-8; Windows PowerShell decodes piped native output with the OEM code page,
+    # which turns localized (for example Russian) messages into mojibake.
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        & winget @arguments | Out-Host
+        $exitCode = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $previousEncoding
+    }
+    return ($exitCode -eq 0)
 }
 
 function Get-WindowsArchitecture {
@@ -205,20 +214,13 @@ function Install-Winget {
     }
     if (-not (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue)) { return $false }
     Write-Step 'winget is missing (common on Windows 10). Installing App Installer from github.com/microsoft/winget-cli...'
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -UseBasicParsing
-    $bundle = $release.assets | Where-Object { $_.name -eq 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' } | Select-Object -First 1
-    $dependencies = $release.assets | Where-Object { $_.name -eq 'DesktopAppInstaller_Dependencies.zip' } | Select-Object -First 1
-    if (-not $bundle) { return $false }
-    $paths = @()
-    if ($dependencies) {
-        $zip = Get-Download $dependencies.browser_download_url $dependencies.name
-        $folder = Join-Path ([System.IO.Path]::GetTempPath()) 'getzilla-winget-dependencies'
-        if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
-        Expand-Archive -Path $zip -DestinationPath $folder -Force
-        Remove-Item -Force $zip
-        $paths = Select-WingetDependencies $folder (Get-WindowsArchitecture)
-    }
-    $package = Get-Download $bundle.browser_download_url $bundle.name
+    $zip = Get-PinnedDownload 'winget-dependencies'
+    $folder = Join-Path ([System.IO.Path]::GetTempPath()) 'getzilla-winget-dependencies'
+    if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
+    Expand-Archive -Path $zip -DestinationPath $folder -Force
+    Remove-Item -Force $zip
+    $paths = @(Select-WingetDependencies $folder (Get-WindowsArchitecture))
+    $package = Get-PinnedDownload 'winget'
     if ($paths.Count) {
         Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop
     } else {
@@ -245,18 +247,37 @@ function Expand-ToUserPrograms([string]$Zip, [string]$Name) {
     return $target
 }
 
-function Select-NodeLts($Index, [int]$Minimum) {
-    foreach ($release in $Index) {
-        if (-not $release.lts) { continue }
-        $major = [int]("$($release.version)".TrimStart('v').Split('.')[0])
-        if ($major -ge $Minimum) { return "$($release.version)" }
-    }
-    return $null
-}
-
 function Get-Download([string]$Url, [string]$FileName) {
     $path = Join-Path ([System.IO.Path]::GetTempPath()) $FileName
     Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing
+    return $path
+}
+
+# Direct downloads used only when winget cannot install a tool (for example in Windows Sandbox).
+# Exact releases with their published SHA-256: no GitHub API rate limit, no unreviewed "latest".
+$PinnedDownloads = @{
+    'winget'              = @{ Url = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'; Sha256 = '65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e' }
+    'winget-dependencies' = @{ Url = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380/DesktopAppInstaller_Dependencies.zip'; Sha256 = 'ba875afe9d190f61218985ac0292a99d1db710bf93e13c68944ca9d89f0d82d1' }
+    'git-x64'             = @{ Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip'; Sha256 = 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be' }
+    'git-arm64'           = @{ Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-arm64.zip'; Sha256 = '38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7' }
+    'python-x64'          = @{ Url = 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe'; Sha256 = 'fb4f9f5d438b2396da0086dc70b935c530cb578e37adc6d354f7ad2037fee83b' }
+    'python-arm64'        = @{ Url = 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-arm64.exe'; Sha256 = '696e2226062c6ec3622c13f143d28336a856968518e49cb4f4c62513215a4f5d' }
+    'pwsh-x64'            = @{ Url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.7/PowerShell-7.6.7-win-x64.zip'; Sha256 = 'd2f952ebdbf24386cb8923553aa58e41a846db35a6155ea04c58142a4b16dbb7' }
+    'pwsh-arm64'          = @{ Url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.7/PowerShell-7.6.7-win-arm64.zip'; Sha256 = '119bd9221254ef3637523cb1990797618f5fd68848b57de40f12b561d743149e' }
+    'node-x64'            = @{ Url = 'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip'; Sha256 = '6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba' }
+    'node-arm64'          = @{ Url = 'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-arm64.zip'; Sha256 = '31c6799744de8a54601643098040c68c3697e56c94e407d61d0e5fa5f34191d7' }
+}
+
+function Get-PinnedDownload([string]$Key) {
+    $pin = $PinnedDownloads[$Key]
+    if (-not $pin) { throw "No pinned download for '$Key' on this machine. Install it manually and run this installer again." }
+    $name = Split-Path $pin.Url -Leaf
+    $path = Get-Download $pin.Url $name
+    $actual = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $pin.Sha256) {
+        Remove-Item -Force $path
+        throw "SHA-256 mismatch for $name (expected $($pin.Sha256), got $actual); the download was deleted."
+    }
     return $path
 }
 
@@ -267,10 +288,7 @@ function Install-Git {
         if (Get-Command git -ErrorAction SilentlyContinue) { return }
     }
     # No winget (for example in Windows Sandbox): portable MinGit for the current user.
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing
-    $asset = $release.assets | Where-Object { $_.name -match '^MinGit-[0-9.]+-64-bit\.zip$' } | Select-Object -First 1
-    if (-not $asset) { throw 'Could not find a MinGit download. Install Git from https://git-scm.com/downloads and run this installer again.' }
-    $zip = Get-Download $asset.browser_download_url $asset.name
+    $zip = Get-PinnedDownload ('git-' + (Get-WindowsArchitecture))
     $target = Join-Path $env:LOCALAPPDATA 'Programs\MinGit'
     if (Test-Path $target) { Remove-Item -Recurse -Force $target }
     Expand-Archive -Path $zip -DestinationPath $target -Force
@@ -317,7 +335,7 @@ function Install-Python {
         Update-SessionPath
         return
     }
-    $installer = Get-Download 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe' 'python-3.13.16-amd64.exe'
+    $installer = Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))
     $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=1',
         'InstallLauncherAllUsers=0', 'Include_test=0', 'Include_doc=0'
@@ -352,13 +370,8 @@ function Install-PowerShell7 {
     $pwsh = Get-Pwsh
     if (-not ($pwsh -and $pwsh.Version -ge $MinimumPowerShell)) {
         try {
-            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -UseBasicParsing
-            $pattern = '^PowerShell-[0-9.]+-win-' + (Get-WindowsArchitecture) + '\.zip$'
-            $asset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-            if ($asset) {
-                $folder = Expand-ToUserPrograms (Get-Download $asset.browser_download_url $asset.name) 'PowerShell7'
-                Add-UserPath $folder
-            }
+            $folder = Expand-ToUserPrograms (Get-PinnedDownload ('pwsh-' + (Get-WindowsArchitecture))) 'PowerShell7'
+            Add-UserPath $folder
         } catch {
             Write-Verbose $_.Exception.Message
         }
@@ -473,8 +486,15 @@ function Install-Agent([string]$Agent) {
 
 function Test-Node([int]$Minimum = 20) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
-    $major = (& node -e 'console.log(process.versions.node.split(".")[0])' 2>$null)
-    return ([int]"$major" -ge $Minimum)
+    try {
+        # `node --version` prints vMAJOR.MINOR.PATCH. No inline program: Windows PowerShell 5.1
+        # strips the double quotes inside native arguments, and with ErrorActionPreference Stop
+        # any stderr line from such a broken call would abort the whole installer.
+        $text = (& node --version 2>$null | Select-Object -First 1)
+        return ([int](("$text".Trim()) -replace '^v(\d+).*$', '$1') -ge $Minimum)
+    } catch {
+        return $false
+    }
 }
 
 function Install-Node([int]$Minimum = 20) {
@@ -483,13 +503,9 @@ function Install-Node([int]$Minimum = 20) {
     if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
     if (Test-Node $Minimum) { return $true }
     try {
-        $version = Select-NodeLts (Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing) $Minimum
-        if ($version) {
-            $name = "node-$version-win-$(Get-WindowsArchitecture).zip"
-            $folder = Expand-ToUserPrograms (Get-Download "https://nodejs.org/dist/$version/$name" $name) 'nodejs'
-            Add-UserPath $folder
-            Add-UserPath (Join-Path $env:APPDATA 'npm')
-        }
+        $folder = Expand-ToUserPrograms (Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))) 'nodejs'
+        Add-UserPath $folder
+        Add-UserPath (Join-Path $env:APPDATA 'npm')
     } catch {
         Write-Verbose $_.Exception.Message
     }
