@@ -262,13 +262,67 @@ node_ok() {
   have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= ${1:-20} ? 0 : 1)" >/dev/null 2>&1
 }
 
+# Pinned official Node.js archives with their published SHA-256 (nodejs.org SHASUMS256.txt).
+# Distribution packages are often too old (Ubuntu 24.04 ships Node.js 18) and pull in hundreds
+# of node-* packages; the archive installs for the current user without root.
+node_archive() {
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64) echo "node-v24.20.0-linux-x64.tar.gz 855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec" ;;
+    Linux-aarch64|Linux-arm64) echo "node-v24.20.0-linux-arm64.tar.gz 3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013" ;;
+    Darwin-x86_64) echo "node-v24.20.0-darwin-x64.tar.gz 9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
+    Darwin-arm64) echo "node-v24.20.0-darwin-arm64.tar.gz 40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
+  esac
+}
+
+checksum_ok() {
+  if have sha256sum; then
+    echo "$2  $1" | sha256sum -c - >/dev/null 2>&1
+  else
+    echo "$2  $1" | shasum -a 256 -c - >/dev/null 2>&1
+  fi
+}
+
+install_node_archive() {
+  local spec name digest version dir tmp
+  spec="$(node_archive)"
+  [ -n "$spec" ] && have curl || return 1
+  name="${spec% *}"
+  digest="${spec#* }"
+  version="${name#node-v}"
+  version="${version%%-*}"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL "https://nodejs.org/dist/v$version/$name" -o "$tmp/$name" || ! checksum_ok "$tmp/$name" "$digest"; then
+    rm -rf "$tmp"
+    say "Node.js $version download failed or did not match its published SHA-256."
+    return 1
+  fi
+  dir="$HOME/.local/lib/nodejs"
+  mkdir -p "$dir" "$HOME/.local/bin"
+  rm -rf "$dir/${name%.tar.gz}"
+  tar -xzf "$tmp/$name" -C "$dir"
+  rm -rf "$tmp"
+  for tool in node npm npx; do
+    ln -sf "$dir/${name%.tar.gz}/bin/$tool" "$HOME/.local/bin/$tool"
+  done
+  export PATH="$HOME/.local/bin:$PATH"
+  hash -r
+  # Global npm packages (the agent CLIs) then land next to it in ~/.local/bin, without root.
+  npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true
+}
+
 ensure_node() {
   local minimum="${1:-20}"
   node_ok "$minimum" && return 0
   say "Installing Node.js ($minimum or newer is needed)..."
   if [ "$(uname -s)" = "Darwin" ] && have brew; then
     brew install node || true
-  elif have apt-get; then
+  else
+    install_node_archive || true
+  fi
+  hash -r
+  node_ok "$minimum" && return 0
+  # Distribution packages only as a fallback.
+  if have apt-get; then
     as_root apt-get install -y nodejs npm </dev/null || true
   elif have dnf; then
     as_root dnf install -y nodejs npm </dev/null || true

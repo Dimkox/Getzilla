@@ -200,6 +200,16 @@ class InstallScriptContractTests(unittest.TestCase):
         for text in (shell, powershell):
             self.assertNotIn('vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]', text)
 
+    def test_shell_installer_prefers_pinned_node_archive_over_old_distro_packages(self) -> None:
+        # Ubuntu 24.04 ships Node.js 18: a bare install never got an agent CLI from apt.
+        text = SHELL.read_text(encoding='utf-8')
+        digests = re.findall(r'node-v24\.20\.0-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz ([0-9a-f]{64})', text)
+        self.assertEqual(len(digests), 4)
+        self.assertIn('checksum_ok "$tmp/$name" "$digest"', text)
+        self.assertIn('npm config set prefix "$HOME/.local"', text)
+        body = text[text.index('ensure_node() {'):]
+        self.assertLess(body.index('install_node_archive'), body.index('apt-get install -y nodejs npm'))
+
     def test_powershell_fallback_downloads_are_pinned_and_verified(self) -> None:
         # Unauthenticated GitHub API calls hit the 60/hour per-IP limit behind shared NAT and fetched
         # an unreviewed "latest" build; every fallback is now an exact release with its SHA-256.
