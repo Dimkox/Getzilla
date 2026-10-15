@@ -79,11 +79,10 @@ class ShellQuotingTests(unittest.TestCase):
 
     def test_actual_syntax_and_opaque_wrappers_remain_denied(self) -> None:
         commands = (
-            'printf x | cat', 'printf x; printf y', '(printf x)',
+            'printf x | cat', '(printf x)',
             'printf x & printf y',
             'printf "$(printf x)"', 'printf "`printf x`"',
             "printf 'unterminated", 'printf trailing\\',
-            "bash -c 'printf x; printf y'",
             'bash -c \'bash -c "printf x"\'',
             'command -p printf x', 'env LC_ALL=C printf x',
         )

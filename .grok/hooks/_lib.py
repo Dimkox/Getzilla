@@ -287,7 +287,8 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         return {'shell': '<ambiguous>'}
     if any(token.substitution for token in tokens):
         return {'command.dynamic-substitution': '<ambiguous>'}
-    if any(token.operator and token.value not in {'&&', '\n'} and '<' not in token.value and '>' not in token.value
+    # ';' runs commands in sequence exactly like a newline; both keep root tracking linear.
+    if any(token.operator and token.value not in {'&&', ';', '\n'} and '<' not in token.value and '>' not in token.value
            for token in tokens):
         return {'command.control-flow': '<ambiguous>'}
     words = [token.value for token in tokens]
