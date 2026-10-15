@@ -391,12 +391,13 @@ function Install-Python {
     $log = Join-Path (Get-InstallLogDir) 'python-install.log'
     Write-Step "Python installer log: $log"
     # Only the packages Getzilla needs: every MSI's signature check can wait about two minutes on a
-    # fresh Windows without cached revocation data (seen in Windows Sandbox), and the py launcher
-    # is not needed because PrependPath puts python.exe on PATH.
+    # fresh Windows without cached revocation data (seen in Windows Sandbox), the py launcher
+    # is not needed because PrependPath puts python.exe on PATH, and the C headers (dev) are not
+    # needed because every package in Getzilla's environment installs as a wheel.
     # Start-Process joins arguments with spaces and does not quote them in Windows PowerShell.
     $process = Start-Process -FilePath $installer -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=0', 'InstallLauncherAllUsers=0',
-        'Include_tcltk=0', 'Include_test=0', 'Include_doc=0', '/log', ('"' + $log + '"')
+        'Include_tcltk=0', 'Include_test=0', 'Include_doc=0', 'Include_dev=0', '/log', ('"' + $log + '"')
     )
     $null = $process.Handle  # keeps ExitCode readable after exit in Windows PowerShell
     $started = Get-Date

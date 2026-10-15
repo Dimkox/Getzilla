@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,14 +137,31 @@ def user_tool_dirs() -> list[Path]:
     return [path for path in dirs if path.is_dir()]
 
 
+def environment_scripts_dir() -> Path | None:
+    """Scripts directory of the running interpreter's virtual environment, if it runs in one.
+
+    Getzilla's own .venv holds the pinned ruff and bandit; it is never on a bare install's PATH.
+    """
+    if sys.prefix == sys.base_prefix:
+        return None
+    scripts = sysconfig.get_path('scripts')
+    return Path(scripts) if scripts and Path(scripts).is_dir() else None
+
+
 def tool_search_path(path: str | None = None) -> str:
-    """``path`` (default: this process's PATH) with absent user tool directories appended.
+    """``path`` (default: this process's PATH) extended with Getzilla's tool directories.
 
     Hooks, verifiers and agent subprocesses often lack the login PATH that the installers
-    extend. Appending keeps every directory already on PATH (system tools) first.
+    extend. The running virtual environment comes first, as activation would put it, so its
+    pinned tools win; absent user tool directories are appended after every PATH entry.
     """
     current = os.environ.get('PATH', '') if path is None else path
     entries = [entry for entry in current.split(os.pathsep) if entry]
+    scripts = environment_scripts_dir()
+    if scripts is not None:
+        key = os.path.normcase(os.path.abspath(scripts))
+        entries = [str(scripts), *(entry for entry in entries
+                                   if os.path.normcase(os.path.abspath(entry)) != key)]
     known = {os.path.normcase(os.path.abspath(entry)) for entry in entries}
     extra = [str(directory) for directory in user_tool_dirs()
              if os.path.normcase(os.path.abspath(directory)) not in known]

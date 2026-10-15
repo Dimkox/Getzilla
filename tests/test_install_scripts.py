@@ -149,6 +149,7 @@ class InstallScriptContractTests(unittest.TestCase):
         # Only needed MSI packages (each signature check can wait ~2 minutes on a fresh Windows), a
         # 30-minute ceiling with progress, and a log for diagnosis.
         for switch in ('InstallAllUsers=0', 'Include_launcher=0', 'InstallLauncherAllUsers=0', 'Include_tcltk=0',
+                       'Include_dev=0',
                        "'/log'", 'while (-not $process.WaitForExit(30000))', 'New-TimeSpan -Minutes 30'):
             self.assertIn(switch, text)
         self.assertNotIn('Start-Process -FilePath $installer -Wait', text)

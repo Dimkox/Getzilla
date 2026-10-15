@@ -74,5 +74,48 @@ class ToolPathTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
 
 
+class EnvironmentScriptsTests(unittest.TestCase):
+    """Getzilla's .venv tools (pinned ruff, bandit) without an activated environment."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.scripts = base / 'venv' / ('Scripts' if os.name == 'nt' else 'bin')
+        self.system = base / 'system-bin'
+        self.system.mkdir(parents=True)
+        self.home = base / 'home'
+        patches = [mock.patch.dict(os.environ, {'PATH': str(self.system)}),
+                   mock.patch.object(util.Path, 'home', return_value=self.home),
+                   mock.patch.object(util.sysconfig, 'get_path', return_value=str(self.scripts))]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _in_venv(self, active: bool):
+        return mock.patch.object(util.sys, 'base_prefix', '/base' if active else util.sys.prefix)
+
+    def test_venv_tool_is_found_without_activation(self) -> None:
+        _tool(self.scripts, 'gz-fake-ruff', 'venv-ruff')
+        with self._in_venv(True):
+            self.assertEqual(Path(util.find_tool('gz-fake-ruff')).parent, self.scripts)
+
+    def test_venv_scripts_come_first_like_activation(self) -> None:
+        _tool(self.system, 'gz-fake-ruff', 'system-ruff')
+        _tool(self.scripts, 'gz-fake-ruff', 'pinned-ruff')
+        with self._in_venv(True):
+            entries = util.tool_search_path().split(os.pathsep)
+            self.assertEqual(entries[0], str(self.scripts))
+            self.assertEqual(entries.count(str(self.scripts)), 1)
+            self.assertEqual(util.tool_search_path(util.tool_search_path()), util.tool_search_path())
+            self.assertEqual(Path(util.find_tool('gz-fake-ruff')).parent, self.scripts)
+
+    def test_base_interpreter_adds_nothing(self) -> None:
+        _tool(self.scripts, 'gz-fake-ruff', 'venv-ruff')
+        with self._in_venv(False):
+            self.assertIsNone(util.environment_scripts_dir())
+            self.assertIsNone(util.find_tool('gz-fake-ruff'))
+
+
 if __name__ == '__main__':
     unittest.main()
