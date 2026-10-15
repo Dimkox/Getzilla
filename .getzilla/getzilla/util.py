@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +89,9 @@ def run(
     merged = os.environ.copy()
     if env:
         merged.update(env)
+    if not env or 'PATH' not in env:
+        # Resolve the same user tools that command_exists() found; an explicit PATH is isolation.
+        merged['PATH'] = tool_search_path(merged.get('PATH', ''))
     try:
         options: dict[str, str] = {}
         if encoding is None and os.name == 'nt':
@@ -121,8 +125,37 @@ def run(
         return subprocess.CompletedProcess(args, 124, stdout, stderr)
 
 
+def user_tool_dirs() -> list[Path]:
+    """Existing per-user directories where Getzilla's installers and updater put tools."""
+    home = Path.home()
+    dirs = [home / '.getzilla' / 'bin', home / '.local' / 'bin', home / '.grok' / 'bin']
+    appdata = os.environ.get('APPDATA')
+    if os.name == 'nt' and appdata:
+        version = f'Python{sys.version_info[0]}{sys.version_info[1]}'
+        dirs += [Path(appdata) / 'npm', Path(appdata) / 'Python' / version / 'Scripts']
+    return [path for path in dirs if path.is_dir()]
+
+
+def tool_search_path(path: str | None = None) -> str:
+    """``path`` (default: this process's PATH) with absent user tool directories appended.
+
+    Hooks, verifiers and agent subprocesses often lack the login PATH that the installers
+    extend. Appending keeps every directory already on PATH (system tools) first.
+    """
+    current = os.environ.get('PATH', '') if path is None else path
+    entries = [entry for entry in current.split(os.pathsep) if entry]
+    known = {os.path.normcase(os.path.abspath(entry)) for entry in entries}
+    extra = [str(directory) for directory in user_tool_dirs()
+             if os.path.normcase(os.path.abspath(directory)) not in known]
+    return os.pathsep.join(entries + extra)
+
+
+def find_tool(name: str) -> str | None:
+    return shutil.which(name, path=tool_search_path())
+
+
 def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    return find_tool(name) is not None
 
 
 def git_output(root: Path, *args: str) -> str | None:

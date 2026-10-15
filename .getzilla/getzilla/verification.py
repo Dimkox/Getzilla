@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import signal
 import sys
 import tempfile
@@ -34,6 +33,8 @@ from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
+    find_tool,
+    tool_search_path,
     changed_file_statuses,
     changed_files,
     command_exists,
@@ -489,6 +490,9 @@ def _workflow_artifacts_check(
 def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None) -> CheckResult:
     environment = os.environ.copy()
     environment.update(env or {})
+    if 'PATH' not in (env or {}):
+        # Run the same user-installed tool that command_exists() found.
+        environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
         proc = execute(command, root, environment, timeout=timeout)
     except RunCancelled as exc:
@@ -1705,7 +1709,7 @@ def _opengrep(root: Path) -> CheckResult:
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
-    executable = shutil.which('opengrep')
+    executable = find_tool('opengrep')
     if executable is None:
         return CheckResult('opengrep', 'skip', 'opengrep not available')
     refusal = _unpinned_opengrep(Path(executable))

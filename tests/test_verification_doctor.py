@@ -17,6 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla.util import find_tool
 from getzilla.doctor import run_doctor
 from getzilla import architecture as architecture_module
 from getzilla import receipts as receipts_module
@@ -307,11 +308,11 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue((root / '.getzilla/getzilla/__init__.py').is_file())
             self.assertFalse((root / '.getzilla/getzilla/verification.py').exists())
             for check in (_ruff(root), _bandit(root)):
-                self.assertEqual(check.status, 'pass' if shutil.which(check.name) else 'skip')
+                self.assertEqual(check.status, 'pass' if find_tool(check.name) else 'skip')
         with full_project_copy() as root:
             source = root / '.getzilla/getzilla/verification.py'
             self.assertEqual(source.read_bytes(), (ROOT / '.getzilla/getzilla/verification.py').read_bytes())
-            if shutil.which('bandit'):
+            if find_tool('bandit'):
                 self.assertEqual(_bandit(root).status, 'pass')
                 (root / '.getzilla/getzilla/_unsafe_probe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
                 self.assertEqual(_bandit(root).status, 'fail')
