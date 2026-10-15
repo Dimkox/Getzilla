@@ -57,7 +57,9 @@ class OpengrepCheckTests(unittest.TestCase):
     def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True) -> V.CheckResult:
         digest = _fake_opengrep(self.bin, payload, exit_code) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
-        with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64):
+        # Hide per-user tool directories too, so only this fixture PATH can supply opengrep.
+        with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64), \
+                mock.patch('getzilla.util.user_tool_dirs', return_value=[]):
             return V._opengrep(self.root)
 
     def test_binary_on_path_that_does_not_match_the_pin_is_refused_unexecuted(self) -> None:
