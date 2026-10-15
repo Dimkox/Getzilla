@@ -84,6 +84,8 @@ The worker requests a short-lived installation token with the reduced permission
 
 ## Bootstrap
 
+`getzilla trust-ci init` does every machine-side step of this section in one safe-to-repeat run: env files and machine secrets, base and built image pins, the CI attestation key, PostgreSQL, migrations and the live harness. It ends with the human steps (GitHub App, human approval key, trust store), and `getzilla trust-ci status` reports what is still open. See [`QUICKSTART.md`](../QUICKSTART.md), "Operator: Trust CI host". The manual steps below are what it does, kept for audit and recovery.
+
 Copy the environment templates. Do not commit the resulting files:
 
 ```bash
