@@ -1207,10 +1207,11 @@ class CommunicationRuleTests(unittest.TestCase):
         ):
             self.assertIn(sentence, text)
 
-    def test_agent_pool_scales_to_one_worker_per_logical_cpu(self) -> None:
+    def test_agent_pool_scales_to_the_allocated_cpu_budget(self) -> None:
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("up to one per verified effective logical CPU", text)
-        self.assertIn("share any idle cores and threads", text)
+        self.assertIn("Reserve two host logical CPUs", text)
+        self.assertIn("Size the agent pool to the allocated CPU budget", text)
+        self.assertIn("Share idle allocated capacity across independent work", text)
 
     def test_l5_autonomy_keeps_exact_grants_and_human_risk_decisions(self) -> None:
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
