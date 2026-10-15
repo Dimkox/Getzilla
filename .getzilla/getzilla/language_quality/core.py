@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
+import sys
 import time
 
 from ..cpu_budget import cpu_budget
@@ -77,6 +78,7 @@ class Policy:
     origin: str = '.getzilla/config/policy.json#language_quality_gates'
     fingerprint: str = ''
     repository_id: str = ''
+    cache: str = 'shadow'
 
 
 def _choices(value: dict, inherited: Policy | None = None) -> None:
@@ -100,10 +102,12 @@ def load_policy(root: Path) -> Policy:
         if not isinstance(raw, dict):
             raise PolicyError('project policy must be an object')
         value = raw.get('language_quality_gates', {})
-        allowed = {'mode', 'enforcement', 'scope', 'autofix', 'ai_retries', 'tools', 'sandbox'}
+        allowed = {'mode', 'enforcement', 'scope', 'autofix', 'ai_retries', 'tools', 'sandbox', 'cache'}
         if not isinstance(value, dict) or set(value) - allowed:
             raise PolicyError('unknown language quality policy field')
         _choices(value)
+        if value.get('cache', 'shadow') not in ('shadow', 'off'):
+            raise PolicyError('cache must be shadow or off')
         tools = value.get('tools', {})
         if not isinstance(tools, dict) or set(tools) - set(TOOLS):
             raise PolicyError('unknown language quality tool')
@@ -112,7 +116,7 @@ def load_policy(root: Path) -> Policy:
             if not isinstance(config, dict) or set(config) - allowed_tool:
                 raise PolicyError('invalid tool configuration')
             _choices(config)
-            if config.get('driver', 'cli') not in {'cli', 'gradle', 'dart', 'flutter'}:
+            if not isinstance(config.get('driver', 'cli'), str) or config.get('driver', 'cli') not in {'cli', 'gradle', 'dart', 'flutter'}:
                 raise PolicyError('invalid tool driver')
             launcher = config.get('launcher', [])
             if not isinstance(launcher, list) or len(launcher) > 8 or any(not isinstance(x, str) or not x or len(x) > 512 or any(ord(c) < 32 for c in x) for x in launcher):
@@ -136,7 +140,7 @@ def load_policy(root: Path) -> Policy:
             from .sandbox import validate_spec
             sandbox = validate_spec(sandbox)
         return Policy(value.get('mode', 'auto'), value.get('enforcement', 'shadow'), value.get('scope', 'changed'),
-                      tools, sandbox, fingerprint=digest(value), repository_id=digest(str(root.resolve())))
+                      tools, sandbox, fingerprint=digest(value), repository_id=digest(str(root.resolve())), cache=value.get('cache', 'shadow'))
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise PolicyError(str(exc)) from exc
 
@@ -207,14 +211,17 @@ def approved_inputs(files: tuple[str, ...], packages: tuple[Package, ...], tools
 
 def _config_change(path: str) -> bool:
     name = PurePosixPath(path).name
-    return (name in set(ANCHORS) | {'settings.gradle', 'settings.gradle.kts', 'gradle.properties', 'gradle-wrapper.properties',
+    return (path == '.getzilla/config/policy.json' or name in set(ANCHORS) | {'settings.gradle', 'settings.gradle.kts', 'gradle.properties', 'gradle-wrapper.properties',
             '.editorconfig', 'analysis_options.yaml', 'pubspec.lock', '.swift-version', '.node-version', '.nvmrc',
             'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock', 'Package.resolved', '.tool-versions'}
             or 'eslint' in name or 'detekt' in name or name.startswith('tsconfig') or name.startswith('.swift')
             or name.endswith(('.lock', '.lockfile', '.gradle', '.gradle.kts', '.xcconfig', '.pbxproj')))
 
 
-def select_scope(package: Package, requested: str, base: str | None, records: list[dict] | None, *, incremental: bool) -> Scope:
+def select_scope(package: Package, requested: str, base: str | None, records: list[dict] | None, *, incremental: bool,
+                 configuration_paths: tuple[str, ...] = ()) -> Scope:
+    for path in configuration_paths:
+        safe_path(path)
     reason = None
     if requested == 'full':
         reason = 'policy-full'
@@ -240,7 +247,7 @@ def select_scope(package: Package, requested: str, base: str | None, records: li
                 reason = 'rename-or-delete'
             elif record.get('source') not in {'index', 'worktree', 'untracked', 'range:' + str(base)}:
                 reason = 'untrusted-status-channel'
-            elif _config_change(path):
+            elif _config_change(path) or path in configuration_paths:
                 reason = 'configuration-change'
         prefix = '' if package.path == '.' else package.path + '/'
         if path.startswith(prefix) and path[len(prefix):] in package.files:
@@ -262,7 +269,7 @@ def read_input(root: Path, name: str) -> bytes:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-        file_descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
+        file_descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
         with os.fdopen(file_descriptor, 'rb') as source:
             before = os.fstat(source.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_INPUT_BYTES:
@@ -278,7 +285,7 @@ def read_input(root: Path, name: str) -> bytes:
         os.close(descriptor)
 
 
-def _read_inputs(root: Path, files: tuple[str, ...]) -> tuple[str, str, str]:
+def _read_inputs(root: Path, files: tuple[str, ...], configuration_paths: tuple[str, ...] = ()) -> tuple[str, str, str]:
     content = hashlib.sha256()
     configs = hashlib.sha256()
     dependencies = hashlib.sha256()
@@ -290,7 +297,7 @@ def _read_inputs(root: Path, files: tuple[str, ...]) -> tuple[str, str, str]:
             raise ValueError('language input byte limit exceeded')
         entry = name.encode() + b'\0' + hashlib.sha256(payload).digest()
         content.update(entry)
-        if _config_change(name):
+        if _config_change(name) or name in configuration_paths:
             configs.update(entry)
         if PurePosixPath(name).name in ANCHORS or '.lock' in name or name.endswith('lock.json'):
             dependencies.update(entry)
@@ -307,13 +314,31 @@ def _result(tool: str, package: str, policy: Policy, config: dict, status: str, 
               'summary': summary, 'diagnostics': [], 'policy_origin': policy.origin,
               'policy_digest': policy.fingerprint, 'tool_version': config.get('version'),
               'tool_version_source': 'policy-pinned-image' if config.get('version') else None,
-              'cache_hit': False, 'cache_status': 'disabled-unverified-reuse', 'duration_ms': 0,
+              'cache_hit': False, 'cache_status': 'not-attempted', 'duration_ms': 0,
+              'execution_performed': False, 'evidence_kind': 'not-executed',
               'executor_identity': None, **details}
     result['evidence_digest'] = digest(result)
     return result
 
 
-def run_registry(root: Path, base: str | None, *, executor=None, cancellation=None) -> list[dict]:
+def _cache_binding(policy, config, tool, package, scope, head, base, inputs, argv, identity, module):
+    from .cache import cache_key
+    if not all(isinstance(value, str) and re.fullmatch(r'[a-f0-9]{40,64}', value) for value in (head, base)):
+        raise ValueError('cache needs resolved commit and base identities')
+    if not isinstance(identity, str) or not identity or len(identity) > 2048:
+        raise ValueError('cache needs current admitted executor identity')
+    implementation = _read_inputs(Path(__file__).parent, ('core.py', 'sandbox.py', 'cache.py', 'models.py', 'adapters/' + module + '.py'))[0]
+    return cache_key({'repository_id': policy.repository_id, 'local_account_id': 'uid:' + str(os.getuid()),
+        'commit_sha': head, 'base_sha': base, 'package': package.path, 'tool_id': tool,
+        'tool_version': config['version'], 'sdk_identity': policy.sandbox['image'],
+        'input_digest': inputs[0], 'config_digest': inputs[1], 'dependency_digest': inputs[2],
+        'policy_digest': policy.fingerprint, 'requested_scope': scope.requested, 'scope': scope.actual,
+        'files': list(scope.files), 'argv': list(argv), 'executor_identity': identity,
+        'implementation_digest': implementation, 'platform': sys.platform, 'sandbox': policy.sandbox,
+        'effective_cpus': cpu_budget(policy.sandbox['cpus']).effective})
+
+
+def run_registry(root: Path, base: str | None, *, executor=None, cancellation=None, preflight: bool = False) -> list[dict]:
     """Serial tool execution shares one bounded CPU allocation; no nested pool."""
     try:
         policy = load_policy(root)
@@ -325,12 +350,15 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
         files = inventory(root)
         packages = discover_packages(files)
         inputs_files = approved_inputs(files, packages, policy.tools)
+        explicit_configs = tuple((PurePosixPath(p.path) / c['config']).as_posix()
+            for t, c in policy.tools.items() if c.get('config') for p in packages if p.language == TOOLS[t][0])
         records = changed_file_statuses(root, base=base) if base else None
         head = git_head(root)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return [_result(tool, '.', policy, policy.tools.get(tool, {}), 'ERROR', str(exc)) for tool in TOOLS]
     results = []
     inputs = None
+    ready = time.monotonic()
     for tool, (language, module) in TOOLS.items():
         config = policy.tools.get(tool, {})
         mode = config.get('mode', policy.mode)
@@ -341,13 +369,15 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
             continue
         for package in matched:
             start = time.monotonic()
-            details = {'commit_sha': head, 'base_sha': base, 'cpu_budget': cpu_budget().to_dict()}
+            timings = {'queue': round((start - ready) * 1000, 3), 'setup': 0.0, 'execution': 0.0, 'validation': 0.0}
+            details = {'commit_sha': head, 'base_sha': base, 'cpu_budget': cpu_budget().to_dict(), 'timings_ms': timings}
             try:
                 driver = config.get('driver', 'dart' if language == 'dart' else 'cli')
                 requested = config.get('scope', policy.scope)
                 # This fixed capability table can be consulted before imports/configuration.
                 incremental = tool not in {'detekt', 'dart_analyzer'} and driver != 'gradle'
-                scope = select_scope(package, requested, base, records, incremental=incremental)
+                configuration_paths = ((PurePosixPath(package.path) / config['config']).as_posix(),) if config.get('config') else ()
+                scope = select_scope(package, requested, base, records, incremental=incremental, configuration_paths=configuration_paths)
                 details.update(scope=scope.actual, requested_scope=scope.requested, files=list(scope.files), fallback_reason=scope.reason)
                 if not scope.files:
                     results.append(_result(tool, package.path, policy, config, 'SKIPPED_BY_POLICY', 'no source changes in package', **details))
@@ -369,11 +399,19 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
                 if policy.sandbox is None or config.get('requires_macos') or os.name != 'posix':
                     results.append(_result(tool, package.path, policy, config, 'UNSUPPORTED_RUNNER', 'qualified sandbox unavailable for requested tool/platform', **details))
                     continue
+                if preflight:
+                    from .sandbox import ContainerExecutor
+                    backend = ContainerExecutor(policy.sandbox)
+                    admitted = backend.spec['image'] in backend.approved_images and backend._available()
+                    results.append(_result(tool, package.path, policy, config,
+                        'NOT_RUN' if admitted else 'UNSUPPORTED_RUNNER',
+                        'configured and operator-admitted; tool execution and SDK availability not tested' if admitted else 'host image admission or trusted container client missing', **details))
+                    continue
                 if cancellation and cancellation():
                     results.append(_result(tool, package.path, policy, config, 'CANCELLED', 'cancelled before execution', **details))
                     continue
                 if inputs is None:
-                    inputs = _read_inputs(root, inputs_files)
+                    inputs = _read_inputs(root, inputs_files, explicit_configs)
                 details.update(input_digest=inputs[0], config_digest=inputs[1], dependency_digest=inputs[2])
                 adapter = importlib.import_module('.adapters.' + module, __package__)
                 capabilities = adapter.capabilities(tool, driver)
@@ -383,8 +421,44 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
                 argv = adapter.build_argv(request)
                 from .sandbox import ContainerExecutor
                 backend = executor or ContainerExecutor(policy.sandbox)
+                cache = None
+                key = identity = None
+                details['cache_status'] = 'bypassed-blocking' if config.get('enforcement', policy.enforcement) == 'blocking' else 'disabled-policy'
+                if config.get('enforcement', policy.enforcement) == 'shadow' and policy.cache == 'shadow':
+                    from .cache import ShadowCache
+                    try:
+                        identity = backend.cache_identity(root, cancellation=cancellation)
+                        key = _cache_binding(policy, config, tool, package, scope, head, base, inputs, argv, identity, module)
+                        cache = ShadowCache(root)
+                        cached, details['cache_status'] = cache.read(key)
+                        details['cache_key_digest'] = key
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        cached = None
+                        details['cache_status'] = 'disabled-incomplete-identity'
+                    if cancellation and cancellation():
+                        results.append(_result(tool, package.path, policy, config, 'CANCELLED', 'cancelled during cache lookup', **details))
+                        continue
+                    if cached is not None:
+                        validation_start = time.monotonic()
+                        timings['setup'] = round((validation_start - start) * 1000, 3)
+                        if _read_inputs(root, inputs_files)[0] != inputs[0] or load_policy(root).fingerprint != policy.fingerprint:
+                            results.append(_result(tool, package.path, policy, config, 'ERROR', 'language inputs changed during cache lookup', **details))
+                            continue
+                        timings['validation'] = round((time.monotonic() - validation_start) * 1000, 3)
+                        details.update(cache_hit=True, evidence_kind='cached-unverified', cached_observation=cached,
+                                       duration_ms=round((time.monotonic() - start) * 1000))
+                        results.append(_result(tool, package.path, policy, config, 'CACHED_UNVERIFIED',
+                                               'Unverified cached observation; language tool was not run', **details))
+                        continue
+                if _read_inputs(root, inputs_files)[0] != inputs[0]:
+                    raise ValueError('language source changed before execution')
+                execution_start = time.monotonic()
+                timings['setup'] = round((execution_start - start) * 1000, 3)
                 raw = backend.execute(root, package.path, inputs_files, argv, cancellation=cancellation, expected_digest=inputs[0])
-                details.update(executor_identity=raw.identity, execution_fingerprint=digest({'argv': argv, 'input': inputs[0], 'policy': policy.fingerprint, 'executor': raw.identity}))
+                validation_start = time.monotonic()
+                timings['execution'] = round((validation_start - execution_start) * 1000, 3)
+                details.update(executor_identity=raw.identity, execution_fingerprint=digest({'argv': argv, 'input': inputs[0], 'policy': policy.fingerprint, 'executor': raw.identity}),
+                               execution_performed=raw.status == 'COMPLETED', evidence_kind='fresh-execution' if raw.status == 'COMPLETED' else 'execution-attempt')
                 if raw.status != 'COMPLETED':
                     status, summary = raw.status, raw.summary
                 else:
@@ -406,10 +480,18 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
                             value['path'] = (PurePosixPath(package.path) / name).as_posix()
                         diagnostics.append(value)
                     details['diagnostics'] = diagnostics
-                if _read_inputs(root, inputs_files)[0] != inputs[0]:
+                if _read_inputs(root, inputs_files)[0] != inputs[0] or load_policy(root).fingerprint != policy.fingerprint:
                     status, summary = 'ERROR', 'language source changed during execution'
+                timings['validation'] = round((time.monotonic() - validation_start) * 1000, 3)
                 details['duration_ms'] = round((time.monotonic() - start) * 1000)
-                results.append(_result(tool, package.path, policy, config, status, summary, **details))
+                result = _result(tool, package.path, policy, config, status, summary, **details)
+                if cache is not None and key and status in {'PASS', 'FAIL'} and raw.status == 'COMPLETED' and raw.identity == identity:
+                    details['cache_write_status'] = 'written'
+                    result = _result(tool, package.path, policy, config, status, summary, **details)
+                    details['cache_write_status'] = cache.write(key, {'reported_status': status, 'summary': summary,
+                        'diagnostics': result['diagnostics'], 'claimed_source_evidence_digest': result['evidence_digest']})
+                    result = _result(tool, package.path, policy, config, status, summary, **details)
+                results.append(result)
             except (OSError, ValueError, TypeError, ImportError, subprocess.SubprocessError) as exc:
                 results.append(_result(tool, package.path, policy, config, 'ERROR', str(exc)[:512], **details))
     return results
@@ -419,6 +501,8 @@ def project_checks(results: list[dict]) -> list[dict]:
     checks = []
     for result in results:
         status = result['execution_status']
+        if result.get('cache_hit') or result.get('evidence_kind') == 'cached-unverified':
+            status = 'CACHED_UNVERIFIED'
         if result['enforcement'] != 'blocking' or status in {'NOT_APPLICABLE', 'SKIPPED_BY_POLICY'}:
             continue
         checks.append({'name': 'lqg-' + result['tool_id'] + ':' + result['package'],

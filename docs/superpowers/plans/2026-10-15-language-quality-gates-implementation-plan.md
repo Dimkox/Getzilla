@@ -4,34 +4,46 @@ Design: [contract](../specs/2026-10-15-language-quality-gates-design.md).
 Change: engineering/changes/20261015-task-19101f.
 Base: 7cf4f65dd2ba9bb1390dc84c6185ba0f104255c8.
 
-1. Commit ABI bootstrap and durable plan.
-2. Run core and four language writers in separate worktrees.
-3. Core owns shared policy/discovery/scope/sandbox/evidence and verification.py.
-   Language owners own only adapters/eslint.py, kotlin.py, dart.py, swift.py
-   and their tests/test_lqg_<language>.py. No overlapping mutable candidate.
-4. Add tests before behavior. Cover malformed policy, unsafe paths, full fallback,
-   missing tools, bounded output, timeout/cancellation and shadow/blocking admission.
-5. One integrator takes the four commits. Check consumer installation and focused
-   regressions. Record actual SDK smoke availability and rollback evidence.
-6. Commit candidate. Run bounded committed-HEAD controls. Obtain route-selected
-   independent reviews. Store reports, freeze, then run the final PR gate.
-7. Deliver through PR with required exact-head external checks.
+1. Freeze the shared ABI and durable scope.
+2. Build four adapter contours in isolated worktrees. One owner integrates them.
+3. Build the shared policy, package discovery, conservative scope, sandbox,
+   bounded shadow cache, evidence and verification/doctor integration.
+4. Add regression tests before behavior. Cover malformed policy, custom config
+   and project policy changes, FIFO/symlink inputs, operator image admission,
+   cleanup failures, running cancellation and cached-observation provenance.
+5. Verify public/private CI selection, consumer runtime/documentation payload,
+   policy-off rollback and all seven adapters with synthetic fixtures.
+6. Record reproducible cold/warm, changed/full, typed/untyped and monorepo timings.
+   Keep SDK/container performance and external CI latency claims separate.
+7. Commit candidate. Run bounded committed-HEAD controls. Obtain allowed code/test
+   reviews. Persist reports, freeze, then run the qualifying PR gate.
+8. Deliver through a PR with required exact-head external checks.
 
-Resumed measured capacity: 26 allowed logical CPUs, no finite cgroup quota.
-Default CPU budget is max(1, host logical CPU count - 2), capped by allowed
-online CPUs and the minimum finite ancestor quota. This host has 28 logical CPUs. Core gets
-four test workers; each adapter gets at most two. Route analysis cap is 10,
-platform child slots 12. Integration writes are serialized.
+CPU budget is max(1, total host logical CPUs - 2), then actual affinity/cpuset
+and minimum ancestor quota. The resumed host observation is 28 logical CPUs and
+a verified child capacity of 26. This repair owner has 6 CPUs; the separate hook
+owner has 6. Combined allocation is 12, below 26. Route and agent-slot caps remain
+separate. LQG executes tools serially inside each verification.
 
-- [x] Base and contracts inspected.
-- [x] Consolidated design and ABI specified.
-- [x] Core and adapters implemented and integrated.
-- [x] Focused tests, install and rollback checks complete.
-- [ ] Real smoke and performance limitations recorded.
-- [ ] Independent review and final/external gates complete.
+- [x] Inspect latest base and owner source plans.
+- [x] Specify and integrate seven pure CLI adapters.
+- [x] Implement shared policy, scope, isolated execution, CPU budget and evidence.
+- [x] Repair both findings from the historical 2abea745 FAIL reviews.
+- [x] Add bounded clone-local shadow cache with explicit CACHED_UNVERIFIED results.
+- [x] Add doctor preflight, public/private CI regression and installed documentation.
+- [x] Exercise JS/TS, Kotlin, Dart, Flutter, Swift, mixed and Python-only fixtures.
+- [x] Run reproducible synthetic benchmark; save raw samples and measured source digest.
+- [ ] Run independent reviews of the repaired committed candidate.
+- [ ] Freeze reports and pass the final local and exact-head external gates.
+- [ ] Qualify real SDK/macOS runners and representative external CI latency.
 
-Current result: UNVERIFIED.
+Remaining environment limits: no qualified ESLint/JDK/Kotlin/Dart/Flutter/Swift
+image matrix or macOS runner was available. Real SDK smoke remains NOT_RUN.
+External CI latency baseline is unavailable. Synthetic measurements do not prove
+the 5%/10% rollout targets. Gradle execution cannot yield PASS without a structured
+report; approved CLI paths remain available. No cache reuse is allowed for blocking
+admission. Auto-fix, AI remediation and default blocking are separate future scope.
 
-Implemented first rollout: seven CLI adapters, shared execution/evidence, CPU reserve,
-and verifier integration. Persistent cache, representative performance qualification,
-Gradle structured reports and real SDK matrix remain pending. They are not marked done.
+Current result: UNVERIFIED pending fresh reviews and final gates. Historical FAIL
+reports stay FAIL. The old local route and current coordinator route differ;
+the package records that gap without invented review receipts.

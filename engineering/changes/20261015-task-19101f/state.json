@@ -123,6 +123,24 @@
       "from": "verifying",
       "reason": "Freeze candidate for allowed independent code and test review",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-15T09:04:10+00:00",
+      "from": "reviewing",
+      "reason": "Owner authorized repair after historical failed reviews",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-15T09:22:39+00:00",
+      "from": "implementing",
+      "reason": "323 focused tests passed and synthetic fixture measurements preserved",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-15T09:22:40+00:00",
+      "from": "verifying",
+      "reason": "Repair candidate prepared for fresh permitted code and test review",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -133,5 +151,5 @@
   "schema_version": 1,
   "status": "reviewing",
   "title": "GZ-LQG-001 optional language quality gate registry",
-  "updated_at": "2026-10-15T08:01:18+00:00"
+  "updated_at": "2026-10-15T09:22:40+00:00"
 }

@@ -1,16 +1,20 @@
 # Tasks
 
-- [x] Inspect latest base and source plans.
-- [x] Freeze shared adapter ABI and save design/plan.
-- [x] Implement four isolated adapter contours and integrate their commits.
-- [x] Implement strict shared policy, package/scope selection, sandbox and evidence.
-- [x] Add CPU reserve and verification integration.
-- [x] Prove container read-only/non-root/network/environment boundaries with a local image.
-- [x] Finish focused install/verification regression controls (277 tests passed).
-- [ ] Run independent code/test review on the committed candidate.
-- [ ] Save review reports, freeze, run the single final qualifying PR gate.
-- [ ] Pass exact-head public Actions checks.
-- [ ] Add qualified persisted execution cache and representative latency benchmarks.
-- [ ] Add Gradle structured report admission and real SDK matrix qualification.
+- [x] Inspect source plans and latest base.
+- [x] Freeze ABI and integrate four isolated adapter commits.
+- [x] Implement common policy/scope/sandbox/evidence and CPU reserve.
+- [x] Prove local Node container isolation with explicit fixture admission.
+- [x] Run first focused controls; preserve 2abea745 code/test reviews as historical FAIL.
+- [x] Reproduce and repair custom-config/policy fallback, FIFO reads and malformed types.
+- [x] Cover operator-registry metadata/schema, cleanup failure and running cancellation.
+- [x] Implement bounded shadow cache and test forged observations, invalidation and bypass.
+- [x] Add doctor, public/private CI and consumer-documentation regressions.
+- [x] Build deterministic language fixtures and record synthetic benchmark samples.
+- [ ] Review repaired committed candidate with allowed independent code/test agents.
+- [ ] Persist fresh reports, freeze and pass the qualifying PR gate.
+- [ ] Pass exact-head external CI checks.
+- [ ] Qualify actual SDK/macOS matrix and external representative latency.
 
-The last two items remain explicit follow-up scope. They are not represented as PASS.
+No executable local cache/doctor/fixture task is deferred. SDK/macOS and production-like
+CI measurements need unavailable runners/data. Gradle report admission remains unsupported;
+CLI alternatives are implemented. Auto-fix and default blocking require separate scope.

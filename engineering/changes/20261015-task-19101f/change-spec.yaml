@@ -4,7 +4,7 @@
   "objective": {
     "id": "OBJ-001",
     "statement": "Add optional language quality gates and reserve two host logical CPUs for Getzilla workloads.",
-    "success_metric": "Seven pure adapters share strict policy, scope, sandbox, evidence and admission; CPU requests respect one host reserve.",
+    "success_metric": "Seven adapters share policy, scope, sandbox and evidence; shadow cache is explicitly unverified, blocking always runs fresh, and CPU requests respect one host reserve.",
     "target": "Offline contract tests and bounded container isolation smoke pass on the committed candidate."
   },
   "risk": {
@@ -39,6 +39,9 @@
       "evidence": [
         {
           "test": "tests/test_lqg_core.py"
+        },
+        {
+          "test": "tests/test_lqg_repair.py"
         }
       ]
     },
@@ -48,6 +51,9 @@
       "evidence": [
         {
           "test": "tests/test_lqg_core.py"
+        },
+        {
+          "test": "tests/test_lqg_repair.py"
         }
       ]
     },
@@ -57,6 +63,9 @@
       "evidence": [
         {
           "test": "tests/test_lqg_core.py"
+        },
+        {
+          "test": "tests/test_lqg_repair.py"
         }
       ]
     },
@@ -81,6 +90,39 @@
         },
         {
           "test": "tests/test_lqg_core.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Bounded clone-local cache reuses shadow observations only with full current binding and unverified provenance; blocking bypasses all cache IO.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_cache.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "Doctor preflight never executes consumer tools; public and private CI selection is stable, receipt failure stays fatal and the installed guide exists.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_integration.py"
+        },
+        {
+          "test": "tests/test_ci_gate.py"
+        },
+        {
+          "test": "tests/test_installer.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-009",
+      "statement": "Reproducible language fixtures record raw cold and warm synthetic timings without claiming real SDK or external CI performance.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_benchmark.py"
         }
       ]
     }
@@ -150,6 +192,8 @@
     "maximum_steps": 1
   },
   "approvals": {
-    "required_scopes": ["scope_and_design_approval"]
+    "required_scopes": [
+      "scope_and_design_approval"
+    ]
   }
 }

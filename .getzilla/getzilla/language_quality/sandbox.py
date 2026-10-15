@@ -32,7 +32,7 @@ def validate_spec(value: dict) -> dict:
     if not isinstance(value, dict) or set(value) - (set(defaults) | {'image'}):
         raise ValueError('invalid sandbox configuration')
     result = {**defaults, **value}
-    if result['engine'] not in {'docker', 'podman'}:
+    if not isinstance(result['engine'], str) or result['engine'] not in {'docker', 'podman'}:
         raise ValueError('unsupported sandbox backend')
     if not isinstance(result.get('image'), str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./:_-]*@sha256:[a-f0-9]{64}', result['image']):
         raise ValueError('sandbox image must have an immutable sha256 digest')
@@ -93,10 +93,18 @@ def bounded_process(command: list[str], environment: dict[str, str], *, timeout:
                 if status != 'COMPLETED':
                     break
         if status == 'COMPLETED':
-            try:
-                process.wait(timeout=max(.01, timeout - (time.monotonic() - started)))
-            except subprocess.TimeoutExpired:
-                status, summary = 'TIMEOUT', 'language execution exceeded time limit'
+            while process.poll() is None:
+                if cancellation and cancellation():
+                    status, summary = 'CANCELLED', 'language execution cancelled'
+                    break
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    status, summary = 'TIMEOUT', 'language execution exceeded time limit'
+                    break
+                try:
+                    process.wait(timeout=min(.05, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
     finally:
         _stop(process)
         process.stdout.close()
@@ -183,6 +191,20 @@ class ContainerExecutor:
                     and attributes.st_uid == 0 and not attributes.st_mode & 0o022)
         except OSError:
             return False
+
+    def cache_identity(self, root: Path, *, cancellation=None) -> str | None:
+        """Recheck host admission and locally resolved image before any cache read."""
+        if self.spec['image'] not in self.approved_images or not self._available():
+            return None
+        with tempfile.TemporaryDirectory(prefix='identify-', dir=private_parent(root)) as temporary:
+            environment = {'PATH': '/usr/bin:/bin', 'HOME': temporary,
+                           'DOCKER_CONFIG': str(Path(temporary) / 'docker'), 'LANG': 'C.UTF-8'}
+            result = bounded_process([str(self.client), 'image', 'inspect', '--format', '{{.Id}}', self.spec['image']],
+                                     environment, timeout=10, output_limit=4096, cancellation=cancellation)
+        image_id = result.output.stdout.strip()
+        if result.status != 'COMPLETED' or result.output.returncode or not re.fullmatch(r'sha256:[a-f0-9]{64}', image_id):
+            return None
+        return self.spec['engine'] + ':' + self.spec['image'] + ':' + image_id
 
     def execute(self, root: Path, package: str, files: tuple[str, ...], argv: tuple[str, ...] | list[str], *, cancellation=None, expected_digest=None) -> Execution:
         from .core import MAX_INPUT_BYTES, excluded, safe_path, read_input, _read_inputs

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .architecture import architecture_inputs_present, preflight_architecture
 from .manifest import verify_manifest
+from .language_quality.core import run_registry
 from .repo import detect_repo
 from .router import build_route
 from .toolchain import check_toolchain
@@ -110,4 +111,9 @@ def run_doctor(root: Path) -> list[DoctorItem]:
 
     for tool in check_toolchain(root):
         items.append(DoctorItem(tool.status, f'tool:{tool.id}', tool.message))
+    for result in run_registry(root, None, preflight=True):
+        # Doctor reports readiness only; no config code, SDK or container runs here.
+        items.append(DoctorItem('fail' if result['tool_id'] == 'policy' else 'info',
+                                f"lqg:{result['tool_id']}:{result['package']}",
+                                result['execution_status'] + ': ' + result['summary']))
     return items

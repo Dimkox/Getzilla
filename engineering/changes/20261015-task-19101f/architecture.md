@@ -2,28 +2,42 @@
 
 Typed authority: change-spec.yaml. Adapter ABI: [design](../../../docs/superpowers/specs/2026-10-15-language-quality-gates-design.md).
 
-Existing verification -> language_quality.core -> pure adapter -> ContainerExecutor -> normalized
-result -> advisory report -> optional blocking CheckResult. Existing receipts retain the report.
-Core never imports Trust CI. Public/private CI selection stays unchanged.
+Verification -> language_quality.core -> pure adapter -> ContainerExecutor ->
+normalized result -> advisory report -> optional blocking CheckResult. Existing
+receipts retain the report. Doctor calls the same registry in preflight mode.
+Core never imports Trust CI; public/private CI selection is unchanged.
 
-Policy authority is .getzilla/config/policy.json#language_quality_gates.
-The adapter boundary is immutable models.py. Tool IDs are finite; adapters have no process,
-policy, receipt or cache authority. The core owns source scope and package boundaries.
-Changed scope uses exact comparison bases and status channels. Ambiguity selects full package.
+One policy authority: .getzilla/config/policy.json#language_quality_gates.
+Adapters have no process, policy, cache or receipt authority. Source and config paths
+are package-relative. Unknown Git bases/statuses, renames/deletes, configured files,
+project policy and known build/SDK/lock changes force full package scope.
 
 Host-owned /etc/getzilla/language-quality.json separately admits exact image digests.
-Repository policy and environment markers cannot authorize an image. No admission means
-UNSUPPORTED_RUNNER before any container subprocess. Getzilla never writes host admission.
-ContainerExecutor reads approved inputs through no-follow directory descriptors. It validates
-snapshot digest before launch. An immutable already-local Docker/Podman image runs non-root,
-network-none, read-only, capability-free, bounded by CPU/RAM/PIDs/time/output. The host client
-uses a clean environment. Timeout/cancellation kills the client and removes the owned container.
-Only private scratch is writable. No host execution fallback exists.
+Repository policy and environment markers cannot authorize an image. Without admission,
+no container process runs. Getzilla never writes the host registry. Source reads use
+no-follow directory descriptors and nonblocking file opens, then regular-file checks.
+The snapshot digest is checked before execution. The immutable local container runs
+offline, read-only, non-root, capability-free and bounded by CPU/RAM/PIDs/time/output.
+Cancellation kills/reaps its process and cleanup removes its owned container.
 
-cpu_budget.py derives host logical reserve, actual process affinity (already intersected with
-online/cpuset constraints) and minimum visible cgroup quota. selected_workers and select_engine
-both enforce it. PR fallback and LQG use the same helper.
+ShadowCache stores bounded JSON under clone-local private runtime directories.
+Its key binds account/checkout identity, commit/base, all approved dirty input bytes,
+config/dependencies/policy, tool and image-bound SDK identity, argv/package/scope,
+current admitted image resolution, implementation bytes and effective platform/budget.
+The directory is 0700; entries are 0600, regular, single-link files. Descriptor traversal,
+nonblocking locks/opens, atomic replacement, TTL24h, 128-entry/32MiB totals and
+256KiB entry bounds prevent unbounded or redirected cache I/O.
 
-No API/event schema or data migration changes. No external mutations, retry queue or production
-rollout. Cache is deliberately disabled pending trustworthy persisted reuse. Gradle remains
-nonpassing until a bounded report artifact contract is added.
+Cache hashes detect corruption, not authenticity. A loaded claim becomes
+CACHED_UNVERIFIED with execution_performed=false and evidence_kind=cached-unverified.
+Persisted PASS/FAIL and diagnostics stay under cached_observation. No cached authority
+fields are accepted. Current policy and bindings are rebuilt. Blocking bypasses cache;
+projection also refuses cached provenance defensively. No signing keys are introduced.
+
+cpu_budget.py reserves two host logical CPUs once and caps by allowed CPUs and quota.
+The test runner and each serial LQG container use it. The coordinator allocates concurrent
+owners separately. Fixtures measure only the Python orchestration path with injected
+outputs; real SDK/container startup and external CI timings remain unqualified.
+
+No migration or external mutation. Gradle results cannot pass without a bounded
+structured report; supported CLI paths are used. Deployed CI remains outside this change.

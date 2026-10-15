@@ -1,22 +1,36 @@
 # Requirements
 
-Typed criteria AC-001 through AC-006 live in change-spec.yaml.
+Typed acceptance criteria AC-001 through AC-009 live in change-spec.yaml.
 Use auto/on/off, shadow/blocking, changed/full. Defaults are auto/shadow/changed.
 Unknown fields, duplicate keys, unsafe paths and unsupported policy values fail closed.
-Detailed results distinguish PASS, FAIL, ERROR, TIMEOUT, CANCELLED, NOT_CONFIGURED,
-NOT_APPLICABLE, SKIPPED_BY_POLICY and UNSUPPORTED_RUNNER.
+Detailed execution outcomes distinguish PASS, FAIL, ERROR, TIMEOUT, CANCELLED,
+NOT_CONFIGURED, NOT_APPLICABLE, SKIPPED_BY_POLICY and UNSUPPORTED_RUNNER.
+CACHED_UNVERIFIED is an advisory observation, never a fresh tool result. Doctor
+can report NOT_RUN for an admitted configuration without executing a tool.
 
-Read only inventoried source plus approved language configuration/manifests. Do not mount the
-checkout, credentials, runtime state or host dependencies. Tools and their dependency closure
-must already exist in the immutable image. Missing closure may produce ERROR; do not install it.
-ESLint plugins and Dart/Flutter packages require a consumer-specific qualified image; generic
-Node availability is not proof that those SDKs/dependencies are present.
+Read only inventoried source and approved configuration/manifests. Do not mount the
+checkout, credentials, runtime state or host dependencies. Tools, SDKs and dependency
+closure must exist in an operator-admitted immutable image. Missing closure is not
+fixed by an automatic install. Generic Node availability does not qualify ESLint.
 
-CPU default and maximum are max(1, host logical CPU count - 2), then affinity/cpuset and finite
-ancestor quota caps. Positive explicit worker requests may lower the allocation, not raise it.
-Zero retains the existing sequential test-runner rollback. LQG runs tools serially and caps each
-container allocation. The coordinator caps all concurrent heavy child work at the shared budget.
+Custom configured files and .getzilla/config/policy.json invalidate changed scope.
+Open source descriptors without blocking; reject non-regular files before reading.
+Cancellation remains observable after output pipes close. Cleanup failure refuses PASS.
 
-No new service, database or package dependency. No deployed Trust CI or branch-protection changes.
-No cache reuse until identities and receipt trust are proven. Real tool smoke and consumer
-p50/p95 benchmarks are pending where SDKs or representative projects are unavailable.
+Cache is clone-local and keyed by every current execution input and implementation.
+Only shadow observations can reuse it. Disk claims remain unverified even if their
+corruption hash matches. Blocking does zero cache reads or writes. Cache I/O failure
+does not overwrite fresh execution status. Bound size, entry count, age and traversal.
+
+CPU default and ceiling are max(1, host logical CPU count - 2), then affinity/cpuset
+and ancestor quota caps. Explicit worker requests may lower the allocation. Zero
+retains sequential test-runner rollback. Concurrent owners share the global budget.
+
+Doctor performs readiness checks without running consumer code. Public/private CI
+selection and mandatory quality checks remain unchanged. Install the LQG documentation
+with its consumer link. Record reproducible fixture samples and source identity.
+No SDK, container-startup or external CI performance claim follows from synthetic data.
+
+No new service, database, dependency, deployed Trust CI change, security key,
+package install, auto-fix or AI call. Real SDK smoke and external CI baseline remain
+unavailable until qualified runners and representative consumer evidence exist.

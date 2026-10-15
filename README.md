@@ -4,6 +4,10 @@ Current source: **2.2.2 source candidate**, including the verifier child-test sc
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
+The source candidate also includes [optional language quality gates](docs/LANGUAGE_QUALITY_GATES.md)
+for ESLint, Kotlin, Dart/Flutter and Swift. They default to advisory checks, require an
+operator-approved offline container and keep cached observations separate from fresh results.
+
 The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported. Generated hooks use the nearest installed project, so nested worktrees keep their own route and denial state. Task scratch stays under the canonical project root `.getzilla/runtime`.
 
 ## The short version

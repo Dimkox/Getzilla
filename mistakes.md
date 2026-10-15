@@ -1937,3 +1937,7 @@ The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child test
 - The vulnerability collector omitted build-system.requires, so vulnerable packaging backends were absent from the audit inventory. Include exact backend pins with manifest provenance and test build-only projects as well as runtime dependencies. The new wheel validation must respect delivery as a namespace package, not assume an __init__.py file.
 
 - Broad no-network route-policy ownership also covered the older OSV scanner. The build-parser edit exposed its inherited HTTPS client in exact changed-source fitness, which the earlier bounded suite did not run for this module. Give the scanner narrow ownership and declared metadata egress, then run the actual fitness contract before reviews; do not suppress old-import detection.
+
+- 2026-10-15: LQG scope invalidation used fixed config names and omitted configured paths and policy changes, which could skip a blocking check. Derive those paths before selecting changed scope and test config-only changes through the full registry.
+
+- 2026-10-15: LQG checked a source descriptor after a blocking open, so a FIFO could stop verification before its timeout. Open without blocking, validate the descriptor type, and keep a bounded subprocess regression for special files.

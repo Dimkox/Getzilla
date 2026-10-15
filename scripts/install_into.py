@@ -34,6 +34,7 @@ MANAGED_DIRS = (
     "factory/src",
 )
 MANAGED_FILES = (
+    "docs/LANGUAGE_QUALITY_GATES.md",
     "factory/.env.example",
     "factory/.gitignore",
     "factory/actors.example.json",

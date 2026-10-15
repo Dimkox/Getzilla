@@ -1,27 +1,40 @@
 # Test plan
 
-P0: reject malformed policy, unknown IDs, symlink/path escapes and incomplete scope.
-P0: missing configuration/backend and abnormal tool exits must not pass.
-P0: block/shadow projection must preserve mandatory quality rules.
-P0: output, time and cancellation bounds must terminate the owned execution.
-P0: source snapshots exclude unrelated private files and bind their content digest.
-P1: each adapter validates argv, diagnostic schema and exit status.
-P1: host28/affinity22 gives22; host28/child26 gives26; explicit28 gives26; quota4 gives4.
-P1: consumer installation retains all shared modules and public/private CI selection.
+P0: malformed policy and unknown types fail closed. Custom configuration and policy-only
+changes force full scope. FIFO/symlink inputs cannot block or escape the snapshot.
+P0: operator image ownership/mode/schema checks run before container execution.
+Timeout/cancellation, closed output pipes and cleanup failure never become PASS.
+P0: shadow observations cannot block. Blocking never reads/writes cache, and cached
+provenance cannot create admission PASS even with a forged reported status/hash.
+P1: cache invalidates every key dimension; rejects malformed, expired, oversized,
+unsafe-permission, symlink/hardlink/FIFO entries; evicts within fixed limits.
+P1: doctor preflight, installed documentation, unchanged CI split/workflow bytes and
+receipt-publication failure preserve existing behavior.
+P1: all seven adapters run through the real registry with deterministic fixture outputs.
+P1: CPU reserve is applied once and caps explicit as well as automatic requests.
 
-Focused commands:
-- python3 -m unittest tests.test_lqg_core tests.test_lqg_eslint tests.test_lqg_kotlin tests.test_lqg_dart tests.test_lqg_swift
-- python3 -m unittest tests.test_python_test_runner
-- python3 -m unittest tests.test_quality_gates tests.test_ci_gate tests.test_installer tests.test_manifest_package
-- ruff check .getzilla/getzilla/language_quality .getzilla/getzilla/cpu_budget.py tests/test_lqg_core.py
+New regression modules: tests.test_lqg_repair, tests.test_lqg_cache,
+tests.test_lqg_integration, tests.test_lqg_benchmark.
+Existing controls: all four adapter modules, tests.test_lqg_core,
+tests.test_python_test_runner, tests.test_quality_gates, tests.test_ci_gate,
+tests.test_workflow_sources, tests.test_installer, tests.test_manifest_package,
+tests.test_toolchain and tests.test_verification_doctor.DoctorTests.
 
-Actual observations: the combined focused command above passed277 tests in103.791seconds.
-It covered adapters/core, the full Python runner module, quality gates, CI, installer and manifest.
-The later registry execution/source-mutation fixture passed separately. Capacity12 tests passed.
-The runner initially found an obsolete fallback2 assertion; its repair and focused rerun passed.
-Local Node container smoke passed: source read-only, uid nonzero, loopback-only network,
-ambient test variable absent. The fixture explicitly admits only the known Node image.
-An unapproved image is refused before any subprocess. This is sandbox proof, not SDK qualification.
-Real ESLint/Kotlin/Dart/Swift tool matrix is NOT_RUN. SDK downloads were not attempted.
-Performance baseline is unavailable. No p50/p95 target or cache performance is claimed.
-Final controls/reviews/receipts remain separate and must bind the committed candidate.
+Observed RED: 3 scope/FIFO failures and 4 malformed-type errors; then 25 tests GREEN.
+Cache RED: missing module and expected CACHED_UNVERIFIED; then 33 tests GREEN.
+Extra RED found closed-pipe cancellation and wrong historical evidence linkage; repaired.
+Doctor/payload RED: no doctor items and missing installed documentation; repaired.
+Fixture RED: missing harness/timing fields; repaired.
+The combined focused run passed 207 tests in54.909s. Installer/manifest/toolchain/doctor
+controls passed 116 tests in63.164s. After strengthening byte-limit assertions, the
+8 cache tests passed again in0.109s. These are 323 distinct focused tests, not a final
+PR receipt. Committed-HEAD smoke is run after the repair commit and reported separately.
+
+Synthetic command: python3 scripts/benchmark_lqg.py --samples 5 --concurrency 2.
+Raw evidence lives in evidence/synthetic-benchmarks.json with source bytes digest.
+It measures 20 scenarios, five cold and warm samples each, plus two concurrent fixtures.
+No real SDK, container startup or external CI target is qualified. SDK smoke is NOT_RUN;
+external CI baseline is unavailable. Earlier Node container isolation smoke is separate.
+
+The historical 277-test run and reviews apply to the pre-repair tree only. Both historical
+reviews remain FAIL. Fresh reviews and final receipt must bind the new frozen candidate.
