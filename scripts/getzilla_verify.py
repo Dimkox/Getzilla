@@ -6,6 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+# The pinned coverage/pytest-xdist/ruff/bandit live in Getzilla's own environment.
+from getzilla.interpreter import reexec_in_project_venv  # noqa: E402
+
+reexec_in_project_venv(ROOT)
+
 import argparse
 import json
 import os

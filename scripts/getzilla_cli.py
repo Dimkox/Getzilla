@@ -6,13 +6,15 @@ this Getzilla installation do. Arguments pass through unchanged: `getzilla route
 """
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HOME / '.getzilla'))
+
+from getzilla.interpreter import project_python  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
@@ -63,7 +65,6 @@ def script_path(name: str, cwd: Path | None = None) -> Path:
 
 def test_workers() -> int:
     """Workers for `getzilla test`: measured capacity with the n-2 reserve, else a safe fallback."""
-    sys.path.insert(0, str(HOME / '.getzilla'))
     try:
         from getzilla.startup_cpu import measure
 
@@ -74,14 +75,16 @@ def test_workers() -> int:
 
 def run_tests(args: list[str]) -> int:
     targets = args or ['tests']
-    if importlib.util.find_spec('pytest') and importlib.util.find_spec('xdist'):
+    python = project_python(HOME)
+    probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
+    if probe.returncode == 0:
         workers = test_workers()
         print(f'getzilla test: {workers} parallel workers', flush=True)
-        command = [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
+        command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
     else:
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
-              f'(install it with: {Path(sys.executable).name} -m pip install pytest pytest-xdist)', flush=True)
-        command = [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
+              '(re-run the installer to create Getzilla\'s .venv)', flush=True)
+        command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
     return subprocess.run(command, check=False).returncode
 
 
@@ -96,7 +99,7 @@ def main(argv: list[str]) -> int:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
     script = script_path(COMMANDS[command][0])
-    return subprocess.run([sys.executable, str(script), *rest], check=False).returncode
+    return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode
 
 
 if __name__ == '__main__':

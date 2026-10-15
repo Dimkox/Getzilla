@@ -10,6 +10,10 @@ while [ -h "$self" ]; do
   esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd -P)
+# Getzilla's own environment first: it holds the pinned test and quality tools.
+if [ -x "$here/../.venv/bin/python" ]; then
+  exec "$here/../.venv/bin/python" "$here/../scripts/getzilla_cli.py" "$@"
+fi
 for python in python3 python; do
   if command -v "$python" >/dev/null 2>&1; then
     exec "$python" "$here/../scripts/getzilla_cli.py" "$@"

@@ -94,6 +94,7 @@ function Install-Getzilla {
     Get-GetzillaSource -Repo $Repo -Ref $Ref -Destination $GetzillaHome
     # One `getzilla <command>` for every tool (bin\getzilla.cmd), on PATH for new windows.
     Add-UserPath (Join-Path $GetzillaHome 'bin')
+    Initialize-PythonEnvironment $Python $GetzillaHome
 
     Push-Location $GetzillaHome
     try {
@@ -453,6 +454,25 @@ function Install-PowerShell7 {
         Write-Step ("PowerShell: " + $pwsh.Version)
     } else {
         Write-Step "PowerShell $MinimumPowerShell or newer is still missing. Install it from https://aka.ms/powershell-release?tag=lts and open agents from a PowerShell 7 window."
+    }
+}
+
+function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) {
+    # Getzilla's own environment with the pinned test and quality tools (coverage, pytest-xdist,
+    # ruff, bandit); getzilla and getzilla_verify run under it.
+    Write-Step "Creating Getzilla's Python environment with the pinned test and quality tools..."
+    $venv = Join-Path $GetzillaHome '.venv'
+    Invoke-Python $Python @('-m', 'venv', $venv)
+    $venvPython = Join-Path $venv 'Scripts\python.exe'
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
+        & $venvPython -m pip install --disable-pip-version-check -q `
+            -r (Join-Path $GetzillaHome '.getzilla\config\python-test-requirements.txt') `
+            -r (Join-Path $GetzillaHome '.getzilla\config\python-quality-requirements.txt')
+    }
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
+        Write-Step "Python environment: $venv"
+    } else {
+        Write-Host "WARNING: could not create $venv; verify will report missing coverage, ruff and bandit." -ForegroundColor Yellow
     }
 }
 

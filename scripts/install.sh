@@ -70,6 +70,7 @@ main() {
 
   fetch_getzilla "$repo" "$ref" "$home"
   link_getzilla_command "$home"
+  setup_python_env "$home" "$python"
 
   if [ "${GETZILLA_SKIP_AGENT:-0}" != "1" ]; then
     configure_agent "$home" "$python" "$agent" "$provider"
@@ -442,6 +443,20 @@ update_security_data() {
   say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
   (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
     || printf 'WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "%s" && %s scripts/getzilla_update.py --only osv --only opengrep\n' "$home" "$python" >&2
+}
+
+setup_python_env() {
+  # Getzilla's own environment with the pinned test and quality tools (PEP 668 safe).
+  local home="$1" python="$2"
+  say "Creating Getzilla's Python environment with the pinned test and quality tools..."
+  if "$python" -m venv "$home/.venv" </dev/null \
+    && "$home/.venv/bin/python" -m pip install --disable-pip-version-check -q \
+      -r "$home/.getzilla/config/python-test-requirements.txt" \
+      -r "$home/.getzilla/config/python-quality-requirements.txt" </dev/null; then
+    say "Python environment: $home/.venv"
+  else
+    printf 'WARNING: could not create %s/.venv; verify will report missing coverage, ruff and bandit.\n' "$home" >&2
+  fi
 }
 
 link_getzilla_command() {
