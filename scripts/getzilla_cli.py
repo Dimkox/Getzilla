@@ -36,6 +36,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'vulns': ('getzilla_vulns.py', 'check pinned dependencies against known vulnerabilities'),
     'update': ('getzilla_update.py', 'update vulnerability data and third-party tools'),
     'ci': ('getzilla_ci.py', 'select the CI and merge gate for this repository'),
+    'trust-ci': ('getzilla_trust_ci.py', 'set up and check the self-hosted Trust CI host (init, status)'),
     'deploy': ('getzilla_deploy.py', 'prepare human-owned publish commands'),
     'harness': ('getzilla_harness.py', 'regenerate the agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
