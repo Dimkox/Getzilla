@@ -116,6 +116,37 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(snapshot['chosen_capacity'], 2)
 
 
+class WindowsMeasureTests(unittest.TestCase):
+    def test_windows_counts_usable_cpus_with_reserve_and_physical_cores(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(argv: list[str]) -> dict:
+            calls.append(argv)
+            return {'argv': argv, 'code': 0, 'stdout': '10\r\n', 'stderr': ''}
+
+        with mock.patch.object(startup_cpu, 'has_linux_affinity', return_value=False), \
+                mock.patch.object(startup_cpu.os, 'cpu_count', return_value=12), \
+                mock.patch.object(startup_cpu.os, 'process_cpu_count', return_value=12, create=True):
+            snapshot = startup_cpu.measure(reserve=2, runner=runner)
+        self.assertEqual(snapshot['platform'], 'windows')
+        self.assertEqual(snapshot['topology']['physical_cores'], 10)
+        self.assertEqual(snapshot['topology']['online_logical_cpus'], 12)
+        self.assertEqual(snapshot['chosen_capacity'], 10)
+        self.assertIsNone(snapshot['probe'])
+        self.assertEqual(len(calls), 1)
+
+    def test_windows_unknown_cores_is_an_uncertainty_not_a_failure(self) -> None:
+        def runner(argv: list[str]) -> dict:
+            return {'argv': argv, 'code': None, 'stdout': '', 'stderr': 'FileNotFoundError'}
+
+        with mock.patch.object(startup_cpu, 'has_linux_affinity', return_value=False), \
+                mock.patch.object(startup_cpu.os, 'cpu_count', return_value=4), \
+                mock.patch.object(startup_cpu.os, 'process_cpu_count', return_value=2, create=True):
+            snapshot = startup_cpu.measure(reserve=0, runner=runner)
+        self.assertIsNone(snapshot['topology']['physical_cores'])
+        self.assertEqual(snapshot['chosen_capacity'], 2)
+        self.assertTrue(any('physical core' in item for item in snapshot['uncertainties']))
+
 @unittest.skipUnless(hasattr(os, 'sched_getaffinity'), 'Linux affinity API required')
 class CliTests(unittest.TestCase):
     script = ROOT / 'scripts/getzilla_startup_cpu.py'

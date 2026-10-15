@@ -145,8 +145,54 @@ def choose_capacity(*, online: set[int], affinity: set[int], cpuset: set[int] | 
     return {'verified_cpus': format_cpu_list(verified), 'chosen_capacity': max(1, limit), 'reasons': reasons}
 
 
+_WINDOWS_CORES = ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+                  '(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum']
+
+
+def has_linux_affinity() -> bool:
+    return hasattr(os, 'sched_getaffinity')
+
+
+def measure_windows(*, reserve: int, runner: Runner) -> dict[str, Any]:
+    """Windows step zero: logical and process-usable CPUs, physical cores; no cgroup or probe exists."""
+    logical = os.cpu_count() or 1
+    usable = getattr(os, 'process_cpu_count', os.cpu_count)() or logical
+    uncertainties = ['Windows: job-object CPU rate limits are not inspected; usable CPUs come from the '
+                     'process affinity (os.process_cpu_count)']
+    commands = [runner(list(_WINDOWS_CORES))]
+    text = commands[0]['stdout'].strip()
+    physical = int(text) if commands[0]['code'] == 0 and text.isdecimal() else None
+    if physical is None:
+        uncertainties.append('physical core count unavailable')
+    online = set(range(logical))
+    affinity = set(range(min(usable, logical)))
+    decision = choose_capacity(online=online, affinity=affinity, cpuset=None, quota=None,
+                               probe_allowed=None, reserve=reserve)
+    return {
+        'schema_version': SCHEMA_VERSION,
+        'kind': 'startup-cpu-step-zero',
+        'platform': 'windows',
+        'observed_at': now_utc(),
+        'pid': os.getpid(),
+        'commands': commands,
+        'topology': {'physical_cores': physical, 'online_logical_cpus': logical,
+                     'online_cpus': format_cpu_list(online)},
+        'process': {'nproc': len(affinity), 'affinity': format_cpu_list(affinity)},
+        'cgroup': None,
+        'effective_cpuset': None,
+        'finite_quota': None,
+        'reserve': reserve,
+        'probe': None,
+        **decision,
+        'uncertainties': uncertainties,
+        'evidence_kind': 'local observation; not a verification receipt',
+    }
+
+
 def measure(*, reserve: int = 0, probe: bool = True, runner: Runner = run_command) -> dict[str, Any]:
     """Perform step zero and return the snapshot (no files are written here)."""
+    if not has_linux_affinity():
+        return measure_windows(reserve=reserve, runner=runner)
     uncertainties: list[str] = []
     commands = [runner(argv) for argv in (
         ['lscpu'], ['lscpu', '-p=CPU,CORE,SOCKET,ONLINE'], ['nproc', '--all'], ['nproc'],
