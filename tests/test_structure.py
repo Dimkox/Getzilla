@@ -20,7 +20,7 @@ ROOT_ENTRIES = frozenset(
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
         "FACTORY_UNIFIED_UPGRADE_TZ_v1.5_FINAL.md",
         "LICENSE", "Makefile", "PROJECT_STATE.json", "QUICKSTART.md", "README.md", "SECURITY.md",
-        "START_HERE.md", "VERSION", "architecture", "bandit.yaml", "decisions.md",
+        "START_HERE.md", "VERSION", "architecture", "bandit.yaml", "bin", "decisions.md",
         "delivery", "docs", "engineering", "examples", "factory", "governance",
         "mistakes.md", "packages", "pilot", "ruff.toml", "schemas", "scripts",
         "side-projects", "tests", "trust-ci",

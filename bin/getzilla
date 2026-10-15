@@ -1,0 +1,19 @@
+#!/bin/sh
+# getzilla: one command for the Getzilla tools; see `getzilla help`.
+# Follow symlinks (the installer links ~/.local/bin/getzilla here) to find this checkout.
+self=$0
+while [ -h "$self" ]; do
+  target=$(readlink "$self")
+  case $target in
+    /*) self=$target ;;
+    *) self=$(dirname -- "$self")/$target ;;
+  esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd -P)
+for python in python3 python; do
+  if command -v "$python" >/dev/null 2>&1; then
+    exec "$python" "$here/../scripts/getzilla_cli.py" "$@"
+  fi
+done
+echo 'getzilla: Python 3.10 or newer is required' >&2
+exit 1

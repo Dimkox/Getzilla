@@ -69,6 +69,7 @@ main() {
   fi
 
   fetch_getzilla "$repo" "$ref" "$home"
+  link_getzilla_command "$home"
 
   if [ "${GETZILLA_SKIP_AGENT:-0}" != "1" ]; then
     configure_agent "$home" "$python" "$agent" "$provider"
@@ -97,6 +98,7 @@ main() {
   cat <<EOF
 
 Next:
+  0. Every Getzilla tool is one command: getzilla help
   1. New project:      cd "$home" && $python scripts/install_into.py --materialize-new /path/to/new/project
      Existing project: cd "$home" && $python scripts/install_into.py --plan /path/to/your/project
   2. In your project run: $(agent_command "$agent")
@@ -386,6 +388,14 @@ update_security_data() {
   say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
   (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
     || printf 'WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "%s" && %s scripts/getzilla_update.py --only osv --only opengrep\n' "$home" "$python" >&2
+}
+
+link_getzilla_command() {
+  # One `getzilla <command>` for every tool, next to the agent CLIs in ~/.local/bin.
+  local home="$1"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"
+  say "getzilla command: $HOME/.local/bin/getzilla (add ~/.local/bin to PATH if it is not found)"
 }
 
 offer_tool_update() {

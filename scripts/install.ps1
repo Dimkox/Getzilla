@@ -92,6 +92,8 @@ function Install-Getzilla {
     }
 
     Get-GetzillaSource -Repo $Repo -Ref $Ref -Destination $GetzillaHome
+    # One `getzilla <command>` for every tool (bin\getzilla.cmd), on PATH for new windows.
+    Add-UserPath (Join-Path $GetzillaHome 'bin')
 
     Push-Location $GetzillaHome
     try {
@@ -123,6 +125,7 @@ function Install-Getzilla {
     }
     Write-Host ''
     Write-Host 'Next:'
+    Write-Host '  0. Every Getzilla tool is one command: getzilla help   (open a new PowerShell window first)'
     Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"
     Write-Host "     Existing project: cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --plan C:\path\to\your\project"
     Write-Host ('  2. In your project run: ' + (Get-AgentCommand $Agent))
