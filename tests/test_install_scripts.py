@@ -142,11 +142,14 @@ class InstallScriptContractTests(unittest.TestCase):
         text = POWERSHELL.read_text(encoding='utf-8')
         self.assertIn("'Git.Git'", text)
         self.assertIn('--id Git.Git', _toolchain_windows_install('git'))
-        python_ids = set(re.findall(r"'Python\.Python\.3\.(\d+)'", text))
-        self.assertEqual(len(python_ids), 1)
-        self.assertGreaterEqual(int(python_ids.pop()), 10)
+        # Python comes per user from the pinned python.org installer, never through winget: winget's
+        # install waited on a hidden elevation prompt in a clean Windows Sandbox.
+        self.assertNotRegex(text, r"Invoke-Winget 'Python\.Python")
         self.assertIn('/python-3.13.16-amd64.exe', text)
-        self.assertIn('InstallAllUsers=0', text)
+        for switch in ('InstallAllUsers=0', 'InstallLauncherAllUsers=0'):
+            self.assertIn(switch, text)
+        self.assertIn('$process.WaitForExit(600000)', text)
+        self.assertNotIn('Start-Process -FilePath $installer -Wait', text)
 
     def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
         shell = SHELL.read_text(encoding='utf-8')

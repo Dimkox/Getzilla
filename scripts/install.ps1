@@ -156,8 +156,27 @@ function Test-Winget {
     return [bool](Get-Command winget -ErrorAction SilentlyContinue)
 }
 
+function Test-IsElevated {
+    if (-not (Test-IsWindowsHost)) { return $false }
+    try {
+        $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Test-WingetInstalls {
+    # winget installs Git, PowerShell 7 and Node.js machine-wide and Python's launcher for all users.
+    # Without an elevated session each of those waits on a UAC prompt, which hangs unattended runs
+    # (Windows Sandbox, CI, remote shells); the pinned per-user downloads need no administrator.
+    return ((Test-Winget) -and (Test-IsElevated))
+}
+
 function Invoke-Winget([string]$Id, [string[]]$Extra) {
-    $arguments = @('install', '-e', '--id', $Id, '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
+    # The winget community source only: the msstore source fails in some regions (0x8a15003b) and,
+    # matching the same id, makes winget refuse to choose a package at all.
+    $arguments = @('install', '-e', '--id', $Id, '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
     # winget writes UTF-8; Windows PowerShell decodes piped native output with the OEM code page,
     # which turns localized (for example Russian) messages into mojibake.
     $previousEncoding = [Console]::OutputEncoding
@@ -189,12 +208,18 @@ function Select-WingetDependencies([string]$Root, [string]$Architecture) {
 }
 
 function Initialize-Winget {
+    $perUser = 'Not running as administrator: tools are installed for the current user from pinned, verified downloads (no UAC prompts).'
     if (Test-Winget) {
         Write-Step ('winget: ' + ((& winget --version) | Select-Object -First 1))
+        if (-not (Test-IsElevated)) { Write-Step $perUser }
         return
     }
     if ($env:GETZILLA_SKIP_WINGET -eq '1') {
         Write-Step 'winget is missing; skipping its installation (GETZILLA_SKIP_WINGET=1). Using direct downloads.'
+        return
+    }
+    if (-not (Test-IsElevated)) {
+        Write-Step $perUser
         return
     }
     try {
@@ -283,7 +308,7 @@ function Get-PinnedDownload([string]$Key) {
 
 function Install-Git {
     Write-Step 'Installing Git...'
-    if ((Test-Winget) -and (Invoke-Winget 'Git.Git' @())) {
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'Git.Git' @())) {
         Update-SessionPath
         if (Get-Command git -ErrorAction SilentlyContinue) { return }
     }
@@ -330,16 +355,23 @@ function Invoke-Python([string[]]$Python, [string[]]$Arguments) {
 }
 
 function Install-Python {
-    Write-Step 'Installing Python 3.13...'
-    if ((Test-Winget) -and (Invoke-Winget 'Python.Python.3.13' @('--scope', 'user'))) {
-        Update-SessionPath
-        return
-    }
+    Write-Step 'Installing Python 3.13 for the current user...'
+    # Not winget: on a clean Windows (Windows Sandbox) its Python.Python.3.13 install waited on an
+    # elevation prompt nobody could see, even with --scope user and per-user --override switches.
+    # The pinned python.org installer with these per-user switches needs no administrator.
     $installer = Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))
-    $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+    # Not Start-Process -Wait: Windows PowerShell then waits for the whole process tree, and the
+    # Python installer leaves a background child running, so the installer hung after Python was in.
+    $process = Start-Process -FilePath $installer -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=1',
         'InstallLauncherAllUsers=0', 'Include_test=0', 'Include_doc=0'
     )
+    $null = $process.Handle  # keeps ExitCode readable after exit in Windows PowerShell
+    if (-not $process.WaitForExit(600000)) {
+        try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
+        Remove-Item -Force $installer -ErrorAction SilentlyContinue
+        throw 'The Python installer did not finish within 10 minutes (it may be waiting on a hidden prompt). Install Python 3.13 for the current user from https://www.python.org/downloads/ and run this installer again.'
+    }
     Remove-Item -Force $installer
     if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode)." }
     Update-SessionPath
@@ -366,7 +398,7 @@ function Install-PowerShell7 {
         return
     }
     Write-Step "Installing PowerShell $MinimumPowerShell or newer (Getzilla's minimum)..."
-    if ((Test-Winget) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
     $pwsh = Get-Pwsh
     if (-not ($pwsh -and $pwsh.Version -ge $MinimumPowerShell)) {
         try {
@@ -500,7 +532,7 @@ function Test-Node([int]$Minimum = 20) {
 function Install-Node([int]$Minimum = 20) {
     if (Test-Node $Minimum) { return $true }
     Write-Step "Installing Node.js LTS ($Minimum or newer is needed)..."
-    if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
     if (Test-Node $Minimum) { return $true }
     try {
         $folder = Expand-ToUserPrograms (Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))) 'nodejs'
