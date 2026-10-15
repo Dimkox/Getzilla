@@ -119,6 +119,25 @@ class ToolchainTests(unittest.TestCase):
             self.assertIn(tool_id, tools)
             self.assertFalse(tools[tool_id]['required'])
 
+    def test_every_real_tool_records_its_build_host_version(self) -> None:
+        for tool in load_toolchain(ROOT)['tools']:
+            self.assertRegex(str(tool.get('built') or ''), r'^\d+(\.\d+)*$', tool['id'])
+
+    def test_unknown_build_version_is_left_out_not_printed_empty(self) -> None:
+        spec = {key: value for key, value in PYTHON_SPEC.items() if key != 'built'}
+        checks = []
+        with patch('getzilla.toolchain.command_exists', return_value=False):
+            checks.append(check_tool(spec, host='linux'))
+            checks.append(check_tool({**spec, 'required': False}, host='linux'))
+        with patch('getzilla.toolchain.detect_command', return_value=('python3', '3.9.1')):
+            checks.append(check_tool(spec, host='linux'))
+        with patch('getzilla.toolchain.detect_command', return_value=('python3', '3.12.3')):
+            checks.append(check_tool(spec, host='linux'))
+        for check in checks:
+            for text in (check.message, check.offer or ''):
+                self.assertNotIn('built', text)
+        self.assertEqual(checks[-1].message, 'python3 3.12.3 (>= 3.10)')
+
     def test_install_command_uses_host_then_generic(self) -> None:
         self.assertIn('apt-get', install_command(PYTHON_SPEC, 'linux'))
         self.assertIn('python.org', install_command(PYTHON_SPEC, 'unknown-os'))

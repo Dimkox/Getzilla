@@ -94,9 +94,13 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
     fallback = str(spec.get('fallback') or minimum or built)
     install = install_command(spec, host)
     command, found = detect_command(spec)
+    # A tool without a recorded build-host version says nothing about it, never "built )".
+    built_on = f', built on {built}' if built else ''
+    built_note = f' (built {built})' if built else ''
+    built_pin = f', built {built}' if built else ''
     offer = (
-        f'Install fallback {name} {fallback} (or newer, built on {built}): {install}'
-        if install else f'Install fallback {name} {fallback} (or newer, built on {built})'
+        f'Install fallback {name} {fallback} (or newer{built_on}): {install}'
+        if install else f'Install fallback {name} {fallback} (or newer{built_on})'
     )
     if not command:
         return ToolCheck(
@@ -104,10 +108,10 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
             name=name,
             status='fail' if required else 'info',
             message=(
-                f'missing; required>={minimum} (built {built}); {offer}'
+                f'missing; required>={minimum}{built_note}; {offer}'
                 if required else
                 f'not installed; optional for {spec.get("profile") or "matching profiles"}; '
-                f'required>={minimum} if used (built {built}); {offer}'
+                f'required>={minimum} if used{built_note}; {offer}'
             ),
             required=required,
             minimum=minimum,
@@ -121,7 +125,7 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
             id=tool_id,
             name=name,
             status='fail' if required else 'info',
-            message=f'{command} {found} < minimum {minimum} (built {built}); {offer}',
+            message=f'{command} {found} < minimum {minimum}{built_note}; {offer}',
             required=required,
             found=found,
             command=command,
@@ -138,7 +142,7 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
         id=tool_id,
         name=name,
         status='pass',
-        message=f'{command} {found or "present"} (>= {minimum}, built {built}){extra}',
+        message=f'{command} {found or "present"} (>= {minimum}{built_pin}){extra}',
         required=required,
         found=found,
         command=command,
