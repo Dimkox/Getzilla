@@ -21,6 +21,7 @@ from getzilla import fsx
 from getzilla._policy_legacy import (
     _executable_name,
     _shell_tokens,
+    _simple_commands,
     _unwrap_execution_wrappers,
     analyze_command_authority,
 )
@@ -31,6 +32,23 @@ _POSIX_SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
 _WINDOWS_SHELLS = {'cmd', 'powershell', 'pwsh'}
 _WINDOWS_DIRECTORY_COMMANDS = {'cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location'}
 _WINDOWS_DYNAMIC_COMMANDS = {'invoke-expression', 'iex'}
+# Interpreter code passed inline (option, stdin or here-document) is opaque to policy, unlike a
+# reviewable script file or module, so such invocations fail closed.
+_PYTHON_INTERPRETER = re.compile(r'^(?:python|pypy)(?:\d+(?:\.\d+)*)?$')
+_INLINE_CODE_OPTIONS = {
+    'node': {'-e', '--eval', '-p', '--print', '-'},
+    'nodejs': {'-e', '--eval', '-p', '--print', '-'},
+    'bun': {'-e', '--eval', '-p', '--print'},
+    'php': {'-r'},
+    'lua': {'-e', '-'},
+    'luajit': {'-e', '-'},
+    'rscript': {'-e'},
+    'osascript': {'-e'},
+}
+_INLINE_CODE_CLUSTERS = {'perl': 'eE', 'ruby': 'e'}
+_AWK_INTERPRETERS = {'awk', 'gawk', 'mawk', 'nawk'}
+_AWK_EXECUTION = re.compile(r'system|getline|\||@load')
+_HERE_DOCUMENT_OPERATORS = {'<<', '<<-', '<<<'}
 
 
 def _shells() -> set[str]:
@@ -279,6 +297,83 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     return _contains_nested_command_shell(words[1:])
 
 
+def _python_program_is_inline(args: list[str]) -> bool | None:
+    """True for ``-c``/stdin code, False for a script or ``-m`` module, None if no program is named."""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == '-':
+            return True
+        if arg == '--':
+            return False if index + 1 < len(args) else None
+        if not arg.startswith('-'):
+            return False
+        if not arg.startswith('--'):
+            flags = arg[1:]
+            for position, flag in enumerate(flags):
+                if flag == 'c':
+                    return True
+                if flag == 'm':
+                    return False
+                if flag in 'WX':
+                    index += position == len(flags) - 1
+                    break
+        index += 1
+    return None
+
+
+def _awk_programs(args: list[str]) -> list[str]:
+    """Inline awk program texts; a program read with ``-f`` is a file, not inline text."""
+    programs: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in {'-e', '--source'}:
+            programs.extend(args[index + 1:index + 2])
+            index += 2
+            continue
+        if arg in {'-F', '-v', '-f', '--field-separator', '--assign', '--file'}:
+            index += 2
+            continue
+        if arg == '--':
+            programs.extend(args[index + 1:index + 2])
+            break
+        if arg.startswith('-') and len(arg) > 1:
+            index += 1
+            continue
+        if not any(other in {'-f', '--file'} or other.startswith('-f') for other in args[:index]):
+            programs.append(arg)
+        break
+    return programs
+
+
+def _runs_inline_program(command: str, tokens: list[Any]) -> bool:
+    """Whether any simple command runs interpreter code given inline instead of as a file."""
+    here_document = any(token.operator and token.value in _HERE_DOCUMENT_OPERATORS for token in tokens)
+    for argv in _simple_commands(command):
+        if not argv:
+            continue
+        name, args = _executable_name(argv[0]), argv[1:]
+        if _PYTHON_INTERPRETER.match(name):
+            if here_document or _python_program_is_inline(args):
+                return True
+            continue
+        options = _INLINE_CODE_OPTIONS.get(name)
+        if options is not None and (here_document or any(arg.split('=', 1)[0] in options for arg in args)):
+            return True
+        cluster = _INLINE_CODE_CLUSTERS.get(name)
+        if cluster is not None and (here_document or any(
+            arg.startswith('-') and not arg.startswith('--') and any(flag in cluster for flag in arg[1:])
+            for arg in args
+        )):
+            return True
+        if name == 'deno' and args[:1] == ['eval']:
+            return True
+        if name in _AWK_INTERPRETERS and any(_AWK_EXECUTION.search(program) for program in _awk_programs(args)):
+            return True
+    return False
+
+
 def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
@@ -287,6 +382,8 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         return {'shell': '<ambiguous>'}
     if any(token.substitution for token in tokens):
         return {'command.dynamic-substitution': '<ambiguous>'}
+    if _runs_inline_program(command, tokens):
+        return {'command.inline-program': '<ambiguous>'}
     # ';' runs commands in sequence exactly like a newline; both keep root tracking linear.
     if any(token.operator and token.value not in {'&&', ';', '\n'} and '<' not in token.value and '>' not in token.value
            for token in tokens):
