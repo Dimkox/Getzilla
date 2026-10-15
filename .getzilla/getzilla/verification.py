@@ -22,6 +22,8 @@ from .architecture_diagrams import artifact_digests, compare_generated, render_d
 from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
 from .architecture_fitness import diff_architecture, evaluate_fitness
 from .quality_gates import evaluate_quality_gate, required_check_refused
+from .cpu_budget import cpu_budget
+from .language_quality.core import run_registry as run_language_quality, project_checks as language_quality_checks
 from .receipts import (
     active_architecture_binding,
     active_governance_binding,
@@ -1951,7 +1953,7 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
         try:
             workers = selected_workers(root)
             if workers is None and mode in {'pr', 'release'}:
-                workers = selected_workers(root) if (root / '.getzilla-test-runner.json').exists() else 2
+                workers = cpu_budget().effective
             core = run_core_tests(root, mode, workers) if workers is not None else None
         except RunnerError as exc:
             results.append(CheckResult('python-unittest', 'fail', str(exc)))
@@ -2265,6 +2267,12 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
             raise VerificationCancelled(number, report) from None
 
 
+def _language_quality_report(root: Path, base: str | None, cancellation):
+    results = run_language_quality(root, base, cancellation=cancellation)
+    return ({'schema_version': 1, 'status': 'observed', 'results': results},
+            [CheckResult(**check) for check in language_quality_checks(results)])
+
+
 def _verification_run(root: Path, mode: str, profiles: list[str] | None, record: bool,
                       state: _RunState, cancellation, *, keep_going: bool = False) -> dict[str, object]:
     report = state.report
@@ -2414,6 +2422,19 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
+    state.stage = 'language-quality'
+    cancellation.check()
+    if dispatch.blocked_by:
+        language_report = {'schema_version': 1, 'status': 'not_run', 'results': [],
+                           'reason': 'required verification refused: ' + dispatch.blocked_by}
+    else:
+        bases = {item.comparison_base_sha for item in git_ranges.bases}
+        language_base = next(iter(bases)) if len(bases) == 1 and not git_ranges.findings else None
+        language_report, language_checks = _language_quality_report(root, language_base, cancellation)
+        for check in language_checks:
+            dispatch.add(check)
+    report.setdefault('advisory', {})['lqg'] = language_report
+    cancellation.check()
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:

@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-15 — Freeze pure adapters before parallel implementation
+
+One immutable argv/output ABI let four isolated language writers work without shared mutable files. One integrator retained policy, sandbox and receipt ownership, so adapters added no execution authority.
+
 ## 2026-10-08 — Bound per-token secret matching and generalise wrapper handling (round-2 review)
 
 The round-2 review found two HIGH gaps in the follow-up. First, the overall secret scan was bounded but the per-token pattern walk was not, so a large argv could still approach the 10 s hook timeout. `_secret_reference` now ticks the shared `_Budget` on every token and `shell_secret_reference` caps the command it scans at 128 KiB and fails closed, then memoizes the verdict per process so `sensitive_action` and `evaluate_pre_tool` never scan the same command twice. Second, recursive root removal was unblocked behind any wrapper not on a fixed list; `_recursive_remove_of_root` now scans the whole argv for a delete verb (skipping an inert argv0 such as `echo`/`printf`) so every exec wrapper — ionice, watch, unbuffer, chrt, flock, busybox, toybox — is covered the way main is. The medium findings are closed in the same path: grep globs with no path are reads, harness/cloud/package credential stores (and `gh api -F body=@file` of one) are secrets, fish/tcsh/script and `$IFS` word-splitting are handled by the policy, the package-publish clients deny by default, and the Windows caret/Start-Process/web-cmdlet/robocopy/Format-Volume/recursive-read spellings reach POSIX parity. `ssh` `known_hosts`/`authorized_keys` and `.ssh/config` are no longer treated as secrets.

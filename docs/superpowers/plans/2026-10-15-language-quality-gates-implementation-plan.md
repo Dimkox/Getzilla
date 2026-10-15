@@ -25,9 +25,13 @@ platform child slots 12. Integration writes are serialized.
 
 - [x] Base and contracts inspected.
 - [x] Consolidated design and ABI specified.
-- [ ] Core and adapters implemented and integrated.
-- [ ] Focused tests, install and rollback checks complete.
+- [x] Core and adapters implemented and integrated.
+- [x] Focused tests, install and rollback checks complete.
 - [ ] Real smoke and performance limitations recorded.
 - [ ] Independent review and final/external gates complete.
 
 Current result: UNVERIFIED.
+
+Implemented first rollout: seven CLI adapters, shared execution/evidence, CPU reserve,
+and verifier integration. Persistent cache, representative performance qualification,
+Gradle structured reports and real SDK matrix remain pending. They are not marked done.

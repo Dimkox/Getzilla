@@ -1,0 +1,155 @@
+{
+  "schema_version": 2,
+  "change_id": "20261015-task-19101f",
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Add optional language quality gates and reserve two host logical CPUs for Getzilla workloads.",
+    "success_metric": "Seven pure adapters share strict policy, scope, sandbox, evidence and admission; CPU requests respect one host reserve.",
+    "target": "Offline contract tests and bounded container isolation smoke pass on the committed candidate."
+  },
+  "risk": {
+    "tier": "red",
+    "domains": [
+      "api",
+      "security"
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Seven tool IDs have pure read-only command and normalization adapters.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_eslint.py"
+        },
+        {
+          "test": "tests/test_lqg_kotlin.py"
+        },
+        {
+          "test": "tests/test_lqg_dart.py"
+        },
+        {
+          "test": "tests/test_lqg_swift.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Defaults are auto/shadow/changed; unknown policy is rejected; blocking nonpasses refuse admission.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_core.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Uncertain Git scope falls back to full package; source and configuration paths cannot escape their package.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_core.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Consumer tools execute only in a qualified offline read-only non-root bounded container.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_core.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "CPU allocation reserves two from host logical count once and caps automatic and explicit workers by affinity and quota.",
+      "evidence": [
+        {
+          "test": "tests/test_python_test_runner.py"
+        },
+        {
+          "test": "tests/test_lqg_core.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-006",
+      "statement": "Existing mandatory quality gates remain unchanged and advisory evidence enters the verifier report.",
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        },
+        {
+          "test": "tests/test_lqg_core.py"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Local reports and policy cannot create external merge authority.",
+      "evidence": [
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ]
+    },
+    {
+      "id": "INV-002",
+      "statement": "Missing SDK/backend/configuration, invalid output, timeout and cancellation never become PASS.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_core.py"
+        },
+        {
+          "test": "tests/test_lqg_eslint.py"
+        },
+        {
+          "test": "tests/test_lqg_kotlin.py"
+        },
+        {
+          "test": "tests/test_lqg_dart.py"
+        },
+        {
+          "test": "tests/test_lqg_swift.py"
+        }
+      ]
+    }
+  ],
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "No installation, host execution of consumer tools, source fixing, AI retries or weakening mandatory checks.",
+      "evidence": [
+        {
+          "test": "tests/test_lqg_core.py"
+        },
+        {
+          "test": "tests/test_quality_gates.py"
+        }
+      ]
+    }
+  ],
+  "contracts": {
+    "openapi": [],
+    "json_schema": [],
+    "events": []
+  },
+  "observability": [
+    {
+      "id": "SIG-001",
+      "metric": "report.advisory.lqg.results contains detailed status and scope/policy/execution evidence.",
+      "proves": [
+        "OBJ-001"
+      ]
+    }
+  ],
+  "rollback": {
+    "strategy": "feature_flag",
+    "maximum_steps": 1
+  },
+  "approvals": {
+    "required_scopes": ["scope_and_design_approval"]
+  }
+}

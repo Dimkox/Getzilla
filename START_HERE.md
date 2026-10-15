@@ -8,6 +8,10 @@ This file is the zero-context entrypoint for any new agent, human, Codex/Grok/Cl
 
 ## First action: measure resources and schedule independent work
 
+The shared CPU work budget reserves two from the host logical count: `max(1, n - 2)`.
+Cap it by actual allowed online CPUs/cpuset and finite ancestor quota. Do not subtract
+two again from restricted affinity. Explicit allocations may lower the budget only.
+
 **Step zero, before all other startup work:** complete and record CPU/capacity discovery before inspecting backlog/routes, planning dependencies, spawning agents or running heavy commands. Store the snapshot locally first and attach it to the active package after routing. Follow the [mandatory startup algorithm](AGENTS.md#mandatory-startup-algorithm-measure-then-dispatch):
 
 1. Measure physical/online logical topology (`lscpu`, `nproc --all`), current capacity (`nproc`) and affinity. Resolve actual cgroup membership/mounts, effective cpuset and finite quota, including ancestor limits.

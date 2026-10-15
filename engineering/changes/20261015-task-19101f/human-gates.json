@@ -1,0 +1,31 @@
+{
+  "change_id": "20261015-task-19101f",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner-instruction",
+      "change_id": "20261015-task-19101f",
+      "decided_at": "2026-10-15T07:56:31+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner approved the supplied plans and resumed implementation with Делай код разрешаю",
+      "resource": null,
+      "route_id": "19101f3e5e0d",
+      "scope_digest": "39882019c259ab7c266bc0475859fc9c3ef8f7f358091cf954d106e6f7d7243d"
+    },
+    {
+      "action": null,
+      "actor": "owner-instruction",
+      "change_id": "20261015-task-19101f",
+      "decided_at": "2026-10-15T08:01:17+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner approved supplied plans and resumed code with Делай код разрешаю including CPU reserve",
+      "resource": null,
+      "route_id": "19101f3e5e0d",
+      "scope_digest": "cf79077d2e4663e96f399e031c7c77a80ca33013c3e6b9a59ca0a7192cb3c886"
+    }
+  ],
+  "route_id": "19101f3e5e0d",
+  "schema_version": 1
+}

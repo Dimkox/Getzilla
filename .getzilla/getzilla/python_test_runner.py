@@ -20,7 +20,7 @@ import threading
 import time
 
 from . import fsx
-from ._cpu_capacity import linux_quota_capacity
+from .cpu_budget import cpu_budget
 from .verification_scope import FORCE_FULL_VARIABLE
 
 
@@ -76,19 +76,8 @@ def selected_workers(root: Path) -> int | None:
     if value == 'auto':
         if os.name != 'posix':
             return 0
-        try:
-            available = len(os.sched_getaffinity(0))
-        except (AttributeError, OSError):
-            available = 0
-        if available <= 0:
-            available = os.cpu_count() or 1
-        selected = min(28, max(1, available))
-        if sys.platform == 'linux':
-            quota = linux_quota_capacity()
-            if quota is not None:
-                selected = min(selected, quota)
-        return selected
-    return int(value)
+        return cpu_budget().effective
+    return cpu_budget(int(value)).effective if int(value) else 0
 
 
 @dataclass
@@ -356,6 +345,8 @@ def select_engine(workers: int, measured: bool) -> tuple[int, str]:
     pass before execution, never after a failure, and never claim the parallel
     backend it did not use.
     """
+    if workers > 0:
+        workers = cpu_budget(workers).effective
     if workers > 0 and measured and not parallel_engine_ready(measured) and _parallel_process_cleanup_supported():
         return workers, "coverage-unittest-parallel"
     if workers > 0 and (

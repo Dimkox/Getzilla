@@ -34,6 +34,11 @@ Nothing reaches a protected branch without the factory phase. The vibe phase dec
 
 ## Routed implementation and independent review
 
+Measure host logical CPUs, actual affinity/cpuset and ancestor quotas before heavy work.
+Reserve two from the total host logical count: `max(1, n - 2)`, capped by actual capacity.
+Apply this reserve once. Explicit worker requests may lower the shared budget only.
+Sum concurrent heavy workers within the budget. Agent slots and route caps are separate.
+
 Use only `allowed_agents` from the active route. Run its independent analysis agents in parallel, use exactly one write agent as implementation owner, and dispatch the listed independent review agents only after implementation and verification. Never substitute a generic worker for a selected domain write agent or let an implementer approve its own work.
 
 Read relevant code, contracts and tests before editing. Reproduce defects and add a failing regression or characterization test when practical. Make the smallest coherent change, preserve compatibility unless a versioned break is approved, and justify any new service or dependency. Production-facing behavior requires observable success/failure signals and rollback or forward recovery. Respect named human gates; ordinary bounded work without a named gate can proceed within the user's scope.

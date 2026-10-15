@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-10-15 — Sibling worktrees were outside the canonical root
+
+Root cause: the coordinator created isolated worktrees beside the repository before applying the canonical workspace rule. The hook blocked writes and its circuit breaker stopped dependent work. After explicit owner resumption, moving the same worktrees under `.getzilla/runtime/worktrees` preserved their branches and allowed exact scoped writes.
+
+## 2026-10-15 — Access time was treated as source mutation
+
+Root cause: full stat-result equality included atime, which ordinary reads can change. Compare device, inode, mode, size, mtime and ctime instead; read through no-follow descriptors and validate the copied snapshot digest before execution.
+
 ## 2026-10-08 — Pushed review fixes to a branch whose PR had already merged
 
 Root cause: I pushed the round-2 #59 fixes to `fix/hook-policy-followup` without first checking the PR state; the owner had merged #59 at its round-1 head half an hour earlier, so the push landed on a closed PR and `main` kept the reviewed HIGH findings. Before pushing to an existing PR branch, check `gh pr view <n> --json state,headRefOid` and that the head still matches what was reviewed; if the PR is merged, open a follow-up PR instead.

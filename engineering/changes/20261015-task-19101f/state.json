@@ -1,0 +1,137 @@
+{
+  "change_id": "20261015-task-19101f",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "feat/language-quality-gates-20261015",
+      "change_id": "20261015-task-19101f",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "7cf4f65dd2ba9bb1390dc84c6185ba0f104255c8",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-15T06:57:29+00:00",
+      "route_id": "19101f3e5e0d"
+    },
+    {
+      "branch": "feat/language-quality-gates-20261015",
+      "change_id": "20261015-task-19101f",
+      "detached": false,
+      "dirty_product_paths": [
+        ".getzilla/getzilla/cpu_budget.py",
+        ".getzilla/getzilla/language_quality/core.py",
+        ".getzilla/getzilla/language_quality/sandbox.py",
+        ".getzilla/getzilla/python_test_runner.py",
+        ".getzilla/getzilla/verification.py",
+        ".getzilla/templates/consumer-AGENTS.md.tmpl",
+        "AGENTS.md",
+        "START_HERE.md",
+        "decisions.md",
+        "docs/LANGUAGE_QUALITY_GATES.md",
+        "docs/REFERENCE.md",
+        "mistakes.md",
+        "tests/test_lqg_core.py",
+        "tests/test_python_test_runner.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [],
+      "head": "ad9a5a3fef511997162870386b19dd2fd905adce",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-15T07:56:32+00:00",
+      "route_id": "19101f3e5e0d"
+    }
+  ],
+  "created_at": "2026-10-15T06:57:29+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-15T06:57:29+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-15T07:54:17+00:00",
+      "from": "draft",
+      "reason": "Owner plans and resumed implementation scope recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-15T07:56:32+00:00",
+      "from": "scoped",
+      "reason": "Existing explicit owner scope consent recorded through getzilla_gate",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-15T07:56:32+00:00",
+      "from": "approved",
+      "reason": "Integrated common layer and four isolated adapter commits",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-15T08:01:17+00:00",
+      "from": "implementing",
+      "reason": "Focused 277 tests and latest 98 language tests passed",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-15T08:01:18+00:00",
+      "from": "verifying",
+      "reason": "Freeze candidate for allowed independent code and test review",
+      "to": "reviewing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval"
+  ],
+  "human_gates_digest": "54ba43801e9519c520d359d7d2b8a775153ad96dd6fb2c27b00279ff73a2d09e",
+  "route_id": "19101f3e5e0d",
+  "schema_version": 1,
+  "status": "reviewing",
+  "title": "GZ-LQG-001 optional language quality gate registry",
+  "updated_at": "2026-10-15T08:01:18+00:00"
+}
