@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 
 from ._policy_legacy import (
-    _COMMAND_SPLIT,
+    _command_chunks,
     _GLOB_META,
     _SHELL_MUTATION_SIGNAL,
     _SHELL_REDIRECTION,
@@ -350,10 +350,6 @@ def _control_plane_shell_mutation(
         return [], True
     return [], mutation and unresolved and _opaque_control_plane_reference(root, command, patterns)
 
-
-
-def _command_chunks(command: str) -> list[str]:
-    return [part for part in _COMMAND_SPLIT.split(command) if part.strip()]
 
 
 def _leading_argv(chunk: str) -> list[str]:

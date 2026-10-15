@@ -1,0 +1,20 @@
+{
+  "observed_at": "2026-10-15T08:18:00Z",
+  "purpose": "GZ-HOOK-ROOT-001 diagnosis startup",
+  "host_physical_cores": 14,
+  "host_logical_cpus": 28,
+  "online_cpu_ids": "0-27",
+  "process_nproc": 22,
+  "process_affinity": "0-1,8-27",
+  "membership": "/user.slice/user-1000.slice/session-2050.scope",
+  "cgroup_mount": {"kind": "cgroup2", "root": "/", "mountpoint": "/sys/fs/cgroup"},
+  "effective_cpuset": "0-27",
+  "quota": null,
+  "bounds": "root cpu.max absent; user.slice, user-1000.slice and session cpu.max each max 100000. Root and user.slice cpuset.cpus.effective each 0-27; child controls absent and inherited.",
+  "child_probe": {"command": "taskset -c 0-25 nproc", "nproc": 26, "verified_affinity": "0-25", "same_cgroup_membership": true, "success": true},
+  "owner_policy": "max(1, total host logical CPU count - 2), further capped by allowed online CPUs and finite ancestor quota",
+  "chosen_capacity": 26,
+  "controller_affinity_changed": false,
+  "commands": ["lscpu", "nproc --all", "nproc", "taskset -pc 958612", "cat /proc/self/status", "cat /proc/self/cgroup /proc/self/mountinfo", "rg -n cgroup /proc/self/mountinfo", "cat applicable cpuset.cpus.effective and cpu.max controls at every visible ancestor", "taskset -c 0-25 nproc", "taskset -c 0-25 cat /proc/self/status /proc/self/cgroup"],
+  "note": "The full mountinfo output was truncated. The bounded cgroup-specific observation identified the applicable mount. No heavy work or route inspection preceded this snapshot."
+}

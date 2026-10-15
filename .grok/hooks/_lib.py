@@ -20,9 +20,8 @@ if str(STACK) not in sys.path:
 from getzilla import fsx
 from getzilla._policy_legacy import (
     _executable_name,
-    _split_words,
+    _shell_tokens,
     _unwrap_execution_wrappers,
-    _windows_sequence_split,
     analyze_command_authority,
 )
 from getzilla.util import find_root
@@ -280,35 +279,35 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     return _contains_nested_command_shell(words[1:])
 
 
-def _windows_control_flow(command: str) -> bool:
-    # A lone '&' sequences commands in cmd.exe and PowerShell, like ';' in sh.
-    return fsx.WINDOWS and len(_windows_sequence_split(command)) > 1
-
-
 def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
-        words = _split_words(command)
+        tokens = _shell_tokens(command)
     except ValueError:
         return {'shell': '<ambiguous>'}
+    if any(token.substitution for token in tokens):
+        return {'command.dynamic-substitution': '<ambiguous>'}
+    if any(token.operator and token.value not in {'&&', '\n'} and '<' not in token.value and '>' not in token.value
+           for token in tokens):
+        return {'command.control-flow': '<ambiguous>'}
+    words = [token.value for token in tokens]
     expects_command = True
-    for word in words:
-        if word in {'&&', '||', ';', '|'}:
+    for token in tokens:
+        word = token.value
+        if token.operator:
             expects_command = True
             continue
         if not expects_command:
             continue
         if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', word):
             continue
-        if word.startswith(('$', '`')) or '$(' in word or '${' in word:
+        if token.expansion:
             return {'command.dynamic-position': '<ambiguous>'}
         expects_command = False
     if any(_is_directory_command(word) for word in words) and os.environ.get('CDPATH'):
         return {'command.cdpath-environment': '<ambiguous>'}
     if any(word.startswith('CDPATH=') and word != 'CDPATH=' for word in words):
         return {'command.cdpath-assignment': '<ambiguous>'}
-    if re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command) or _windows_control_flow(command):
-        return {'command.control-flow': '<ambiguous>'}
     assignment_index = 0
     while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
         name, value = words[0].split('=', 1)

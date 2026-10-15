@@ -173,6 +173,7 @@ def _record_denial(
     context: RootContext,
     action: str,
 ) -> tuple[int, int]:
+    from getzilla import _policy_legacy
     from getzilla.state import runtime_lock
     from getzilla.util import dump_json, load_json, runtime_dir
 
@@ -187,10 +188,26 @@ def _record_denial(
     )
     path = runtime_dir(root) / 'tool-denials.json'
     command = input_data.get('command')
+    source_paths = {
+        'hook': Path(__file__).resolve(),
+        'root_parser': Path(root_context.__code__.co_filename).resolve(),
+        'policy_parser': Path(_policy_legacy.__file__).resolve(),
+    }
     evidence = {
         'session_cwd': context.session_cwd,
         'session_root': str(context.session_root) if context.session_root else None,
-        'command_workdirs': context.command_workdirs,
+        'command_workdirs': {
+            key: '<ambiguous>' if value == '<ambiguous>' else '<declared>'
+            for key, value in context.command_workdirs.items()
+        },
+        'command_workdir_sources': sorted(context.command_workdirs),
+        'root_failure_sources': sorted(
+            key for key, value in context.command_workdirs.items() if value == '<ambiguous>'
+        ),
+        'hook_implementation': {
+            name: {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+            for name, path in source_paths.items()
+        },
         'effective_root': str(context.effective_root) if context.effective_root else None,
         'resolution_status': context.resolution_status,
         'action': action,

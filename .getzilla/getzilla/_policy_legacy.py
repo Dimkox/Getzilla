@@ -68,7 +68,6 @@ DESTRUCTIVE_COMMANDS = [
     r'\bformat-volume\b',
     r'\bclear-disk\b',
 ]
-_COMMAND_SPLIT = re.compile(r'(?:&&|\|\||[;|\n])')
 _WRAPPERS = {'sudo', 'doas', 'command', 'time', 'nohup', 'nice'}
 _EXECUTION_WRAPPERS = {'command', 'nice', 'nohup', 'setsid', 'time', 'timeout'}
 _UNWRAP_SHELL = re.compile(
@@ -348,12 +347,12 @@ def _command_env(command: str) -> dict[str, str]:
     """
     env: dict[str, str] = {}
     try:
-        words = _words(command)
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
     except ValueError:
         return env
     current: list[str] = []
-    for word in [*words, ';']:
-        if word and set(word) <= _PUNCTUATION:
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if token.operator:
             assignments, argv = _env_assignments(current)
             env.update(assignments)
             name = _executable_name(argv[0]) if argv else ''
@@ -371,17 +370,86 @@ def _command_env(command: str) -> dict[str, str]:
                         break
             current = []
             continue
-        current.append(word)
+        current.append(token.value)
     return env
 
 
+@dataclass(frozen=True)
+class _ShellToken:
+    value: str
+    start: int
+    end: int
+    operator: bool = False
+    expansion: bool = False
+    substitution: bool = False
+
+
+_SHELL_OPERATORS = (
+    ';;&', '<<<', '<<-', '&>>', '&&', '||', ';;', ';&', '|&',
+    '<<', '>>', '<&', '>&', '<>', '>|', '&>',
+)
+
+
+def _shell_tokens(text: str) -> list[_ShellToken]:
+    """Scan literal words and operators once, retaining quote/escape provenance.
+
+    This is a bounded lexical grammar, not a shell interpreter. Active expansion
+    is marked, never evaluated. Offsets refer to the original command so callers
+    can split commands without splitting quoted argument data.
+    """
+    tokens: list[_ShellToken] = []
+    index = 0
+    while index < len(text):
+        if text[index] in ' \t\r':
+            index += 1
+            continue
+        start = index
+        if text[index] in _PUNCTUATION:
+            operator = next((op for op in _SHELL_OPERATORS if text.startswith(op, index)), text[index])
+            index += len(operator)
+            tokens.append(_ShellToken(operator, start, index, operator=True))
+            continue
+        quote = ''
+        expansion = substitution = False
+        while index < len(text):
+            char = text[index]
+            if quote == "'":
+                if char == "'":
+                    quote = ''
+                index += 1
+                continue
+            if char == '\\' or (fsx.WINDOWS and char == '^' and not quote):
+                following = text[index + 1:index + 2]
+                if not following:
+                    raise ValueError('unfinished shell escape')
+                if following == '\n':
+                    raise ValueError('shell line continuation is unsupported')
+                if not quote or following in {'$', '`', '"', '\\'}:
+                    index += 2
+                    continue
+            if quote:
+                if char == quote:
+                    quote = ''
+            elif char in {'"', "'"}:
+                quote = char
+            elif char in ' \t\r' or char in _PUNCTUATION:
+                break
+            if char in {'$', '`'}:
+                expansion = True
+                substitution = substitution or char == '`' or text.startswith('$(', index)
+            index += 1
+        if quote:
+            raise ValueError('unfinished shell quote')
+        values = _split_words(text[start:index])
+        if len(values) != 1:
+            raise ValueError('unsupported shell word')
+        tokens.append(_ShellToken(values[0], start, index, expansion=expansion, substitution=substitution))
+    return tokens
+
+
 def _words(text: str) -> list[str]:
-    """Shell words and operator tokens (``;``, ``&&``, ``|``, ``(``, ``>``, newline), quotes removed."""
-    if fsx.WINDOWS:
-        text = _windows_literal_backslashes(_strip_windows_carets(text))
-    lexer = shlex.shlex(_ANSI_C_QUOTE.sub(_ansi_c, text), posix=True, punctuation_chars=''.join(sorted(_PUNCTUATION)))
-    lexer.whitespace, lexer.whitespace_split, lexer.commenters = ' \t\r', True, ''
-    return list(lexer)
+    """Compatibility view; consumers that split commands retain token provenance."""
+    return [token.value for token in _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, text))]
 
 
 def _strip_wrappers(argv: list[str]) -> list[str]:
@@ -524,18 +592,18 @@ def _simple_commands(command: str, depth: int = 0) -> list[list[str] | None]:
     if depth > 4:
         return [None]
     try:
-        words = _words(command)
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
     except ValueError:
         return [None]
     commands: list[list[str] | None] = []
     current: list[str] = []
-    for word in [*words, ';']:
-        if word and set(word) <= _PUNCTUATION:
-            if '<' not in word and '>' not in word and current:
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if token.operator:
+            if '<' not in token.value and '>' not in token.value and current:
                 commands.extend(_expand_command(current, depth))
                 current = []
             continue
-        current.append(word)
+        current.append(token.value)
     return commands
 
 
@@ -789,10 +857,20 @@ def _extract_patch_paths(command: str) -> list[str]:
 
 
 def _command_chunks(command: str) -> list[str]:
-    chunks = [part for part in _COMMAND_SPLIT.split(command) if part.strip()]
-    if fsx.WINDOWS:
-        # cmd.exe and PowerShell also sequence commands with a single '&'.
-        chunks = [piece for chunk in chunks for piece in _windows_sequence_split(chunk) if piece.strip()]
+    try:
+        tokens = _shell_tokens(command)
+    except ValueError:
+        # Preserve malformed source for the existing fail-closed callers.
+        return [command] if command.strip() else []
+    chunks: list[str] = []
+    start = 0
+    for token in tokens:
+        if token.operator and token.value in {'&&', '||', ';', ';;', ';&', ';;&', '|', '|&', '&', '\n'}:
+            if command[start:token.start].strip():
+                chunks.append(command[start:token.start])
+            start = token.end
+    if command[start:].strip():
+        chunks.append(command[start:])
     return chunks
 
 
