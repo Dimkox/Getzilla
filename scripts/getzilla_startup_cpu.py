@@ -16,8 +16,8 @@ from getzilla.state import get_active_change
 from getzilla.util import dump_json, find_root, runtime_dir
 
 parser = argparse.ArgumentParser(description='Startup CPU step zero: measure and record effective capacity.')
-parser.add_argument('--reserve', type=int, default=0,
-                    help='keep this many logical CPUs free (owner n-2 ceiling: --reserve 2)')
+parser.add_argument('--reserve', type=int, default=2,
+                    help='keep this many logical CPUs free (default 2: the owner n-2 ceiling; 0 disables)')
 parser.add_argument('--no-probe', action='store_true', help='skip the child-only affinity-widening probe')
 parser.add_argument('--attach', action='store_true',
                     help='also attach the snapshot to the active change package evidence')
