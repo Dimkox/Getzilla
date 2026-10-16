@@ -52,7 +52,7 @@ def selected_workers(root: Path) -> int | None:
             attributes = path.stat()
             if path.is_symlink() or not stat.S_ISREG(attributes.st_mode) or attributes.st_size > 4096:
                 raise RunnerError('invalid test runner configuration file')
-            config = json.loads(path.read_text(), object_pairs_hook=_closed_object)
+            config = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_closed_object)
             if not isinstance(config, dict) or set(config) != {'schema_version', 'workers'}:
                 raise RunnerError('test runner configuration requires schema_version and workers')
             if type(config['schema_version']) is not int or config['schema_version'] != 1:
@@ -247,7 +247,10 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
                 **fsx.process_group_kwargs(),
             )
         except OSError as exc:
-            result = ProcessResult(command, 127, stderr=str(exc))
+            detail = str(exc)
+            if command and command[0] not in detail:
+                detail = f'{detail}: {command[0]}'  # Windows WinError 2 names no file
+            result = ProcessResult(command, 127, stderr=detail)
             retained['result'] = result
             return result
         reason = ''
@@ -281,6 +284,9 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         stderr.seek(0)
         out = stdout.read(OUTPUT_LIMIT).decode('utf-8', errors='backslashreplace')
         err = stderr.read(OUTPUT_LIMIT).decode('utf-8', errors='backslashreplace')
+        if os.name == 'nt':
+            # Text output ends lines with CRLF on Windows; records keep the one convention.
+            out, err = out.replace('\r\n', '\n'), err.replace('\r\n', '\n')
         code = original_returncode if original_returncode is not None else process.returncode
         if cancelled():
             code = code if original_returncode is not None else 128 + cancelled()
@@ -558,7 +564,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                     exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts)
                     raise
                 try:
-                    document = json.loads(report_file.read_text())
+                    document = json.loads(report_file.read_text(encoding='utf-8'))
                     settings = configparser.ConfigParser()
                     settings.read(config)
                     expected_branch = settings.getboolean('run', 'branch', fallback=False)
