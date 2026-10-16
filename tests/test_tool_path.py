@@ -67,6 +67,19 @@ class ToolPathTests(unittest.TestCase):
         self.assertEqual(entries.count(str(self.home / '.local' / 'bin')), 1)
         self.assertEqual(util.tool_search_path(path), path)
 
+    def test_resolve_command_finds_windows_shims_and_leaves_paths_alone(self) -> None:
+        tool = _tool(self.home / '.local' / 'bin', 'gz-fake-agent', 'agent')
+        search = util.tool_search_path()
+        resolved = util.resolve_command(['gz-fake-agent', '--version'], search)
+        if os.name == 'nt':
+            self.assertEqual(Path(resolved[0]), tool)  # gz-fake-agent.cmd via PATHEXT
+        else:
+            self.assertEqual(resolved[0], 'gz-fake-agent')  # exec searches PATH itself
+        self.assertEqual(resolved[1:], ['--version'])
+        explicit = [str(tool), '-x']
+        self.assertEqual(util.resolve_command(explicit, search), explicit)
+        self.assertEqual(util.resolve_command(['gz-missing-tool'], search), ['gz-missing-tool'])
+
     def test_explicit_path_in_env_stays_isolated(self) -> None:
         _tool(self.home / '.local' / 'bin', 'gz-fake-ruff', 'user-ruff')
         proc = util.run(['gz-fake-ruff'], cwd=Path(self.tmp.name), timeout=30,

@@ -103,7 +103,7 @@ def run(
         if errors != 'strict':
             options['errors'] = errors
         return subprocess.run(
-            args,
+            resolve_command(args, merged.get('PATH', '')),
             cwd=cwd,
             text=True,
             capture_output=True,
@@ -170,6 +170,19 @@ def tool_search_path(path: str | None = None) -> str:
 
 def find_tool(name: str) -> str | None:
     return shutil.which(name, path=tool_search_path())
+
+
+def resolve_command(args: list[str], path: str) -> list[str]:
+    """``args`` with a bare program name resolved against ``path`` on Windows.
+
+    CreateProcess searches the parent's PATH, not the child's, and appends only ``.exe``: npm's
+    ``.cmd`` shims (qwen, codex, gemini) and tools in the user directories would not start.
+    POSIX exec already searches the child's PATH, so ``args`` is returned unchanged there.
+    """
+    if os.name != 'nt' or not args or os.path.dirname(args[0]):
+        return args
+    found = shutil.which(args[0], path=path)
+    return [found, *args[1:]] if found else args
 
 
 def command_exists(name: str) -> bool:

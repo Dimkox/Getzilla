@@ -43,6 +43,7 @@ from .util import (
     read_text_limited,
     run,
     tree_fingerprint,
+    resolve_command,
 )
 from .workflow_artifacts import WorkflowArtifactError, validate_stored_workflow
 from .verification_scope import (
@@ -494,7 +495,8 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         # Run the same user-installed tool that command_exists() found.
         environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
-        proc = execute(command, root, environment, timeout=timeout)
+        # The report keeps the command as written; only the launch resolves it (Windows .cmd shims).
+        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout)
     except RunCancelled as exc:
         proc = exc.result
         exc.checks = [CheckResult(
