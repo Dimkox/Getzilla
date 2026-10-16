@@ -112,7 +112,11 @@ class GraphStoreTests(unittest.TestCase):
             second.publish(build_generation(graph_input({**V1, 'c.py': ''})), expected_active=expected)
         self.assertEqual(caught.exception.reason_code, 'CONCURRENT_PUBLISH')
         self.assertEqual(second.read_active().export(), build_generation(graph_input(V2)).export())
-        counts = sqlite3.connect(str(self.path)).execute('SELECT count(*) FROM generations WHERE complete = 1').fetchone()
+        check = sqlite3.connect(str(self.path))
+        try:
+            counts = check.execute('SELECT count(*) FROM generations WHERE complete = 1').fetchone()
+        finally:
+            check.close()
         self.assertEqual(counts[0], 2)
 
 
