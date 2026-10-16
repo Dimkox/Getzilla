@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -2131,6 +2132,54 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 operation = commands[-1]
                 self.assertTrue(any(value.startswith("--git-dir=") for value in operation))
                 self.assertIn(f"--work-tree={worktree}", operation)
+
+    def test_linked_worktree_registrations_rewritten_later_still_bind(self) -> None:
+        # Registrations written in a later clock tick than they were created have
+        # an NTFS change time past their creation time; Windows reads of all three
+        # were refused for good, which is what a busy machine hit after
+        # `git worktree add`.
+        root, head = self._repository()
+        linked = root.parent / f"{root.name}-rewritten-linked"
+        self.addCleanup(shutil.rmtree, linked, True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked), head], cwd=root, check=True)
+        git_directory = root / ".git" / "worktrees" / linked.name
+        time.sleep(0.05)
+        for registration in (linked / ".git", git_directory / "gitdir", git_directory / "commondir"):
+            with registration.open("r+b") as handle:  # in place: Git for Windows hides .git
+                content = handle.read()
+                handle.seek(0)
+                handle.write(content)
+        self.assertEqual(architecture_diff._git(linked, ["rev-parse", "HEAD"]), (head + "\n").encode())
+
+    def test_git_pointer_compares_creation_time_by_name_and_handle_on_windows(self) -> None:
+        # Emulate CPython on Windows anywhere: os.lstat reports the creation time
+        # as st_ctime, os.fstat the change time; st_birthtime is the creation time.
+        root, _ = self._repository()
+        pointer = root / "registration"
+        pointer.write_bytes(b"gitdir: elsewhere\n")
+        real_lstat, real_fstat = Path.lstat, os.fstat
+        created = real_lstat(pointer).st_mtime_ns - 2_000_000
+
+        def windows_view(info: os.stat_result, ctime_ns: int, birthtime_ns: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                st_dev=info.st_dev, st_ino=info.st_ino, st_mode=info.st_mode, st_size=info.st_size,
+                st_mtime_ns=info.st_mtime_ns, st_ctime_ns=ctime_ns, st_birthtime_ns=birthtime_ns,
+                st_file_attributes=0,
+            )
+
+        def by_handle(descriptor: int) -> SimpleNamespace:
+            info = real_fstat(descriptor)
+            return windows_view(info, info.st_mtime_ns, created)
+
+        def by_name(created_by_name: int):
+            return lambda path: windows_view(real_lstat(path), created_by_name, created_by_name)
+
+        with mock.patch.object(architecture_diff.fsx, "WINDOWS", True), \
+                mock.patch.object(architecture_diff.os, "fstat", by_handle):
+            with mock.patch.object(Path, "lstat", by_name(created)):
+                self.assertEqual(architecture_diff._git_pointer(pointer), b"gitdir: elsewhere\n")
+            with mock.patch.object(Path, "lstat", by_name(created - 1)), self.assertRaises(ArchitectureError):
+                architecture_diff._git_pointer(pointer)
 
     def test_git_refuses_subdirectory_and_wrong_worktree_binding(self) -> None:
         root, _ = self._repository()

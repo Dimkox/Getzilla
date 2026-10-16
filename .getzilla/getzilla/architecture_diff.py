@@ -376,10 +376,18 @@ def _git_command(
     return command
 
 
+def _stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    # CPython on Windows fills st_ctime by name (os.lstat) with the creation
+    # time but by handle (os.fstat) with the NTFS change time, which passes the
+    # creation time once a file is written in a later clock tick than it was
+    # created (Git under load). Both report the creation time as st_birthtime,
+    # so a name can be compared with a handle there.
+    created = getattr(info, "st_birthtime_ns", info.st_ctime_ns) if fsx.WINDOWS else info.st_ctime_ns
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, created)
+
+
 def _git_path_identity(path: Path) -> tuple[int, int, int, int, int, int]:
-    info = path.lstat()
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
-            info.st_mtime_ns, info.st_ctime_ns)
+    return _stat_identity(path.lstat())
 
 
 def _git_pointer(path: Path) -> bytes:
@@ -402,8 +410,7 @@ def _git_pointer(path: Path) -> bytes:
         if (len(content) != before.st_size
                 or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
                 != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-                or _git_path_identity(path) != (before.st_dev, before.st_ino,
-                    before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns)):
+                or _git_path_identity(path) != _stat_identity(before)):
             raise ArchitectureError("Git registration changed while reading", code="git")
         return content
     finally:
