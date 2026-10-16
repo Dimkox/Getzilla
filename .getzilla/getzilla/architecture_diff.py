@@ -16,7 +16,7 @@ import subprocess  # nosec B404
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -42,6 +42,9 @@ BLOB_STREAM_CHUNK_BYTES = 64 * 1024
 # Keep a finite aggregate bound; per-blob, stream, path and time limits still apply.
 MAX_DIFF_ARTIFACT_BYTES = 128_000_000
 MAX_LINE_STAT_LINES = 100_000
+# One `git diff --no-index` covers up to this many changed text pairs and bytes.
+MAX_LINE_STAT_BATCH_PATHS = 256
+MAX_LINE_STAT_BATCH_BYTES = 8_000_000
 _EXACT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _ADOPTION_PATH = "architecture/adoption.json"
 _MODEL_PATHS = ("architecture/system.yaml", "architecture/rules.yaml")
@@ -1379,20 +1382,32 @@ def _changed_paths(root: Path, base: str, head: str | None, *, worktree: bool) -
     return unique
 
 
-def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+def _line_stat_text(old: bytes | None, new: bytes | None) -> tuple[bytes, bytes] | None:
+    """The bounded text pair an exact line stat compares, or None when the pair has none."""
     before = old or b""
     after = new or b""
     if len(before) > MAX_ANALYZED_FILE_BYTES or len(after) > MAX_ANALYZED_FILE_BYTES:
         raise ArchitectureError("line-stat byte limit exceeded", code="limit")
     if b"\0" in before or b"\0" in after:
-        return None, None
+        return None
     try:
         before_lines = before.decode("utf-8").splitlines()
         after_lines = after.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return None, None
+        return None
     if len(before_lines) > MAX_LINE_STAT_LINES or len(after_lines) > MAX_LINE_STAT_LINES:
         raise ArchitectureError("line-stat line limit exceeded", code="limit")
+    return before, after
+
+
+def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+    text = _line_stat_text(old, new)
+    if text is None:
+        return None, None
+    return _numstat_pair(*text)
+
+
+def _numstat_pair(before: bytes, after: bytes) -> tuple[int, int]:
     with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
         root = Path(directory)
         (root / "before").write_bytes(before)
@@ -1434,6 +1449,109 @@ def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int |
         return int(fields[0]), int(fields[1])
     except ValueError as exc:
         raise ArchitectureError("invalid exact line-stat counts", code="git") from exc
+
+
+def _numstat_batch(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for several text pairs from one `git diff --no-index` over two directories.
+
+    The whole batch gets the deadline and per-pair output cap of a single pair, so it can only
+    succeed where every pair alone would have.
+    """
+    names = [f"{index:05d}".encode("ascii") for index in range(len(pairs))]
+    with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
+        root = Path(directory)
+        for side in ("before", "after"):
+            (root / side).mkdir()
+        for name, (before, after) in zip(names, pairs):
+            (root / "before" / name.decode("ascii")).write_bytes(before)
+            (root / "after" / name.decode("ascii")).write_bytes(after)
+        returncode, output, error = _run_capped(
+            _git_command(
+                [
+                    "diff",
+                    "--no-index",
+                    "--numstat",
+                    "-z",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--",
+                    "before",
+                    "after",
+                ]
+            ),
+            cwd=root,
+            env=_git_environment(),
+            stdout_limit=4_096 * len(pairs),
+            stderr_limit=65_536,
+            timeout=_LINE_STAT_TIMEOUT_SECONDS,
+        )
+    if returncode not in {0, 1}:
+        message = error.decode("utf-8", "replace").strip()
+        raise ArchitectureError(f"exact line-stat operation failed: {message}", code="git")
+    counts = [(0, 0)] * len(pairs)
+    if returncode == 0:
+        if output:
+            raise ArchitectureError("unchanged line-stat operation emitted output", code="git")
+        return counts
+    # Each changed pair is `added<TAB>deleted<TAB><NUL>before/NAME<NUL>after/NAME<NUL>`.
+    tokens = output.split(b"\0")
+    if not output.endswith(b"\0") or (len(tokens) - 1) % 3:
+        raise ArchitectureError("unexpected exact line-stat output", code="git")
+    position = {name: index for index, name in enumerate(names)}
+    seen: set[bytes] = set()
+    for cursor in range(0, len(tokens) - 1, 3):
+        record, before_path, after_path = tokens[cursor:cursor + 3]
+        fields = record.split(b"\t")
+        name = before_path.removeprefix(b"before/")
+        if (
+            len(fields) != 3
+            or fields[2]
+            or before_path != b"before/" + name
+            or after_path != b"after/" + name
+            or name not in position
+            or name in seen
+        ):
+            raise ArchitectureError("unexpected exact line-stat output", code="git")
+        if fields[0] == b"-" or fields[1] == b"-":
+            raise ArchitectureError("exact text line-stat output is unavailable", code="git")
+        if not fields[0].isdigit() or not fields[1].isdigit():
+            raise ArchitectureError("invalid exact line-stat counts", code="git")
+        seen.add(name)
+        counts[position[name]] = int(fields[0]), int(fields[1])
+    return counts
+
+
+def _line_stat_chunks(pairs: list[tuple[bytes, bytes]]) -> Iterator[list[tuple[bytes, bytes]]]:
+    chunk: list[tuple[bytes, bytes]] = []
+    size = 0
+    for pair in pairs:
+        pair_size = len(pair[0]) + len(pair[1])
+        if chunk and (
+            len(chunk) >= MAX_LINE_STAT_BATCH_PATHS or size + pair_size > MAX_LINE_STAT_BATCH_BYTES
+        ):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(pair)
+        size += pair_size
+    if chunk:
+        yield chunk
+
+
+def _line_stats_many(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for checked text pairs with the outcome of one `_line_stats` per pair."""
+    counts: list[tuple[int, int]] = []
+    for chunk in _line_stat_chunks(pairs):
+        if len(chunk) > 1:
+            try:
+                counts.extend(_numstat_batch(chunk))
+                continue
+            except ArchitectureError:
+                # The batch only saves processes. Re-run each pair alone, with its own
+                # deadline, so the first pair that fails alone fails exactly as before.
+                pass
+        counts.extend(_numstat_pair(*pair) for pair in chunk)
+    return counts
 
 
 def read_diff_file(root: Path, diff: ArchitectureDiff, path: str, side: str = "head") -> bytes | None:
@@ -1666,6 +1784,8 @@ def diff_architecture(
         None if worktree else _batch_git_profiles(repository, _required_head(head), paths)
     )
     artifacts: list[ChangedArtifact] = []
+    # Text pairs are checked in path order; their exact line stats are counted in batches after.
+    line_stat_inputs: list[tuple[int, tuple[bytes, bytes]]] = []
     artifact_bytes = 0
     head_side = None if worktree else _required_head(head)
     for path in paths:
@@ -1697,25 +1817,28 @@ def diff_architecture(
         )
         if oversized_text:
             raise ArchitectureError(f"text file exceeds analysis limit: {path}", code="limit")
-        if any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
-            added, deleted = None, None
-        else:
-            added, deleted = _line_stats(
+        if not any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
+            text = _line_stat_text(
                 base_profile.content if base_profile else None,
                 head_profile.content if head_profile else None,
             )
+            if text is not None:
+                line_stat_inputs.append((len(artifacts), text))
         artifacts.append(
             ChangedArtifact(
                 path=path,
                 status=status,
-                added_lines=added,
-                deleted_lines=deleted,
+                added_lines=None,
+                deleted_lines=None,
                 base_size=base_profile.size if base_profile else 0,
                 head_size=head_profile.size if head_profile else 0,
                 base_digest=base_profile.digest if base_profile else None,
                 head_digest=head_profile.digest if head_profile else None,
             )
         )
+    line_stats = _line_stats_many([text for _index, text in line_stat_inputs])
+    for (index, _text), (added, deleted) in zip(line_stat_inputs, line_stats, strict=True):
+        artifacts[index] = replace(artifacts[index], added_lines=added, deleted_lines=deleted)
     changes = _change_records(base_state, head_state)
     base_digest = None if base_state is None else architecture_digests(base_state.snapshot)[
         "architecture_digest"

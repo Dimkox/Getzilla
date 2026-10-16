@@ -7278,6 +7278,69 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(exact.head_sha, head)
         self.assertEqual(worktree.head_kind, "worktree")
 
+    def test_changed_text_line_stats_share_one_git_process_with_single_run_results(self) -> None:
+        repo, _architecture_base = self._repo()
+        bodies = {
+            f"notes/note-{index}.md": "".join(f"line {line}\n" for line in range(40))
+            for index in range(5)
+        }
+        for path, body in bodies.items():
+            repo.write_text(path, body)
+        repo.write_text("notes/retired.md", "gone\nsoon\n")
+        repo.write_bytes("notes/blob.bin", b"\0binary")
+        source_base = repo.commit("line-stat base")
+        for index, path in enumerate(bodies):
+            lines = bodies[path].splitlines(keepends=True)
+            lines[index] = f"changed {index}\n"
+            lines.extend(f"appended {index}.{extra}\n" for extra in range(index))
+            repo.write_text(path, "".join(lines))
+        (repo.root / "notes/retired.md").unlink()
+        repo.write_text("notes/fresh.md", "new\nfile\nhere\n")
+        repo.write_bytes("notes/blob.bin", b"\0binary changed")
+        repo.write_bytes("notes/latin1.txt", "caf\xe9\n".encode("latin-1"))
+        source_head = repo.commit("line-stat head")
+        real_run = DIFF._run_capped
+        no_index: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            if "--no-index" in command:
+                no_index.append(command)
+            return real_run(command, **kwargs)
+
+        def line_stats() -> tuple[dict[str, tuple[int | None, int | None]], int]:
+            DIFF._GIT_BLOB_CACHE.clear()
+            DIFF._MATERIALIZED_STATE_CACHE.clear()
+            no_index.clear()
+            with patch.object(DIFF, "_run_capped", side_effect=observed):
+                diff = FIT.diff_architecture(repo.root, base_sha=source_base, head_sha=source_head)
+            return {item.path: (item.added_lines, item.deleted_lines) for item in diff.artifacts}, len(no_index)
+
+        stats, processes = line_stats()
+        expected = {
+            path: DIFF._line_stats(
+                DIFF._git_blob(repo.root, source_base, path),
+                DIFF._git_blob(repo.root, source_head, path),
+            )
+            for path in stats
+        }
+        self.assertEqual(stats, expected)
+        self.assertEqual(stats["notes/fresh.md"], (3, 0))
+        self.assertEqual(stats["notes/retired.md"], (0, 2))
+        self.assertEqual(stats["notes/blob.bin"], (None, None))
+        self.assertEqual(stats["notes/latin1.txt"], (None, None))
+        # Seven text pairs, one exact diff process instead of seven.
+        self.assertEqual(processes, 1)
+        with patch.object(DIFF, "MAX_LINE_STAT_BATCH_PATHS", 3):
+            # 3 + 3 + 1 pairs: two batches and one single-pair run.
+            self.assertEqual(line_stats(), (expected, 3))
+        with patch.object(
+            DIFF, "_numstat_batch", side_effect=ARCHITECTURE.ArchitectureError("timeout", code="timeout")
+        ):
+            # A batch that fails for any reason is re-run one pair at a time, as before batching.
+            self.assertEqual(line_stats(), (expected, 7))
+        self.assertEqual(DIFF._numstat_batch([(b"a\n", b"a\n"), (b"x\n", b"y\nz\n")]), [(0, 0), (2, 1)])
+        self.assertEqual(DIFF._numstat_batch([(b"same\n", b"same\n")] * 2), [(0, 0), (0, 0)])
+
     def test_line_stats_are_linear_and_have_an_explicit_line_ceiling(self) -> None:
         self.assertTrue(hasattr(DIFF, "MAX_LINE_STAT_LINES"), "line-stat ceiling is absent")
         before = (b"x\n" * 6_000) + b"before\n"
