@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import tempfile
 import unittest
@@ -119,6 +120,27 @@ class FsxTests(unittest.TestCase):
         fsx.mkdir_at(self.sub, 'inner')
         fsx.rmdir_at(self.sub, 'inner')
         self.assertEqual(fsx.listdir(self.sub), [])
+
+    def test_owned_popen_starts_a_stoppable_process_tree(self) -> None:
+        process = fsx.owned_popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            if fsx.WINDOWS:
+                job = fsx.owned_job(process)
+                self.assertIsNotNone(job)
+                self.assertTrue(fsx.process_jobs_supported())
+                self.assertTrue(job.terminate(5))
+                job.close()
+            else:
+                # POSIX keeps the new session the runner always used.
+                self.assertIsNone(fsx.owned_job(process))
+                self.assertFalse(fsx.process_jobs_supported())
+                self.assertEqual(os.getsid(process.pid), process.pid)
+                os.killpg(process.pid, signal.SIGKILL)
+            self.assertIsNotNone(process.wait(timeout=5))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
 
 if __name__ == '__main__':
