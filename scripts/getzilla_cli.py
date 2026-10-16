@@ -41,6 +41,9 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'harness': ('getzilla_harness.py', 'regenerate the agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
+    'adopt': ('adopt_existing.py', 'adopt a folder without Git into a new local workspace (Zero-Git)'),
+    'branches': ('branch_lifecycle.py', 'branch retention report and guarded delete (dry-run by default)'),
+    'graph': ('getzilla_graph.py', 'Python code graph: build, status, impact, export (read-only)'),
     'demo': ('getzilla_demo.py', 'open the local read-only demo dashboard'),
 }
 

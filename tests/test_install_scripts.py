@@ -52,12 +52,24 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertEqual(state['product_version'], (ROOT / 'VERSION').read_text(encoding='utf-8').strip())
         version = tag.removeprefix('v')
         pinned = f'https://raw.githubusercontent.com/Dimkox/Getzilla/{tag}/scripts/'
-        sh_digest = hashlib.sha256(SHELL.read_bytes()).hexdigest()
-        ps_digest = hashlib.sha256(POWERSHELL.read_bytes()).hexdigest()
-        self.assertEqual(published['installers'], {
-            'scripts/install.sh': {'sha256': sh_digest},
-            'scripts/install.ps1': {'sha256': ps_digest},
-        })
+        # The documented commands fetch the published installers, so they carry the published
+        # digests (bound to the tag bytes by the test below), never the source candidate's.
+        self.assertEqual(set(published['installers']), {'scripts/install.sh', 'scripts/install.ps1'})
+        sh_digest = published['installers']['scripts/install.sh']['sha256']
+        ps_digest = published['installers']['scripts/install.ps1']['sha256']
+        for digest in (sh_digest, ps_digest):
+            self.assertRegex(digest, r'^[0-9a-f]{64}$')
+        # Source installers equal the published ones or are a declared candidate of this version:
+        # an undeclared installer change still fails.
+        source = {
+            'scripts/install.sh': {'sha256': hashlib.sha256(SHELL.read_bytes()).hexdigest()},
+            'scripts/install.ps1': {'sha256': hashlib.sha256(POWERSHELL.read_bytes()).hexdigest()},
+        }
+        if source != published['installers']:
+            candidate = state.get('source_installers') or {}
+            self.assertEqual(candidate.get('status'), 'source_candidate')
+            self.assertEqual(candidate.get('version'), state['product_version'])
+            self.assertEqual(candidate.get('installers'), source)
         for name in ('README.md', 'QUICKSTART.md'):
             text = (ROOT / name).read_text(encoding='utf-8')
             with self.subTest(document=name):
@@ -86,6 +98,22 @@ class InstallScriptContractTests(unittest.TestCase):
                 self.assertLess(ps_fetch, text.index(ps_line))
                 self.assertEqual([line for line in lines if 'Invoke-Expression (Get-Content -Raw $f)' in line], [ps_line])
 
+    def test_published_installer_digests_are_the_bytes_at_the_published_tag(self) -> None:
+        state = json.loads((ROOT / 'PROJECT_STATE.json').read_text(encoding='utf-8'))
+        published = state['published_release']
+        if not (ROOT / '.git').exists():
+            self.skipTest('a release archive carries no Git history to read the published tag from')
+        tag = published['tag']
+        resolved = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'refs/tags/{tag}'],
+                                  cwd=ROOT, capture_output=True, text=True, check=False)
+        self.assertEqual(resolved.returncode, 0, f'tag {tag} is not available locally; CI checks out with fetch-depth: 0')
+        self.assertEqual(resolved.stdout.strip(), published['tag_object'])
+        for path, record in published['installers'].items():
+            blob = subprocess.run(['git', 'cat-file', 'blob', f'{tag}:{path}'], cwd=ROOT,
+                                  capture_output=True, check=False)
+            self.assertEqual(blob.returncode, 0, path)
+            self.assertEqual(hashlib.sha256(blob.stdout).hexdigest(), record['sha256'], path)
+
     def test_published_install_contract_allows_a_new_source_version_without_git_history(self) -> None:
         with tempfile.TemporaryDirectory(prefix='getzilla-install-contract-') as temporary:
             root = Path(temporary)
@@ -96,6 +124,8 @@ class InstallScriptContractTests(unittest.TestCase):
                 target.write_bytes((ROOT / relative).read_bytes())
             state = json.loads((root / 'PROJECT_STATE.json').read_text(encoding='utf-8'))
             state['product_version'] = '9.9.9'
+            if 'source_installers' in state:  # the declared candidate follows the source version
+                state['source_installers']['version'] = '9.9.9'
             (root / 'VERSION').write_text('9.9.9\n', encoding='utf-8')
             (root / 'PROJECT_STATE.json').write_text(json.dumps(state), encoding='utf-8')
             self.assertFalse((root / '.git').exists())

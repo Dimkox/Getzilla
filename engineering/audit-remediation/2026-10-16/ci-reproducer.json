@@ -1,0 +1,8 @@
+{
+  "schema": "getzilla-ci-reproducer-v1",
+  "commit": "c2bf95d62f8491525848ac2643b1f30fc8c438cf",
+  "command": "python3 -m pytest -q -p no:cacheprovider tests/test_install_scripts.py -k Contract",
+  "before_fix": {"exit_code": 1, "summary": "2 failed, 13 passed"},
+  "after_fix": {"exit_code": 0, "summary": "16 passed"},
+  "undeclared_drift_guard": {"mutation": "append a line to scripts/install.sh", "exit_code": 1}
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/source-baseline-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "path_profile",
+    "executable_mode",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "source-baseline-v1"
+    },
+    "path_profile": {
+      "const": "portable-v1"
+    },
+    "executable_mode": {
+      "enum": [
+        "posix-mode",
+        "policy-manifest"
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "type",
+          "executable",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "const": "file"
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "description": "Getzilla admitted source baseline (content identity; no Git identity, no contents)"
+}

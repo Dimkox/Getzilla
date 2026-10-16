@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/admission-plan-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "status",
+    "source_root",
+    "target",
+    "source_digest",
+    "path_profile",
+    "executable_mode",
+    "entries",
+    "exclusions",
+    "blockers",
+    "policy",
+    "policy_digest",
+    "scan",
+    "capabilities",
+    "consistency_mode"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "admission-plan-v1"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "PLAN_READY",
+        "BLOCKED_SECURITY",
+        "BLOCKED_UNSAFE_SOURCE",
+        "BLOCKED_UNSUPPORTED_FS",
+        "STALE_PLAN",
+        "ERROR"
+      ]
+    },
+    "source_root": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "source_digest": {
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "path_profile": {
+      "const": "portable-v1"
+    },
+    "executable_mode": {
+      "enum": [
+        "posix-mode",
+        "policy-manifest"
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "type",
+          "executable",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "const": "file"
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "reason_code",
+          "policy_ref"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "policy_ref": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "reason_code"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object"
+    },
+    "policy_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scan": {
+      "type": "object",
+      "required": [
+        "status",
+        "scanner",
+        "scanner_version",
+        "rules_digest"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "not_run"
+          ]
+        },
+        "rules_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object"
+    },
+    "consistency_mode": {
+      "const": "quiesced_two_pass"
+    }
+  },
+  "description": "Getzilla Zero-Git admission plan (immutable; plan_id is the digest of every other field)"
+}
