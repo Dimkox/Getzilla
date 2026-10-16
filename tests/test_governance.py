@@ -1661,7 +1661,7 @@ class GovernanceHandoffTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            # A hang guard, not a budget: handoff runs hundreds of git processes, ~30s on Windows.
+            # A hang guard, not a budget: handoff runs ~30 git processes, ~1s in Windows Sandbox.
             timeout=120,
         )
 
