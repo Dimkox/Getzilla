@@ -7,7 +7,7 @@ import unittest
 
 from pilot.authority import AuthorityError, operation_resource
 from pilot.runtime_authority import RuntimeGrantLoader
-from pilot.tests.support import run_git, utc_time
+from pilot.tests.support import posix_runtime, run_git, utc_time
 
 
 ROUTE_ID = "0ce2d62a018e"
@@ -15,6 +15,7 @@ CHANGE_ID = "20260905-feature-implement-a-single-operator-codex-github-0ce2d6"
 FINGERPRINT = "b" * 64
 
 
+@posix_runtime
 class RuntimeGrantLoaderTests(unittest.TestCase):
     def _control(self, root: Path) -> tuple[Path, str]:
         control = root / "control"

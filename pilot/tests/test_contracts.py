@@ -185,6 +185,19 @@ def _chain():
 
 
 class PilotContractTests(unittest.TestCase):
+    def test_profile_executables_are_posix_paths_on_every_host(self) -> None:
+        for executable in ("C:\\pilot\\codex.exe", "relative/codex", "/opt/pilot/../bin/codex"):
+            with self.subTest(executable=executable), self.assertRaisesRegex(ContractError, "invalid_executable"):
+                exact_landing_profile(
+                    codex_executable=executable,
+                    codex_sha256=HEX64_A,
+                    codex_version="0.153.4",
+                    model_id="gpt-5.3-codex",
+                    python_executable="/usr/bin/python3",
+                    python_sha256=HEX64_B,
+                )
+        self.assertEqual(_profile().codex_executable, "/opt/pilot/bin/codex")
+
     def test_exact_profile_and_five_outputs_form_a_closed_schema_valid_chain(self) -> None:
         profile, records = _chain()
         self.assertEqual(

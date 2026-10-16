@@ -15,7 +15,7 @@ from pilot.github import (
 )
 from pilot.profile import exact_landing_profile
 from pilot.store import PilotStore
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
 from pilot.workspace import PreparedWorkspace
 
 
@@ -154,6 +154,7 @@ class FakeGitHubTransport:
             raise KeyboardInterrupt("simulated process death")
 
 
+@posix_runtime
 class GitHubPublicationTests(unittest.TestCase):
     def test_exact_command_shapes_are_non_force_single_ref_and_draft_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

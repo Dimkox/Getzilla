@@ -17,7 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
-from getzilla import fsx, python_test_runner, verification
+from getzilla import fsx, python_test_runner
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
@@ -865,16 +865,7 @@ class PythonTestRunnerTests(unittest.TestCase):
             versions = {'coverage': python_test_runner.PINS['coverage'], 'engine': 'coverage-unittest-parallel'}
             coverage_metadata = {'files': ['.getzilla/getzilla/python_test_runner.py']}
 
-        real_command_check = verification._command_check
-
-        def without_pilot(root, name, *args, **kwargs):
-            # The pilot suite is its own check (it does not pass on Windows yet); this test is about Core wiring.
-            if name == 'pilot-unittest':
-                return CheckResult(name, 'pass', 'fixture')
-            return real_command_check(root, name, *args, **kwargs)
-
-        with patch('getzilla.verification._command_check', side_effect=without_pilot), \
-             patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
+        with patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
              patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
              patch('getzilla.verification._factory_unit', return_value=[]), \
              patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \

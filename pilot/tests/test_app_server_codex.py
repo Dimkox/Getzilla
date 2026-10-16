@@ -6,6 +6,7 @@ import unittest
 
 from pilot.codex_executor import AppServerCodexRunner, CodexExecutionError, confined_configuration
 from pilot.profile import CODEX_OUTPUT_SCHEMA, exact_landing_profile
+from pilot.tests.support import posix_runtime
 
 
 class FakeJsonRpcSession:
@@ -102,6 +103,7 @@ def app_server_argv(configured) -> tuple[str, ...]:
     )
 
 
+@posix_runtime
 class AppServerCodexRunnerTests(unittest.TestCase):
     def test_broad_workspace_profile_is_rejected_before_model_turn(self) -> None:
         configured = profile()

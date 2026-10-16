@@ -8,9 +8,10 @@ import tempfile
 import unittest
 
 from pilot.store import PilotStore, PilotStoreError
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
 
 
+@posix_runtime
 class PilotStoreTests(unittest.TestCase):
     def test_replay_is_exact_and_candidate_survives_close_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

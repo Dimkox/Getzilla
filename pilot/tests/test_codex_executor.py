@@ -17,7 +17,7 @@ from pilot.codex_executor import (
 from pilot.contracts import CandidateChangeV1, canonical_json
 from pilot.profile import CODEX_OUTPUT_SCHEMA, exact_landing_profile
 from pilot.store import PilotStore
-from pilot.tests.support import issue_snapshot
+from pilot.tests.support import issue_snapshot, posix_runtime
 from pilot.workspace import PreparedWorkspace
 
 
@@ -77,6 +77,7 @@ class FakeWorkspaceManager:
         return self.candidate
 
 
+@posix_runtime
 class CodexExecutorTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('PILOT_TEST_CODEX_PATH'), 'requires explicit pinned local Codex sandbox')
     def test_installed_sandbox_denies_outside_reads_and_unix_sockets(self) -> None:

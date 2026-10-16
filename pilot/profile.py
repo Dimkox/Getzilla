@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import PurePosixPath
 import hashlib
 import re
 from typing import Any
@@ -125,7 +125,8 @@ def exact_landing_profile(
         ("codex_executable", codex_executable),
         ("python_executable", python_executable),
     ):
-        if not isinstance(value, str) or not Path(value).is_absolute() or ".." in Path(value).parts:
+        # The profile names executables of the POSIX runtime, so every host judges it the same way.
+        if not isinstance(value, str) or not PurePosixPath(value).is_absolute() or ".." in PurePosixPath(value).parts:
             raise ContractError("invalid_executable", name)
     for name, value in (("codex_sha256", codex_sha256), ("python_sha256", python_sha256)):
         if not isinstance(value, str) or HEX64.fullmatch(value) is None:

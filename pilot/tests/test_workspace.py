@@ -6,9 +6,10 @@ import tempfile
 import unittest
 
 from pilot.workspace import ExactGitWorkspace, WorkspaceError, WorkspacePolicy
-from pilot.tests.support import issue_snapshot, make_source, run_git
+from pilot.tests.support import issue_snapshot, make_source, posix_runtime, run_git
 
 
+@posix_runtime
 class ExactGitWorkspaceTests(unittest.TestCase):
     def test_private_no_local_clone_has_no_remote_and_seals_one_parent_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path
 import subprocess
+import unittest
 
 from pilot.contracts import CandidateChangeV1, IssueSnapshotV1
+
+
+# The live runtime binds the owner uid, private POSIX modes, POSIX executable and working
+# paths, bubblewrap and process groups; pilot.cli refuses other hosts (posix_host_required).
+posix_runtime = unittest.skipUnless(
+    os.name == "posix",
+    "pilot runtime is POSIX-only (owner uid, private modes, bubblewrap); the CLI refuses this host",
+)
 
 
 def run_git(repository: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:

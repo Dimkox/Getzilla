@@ -17,7 +17,7 @@ from pilot.live import (
     _validate_roots,
 )
 from pilot.store import PilotStore, PilotStoreError
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
 from pilot.tests.test_coordinator import FakeExecutor, FakeIssueSource, FakeValidator
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, grant, profile
 from pilot.tests.test_github import gate_passed
@@ -88,6 +88,7 @@ def phases(
     )
 
 
+@posix_runtime
 class PilotPhasesTests(unittest.TestCase):
     def test_runtime_roots_reject_a_symlinked_parent_into_control(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
