@@ -7,7 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .risk_terms import load_vocabulary, uncovered_script
+from .cost_guard import GATE as PAID_RUN_GATE, prompt_cost_signals
+from .risk_terms import has_term, load_vocabulary, uncovered_script
 from .repo import RepoProfile, detect_repo
 from .util import git_default_base, load_json, now_utc, tree_fingerprint, unique_ordered
 
@@ -348,23 +349,8 @@ def _domains(text: str, repo: RepoProfile) -> tuple[list[str], list[str], dict[s
 
 
 def _has_term(text: str, term: str) -> bool:
-    """Match risk/domain terms as words, not as substrings of larger words.
-
-    `'прод' in 'продукт'` is True and was classifying ordinary product work as production.
-    """
-    haystack = f' {text.lower()} '
-    needle = term.lower().strip()
-    if not needle:
-        return False
-    if '*' in needle:
-        # Stem terms: every token is a whole word, or a word prefix when it ends with '*';
-        # tokens must be adjacent. 'оплат*' matches 'оплаты' but not 'переоплата'.
-        parts = [re.escape(token[:-1]) + r'\w*' if token.endswith('*') else re.escape(token) + r'(?![\w])'
-                 for token in needle.split()]
-        return re.search(r'(?<![\w])' + r'\s+'.join(parts), haystack, re.UNICODE) is not None
-    if ' ' in needle:
-        return needle in haystack
-    return re.search(r'(?<![\w])' + re.escape(needle) + r'(?![\w])', haystack, re.UNICODE) is not None
+    """Whole-word term match with "*" word stems (see getzilla.risk_terms.has_term)."""
+    return has_term(text, term)
 
 
 def _risk(text: str, intent: str, domains: list[str]) -> tuple[str, list[str]]:
@@ -436,6 +422,14 @@ def build_route(
     intent = _best_intent(prompt, operational_intent=operational_intent)
     domains, task_domains, matched_keywords = _domains(prompt, repo)
     risk, rationale = _risk(prompt, intent, domains)
+    try:
+        cost_signal = prompt_cost_signals(prompt)
+    except (OSError, ValueError):
+        cost_signal = None
+    if cost_signal is not None:
+        if risk == 'low':
+            risk = 'medium'
+        rationale.append(cost_signal.rationale)
     complexity = _complexity(intent, risk, domains, prompt)
 
     cfg = load_routing_config(root)
@@ -555,6 +549,8 @@ def build_route(
         evidence.append('release_review')
 
     human_gates: list[str] = []
+    if cost_signal is not None:
+        human_gates.append(PAID_RUN_GATE)
     if complexity == 'high-risk' or intent == 'architecture':
         human_gates.append('scope_and_design_approval')
     if any(d in domains for d in ('integration', 'data')) and risk == 'high':
@@ -667,4 +663,7 @@ def route_context(route: Route | dict[str, object]) -> str:
         'Use /getzilla-delivery. Do not spawn agents outside the route. '
         'Run every listed read-only analysis agent in parallel (cap is a ceiling, not a quota). '
         'Keep exactly one write owner.'
+        + (' Paid or unbounded operation: put cost-contract.json (provider, max_calls, max_spend_usd_cents, stop_condition, '
+           'alert, limit_symbol) in the change package, test the limit, and do not run it live before paid_run_approval.'
+           if PAID_RUN_GATE in data.get('human_gates', []) else '')
     )

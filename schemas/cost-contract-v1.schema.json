@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/cost-contract-v1.schema.json",
+  "description": "Budget contract for a paid or unbounded operation; lives in the active change package as cost-contract.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "max_calls", "max_spend_usd_cents", "stop_condition", "alert", "limit_symbol"],
+  "properties": {
+    "schema_version": {"const": "cost-contract-v1"},
+    "provider": {"type": "string", "minLength": 1, "maxLength": 200},
+    "max_calls": {"type": "integer", "minimum": 1},
+    "max_spend_usd_cents": {"type": "integer", "minimum": 1, "description": "Spend ceiling in USD cents (integers only: records are canonical JSON)"},
+    "stop_condition": {"type": "string", "minLength": 10, "maxLength": 2000},
+    "alert": {"type": "string", "minLength": 10, "maxLength": 2000},
+    "limit_symbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+  }
+}

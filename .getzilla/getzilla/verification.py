@@ -2279,6 +2279,31 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     return CheckResult('diff-risk', 'pass', f'{summary}; {note}', details=details), metadata
 
 
+def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
+                      git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
+    """Paid or unbounded operations need a budget contract and a tested bound before pr/release."""
+    from . import cost_guard
+    from .project_ingestion import IngestionError
+    from .receipts import _exact_head
+    from .util import runtime_dir
+    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
+    if not bases and not cost_guard.route_has_cost_signal(route):
+        return CheckResult('cost-guard', 'skip', 'no comparison base and no paid-operation signal'), {'status': 'not_run'}
+    active = get_active_change(root) or {}
+    package = root / str(active['path']) if active.get('path') else None
+    try:
+        report = cost_guard.evaluate(root, route, mode, bases, 'HEAD', package)
+        head = _exact_head(root) or 'HEAD'
+        cost_guard.write_state(runtime_dir(root), head, report.findings)
+    except (IngestionError, OSError, ValueError) as exc:
+        status = 'fail' if mode in {'pr', 'release'} else 'skip'
+        return CheckResult('cost-guard', status, f'COST_GUARD_UNAVAILABLE: {_failure_message(exc)}'), {
+            'status': 'error', 'error': _failure_message(exc)}
+    details = [{'severity': 'error' if report.status == 'fail' else 'warning', 'path': '.', 'code': problem.split(':', 1)[0],
+                'message': problem} for problem in report.problems[:20]]
+    return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
+
+
 def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, record: bool = True, *,
            keep_going: bool = False) -> dict[str, object]:
     report = {
@@ -2441,6 +2466,11 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
     dispatch.add(diff_check)
     report['diff_risk'] = diff_metadata
+    state.stage = 'cost-guard'
+    cancellation.check()
+    cost_check, cost_metadata = _cost_guard_check(root, route, mode, git_ranges)
+    dispatch.add(cost_check)
+    report['cost_guard'] = cost_metadata
     state.stage = 'repository'
     dispatch.run('git-diff-check', lambda: _git_diff_check(root, mode, git_ranges))
     # Preserve the successful report inventory order while authority checks run first.

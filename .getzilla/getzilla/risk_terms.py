@@ -11,14 +11,14 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
 SCHEMA = 'risk-terms-v1'
 DEFAULT_DIR = Path(__file__).resolve().parents[1] / 'config' / 'risk-terms'
-CATEGORIES = ('high', 'medium')
+CATEGORIES = ('high', 'medium', 'signal')  # signal terms raise nothing alone; cost_guard combines them
 TOKEN = re.compile(r'^[^\s*]+\*?$')
 UNCOVERED_SHARE = 0.3
 MIN_LETTERS = 3
@@ -35,6 +35,29 @@ class RiskVocabulary:
     scripts: frozenset[str]
     languages: tuple[str, ...]
     term_ids: Mapping[str, str]  # term -> id, for rationale
+    ids: Mapping[str, tuple[str, ...]] = field(default_factory=dict)  # id -> terms in every language
+
+    def matched_ids(self, text: str) -> set[str]:
+        return {term_id for term_id, terms in self.ids.items() if any(has_term(text, term) for term in terms)}
+
+
+def has_term(text: str, term: str) -> bool:
+    """Match a term as whole words; a trailing '*' on a word matches a prefix from the word start.
+
+    `'прод' in 'продукт'` is True and was classifying ordinary product work as production, so
+    plain terms never match inside a longer word. Words of a phrase must be adjacent.
+    """
+    haystack = f' {text.lower()} '
+    needle = term.lower().strip()
+    if not needle:
+        return False
+    if '*' in needle:
+        parts = [re.escape(token[:-1]) + r'\w*' if token.endswith('*') else re.escape(token) + r'(?![\w])'
+                 for token in needle.split()]
+        return re.search(r'(?<![\w])' + r'\s+'.join(parts), haystack, re.UNICODE) is not None
+    if ' ' in needle:
+        return needle in haystack
+    return re.search(r'(?<![\w])' + re.escape(needle) + r'(?![\w])', haystack, re.UNICODE) is not None
 
 
 def _check_term(term: Any, where: str) -> str:
@@ -111,15 +134,20 @@ def load_vocabulary(directory: Path = DEFAULT_DIR) -> RiskVocabulary:
     high: list[str] = []
     medium: list[str] = []
     term_ids: dict[str, str] = {}
+    ids: dict[str, list[str]] = {}
     scripts = {base['script']}
     languages = ['en']
 
     def add(term_id: str, terms: list[str]) -> None:
-        target = high if base['terms'][term_id]['category'] == 'high' else medium
+        category = base['terms'][term_id]['category']
+        target = high if category == 'high' else medium if category == 'medium' else None
         for term in terms:
+            if term not in ids.setdefault(term_id, []):
+                ids[term_id].append(term)
             if term not in term_ids:
                 term_ids[term] = term_id
-                target.append(term)
+                if target is not None:
+                    target.append(term)
 
     for term_id, entry in base['terms'].items():
         add(term_id, entry['terms'])
@@ -131,7 +159,8 @@ def load_vocabulary(directory: Path = DEFAULT_DIR) -> RiskVocabulary:
         languages.append(pack['lang'])
         for term_id, terms in pack['terms'].items():
             add(term_id, terms)
-    return RiskVocabulary(tuple(high), tuple(medium), frozenset(scripts), tuple(languages), term_ids)
+    return RiskVocabulary(tuple(high), tuple(medium), frozenset(scripts), tuple(languages), term_ids,
+                          {term_id: tuple(terms) for term_id, terms in ids.items()})
 
 
 def letter_scripts(text: str) -> dict[str, int]:
