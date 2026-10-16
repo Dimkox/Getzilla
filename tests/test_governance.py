@@ -2235,7 +2235,10 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 with self.assertRaises(ArchitectureError):
                     architecture_diff._git(root, ["rev-parse", "HEAD"])
                 self.assertEqual(len(probes), 5)
-                (linked / ".git").write_text(f"gitdir: {foreign / '.git'}\n", encoding="utf-8")
+                # In place: Git for Windows hides .git, and Windows refuses to recreate a hidden file.
+                with (linked / ".git").open("r+b") as registration:
+                    registration.write(f"gitdir: {foreign / '.git'}\n".encode())
+                    registration.truncate()
                 with self.assertRaises(ArchitectureError):
                     architecture_diff._git(linked, ["rev-parse", "HEAD"])
             self.assertIsNone(architecture_diff._PROBED_BINDINGS.get())
