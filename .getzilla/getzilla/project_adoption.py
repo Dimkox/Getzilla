@@ -12,6 +12,7 @@ import ctypes.util
 import errno
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,18 @@ def rename_noreplace(source: Path, target: Path) -> None:
         raise OSError(code, os.strerror(code), str(target))
 
 
+def remove_owned_tree(path: Path) -> None:
+    """Delete an operation-owned tree; Git writes read-only objects, which Windows refuses to unlink."""
+    def writable_retry(function: Any, failed: str, _error: Any) -> None:
+        os.chmod(failed, stat.S_IWRITE | stat.S_IREAD)
+        function(failed)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable_retry)
+    else:
+        shutil.rmtree(path, onerror=writable_retry)
+
+
 def _remove_owned_staging(state: OperationState) -> None:
     staging = Path(state.staging)
     identity = state.artifacts.get('staging_identity')
@@ -76,7 +89,7 @@ def _remove_owned_staging(state: OperationState) -> None:
         return
     if identity is None or list(shadow_identity(staging)) != list(identity) or staging.is_symlink():
         raise AdoptionError('TARGET_CONFLICT', 'staging directory is not owned by this operation; left untouched')
-    shutil.rmtree(staging)
+    remove_owned_tree(staging)
 
 
 def _receipt(state: OperationState, plan: AdmissionPlan) -> dict[str, Any]:
