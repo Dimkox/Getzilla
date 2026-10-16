@@ -1,7 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://getzilla.app/schemas/source-baseline-v1.schema.json",
-  "title": "Getzilla admitted source baseline (content identity; no Git identity, no contents)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -57,5 +56,6 @@
         }
       }
     }
-  }
+  },
+  "description": "Getzilla admitted source baseline (content identity; no Git identity, no contents)"
 }

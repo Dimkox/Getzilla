@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             envelope = {'schema': 'getzilla-branches-cli-v1', 'command': 'report', 'inventory': inventory.to_dict(),
                         'plan': plan.to_dict()}
             if args.output:
-                Path(args.output).write_text(json.dumps(plan.to_dict(), indent=2) + '\n', encoding='utf-8')
+                Path(args.output).write_text(json.dumps(plan.to_dict(), indent=2) + '\n', encoding="utf-8", newline="\n")
             print(json.dumps(envelope, indent=2))
             return 0
         plan = BranchRetentionPlan.from_dict(_load(args.plan))

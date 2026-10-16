@@ -1,30 +1,123 @@
 {
   "schema": "getzilla-implementation-map-v1",
-  "base": {"commit": "c2bf95d62f8491525848ac2643b1f30fc8c438cf", "tree": "9f20ca23c2b51c6b39417cadd6e0c62ed65a9515"},
+  "base": {
+    "commit": "c2bf95d62f8491525848ac2643b1f30fc8c438cf",
+    "tree": "9f20ca23c2b51c6b39417cadd6e0c62ed65a9515"
+  },
   "searched_refs": "all 50 heads (refs.json); the 4 old unmerged branches (cursor-enterprise-rules, opengrep-runtime-hash, updater-supply-chain, landing) contain no ingestion, graph, release-state or branch-lifecycle code",
   "test_runner": "pytest -n <measured workers> via getzilla test; tests are unittest.TestCase and also run under python -m unittest discover -s tests (repo root on sys.path)",
-  "platforms": {"linux": "claw, Python 3.12", "windows": "Windows Sandbox, Python 3.13.16, Git for Windows 2.55", "ci": "GitHub Actions ubuntu-latest and windows-latest, Python 3.13"},
+  "platforms": {
+    "linux": "claw, Python 3.12",
+    "windows": "Windows Sandbox, Python 3.13.16, Git for Windows 2.55",
+    "ci": "GitHub Actions ubuntu-latest and windows-latest, Python 3.13"
+  },
   "reused": [
-    {"need": "descriptor-relative no-follow file access on POSIX and Windows", "actual": ".getzilla/getzilla/fsx.py (open_dir, open_dir_at, lstat_at, open_at, lock_file)"},
-    {"need": "managed payload for the second commit", "actual": "scripts/install_into.py build_payload(source) and plan_install(source, target)", "note": "materialize_new stays absent-target only (A06)"},
-    {"need": "canonical JSON / receipts style", "actual": "receipts.py conventions; new records use source_models.canonical_json"},
-    {"need": "task graph schema", "actual": "schemas/workflow-task-graph-v1.schema.json (for G09)"},
-    {"need": "architecture model", "actual": ".getzilla/getzilla/architecture.py load_architecture, architecture/system.yaml node repository_paths (for G08)"},
-    {"need": "published release facts", "actual": "PROJECT_STATE.json published_release / source_installers (for R01)"}
+    {
+      "need": "descriptor-relative no-follow file access on POSIX and Windows",
+      "actual": ".getzilla/getzilla/fsx.py (open_dir, open_dir_at, lstat_at, open_at, lock_file)"
+    },
+    {
+      "need": "managed payload for the second commit",
+      "actual": "scripts/install_into.py build_payload(source) and plan_install(source, target)",
+      "note": "materialize_new stays absent-target only (A06)"
+    },
+    {
+      "need": "canonical JSON / receipts style",
+      "actual": "receipts.py conventions; new records use source_models.canonical_json"
+    },
+    {
+      "need": "task graph schema",
+      "actual": "schemas/workflow-task-graph-v1.schema.json (for G09)"
+    },
+    {
+      "need": "architecture model",
+      "actual": ".getzilla/getzilla/architecture.py load_architecture, architecture/system.yaml node repository_paths (for G08)"
+    },
+    {
+      "need": "published release facts",
+      "actual": "PROJECT_STATE.json published_release / source_installers (for R01)"
+    }
   ],
   "created": [
-    {"proposed": "source_models.py, source_inventory.py, source_paths.py, source_baseline.py, source_admission.py, source_secrets.py", "actual": "same paths under .getzilla/getzilla/"},
-    {"proposed": "source_snapshot.py, source_shadow.py, source_git.py, source_provenance.py, source_managed_layer.py, source_verification.py", "actual": "same paths"},
-    {"proposed": "adoption_state.py, project_adoption.py, scripts/adopt_existing.py", "actual": "same paths; CLI registered as `getzilla adopt`"},
-    {"proposed": "schemas/source-baseline-v1, admission-plan-v1, adoption-receipt-v1", "actual": "same paths"}
+    {
+      "proposed": "source_models.py, source_inventory.py, source_paths.py, source_baseline.py, source_admission.py, source_secrets.py",
+      "actual": "same paths under .getzilla/getzilla/"
+    },
+    {
+      "proposed": "source_snapshot.py, source_shadow.py, source_git.py, source_provenance.py, source_managed_layer.py, source_verification.py",
+      "actual": "same paths"
+    },
+    {
+      "proposed": "adoption_state.py, project_adoption.py, scripts/adopt_existing.py",
+      "actual": "same paths; CLI registered as `getzilla adopt`"
+    },
+    {
+      "proposed": "schemas/source-baseline-v1, admission-plan-v1, adoption-receipt-v1",
+      "actual": "same paths"
+    },
+    {
+      "proposed": "release_state.py, RELEASE_STATE.json, schemas/release-state-v1, docs/release-state.md",
+      "actual": "same paths; tests/test_release_state.py covers R01-R03 (gate identity and artifact provenance tests live in the same file)"
+    },
+    {
+      "proposed": "branch_lifecycle.py, scripts/branch_lifecycle.py, docs/branch-lifecycle.md",
+      "actual": "same paths; CLI registered as `getzilla branches`; deletion is update-ref -d with the expected OID on a local repository"
+    },
+    {
+      "proposed": "project_ingestion.py",
+      "actual": ".getzilla/getzilla/project_ingestion.py; routing documented in docs/project-ingestion.md"
+    },
+    {
+      "proposed": "code_graph/{models,python_parser,python_resolver,python_calls,store,incremental,impact,architecture_bindings,task_bindings,cli}.py",
+      "actual": "same paths plus code_graph/builder.py (shared full/incremental pipeline); scripts/getzilla_graph.py registered as `getzilla graph`; schemas/code-index-state-v1"
+    }
   ],
   "decisions": [
-    {"topic": "secret scanner backend", "decision": "built-in versioned rule set in source_secrets.py (rules_digest bound to every plan)", "reason": "no trusted scanner is installed on the hosts; the existing verification._secret_scan reads truncated text and skips files over 2 MB, which breaks the fail-closed contract; an external tool would need plaintext files on disk before admission (N03) and a download (N14)"},
-    {"topic": "SnapshotReceipt, ShadowReceipt, GitBaselineReceipt types", "decision": "defined next to the stage that produces them instead of source_models.py", "reason": "avoids an import cycle; contract fields unchanged"},
-    {"topic": "staging location", "decision": "operation-owned hidden directory next to the target", "reason": "atomic no-replace rename requires the same filesystem as the target"},
-    {"topic": "executable bit on Windows", "decision": "policy-manifest mode is forced on Windows", "reason": "no executable bit exists; equal digests across OS only under the same policy"}
+    {
+      "topic": "secret scanner backend",
+      "decision": "built-in versioned rule set in source_secrets.py (rules_digest bound to every plan)",
+      "reason": "no trusted scanner is installed on the hosts; the existing verification._secret_scan reads truncated text and skips files over 2 MB, which breaks the fail-closed contract; an external tool would need plaintext files on disk before admission (N03) and a download (N14)"
+    },
+    {
+      "topic": "SnapshotReceipt, ShadowReceipt, GitBaselineReceipt types",
+      "decision": "defined next to the stage that produces them instead of source_models.py",
+      "reason": "avoids an import cycle; contract fields unchanged"
+    },
+    {
+      "topic": "staging location",
+      "decision": "operation-owned hidden directory next to the target",
+      "reason": "atomic no-replace rename requires the same filesystem as the target"
+    },
+    {
+      "topic": "executable bit on Windows",
+      "decision": "policy-manifest mode is forced on Windows",
+      "reason": "no executable bit exists; equal digests across OS only under the same policy"
+    },
+    {
+      "topic": "schema keyword subset",
+      "decision": "new schemas use only the keywords getzilla.spec.validate_schema supports (nullable via type lists, no oneOf/title)",
+      "reason": "the repository validates with its own validator; tests/test_new_schema_conformance.py validates real records"
+    },
+    {
+      "topic": "graph cache path",
+      "decision": ".getzilla/index/graph.sqlite as proposed",
+      "reason": "Zero-Git already excludes /.getzilla/index/ in .git/info/exclude; .gitignore now ignores it too"
+    },
+    {
+      "topic": "incremental graph",
+      "decision": "parse reuse only; imports and calls re-resolved over the whole scope",
+      "reason": "guarantees equality with a full rebuild; counters separate parsing from resolution"
+    },
+    {
+      "topic": "pull request state for branch lifecycle",
+      "decision": "supplied by the caller as a file; no GitHub API call in the tool",
+      "reason": "the tool stays local and testable on bare repositories; fetching PR state is a separate authorised read"
+    }
   ],
   "blocked_or_deferred": [
-    {"task": "X01-X05", "reason": "P2: starts only after a separate scope decision (spec 12.1)"}
+    {
+      "task": "X01-X05",
+      "reason": "P2: starts only after a separate scope decision (spec 12.1)"
+    }
   ]
 }

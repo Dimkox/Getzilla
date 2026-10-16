@@ -1,7 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://getzilla.app/schemas/adoption-receipt-v1.schema.json",
-  "title": "Getzilla Zero-Git adoption receipt (kept outside the published tree)",
   "type": "object",
   "required": [
     "schema_version",
@@ -29,26 +28,18 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "source_digest": {
-      "oneOf": [
-        {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
     },
     "snapshot_digest": {
-      "oneOf": [
-        {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
     },
     "source_baseline": {
       "type": "object",
@@ -88,15 +79,11 @@
       ]
     },
     "runtime_payload_digest": {
-      "oneOf": [
-        {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
     },
     "git_present_at_ingest": {
       "const": false
@@ -128,5 +115,6 @@
         "null"
       ]
     }
-  }
+  },
+  "description": "Getzilla Zero-Git adoption receipt (kept outside the published tree)"
 }
