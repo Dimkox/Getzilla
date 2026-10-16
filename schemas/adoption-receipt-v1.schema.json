@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/adoption-receipt-v1.schema.json",
+  "title": "Getzilla Zero-Git adoption receipt (kept outside the published tree)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "operation_id",
+    "state",
+    "plan_id",
+    "source_digest",
+    "git_present_at_ingest",
+    "integrity_status",
+    "project_health_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "adoption-receipt-v1"
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^op-[0-9a-f]{32}$"
+    },
+    "state": {
+      "type": "string"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "snapshot_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_format",
+        "commit_oid",
+        "tree_oid"
+      ],
+      "properties": {
+        "object_format": {
+          "enum": [
+            "sha1",
+            "sha256"
+          ]
+        },
+        "commit_oid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "tree_oid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      }
+    },
+    "managed_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runtime_payload_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "git_present_at_ingest": {
+      "const": false
+    },
+    "integrity_status": {
+      "enum": [
+        "verified",
+        "failed",
+        "not_verified"
+      ]
+    },
+    "project_health_status": {
+      "enum": [
+        "not_run",
+        "pass",
+        "fail",
+        "unknown"
+      ]
+    },
+    "target": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
