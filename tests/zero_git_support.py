@@ -12,7 +12,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 # Synthetic, non-functional secret markers assembled at runtime so no real-looking credential
 # sits in the repository as one literal.
 FAKE_GITHUB_TOKEN = 'ghp_' + 'Z' * 36
-FAKE_PRIVATE_KEY = '-----BEGIN ' + 'PRIVATE KEY-----\nTUlJ\n-----END ' + 'PRIVATE KEY-----\n'
+FAKE_KEY_MARKER = 'Z2V0emlsbGEtZmFrZS1rZXktbWFya2Vy'
+FAKE_PRIVATE_KEY = '-----BEGIN ' + 'PRIVATE KEY-----\n' + FAKE_KEY_MARKER + '\n-----END ' + 'PRIVATE KEY-----\n'
 FAKE_AWS_ID = 'AKIA' + 'Q' * 16
 
 
@@ -43,6 +44,31 @@ def tree_state(root: Path) -> dict[str, tuple[str, bytes, int]]:
             else:
                 state[relative] = ('file', path.read_bytes(), stat.S_IMODE(info.st_mode))
     return state
+
+
+def plan_and_adopt(source: Path, target: Path, state_root: Path, policy=None):
+    """Plan with the default (or given) policy and apply it; returns (plan, receipt)."""
+    from getzilla.project_adoption import run_adoption
+    from getzilla.source_admission import plan_source
+    from getzilla.source_models import IngestPolicy
+    plan = plan_source(source, target, policy or IngestPolicy())
+    receipt = run_adoption(plan, plan.plan_id, quiesced=True, home=ROOT, state_root=state_root)
+    return plan, receipt
+
+
+def git_objects(repository: Path) -> list[bytes]:
+    """Raw contents of every object in a repository (reachable or not)."""
+    import subprocess
+    listing = subprocess.run(['git', '-C', str(repository), 'cat-file', '--batch-all-objects', '--batch-check'],
+                             capture_output=True, check=True).stdout.decode().split('\n')
+    contents = []
+    for line in listing:
+        if not line.strip():
+            continue
+        oid = line.split()[0]
+        contents.append(subprocess.run(['git', '-C', str(repository), 'cat-file', '-p', oid],
+                                       capture_output=True, check=True).stdout)
+    return contents
 
 
 def clean_source(root: Path) -> Path:

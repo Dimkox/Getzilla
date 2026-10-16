@@ -40,6 +40,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'harness': ('getzilla_harness.py', 'regenerate the agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
+    'adopt': ('adopt_existing.py', 'adopt a folder without Git into a new local workspace (Zero-Git)'),
     'demo': ('getzilla_demo.py', 'open the local read-only demo dashboard'),
 }
 
