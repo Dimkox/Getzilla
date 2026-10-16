@@ -2227,6 +2227,58 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
     return report
 
 
+def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
+                     fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
+    """Exact-head diff risk; a route whose evidence is below the diff's risk does not pass pr/release."""
+    from .diff_risk import ORDER, DiffRiskError, classify_diff
+    from .project_ingestion import IngestionError
+    from .router import escalate_route
+    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
+    if not bases:
+        return CheckResult('diff-risk', 'skip', 'no comparison base in this mode; diff risk not computed'), {
+            'status': 'not_run'}
+    try:
+        risks = [classify_diff(root, base, 'HEAD') for base in bases]
+    except (DiffRiskError, IngestionError, OSError, ValueError) as exc:
+        status = 'fail' if mode in {'pr', 'release'} else 'skip'
+        return CheckResult('diff-risk', status, f'DIFF_RISK_UNAVAILABLE: {_failure_message(exc)}'), {
+            'status': 'error', 'error': _failure_message(exc)}
+    worst = max(risks, key=lambda item: ORDER[item.risk])
+    reasons = []
+    for item in risks:
+        reasons.extend(reason for reason in item.reasons if reason not in reasons)
+    gaps = sorted({gap for item in risks for gap in item.gaps})
+    profile = 'full' if worst.risk == 'high' else (
+        'trivial' if all(item.profile_candidate == 'trivial' for item in risks) else 'standard')
+    metadata: dict[str, object] = {
+        'status': 'computed', 'head': worst.head, 'tree': worst.tree, 'bases': bases, 'diff_risk': worst.risk,
+        'profile_candidate': profile, 'reasons': [dict(reason) for reason in reasons[:50]],
+        'reason_count': len(reasons), 'gaps': gaps, 'rules_digest': worst.rules_digest,
+        'route_risk': route.get('risk') if route else None, 'effective_risk': worst.risk,
+        'added_reviewers': [], 'added_evidence': [], 'missing_evidence': [],
+    }
+    summary = f'diff risk {worst.risk} ({len(reasons)} reasons, profile {profile})'
+    if not route:
+        return CheckResult('diff-risk', 'pass', f'{summary}; no active route to escalate'), metadata
+    escalation = escalate_route(route, worst.risk, root)
+    metadata.update(effective_risk=escalation['effective_risk'], added_reviewers=escalation['added_reviewers'],
+                    added_evidence=escalation['added_evidence'])
+    if not escalation['added_evidence']:
+        return CheckResult('diff-risk', 'pass', f"{summary}; route risk {metadata['route_risk']} covers it"), metadata
+    missing = validate_evidence(root, {**route, 'required_evidence': escalation['added_evidence']},
+                                current_fingerprint=fingerprint)
+    metadata['missing_evidence'] = missing
+    details = [{'severity': 'error' if mode in {'pr', 'release'} else 'warning', 'path': reason['path'],
+                'code': reason['rule'], 'message': f"{reason['risk']} risk"} for reason in reasons[:20]]
+    if missing and mode in {'pr', 'release'}:
+        return CheckResult('diff-risk', 'fail', (
+            f"ROUTE_ESCALATED_EVIDENCE_MISSING: the change is {worst.risk} risk but the route was "
+            f"{metadata['route_risk']}; required now: {', '.join(escalation['added_evidence'])}"), details=details), metadata
+    note = 'escalated evidence present' if not missing else (
+        'escalated evidence will be required in pr/release: ' + ', '.join(escalation['added_evidence']))
+    return CheckResult('diff-risk', 'pass', f'{summary}; {note}', details=details), metadata
+
+
 def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, record: bool = True, *,
            keep_going: bool = False) -> dict[str, object]:
     report = {
@@ -2384,6 +2436,11 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
 
     results = state.results
+    state.stage = 'diff-risk'
+    cancellation.check()
+    diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
+    dispatch.add(diff_check)
+    report['diff_risk'] = diff_metadata
     state.stage = 'repository'
     dispatch.run('git-diff-check', lambda: _git_diff_check(root, mode, git_ranges))
     # Preserve the successful report inventory order while authority checks run first.

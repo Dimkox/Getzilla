@@ -614,6 +614,39 @@ def build_route(
     )
 
 
+RISK_ORDER = {'low': 0, 'medium': 1, 'high': 2}
+REVIEW_EVIDENCE = {
+    'code_reviewer': 'code_review', 'test_reviewer': 'test_review', 'bitrix_reviewer': 'bitrix_review',
+    'security_reviewer': 'security_review', 'data_reviewer': 'data_review', 'release_reviewer': 'release_review',
+}
+
+
+def escalate_route(route: dict[str, object], risk: str, root: Path) -> dict[str, object]:
+    """Reviewers and evidence a route needs at `risk`; only ever adds to the route, never removes.
+
+    The prompt decided the route's risk; the exact-head diff may show more. At high risk the route
+    gets the configured high-risk and release reviewers, exactly as if the prompt had said so.
+    """
+    route_risk = str(route.get('risk') or 'low')
+    effective = risk if RISK_ORDER.get(risk, 0) > RISK_ORDER.get(route_risk, 0) else route_risk
+    reviewers = [str(item) for item in route.get('review_agents') or []]
+    evidence = [str(item) for item in route.get('required_evidence') or []]
+    added_reviewers: list[str] = []
+    if effective == 'high' and route_risk != 'high':
+        cfg = load_routing_config(root)
+        risk_agents = cfg.get('review_risk_agents') if isinstance(cfg.get('review_risk_agents'), dict) else {}
+        floors = cfg.get('review_floors') if isinstance(cfg.get('review_floors'), dict) else {}
+        for agent in [*_string_list(risk_agents.get('high')), *_string_list(floors.get('release'))]:
+            if agent not in reviewers and agent not in added_reviewers:
+                added_reviewers.append(agent)
+    added_evidence = [REVIEW_EVIDENCE[agent] for agent in added_reviewers
+                      if agent in REVIEW_EVIDENCE and REVIEW_EVIDENCE[agent] not in evidence]
+    return {'route_risk': route_risk, 'effective_risk': effective,
+            'review_agents': unique_ordered([*reviewers, *added_reviewers]),
+            'required_evidence': unique_ordered([*evidence, *added_evidence]),
+            'added_reviewers': added_reviewers, 'added_evidence': added_evidence}
+
+
 def route_context(route: Route | dict[str, object]) -> str:
     data = route.to_dict() if isinstance(route, Route) else route
     analysis = ', '.join(data.get('analysis_agents', [])) or 'none'
