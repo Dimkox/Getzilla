@@ -1735,6 +1735,7 @@ class ArchitectureModelTests(unittest.TestCase):
             [("unsafe_repository_artifact", "linked-source")],
         )
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are POSIX-only")
     def test_repository_drift_fails_closed_on_special_artifacts(self) -> None:
         root = self._repo()
         os.mkfifo(root / "untrusted-pipe")
