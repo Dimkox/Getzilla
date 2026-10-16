@@ -158,6 +158,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(result["code"], "route")
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are POSIX-only")
     def test_runtime_authority_fifo_fails_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)

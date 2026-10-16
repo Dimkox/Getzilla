@@ -151,7 +151,8 @@ class RuntimeParityTests(unittest.TestCase):
             root = Path(tmp)
             specs = root / ".specify/specs"
             specs.mkdir(parents=True)
-            for name in ("A.md", "a.md", "x\\y.md"):
+            # A backslash is a filename character only on POSIX; the manifest entry is refused anyway.
+            for name in ("A.md", "a.md", *(("x\\y.md",) if os.name == "posix" else ())):
                 (specs / name).write_text("# source\n", encoding="utf-8")
             cases = [
                 [{"source_type": "spec-kit", "source_version": "", "role": "spec", "path": ".specify/specs/A.md"}],
@@ -200,13 +201,14 @@ class RuntimeParityTests(unittest.TestCase):
                 with self.subTest(kind=len(manifest.read_bytes())), self.assertRaises(ARTIFACTS.WorkflowArtifactError):
                     ARTIFACTS.load_source_manifest(root, manifest)
 
-            nofollow = os.O_NOFOLLOW
-            delattr(os, "O_NOFOLLOW")
-            try:
-                with self.assertRaises(ARTIFACTS.WorkflowArtifactError):
-                    ARTIFACTS.load_source_manifest(root, manifest)
-            finally:
-                os.O_NOFOLLOW = nofollow
+            if hasattr(os, "O_NOFOLLOW"):  # a POSIX host without it; Windows uses the fsx engine
+                nofollow = os.O_NOFOLLOW
+                delattr(os, "O_NOFOLLOW")
+                try:
+                    with self.assertRaises(ARTIFACTS.WorkflowArtifactError):
+                        ARTIFACTS.load_source_manifest(root, manifest)
+                finally:
+                    os.O_NOFOLLOW = nofollow
 
     def test_graph_enforces_task_reviewer_and_argv_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,6 +291,7 @@ class RuntimeParityTests(unittest.TestCase):
             with self.assertRaises(ARTIFACTS.WorkflowArtifactError):
                 ARTIFACTS.load_source_manifest(root, manifest)
 
+    @unittest.skipUnless(os.name == "posix", "races the POSIX descriptor walk; Windows pins path identity in fsx")
     def test_ancestor_swap_during_descriptor_walk_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -506,6 +509,8 @@ class CanonicalReceiptTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 get_receipt(root, "route", "verification")
             path.unlink()
+            if not hasattr(os, "mkfifo"):
+                return  # FIFOs are POSIX-only
             os.mkfifo(path)
             queue: multiprocessing.Queue = multiprocessing.Queue()
             process = multiprocessing.Process(target=_fifo_reader, args=(str(root), queue))
@@ -593,7 +598,8 @@ class SerializedCasTests(unittest.TestCase):
             self.assertIn(target.read_bytes(), set(payloads))
 
     def test_interposed_special_and_oversize_values_are_restored(self) -> None:
-        kinds = ("symlink", "fifo", "oversize", "unreadable")
+        # FIFOs and mode-0 files exist only on POSIX (Windows chmod sets read-only, still readable).
+        kinds = ("symlink", "oversize", *(("fifo", "unreadable") if os.name == "posix" else ()))
         for kind in kinds:
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -754,6 +760,7 @@ class SerializedCasTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, "cas")
             self.assertEqual(target.read_bytes(), bytes(competitor))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "interposes the Linux renameat2 exchange")
     def test_syscall_gap_content_change_is_rejected_by_displaced_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
