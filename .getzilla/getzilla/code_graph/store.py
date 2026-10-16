@@ -79,8 +79,12 @@ class GraphStore:
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=30, isolation_level=None)
-        connection.execute('PRAGMA journal_mode=WAL')
-        connection.execute('PRAGMA synchronous=FULL')
+        try:
+            connection.execute('PRAGMA journal_mode=WAL')
+            connection.execute('PRAGMA synchronous=FULL')
+        except sqlite3.Error:
+            connection.close()  # Windows cannot move a file that an open handle still holds
+            raise
         return connection
 
     def _open(self) -> None:
