@@ -313,6 +313,9 @@ class _RepositoryHandle:
     path: Path
     descriptor: fsx.DirHandle
     identity: tuple[int, int, int, int]
+    # False for a directory that only holds one input file: other entries may
+    # come and go there, so only its device and inode are pinned.
+    pin_entries: bool = True
 
 
 @dataclass(frozen=True)
@@ -581,7 +584,23 @@ def _secure_open_flags(*, label: str) -> tuple[int, int, int]:
     return no_follow, directory, nonblock
 
 
-def _open_repository(root: Path | str) -> _RepositoryHandle:
+def _root_matches(
+    info: os.stat_result,
+    identity: tuple[int, int, int, int],
+    *,
+    pin_entries: bool,
+) -> bool:
+    current = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+    if pin_entries:
+        return current == identity
+    # Adding or removing any entry moves a directory's timestamps, so a
+    # directory pinned only as the place of one file compares where it is.
+    return current[:2] == identity[:2]
+
+
+def _open_repository(
+    root: Path | str, *, pin_entries: bool = True
+) -> _RepositoryHandle:
     label = "repository root"
     no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
     repository = Path(os.path.abspath(Path(root)))
@@ -600,15 +619,8 @@ def _open_repository(root: Path | str) -> _RepositoryHandle:
                 opened.st_mtime_ns,
                 opened.st_ctime_ns,
             )
-            if (
-                not stat.S_ISDIR(opened.st_mode)
-                or identity
-                != (
-                    named.st_dev,
-                    named.st_ino,
-                    named.st_mtime_ns,
-                    named.st_ctime_ns,
-                )
+            if not stat.S_ISDIR(opened.st_mode) or not _root_matches(
+                named, identity, pin_entries=pin_entries
             ):
                 raise GovernanceError("repository root changed while opening", code="io")
         except BaseException:
@@ -618,7 +630,7 @@ def _open_repository(root: Path | str) -> _RepositoryHandle:
         raise
     except OSError as exc:
         raise GovernanceError(f"repository root is unavailable: {exc}", code="io") from exc
-    return _RepositoryHandle(repository, descriptor, identity)
+    return _RepositoryHandle(repository, descriptor, identity, pin_entries)
 
 
 def _verify_repository(handle: _RepositoryHandle) -> None:
@@ -631,20 +643,8 @@ def _verify_repository(handle: _RepositoryHandle) -> None:
         not stat.S_ISDIR(opened.st_mode)
         or fsx.is_link(named)
         or not stat.S_ISDIR(named.st_mode)
-        or (
-            opened.st_dev,
-            opened.st_ino,
-            opened.st_mtime_ns,
-            opened.st_ctime_ns,
-        )
-        != handle.identity
-        or (
-            named.st_dev,
-            named.st_ino,
-            named.st_mtime_ns,
-            named.st_ctime_ns,
-        )
-        != handle.identity
+        or not _root_matches(opened, handle.identity, pin_entries=handle.pin_entries)
+        or not _root_matches(named, handle.identity, pin_entries=handle.pin_entries)
     ):
         raise GovernanceError("repository root changed while loading", code="io")
 
@@ -876,6 +876,13 @@ def _read_pinned_authority_bytes(item: _PinnedAuthorityFile) -> bytes:
 
 
 def _read_regular_bytes(root_descriptor: fsx.DirHandle, relative: str, *, label: str) -> bytes:
+    return _read_regular_file(root_descriptor, relative, label=label)[0]
+
+
+def _read_regular_file(
+    root_descriptor: fsx.DirHandle, relative: str, *, label: str
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    """Bytes of a regular file and the ``_file_identity`` they were read at."""
     no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
     parts = PurePosixPath(relative).parts
     directories: list[fsx.DirHandle] = []
@@ -931,7 +938,7 @@ def _read_regular_bytes(root_descriptor: fsx.DirHandle, relative: str, *, label:
         )
         if total != before.st_size or identity_after != identity_before:
             raise GovernanceError(f"{label}: file changed while reading", code="io")
-        return b"".join(chunks)
+        return b"".join(chunks), identity_after
     except GovernanceError:
         raise
     except OSError as exc:
@@ -2581,15 +2588,31 @@ def load_architecture_evidence(path: Path | str) -> dict[str, Any]:
     evidence_path = Path(os.path.abspath(Path(path)))
     if not evidence_path.name or evidence_path.name in {".", ".."}:
         raise GovernanceError("architecture evidence path is invalid", code="path")
-    repository = _open_repository(evidence_path.parent)
+    # The evidence may sit in any directory, often a shared temporary one
+    # where other processes add and remove their own files while it loads.
+    # Pin that directory by device and inode, and the evidence file by its own
+    # identity under its name.
+    repository = _open_repository(evidence_path.parent, pin_entries=False)
     try:
-        data = _read_regular_bytes(
+        data, identity = _read_regular_file(
             repository.descriptor,
             evidence_path.name,
             label="architecture evidence",
         )
         document = load_bytes(data, label="architecture evidence")
         _verify_repository(repository)
+        try:
+            named = _reopen_identity(
+                repository.descriptor, evidence_path.name, directory=False
+            )
+        except OSError as exc:
+            raise GovernanceError(
+                "architecture evidence changed while loading", code="io"
+            ) from exc
+        if not stat.S_ISREG(named.st_mode) or _file_identity(named) != identity:
+            raise GovernanceError(
+                "architecture evidence changed while loading", code="io"
+            )
         return document
     finally:
         fsx.close_dir(repository.descriptor)
