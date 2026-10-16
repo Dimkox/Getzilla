@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import codecs
+import contextlib
+import contextvars
 import fnmatch
 import itertools
 import os
@@ -68,7 +70,6 @@ DESTRUCTIVE_COMMANDS = [
     r'\bformat-volume\b',
     r'\bclear-disk\b',
 ]
-_COMMAND_SPLIT = re.compile(r'(?:&&|\|\||[;|\n])')
 _WRAPPERS = {'sudo', 'doas', 'command', 'time', 'nohup', 'nice'}
 _EXECUTION_WRAPPERS = {'command', 'nice', 'nohup', 'setsid', 'time', 'timeout'}
 _UNWRAP_SHELL = re.compile(
@@ -101,7 +102,27 @@ SIDE_EFFECT_TOOL = re.compile(
     re.IGNORECASE,
 )
 
-# Native Windows only (``fsx.WINDOWS``); POSIX parsing below is unchanged.
+# Set while a command is read as a POSIX shell reads it on Windows: Claude Code runs Git Bash
+# there, where `\n` is an escaped `n`, while cmd.exe and PowerShell read `\` as a separator.
+_POSIX_READING: contextvars.ContextVar[bool] = contextvars.ContextVar('getzilla_posix_reading', default=False)
+
+
+def _windows_reading() -> bool:
+    """Read commands as cmd.exe/PowerShell do: native Windows, unless a POSIX reading is requested."""
+    return fsx.WINDOWS and not _POSIX_READING.get()
+
+
+@contextlib.contextmanager
+def posix_reading():
+    """Evaluate a command as Git Bash reads it; the filesystem stays NTFS."""
+    token = _POSIX_READING.set(True)
+    try:
+        yield
+    finally:
+        _POSIX_READING.reset(token)
+
+
+# Native Windows only (``_windows_reading``); POSIX parsing below is unchanged.
 _WINDOWS_LAUNCHER_SUFFIXES = ('.exe', '.cmd', '.bat', '.com')
 _WINDOWS_LAUNCHER = re.compile(r'(?<=\w)\.(?:exe|cmd|bat|com)(?=$|[\s;&|)])', re.IGNORECASE)
 _WINDOWS_SHELL_EXECUTABLES = {'cmd', 'powershell', 'pwsh'}
@@ -115,7 +136,7 @@ def _executable_name(token: str) -> str:
     directory syntax and drops a launcher suffix, so ``C:\\Git\\cmd\\git.exe`` and
     ``git.EXE`` are both ``git`` rather than an unknown, unclassified program.
     """
-    if not fsx.WINDOWS:
+    if not _windows_reading():
         return Path(token).name.lower()
     name = PureWindowsPath(token).name.lower()
     for suffix in _WINDOWS_LAUNCHER_SUFFIXES:
@@ -186,7 +207,7 @@ def _windows_literal_backslashes(text: str) -> str:
 
 def _split_words(text: str) -> list[str]:
     """``shlex.split``; on Windows a path backslash survives as a separator."""
-    if fsx.WINDOWS:
+    if _windows_reading():
         text = _windows_literal_backslashes(_strip_windows_carets(text))
     return shlex.split(text)
 
@@ -242,17 +263,24 @@ def _windows_path_key(path: str) -> str:
 def _destructive_pattern(command: str, patterns: list[str]) -> str | None:
     """First configured destructive pattern found in ``command``.
 
-    Windows also checks the folded spelling from ``_windows_command_variant``.
+    Windows also checks the folded spelling from ``_windows_command_variant`` against the
+    substring patterns. The recursive-delete check reads argv, so it gets separators,
+    carets and launcher suffixes folded but keeps quotes: text quoted as an argument (a
+    commit message naming ``rm -rf /``) is an argument in cmd.exe, PowerShell and Git Bash.
     """
     candidates = [command]
-    if fsx.WINDOWS:
+    argv_candidates = [command]
+    if _windows_reading():
         variant = _windows_command_variant(command)
         if variant != command:
             candidates.append(variant)
+        separators = _WINDOWS_LAUNCHER.sub('', _strip_windows_carets(command).replace('\\', '/'))
+        if separators != command:
+            argv_candidates.append(separators)
     for pattern in patterns:
         if any(re.search(pattern, candidate, flags=re.IGNORECASE) for candidate in candidates):
             return pattern
-    if any(_recursive_remove_of_root(candidate) for candidate in candidates):
+    if any(_recursive_remove_of_root(candidate) for candidate in argv_candidates):
         return RECURSIVE_REMOVE_POLICY
     return None
 
@@ -348,12 +376,12 @@ def _command_env(command: str) -> dict[str, str]:
     """
     env: dict[str, str] = {}
     try:
-        words = _words(command)
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
     except ValueError:
         return env
     current: list[str] = []
-    for word in [*words, ';']:
-        if word and set(word) <= _PUNCTUATION:
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if token.operator:
             assignments, argv = _env_assignments(current)
             env.update(assignments)
             name = _executable_name(argv[0]) if argv else ''
@@ -371,17 +399,86 @@ def _command_env(command: str) -> dict[str, str]:
                         break
             current = []
             continue
-        current.append(word)
+        current.append(token.value)
     return env
 
 
+@dataclass(frozen=True)
+class _ShellToken:
+    value: str
+    start: int
+    end: int
+    operator: bool = False
+    expansion: bool = False
+    substitution: bool = False
+
+
+_SHELL_OPERATORS = (
+    ';;&', '<<<', '<<-', '&>>', '&&', '||', ';;', ';&', '|&',
+    '<<', '>>', '<&', '>&', '<>', '>|', '&>',
+)
+
+
+def _shell_tokens(text: str) -> list[_ShellToken]:
+    """Scan literal words and operators once, retaining quote/escape provenance.
+
+    This is a bounded lexical grammar, not a shell interpreter. Active expansion
+    is marked, never evaluated. Offsets refer to the original command so callers
+    can split commands without splitting quoted argument data.
+    """
+    tokens: list[_ShellToken] = []
+    index = 0
+    while index < len(text):
+        if text[index] in ' \t\r':
+            index += 1
+            continue
+        start = index
+        if text[index] in _PUNCTUATION:
+            operator = next((op for op in _SHELL_OPERATORS if text.startswith(op, index)), text[index])
+            index += len(operator)
+            tokens.append(_ShellToken(operator, start, index, operator=True))
+            continue
+        quote = ''
+        expansion = substitution = False
+        while index < len(text):
+            char = text[index]
+            if quote == "'":
+                if char == "'":
+                    quote = ''
+                index += 1
+                continue
+            if char == '\\' or (_windows_reading() and char == '^' and not quote):
+                following = text[index + 1:index + 2]
+                if not following:
+                    raise ValueError('unfinished shell escape')
+                if following == '\n':
+                    raise ValueError('shell line continuation is unsupported')
+                if not quote or following in {'$', '`', '"', '\\'}:
+                    index += 2
+                    continue
+            if quote:
+                if char == quote:
+                    quote = ''
+            elif char in {'"', "'"}:
+                quote = char
+            elif char in ' \t\r' or char in _PUNCTUATION:
+                break
+            if char in {'$', '`'}:
+                expansion = True
+                substitution = substitution or char == '`' or text.startswith('$(', index)
+            index += 1
+        if quote:
+            raise ValueError('unfinished shell quote')
+        values = _split_words(text[start:index])
+        if len(values) != 1:
+            raise ValueError('unsupported shell word')
+        tokens.append(_ShellToken(values[0], start, index, expansion=expansion, substitution=substitution))
+    return tokens
+
+
 def _words(text: str) -> list[str]:
-    """Shell words and operator tokens (``;``, ``&&``, ``|``, ``(``, ``>``, newline), quotes removed."""
-    if fsx.WINDOWS:
-        text = _windows_literal_backslashes(_strip_windows_carets(text))
-    lexer = shlex.shlex(_ANSI_C_QUOTE.sub(_ansi_c, text), posix=True, punctuation_chars=''.join(sorted(_PUNCTUATION)))
-    lexer.whitespace, lexer.whitespace_split, lexer.commenters = ' \t\r', True, ''
-    return list(lexer)
+    """Compatibility view; consumers that split commands retain token provenance."""
+    return [token.value for token in _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, text))]
 
 
 def _strip_wrappers(argv: list[str]) -> list[str]:
@@ -441,7 +538,7 @@ def _nested_commands(argv: list[str]) -> list[str | list[str] | None]:
             None,
         )
         return [' '.join(argv[index + 1:])] if index else []
-    if name in {'start-process', 'saps', 'start'} and fsx.WINDOWS:
+    if name in {'start-process', 'saps', 'start'} and _windows_reading():
         rest = argv[1:]
         filepath: str | None = None
         launched: list[str] = []
@@ -524,18 +621,18 @@ def _simple_commands(command: str, depth: int = 0) -> list[list[str] | None]:
     if depth > 4:
         return [None]
     try:
-        words = _words(command)
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
     except ValueError:
         return [None]
     commands: list[list[str] | None] = []
     current: list[str] = []
-    for word in [*words, ';']:
-        if word and set(word) <= _PUNCTUATION:
-            if '<' not in word and '>' not in word and current:
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if token.operator:
+            if '<' not in token.value and '>' not in token.value and current:
                 commands.extend(_expand_command(current, depth))
                 current = []
             continue
-        current.append(word)
+        current.append(token.value)
     return commands
 
 
@@ -789,10 +886,20 @@ def _extract_patch_paths(command: str) -> list[str]:
 
 
 def _command_chunks(command: str) -> list[str]:
-    chunks = [part for part in _COMMAND_SPLIT.split(command) if part.strip()]
-    if fsx.WINDOWS:
-        # cmd.exe and PowerShell also sequence commands with a single '&'.
-        chunks = [piece for chunk in chunks for piece in _windows_sequence_split(chunk) if piece.strip()]
+    try:
+        tokens = _shell_tokens(command)
+    except ValueError:
+        # Preserve malformed source for the existing fail-closed callers.
+        return [command] if command.strip() else []
+    chunks: list[str] = []
+    start = 0
+    for token in tokens:
+        if token.operator and token.value in {'&&', '||', ';', ';;', ';&', ';;&', '|', '|&', '&', '\n'}:
+            if command[start:token.start].strip():
+                chunks.append(command[start:token.start])
+            start = token.end
+    if command[start:].strip():
+        chunks.append(command[start:])
     return chunks
 
 
@@ -1250,7 +1357,7 @@ def _analyze_authority_pieces(
             if (inner.actions or inner.ambiguous) and (not bounded or not inner.context_proven):
                 context_proven = False
             continue
-        if fsx.WINDOWS and outer in _WINDOWS_SHELL_EXECUTABLES:
+        if _windows_reading() and outer in _WINDOWS_SHELL_EXECUTABLES:
             # cmd /c, powershell -Command and their options are not modelled: the
             # authority they carry is reported but never proven.
             if shell_depth > 1:
@@ -1353,7 +1460,7 @@ def is_production_invocation(command: str) -> bool:
 
 def _http_write_resource(command: str, root: Path | None = None) -> str | None:
     resource = _http_write_resource_text(command, root)
-    if resource is None and fsx.WINDOWS:
+    if resource is None and _windows_reading():
         variant = _windows_command_variant(command)
         if variant != command:
             resource = _http_write_resource_text(variant, root)
@@ -2182,7 +2289,7 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
 
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
-_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...]], str | None] = {}
+_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool], str | None] = {}
 
 
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
@@ -2196,7 +2303,8 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     PreToolUse timeout (review S59-1). The result is memoized for the life of the process
     so the hook never pays for the same scan twice (sensitive_action + evaluate_pre_tool).
     """
-    key = (str(root), command, tuple(patterns))
+    # The reading is part of the key: Windows and Git Bash read the same text differently.
+    key = (str(root), command, tuple(patterns), _windows_reading())
     if key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
@@ -2254,15 +2362,15 @@ def evaluate_pre_tool(
             and _is_control_plane_shell_mutation(command, control_plane)
         ):
             return False, 'Blocked control-plane shell mutation; use a structured write with an exact protected-path grant.'
-        secret = shell_secret_reference(root, command, secret_read)
-        if secret is not None:
-            return False, f'Reading secret material is blocked: the shell command references {secret}'
         pattern = _destructive_pattern(
             command,
             _configured_patterns(config, 'destructive_command_patterns', DESTRUCTIVE_COMMANDS),
         )
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
+        secret = shell_secret_reference(root, command, secret_read)
+        if secret is not None:
+            return False, f'Reading secret material is blocked: the shell command references {secret}'
         authority = analyze_command_authority(command)
         if authority.ambiguous or (authority.actions and not authority.context_proven):
             return False, (

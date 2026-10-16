@@ -142,11 +142,17 @@ class InstallScriptContractTests(unittest.TestCase):
         text = POWERSHELL.read_text(encoding='utf-8')
         self.assertIn("'Git.Git'", text)
         self.assertIn('--id Git.Git', _toolchain_windows_install('git'))
-        python_ids = set(re.findall(r"'Python\.Python\.3\.(\d+)'", text))
-        self.assertEqual(len(python_ids), 1)
-        self.assertGreaterEqual(int(python_ids.pop()), 10)
+        # Python comes per user from the pinned python.org installer, never through winget: winget's
+        # install waited on a hidden elevation prompt in a clean Windows Sandbox.
+        self.assertNotRegex(text, r"Invoke-Winget 'Python\.Python")
         self.assertIn('/python-3.13.16-amd64.exe', text)
-        self.assertIn('InstallAllUsers=0', text)
+        # Only needed MSI packages (each signature check can wait ~2 minutes on a fresh Windows), a
+        # 30-minute ceiling with progress, and a log for diagnosis.
+        for switch in ('InstallAllUsers=0', 'Include_launcher=0', 'InstallLauncherAllUsers=0', 'Include_tcltk=0',
+                       'Include_dev=0',
+                       "'/log'", 'while (-not $process.WaitForExit(30000))', 'New-TimeSpan -Minutes 30'):
+            self.assertIn(switch, text)
+        self.assertNotIn('Start-Process -FilePath $installer -Wait', text)
 
     def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
         shell = SHELL.read_text(encoding='utf-8')
@@ -174,12 +180,69 @@ class InstallScriptContractTests(unittest.TestCase):
 
     def test_powershell_installer_installs_winget_or_falls_back_to_direct_downloads(self) -> None:
         text = POWERSHELL.read_text(encoding='utf-8')
-        for needle in ('    Initialize-Winget\n', 'repos/microsoft/winget-cli/releases/latest',
-                       'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle', 'DesktopAppInstaller_Dependencies.zip',
+        for needle in ('    Initialize-Winget\n', 'releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle',
+                       'releases/download/v1.29.380/DesktopAppInstaller_Dependencies.zip',
                        'Add-AppxPackage -Path $package -DependencyPath $paths', 'GETZILLA_SKIP_WINGET',
-                       'repos/PowerShell/PowerShell/releases/latest', 'https://nodejs.org/dist/index.json'):
+                       'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip'):
             self.assertIn(needle, text)
         self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
+
+    def test_both_installers_always_refresh_vulnerability_data(self) -> None:
+        # The CVE database and OpenGrep are part of a working install: refreshed on every run
+        # without a question, before the optional [y/N] update of the other tools.
+        shell = SHELL.read_text(encoding='utf-8')
+        powershell = POWERSHELL.read_text(encoding='utf-8')
+        self.assertIn('scripts/getzilla_update.py --only osv --only opengrep', shell)
+        self.assertIn("@('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')", powershell)
+        self.assertLess(shell.index('  update_security_data "$home" "$python"\n'),
+                        shell.index('  offer_tool_update "$home" "$python"\n'))
+        self.assertLess(powershell.index('    Update-SecurityData $Python $GetzillaHome\n'),
+                        powershell.index('    Request-ToolUpdate $Python $GetzillaHome\n'))
+        for text in (shell, powershell):
+            self.assertNotIn('vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]', text)
+
+    def test_shell_installer_prefers_pinned_node_archive_over_old_distro_packages(self) -> None:
+        # Ubuntu 24.04 ships Node.js 18: a bare install never got an agent CLI from apt.
+        text = SHELL.read_text(encoding='utf-8')
+        digests = re.findall(r'node-v24\.20\.0-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz ([0-9a-f]{64})', text)
+        self.assertEqual(len(digests), 4)
+        self.assertIn('checksum_ok "$tmp/$name" "$digest"', text)
+        self.assertIn('npm config set prefix "$HOME/.local"', text)
+        body = text[text.index('ensure_node() {'):]
+        self.assertLess(body.index('install_node_archive'), body.index('apt-get install -y nodejs npm'))
+
+    def test_powershell_fallback_downloads_are_pinned_and_verified(self) -> None:
+        # Unauthenticated GitHub API calls hit the 60/hour per-IP limit behind shared NAT and fetched
+        # an unreviewed "latest" build; every fallback is now an exact release with its SHA-256.
+        text = POWERSHELL.read_text(encoding='utf-8')
+        self.assertNotIn('api.github.com', text)
+        self.assertNotIn('releases/latest', text)
+        self.assertNotIn('nodejs.org/dist/index.json', text)
+        pins = re.findall(r"'([a-z0-9-]+)'\s*=\s*@\{ Url = '(https://[^']+)'; Sha256 = '([0-9a-f]*)' \}", text)
+        self.assertEqual({key for key, _, _ in pins}, {
+            'winget', 'winget-dependencies', 'git-x64', 'git-arm64', 'python-x64', 'python-arm64',
+            'pwsh-x64', 'pwsh-arm64', 'node-x64', 'node-arm64',
+        })
+        for key, url, digest in pins:
+            with self.subTest(pin=key):
+                self.assertRegex(digest, r'^[0-9a-f]{64}$')
+                self.assertNotIn('latest', url)
+        self.assertIn('(Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()', text)
+        self.assertNotRegex(text, r'Get-Download \$[a-z]+\.browser_download_url')
+        for call in ("Get-PinnedDownload ('git-' + (Get-WindowsArchitecture))",
+                     "Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))",
+                     "Get-PinnedDownload ('pwsh-' + (Get-WindowsArchitecture))",
+                     "Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))",
+                     "Get-PinnedDownload 'winget'", "Get-PinnedDownload 'winget-dependencies'"):
+            self.assertIn(call, text)
+
+    def test_powershell_5_native_calls_avoid_quote_stripping_and_mojibake(self) -> None:
+        # Windows PowerShell 5.1 strips double quotes inside native arguments and decodes piped
+        # native output with the OEM code page; both broke a real bare install.
+        text = POWERSHELL.read_text(encoding='utf-8')
+        self.assertNotRegex(text, r"node(\.exe)? -e '[^']*\"")
+        self.assertIn('& node --version 2>$null', text)
+        self.assertIn('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8', text)
 
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_no_winget_helpers(self) -> None:
@@ -195,9 +258,6 @@ class InstallScriptContractTests(unittest.TestCase):
                 f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
                 '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
                 'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
-                "$index = @(@{version='v25.1.0'; lts=$false}, @{version='v24.11.1'; lts='Krypton'}, "
-                "@{version='v22.21.0'; lts='Jod'}, @{version='v20.19.5'; lts='Iron'}); "
-                "'node20=' + (Select-NodeLts $index 20); 'node25=' + (Select-NodeLts $index 25); "
                 "$env:PROCESSOR_ARCHITEW6432 = $null; $env:PROCESSOR_ARCHITECTURE = 'ARM64'; 'arch=' + (Get-WindowsArchitecture); "
                 f"'deps=' + ((Select-WingetDependencies '{deps}' 'arm64' | ForEach-Object {{ Split-Path $_ -Leaf }}) -join ','); "
                 f"$env:LOCALAPPDATA = '{tmp}'; 'program=' + (Expand-ToUserPrograms '{archive}' 'nodejs'); "
@@ -206,8 +266,6 @@ class InstallScriptContractTests(unittest.TestCase):
             result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True,
                                     timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('node20=v24.11.1', result.stdout)
-            self.assertIn('node25=\n', result.stdout + '\n')
             self.assertIn('arch=arm64', result.stdout)
             deps_line = next(line for line in result.stdout.splitlines() if line.startswith('deps='))
             self.assertEqual(sorted(deps_line[5:].split(',')), [

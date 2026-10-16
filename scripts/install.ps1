@@ -28,10 +28,11 @@
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
-# At the end of every run (first install or re-run) the installer offers to update
-# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec Kit,
-# vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only after you
-# answer yes. Without an interactive console it only prints that command.
+# At the end of every run (first install or re-run) the installer always updates the
+# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers to
+# update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their
+# latest versions and runs scripts/getzilla_update.py for them only after you answer yes.
+# Without an interactive console it only prints that command.
 #
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
@@ -91,6 +92,9 @@ function Install-Getzilla {
     }
 
     Get-GetzillaSource -Repo $Repo -Ref $Ref -Destination $GetzillaHome
+    # One `getzilla <command>` for every tool (bin\getzilla.cmd), on PATH for new windows.
+    Add-UserPath (Join-Path $GetzillaHome 'bin')
+    Initialize-PythonEnvironment $Python $GetzillaHome
 
     Push-Location $GetzillaHome
     try {
@@ -110,6 +114,7 @@ function Install-Getzilla {
         Pop-Location
     }
 
+    Update-SecurityData $Python $GetzillaHome
     Request-ToolUpdate $Python $GetzillaHome
 
     $PythonText = $Python -join ' '
@@ -121,6 +126,7 @@ function Install-Getzilla {
     }
     Write-Host ''
     Write-Host 'Next:'
+    Write-Host '  0. Every Getzilla tool is one command: getzilla help   (open a new PowerShell window first)'
     Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"
     Write-Host "     Existing project: cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --plan C:\path\to\your\project"
     Write-Host ('  2. In your project run: ' + (Get-AgentCommand $Agent))
@@ -129,6 +135,14 @@ function Install-Getzilla {
 
 function Write-Step([string]$Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Get-InstallLogDir {
+    # Third-party installer logs, so a failed or stuck step can be diagnosed afterwards.
+    $dir = $env:GETZILLA_LOG_DIR
+    if (-not $dir) { $dir = Join-Path $env:LOCALAPPDATA 'Getzilla\logs' }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    return $dir
 }
 
 function Test-IsWindowsHost {
@@ -156,10 +170,50 @@ function Test-Winget {
     return [bool](Get-Command winget -ErrorAction SilentlyContinue)
 }
 
+function Test-IsElevated {
+    if (-not (Test-IsWindowsHost)) { return $false }
+    try {
+        $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Test-WingetInstalls {
+    # winget installs Git, PowerShell 7 and Node.js machine-wide and Python's launcher for all users.
+    # Without an elevated session each of those waits on a UAC prompt, which hangs unattended runs
+    # (Windows Sandbox, CI, remote shells); the pinned per-user downloads need no administrator.
+    return ((Test-Winget) -and (Test-IsElevated))
+}
+
 function Invoke-Winget([string]$Id, [string[]]$Extra) {
-    $arguments = @('install', '-e', '--id', $Id, '--silent', '--accept-package-agreements', '--accept-source-agreements') + $Extra
-    & winget @arguments | Out-Host
-    return ($LASTEXITCODE -eq 0)
+    # The winget community source only: the msstore source fails in some regions (0x8a15003b) and,
+    # matching the same id, makes winget refuse to choose a package at all.
+    $logDir = Get-InstallLogDir
+    $installerLog = Join-Path $logDir "winget-$Id.log"
+    # --verbose-logs: winget's own diagnostic log; --log: the package installer's log (MSI, Inno, ...).
+    $arguments = @('install', '-e', '--id', $Id, '--source', 'winget', '--silent', '--accept-package-agreements',
+        '--accept-source-agreements', '--verbose-logs', '--log', $installerLog) + $Extra
+    Write-Step "winget logs: $installerLog and $logDir\winget-diag"
+    # winget writes UTF-8; Windows PowerShell decodes piped native output with the OEM code page,
+    # which turns localized (for example Russian) messages into mojibake.
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        & winget @arguments | Out-Host
+        $exitCode = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $previousEncoding
+        $diag = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+        if (Test-Path $diag) {
+            $target = Join-Path $logDir 'winget-diag'
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Get-ChildItem -Path $diag -Filter '*.log' | Sort-Object LastWriteTime | Select-Object -Last 3 |
+                Copy-Item -Destination $target -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return ($exitCode -eq 0)
 }
 
 function Get-WindowsArchitecture {
@@ -180,12 +234,18 @@ function Select-WingetDependencies([string]$Root, [string]$Architecture) {
 }
 
 function Initialize-Winget {
+    $perUser = 'Not running as administrator: tools are installed for the current user from pinned, verified downloads (no UAC prompts).'
     if (Test-Winget) {
         Write-Step ('winget: ' + ((& winget --version) | Select-Object -First 1))
+        if (-not (Test-IsElevated)) { Write-Step $perUser }
         return
     }
     if ($env:GETZILLA_SKIP_WINGET -eq '1') {
         Write-Step 'winget is missing; skipping its installation (GETZILLA_SKIP_WINGET=1). Using direct downloads.'
+        return
+    }
+    if (-not (Test-IsElevated)) {
+        Write-Step $perUser
         return
     }
     try {
@@ -205,24 +265,17 @@ function Install-Winget {
     }
     if (-not (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue)) { return $false }
     Write-Step 'winget is missing (common on Windows 10). Installing App Installer from github.com/microsoft/winget-cli...'
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -UseBasicParsing
-    $bundle = $release.assets | Where-Object { $_.name -eq 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' } | Select-Object -First 1
-    $dependencies = $release.assets | Where-Object { $_.name -eq 'DesktopAppInstaller_Dependencies.zip' } | Select-Object -First 1
-    if (-not $bundle) { return $false }
-    $paths = @()
-    if ($dependencies) {
-        $zip = Get-Download $dependencies.browser_download_url $dependencies.name
-        $folder = Join-Path ([System.IO.Path]::GetTempPath()) 'getzilla-winget-dependencies'
-        if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
-        Expand-Archive -Path $zip -DestinationPath $folder -Force
-        Remove-Item -Force $zip
-        $paths = Select-WingetDependencies $folder (Get-WindowsArchitecture)
-    }
-    $package = Get-Download $bundle.browser_download_url $bundle.name
+    $zip = Get-PinnedDownload 'winget-dependencies'
+    $folder = Join-Path ([System.IO.Path]::GetTempPath()) 'getzilla-winget-dependencies'
+    if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
+    Expand-Archive -Path $zip -DestinationPath $folder -Force
+    Remove-Item -Force $zip
+    $paths = @(Select-WingetDependencies $folder (Get-WindowsArchitecture))
+    $package = Get-PinnedDownload 'winget'
     if ($paths.Count) {
-        Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop
+        Add-AppxPackage -Path $package -DependencyPath $paths -ErrorAction Stop -Verbose
     } else {
-        Add-AppxPackage -Path $package -ErrorAction Stop
+        Add-AppxPackage -Path $package -ErrorAction Stop -Verbose
     }
     Remove-Item -Force $package
     $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
@@ -245,32 +298,48 @@ function Expand-ToUserPrograms([string]$Zip, [string]$Name) {
     return $target
 }
 
-function Select-NodeLts($Index, [int]$Minimum) {
-    foreach ($release in $Index) {
-        if (-not $release.lts) { continue }
-        $major = [int]("$($release.version)".TrimStart('v').Split('.')[0])
-        if ($major -ge $Minimum) { return "$($release.version)" }
-    }
-    return $null
-}
-
 function Get-Download([string]$Url, [string]$FileName) {
     $path = Join-Path ([System.IO.Path]::GetTempPath()) $FileName
     Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing
     return $path
 }
 
+# Direct downloads used only when winget cannot install a tool (for example in Windows Sandbox).
+# Exact releases with their published SHA-256: no GitHub API rate limit, no unreviewed "latest".
+$PinnedDownloads = @{
+    'winget'              = @{ Url = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'; Sha256 = '65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e' }
+    'winget-dependencies' = @{ Url = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380/DesktopAppInstaller_Dependencies.zip'; Sha256 = 'ba875afe9d190f61218985ac0292a99d1db710bf93e13c68944ca9d89f0d82d1' }
+    'git-x64'             = @{ Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip'; Sha256 = 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be' }
+    'git-arm64'           = @{ Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-arm64.zip'; Sha256 = '38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7' }
+    'python-x64'          = @{ Url = 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe'; Sha256 = 'fb4f9f5d438b2396da0086dc70b935c530cb578e37adc6d354f7ad2037fee83b' }
+    'python-arm64'        = @{ Url = 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-arm64.exe'; Sha256 = '696e2226062c6ec3622c13f143d28336a856968518e49cb4f4c62513215a4f5d' }
+    'pwsh-x64'            = @{ Url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.7/PowerShell-7.6.7-win-x64.zip'; Sha256 = 'd2f952ebdbf24386cb8923553aa58e41a846db35a6155ea04c58142a4b16dbb7' }
+    'pwsh-arm64'          = @{ Url = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.7/PowerShell-7.6.7-win-arm64.zip'; Sha256 = '119bd9221254ef3637523cb1990797618f5fd68848b57de40f12b561d743149e' }
+    'node-x64'            = @{ Url = 'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip'; Sha256 = '6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba' }
+    'node-arm64'          = @{ Url = 'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-arm64.zip'; Sha256 = '31c6799744de8a54601643098040c68c3697e56c94e407d61d0e5fa5f34191d7' }
+}
+
+function Get-PinnedDownload([string]$Key) {
+    $pin = $PinnedDownloads[$Key]
+    if (-not $pin) { throw "No pinned download for '$Key' on this machine. Install it manually and run this installer again." }
+    $name = Split-Path $pin.Url -Leaf
+    $path = Get-Download $pin.Url $name
+    $actual = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $pin.Sha256) {
+        Remove-Item -Force $path
+        throw "SHA-256 mismatch for $name (expected $($pin.Sha256), got $actual); the download was deleted."
+    }
+    return $path
+}
+
 function Install-Git {
     Write-Step 'Installing Git...'
-    if ((Test-Winget) -and (Invoke-Winget 'Git.Git' @())) {
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'Git.Git' @())) {
         Update-SessionPath
         if (Get-Command git -ErrorAction SilentlyContinue) { return }
     }
     # No winget (for example in Windows Sandbox): portable MinGit for the current user.
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing
-    $asset = $release.assets | Where-Object { $_.name -match '^MinGit-[0-9.]+-64-bit\.zip$' } | Select-Object -First 1
-    if (-not $asset) { throw 'Could not find a MinGit download. Install Git from https://git-scm.com/downloads and run this installer again.' }
-    $zip = Get-Download $asset.browser_download_url $asset.name
+    $zip = Get-PinnedDownload ('git-' + (Get-WindowsArchitecture))
     $target = Join-Path $env:LOCALAPPDATA 'Programs\MinGit'
     if (Test-Path $target) { Remove-Item -Recurse -Force $target }
     Expand-Archive -Path $zip -DestinationPath $target -Force
@@ -312,18 +381,41 @@ function Invoke-Python([string[]]$Python, [string[]]$Arguments) {
 }
 
 function Install-Python {
-    Write-Step 'Installing Python 3.13...'
-    if ((Test-Winget) -and (Invoke-Winget 'Python.Python.3.13' @('--scope', 'user'))) {
-        Update-SessionPath
-        return
-    }
-    $installer = Get-Download 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe' 'python-3.13.16-amd64.exe'
-    $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
-        '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=1',
-        'InstallLauncherAllUsers=0', 'Include_test=0', 'Include_doc=0'
+    Write-Step 'Installing Python 3.13 for the current user...'
+    # Not winget: on a clean Windows (Windows Sandbox) its Python.Python.3.13 install waited on an
+    # elevation prompt nobody could see, even with --scope user and per-user --override switches.
+    # The pinned python.org installer with these per-user switches needs no administrator.
+    $installer = Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))
+    # Not Start-Process -Wait: Windows PowerShell then waits for the whole process tree, and the
+    # Python installer leaves a background child running, so the installer hung after Python was in.
+    $log = Join-Path (Get-InstallLogDir) 'python-install.log'
+    Write-Step "Python installer log: $log"
+    # Only the packages Getzilla needs: every MSI's signature check can wait about two minutes on a
+    # fresh Windows without cached revocation data (seen in Windows Sandbox), the py launcher
+    # is not needed because PrependPath puts python.exe on PATH, and the C headers (dev) are not
+    # needed because every package in Getzilla's environment installs as a wheel.
+    # Start-Process joins arguments with spaces and does not quote them in Windows PowerShell.
+    $process = Start-Process -FilePath $installer -PassThru -ArgumentList @(
+        '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=0', 'InstallLauncherAllUsers=0',
+        'Include_tcltk=0', 'Include_test=0', 'Include_doc=0', 'Include_dev=0', '/log', ('"' + $log + '"')
     )
+    $null = $process.Handle  # keeps ExitCode readable after exit in Windows PowerShell
+    $started = Get-Date
+    $limit = New-TimeSpan -Minutes 30
+    while (-not $process.WaitForExit(30000)) {
+        $elapsed = (Get-Date) - $started
+        if ($elapsed -gt $limit) {
+            try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
+            Remove-Item -Force $installer -ErrorAction SilentlyContinue
+            throw "The Python installer did not finish within 30 minutes; see $log and the python-install_*.log files next to it. Install Python 3.13 for the current user from https://www.python.org/downloads/ and run this installer again."
+        }
+        $current = Select-String -Path $log -Pattern 'Applying execute package: (\w+?)_' -ErrorAction SilentlyContinue |
+            Select-Object -Last 1
+        $component = if ($current) { $current.Matches[0].Groups[1].Value } else { 'preparing' }
+        Write-Step ("Python: installing {0} ({1:N0} min so far; slow signature checks are normal on a fresh Windows)" -f $component, $elapsed.TotalMinutes)
+    }
     Remove-Item -Force $installer
-    if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode)." }
+    if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode); see $log." }
     Update-SessionPath
 }
 
@@ -348,17 +440,12 @@ function Install-PowerShell7 {
         return
     }
     Write-Step "Installing PowerShell $MinimumPowerShell or newer (Getzilla's minimum)..."
-    if ((Test-Winget) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
     $pwsh = Get-Pwsh
     if (-not ($pwsh -and $pwsh.Version -ge $MinimumPowerShell)) {
         try {
-            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -UseBasicParsing
-            $pattern = '^PowerShell-[0-9.]+-win-' + (Get-WindowsArchitecture) + '\.zip$'
-            $asset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-            if ($asset) {
-                $folder = Expand-ToUserPrograms (Get-Download $asset.browser_download_url $asset.name) 'PowerShell7'
-                Add-UserPath $folder
-            }
+            $folder = Expand-ToUserPrograms (Get-PinnedDownload ('pwsh-' + (Get-WindowsArchitecture))) 'PowerShell7'
+            Add-UserPath $folder
         } catch {
             Write-Verbose $_.Exception.Message
         }
@@ -371,22 +458,57 @@ function Install-PowerShell7 {
     }
 }
 
+function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) {
+    # Getzilla's own environment with the pinned test and quality tools (coverage, pytest-xdist,
+    # ruff, bandit); getzilla and getzilla_verify run under it.
+    Write-Step "Creating Getzilla's Python environment with the pinned test and quality tools..."
+    $venv = Join-Path $GetzillaHome '.venv'
+    Invoke-Python $Python @('-m', 'venv', $venv)
+    $venvPython = Join-Path $venv 'Scripts\python.exe'
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
+        & $venvPython -m pip install --disable-pip-version-check -q `
+            -r (Join-Path $GetzillaHome '.getzilla\config\python-test-requirements.txt') `
+            -r (Join-Path $GetzillaHome '.getzilla\config\python-quality-requirements.txt')
+    }
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
+        Write-Step "Python environment: $venv"
+    } else {
+        Write-Host "WARNING: could not create $venv; verify will report missing coverage, ruff and bandit." -ForegroundColor Yellow
+    }
+}
+
+function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
+    # Not optional: without fresh vulnerability data the first gates would scan against an empty
+    # or stale CVE database. A network failure warns instead of failing the install.
+    Write-Step 'Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner...'
+    Push-Location $GetzillaHome
+    try {
+        Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ('WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "' + $GetzillaHome + '"; ' +
+                ($Python -join ' ') + ' scripts/getzilla_update.py --only osv --only opengrep') -ForegroundColor Yellow
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Request-ToolUpdate([string[]]$Python, [string]$GetzillaHome) {
     $answer = 'n'
     if (Test-CanAsk) {
-        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]' 'n'
+        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]' 'n'
     }
     if ($answer -in @('y', 'Y', 'yes', 'Yes', 'YES')) {
         Write-Step 'Updating third-party tools...'
         Push-Location $GetzillaHome
         try {
-            Invoke-Python $Python @('scripts/getzilla_update.py')
+            Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'agents', '--only', 'sources')
             if ($LASTEXITCODE -ne 0) { Write-Step 'Some updates failed (FAIL lines above); run the same command again later.' }
         } finally {
             Pop-Location
         }
     } else {
-        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py')
+        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py --only agents --only sources')
     }
 }
 
@@ -473,23 +595,26 @@ function Install-Agent([string]$Agent) {
 
 function Test-Node([int]$Minimum = 20) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
-    $major = (& node -e 'console.log(process.versions.node.split(".")[0])' 2>$null)
-    return ([int]"$major" -ge $Minimum)
+    try {
+        # `node --version` prints vMAJOR.MINOR.PATCH. No inline program: Windows PowerShell 5.1
+        # strips the double quotes inside native arguments, and with ErrorActionPreference Stop
+        # any stderr line from such a broken call would abort the whole installer.
+        $text = (& node --version 2>$null | Select-Object -First 1)
+        return ([int](("$text".Trim()) -replace '^v(\d+).*$', '$1') -ge $Minimum)
+    } catch {
+        return $false
+    }
 }
 
 function Install-Node([int]$Minimum = 20) {
     if (Test-Node $Minimum) { return $true }
     Write-Step "Installing Node.js LTS ($Minimum or newer is needed)..."
-    if ((Test-Winget) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
+    if ((Test-WingetInstalls) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
     if (Test-Node $Minimum) { return $true }
     try {
-        $version = Select-NodeLts (Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing) $Minimum
-        if ($version) {
-            $name = "node-$version-win-$(Get-WindowsArchitecture).zip"
-            $folder = Expand-ToUserPrograms (Get-Download "https://nodejs.org/dist/$version/$name" $name) 'nodejs'
-            Add-UserPath $folder
-            Add-UserPath (Join-Path $env:APPDATA 'npm')
-        }
+        $folder = Expand-ToUserPrograms (Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))) 'nodejs'
+        Add-UserPath $folder
+        Add-UserPath (Join-Path $env:APPDATA 'npm')
     } catch {
         Write-Verbose $_.Exception.Message
     }

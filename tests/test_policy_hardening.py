@@ -7,6 +7,7 @@ inputs are synthetic hook payloads; nothing here executes the commands.
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 import sys
 import time
@@ -24,6 +25,13 @@ from getzilla.policy import evaluate_pre_tool, production_action, sensitive_acti
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, set_active_route  # noqa: E402
 from tests._support import project_copy  # noqa: E402
+
+# A system tree far larger than the scan budget: /proc on Linux, the Windows directory there.
+_HUGE_TREE = (
+    '/proc' if Path('/proc/self').is_dir()
+    else os.environ.get('SystemRoot', 'C:/Windows').replace(os.sep, '/') if os.name == 'nt'
+    else '/usr'
+)
 
 
 @contextlib.contextmanager
@@ -253,7 +261,7 @@ class BoundedAnalysisTests(_Case):
         started = time.monotonic()
         allowed, reason = self.bash('cat /proc/*/*/*/*/zz* deploy/tls/server.key')
         self.assertFalse(allowed)
-        allowed, reason = self.bash('cat /proc/*/*/*/*/*/zz*')
+        allowed, reason = self.bash(f'cat {_HUGE_TREE}/*/*/*/*/*/zz*')
         self.assertLess(time.monotonic() - started, 8.0)
         self.assertFalse(allowed, 'an unbounded scan must fail closed')
         self.assertIn('bounded', reason or '')
@@ -263,7 +271,7 @@ class BoundedAnalysisTests(_Case):
             allowed, reason = self.bash('cat deploy/*/*')
         self.assertFalse(allowed)
         self.assertEqual(
-            sensitive_action(self.root, {'tool_name': 'Bash', 'tool_input': {'command': 'cat /proc/*/*/*/*/*/zz*'}}),
+            sensitive_action(self.root, {'tool_name': 'Bash', 'tool_input': {'command': f'cat {_HUGE_TREE}/*/*/*/*/*/zz*'}}),
             'secret-read',
         )
 
@@ -413,8 +421,16 @@ class Review2PosixTests(_Case):
         command = 'cat deploy/tls/server.key'
         patterns = legacy.DEFAULT_SECRET_READ
         legacy.shell_secret_reference(self.root, command, patterns)
-        key = (str(self.root), command, tuple(patterns))
+        key = (str(self.root), command, tuple(patterns), legacy._windows_reading())
         self.assertIn(key, legacy._SECRET_SCAN_CACHE)
+
+    def test_secret_scan_memo_never_crosses_readings(self) -> None:
+        legacy._SECRET_SCAN_CACHE.clear()
+        command, patterns = r'cat .e\nv', legacy.DEFAULT_SECRET_READ
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assertIsNone(legacy.shell_secret_reference(self.root, command, patterns))
+            with legacy.posix_reading():
+                self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), '.env')
 
 
 class Review3RootDeleteTests(_Case):
@@ -496,6 +512,23 @@ class Review2WindowsTests(_Case):
     def test_encoded_powershell_fails_closed(self) -> None:
         with mock.patch.object(fsx, 'WINDOWS', True):
             self.assert_denied(('powershell -EncodedCommand ZwBpAHQAIABwAHUAcwBo',))
+
+    def test_git_bash_reading_of_backslashes_is_enforced_too(self) -> None:
+        # Claude Code runs Git Bash on Windows, where a backslash escapes: `.e\nv` is `.env`.
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assert_denied((r'cat .e\nv', r'cat .\e\nv'), 'secret')
+            for command in (r'cat .e\nv', r'cat .\e\nv'):
+                event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
+                self.assertEqual(sensitive_action(self.root, event), 'secret-read', command)
+            self.assert_allowed((r'type src\app.py', r'findstr TODO src\app.py'))
+
+    def test_quoted_text_naming_a_delete_is_an_argument(self) -> None:
+        with mock.patch.object(fsx, 'WINDOWS', True):
+            self.assert_allowed(('git commit -m "remove rm -rf / note"', "grep -rn 'rm -r /' docs"))
+            self.assert_denied((
+                'cmd /c "rm -rf /"', '"rm" -rf /', 'r"m" -rf /', 'rm -rf C:\\', 'rm -rf "C:\\\\"',
+                'pwsh -c "Remove-Item -Recurse -Force C:\\\\"',
+            ), 'destructive')
 
     def test_windows_benign_commands_stay_allowed(self) -> None:
         with mock.patch.object(fsx, 'WINDOWS', True):

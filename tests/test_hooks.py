@@ -39,7 +39,7 @@ class HookTests(unittest.TestCase):
             shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
             proc = subprocess.run(
-                ['python3', 'pre_tool_use.py'],
+                [sys.executable, 'pre_tool_use.py'],
                 cwd=root,
                 input='{"tool_name":"Read","tool_input":{"path":"AGENTS.md"}}',
                 text=True,
@@ -57,7 +57,7 @@ class HookTests(unittest.TestCase):
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
             (root / '.grok/hooks/pre_tool_use.py').unlink()
             proc = subprocess.run(
-                ['python3', 'pre_tool_use.py'],
+                [sys.executable, 'pre_tool_use.py'],
                 cwd=root,
                 input='{}',
                 text=True,

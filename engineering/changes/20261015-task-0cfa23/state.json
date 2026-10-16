@@ -1,0 +1,116 @@
+{
+  "change_id": "20261015-task-0cfa23",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/hook-root-20261015",
+      "change_id": "20261015-task-0cfa23",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "7cf4f65dd2ba9bb1390dc84c6185ba0f104255c8",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-15T08:27:01+00:00",
+      "route_id": "0cfa23ed0476"
+    },
+    {
+      "branch": "fix/hook-root-20261015",
+      "change_id": "20261015-task-0cfa23",
+      "detached": false,
+      "dirty_product_paths": [
+        ".getzilla/getzilla/_policy_legacy.py",
+        ".getzilla/getzilla/shell_targets.py",
+        ".grok/hooks/_lib.py",
+        ".grok/hooks/pre_tool_use.py",
+        "decisions.md",
+        "mistakes.md",
+        "tests/test_hook_shell_quoting.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [
+        "uncommitted_product_zero_ahead"
+      ],
+      "head": "7cf4f65dd2ba9bb1390dc84c6185ba0f104255c8",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-15T08:56:58+00:00",
+      "route_id": "0cfa23ed0476"
+    }
+  ],
+  "created_at": "2026-10-15T08:27:01+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "single final qualifying gate awaits independent reports and freeze",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "independent review of committed candidate pending",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "independent review of committed candidate pending",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-15T08:27:01+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-15T08:56:56+00:00",
+      "from": "draft",
+      "reason": "Bounded design and acceptance criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-15T08:56:57+00:00",
+      "from": "scoped",
+      "reason": "No named human gate and owner authorized bounded repair",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-15T08:56:58+00:00",
+      "from": "approved",
+      "reason": "Shared parser and regression tests implemented",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-15T08:57:37+00:00",
+      "from": "implementing",
+      "reason": "Focused regressions and lint passed with final gate pending",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-15T08:57:38+00:00",
+      "from": "verifying",
+      "reason": "Candidate ready for bounded committed observation and independent reviews",
+      "to": "reviewing"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "b6f0267b2ca0219cfe5ce22a74494ac02070ad83f7e27e103f2c23f10c6b8be5",
+  "route_id": "0cfa23ed0476",
+  "schema_version": 1,
+  "status": "reviewing",
+  "title": "GZ-HOOK-ROOT-001",
+  "updated_at": "2026-10-15T08:57:38+00:00"
+}

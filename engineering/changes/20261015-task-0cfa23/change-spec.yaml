@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "change_id": "20261015-task-0cfa23",
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix quoted argument false root ambiguity without weakening command authority or root boundaries",
+    "success_metric": "Offline quoted-read probes pass normal policy and sensitive syntax, root, grant and interpreter guards remain denied",
+    "target": "Canonical hook and shared shell parser with focused regressions"
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Quoted and escaped operator data reaches normal root and authority checks, including the exact gh jq reproduction",
+      "evidence": [
+        {
+          "test": "tests/test_hook_shell_quoting.py"
+        },
+        {
+          "receipt": "test_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Actual operators, substitutions, malformed grammar, sensitive root conflicts and missing grants remain closed; interpreter arguments retain code analysis",
+      "evidence": [
+        {
+          "test": "tests/test_hooks.py"
+        },
+        {
+          "test": "tests/test_policy_shell_targets.py"
+        },
+        {
+          "test": "tests/test_hook_shell_quoting.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Denials record implementation identity and failure sources without argument values and without changing circuit-breaker semantics",
+      "evidence": [
+        {
+          "test": "tests/test_hook_shell_quoting.py"
+        },
+        {
+          "test": "tests/test_pre_tool_circuit_breaker.py"
+        },
+        {
+          "receipt": "verification"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "No shell evaluation, grant relaxation, cross-worktree authority reuse or live hook modification",
+      "evidence": [
+        {
+          "receipt": "code_review"
+        }
+      ]
+    }
+  ],
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "No production or external write and no circuit-breaker reset",
+      "evidence": [
+        {
+          "receipt": "code_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  }
+}

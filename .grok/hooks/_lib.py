@@ -20,9 +20,9 @@ if str(STACK) not in sys.path:
 from getzilla import fsx
 from getzilla._policy_legacy import (
     _executable_name,
-    _split_words,
+    _shell_tokens,
+    _simple_commands,
     _unwrap_execution_wrappers,
-    _windows_sequence_split,
     analyze_command_authority,
 )
 from getzilla.util import find_root
@@ -32,6 +32,23 @@ _POSIX_SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
 _WINDOWS_SHELLS = {'cmd', 'powershell', 'pwsh'}
 _WINDOWS_DIRECTORY_COMMANDS = {'cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location'}
 _WINDOWS_DYNAMIC_COMMANDS = {'invoke-expression', 'iex'}
+# Interpreter code passed inline (option, stdin or here-document) is opaque to policy, unlike a
+# reviewable script file or module, so such invocations fail closed.
+_PYTHON_INTERPRETER = re.compile(r'^(?:python|pypy)(?:\d+(?:\.\d+)*)?$')
+_INLINE_CODE_OPTIONS = {
+    'node': {'-e', '--eval', '-p', '--print', '-'},
+    'nodejs': {'-e', '--eval', '-p', '--print', '-'},
+    'bun': {'-e', '--eval', '-p', '--print'},
+    'php': {'-r'},
+    'lua': {'-e', '-'},
+    'luajit': {'-e', '-'},
+    'rscript': {'-e'},
+    'osascript': {'-e'},
+}
+_INLINE_CODE_CLUSTERS = {'perl': 'eE', 'ruby': 'e'}
+_AWK_INTERPRETERS = {'awk', 'gawk', 'mawk', 'nawk'}
+_AWK_EXECUTION = re.compile(r'system|getline|\||@load')
+_HERE_DOCUMENT_OPERATORS = {'<<', '<<-', '<<<'}
 
 
 def _shells() -> set[str]:
@@ -104,7 +121,10 @@ TOOL_ALIASES = {
 
 
 def read_payload() -> dict[str, Any]:
-    raw = sys.stdin.read()
+    # Agents send UTF-8 JSON. Text-mode stdin uses the console code page on Windows (cp1251 on
+    # a Russian system), which turned Cyrillic prompts into mojibake, so decode the bytes here.
+    stream = getattr(sys.stdin, 'buffer', None)
+    raw = stream.read().decode('utf-8-sig', errors='replace') if stream is not None else sys.stdin.read()
     if not raw.strip():
         return {}
     try:
@@ -115,10 +135,15 @@ def read_payload() -> dict[str, Any]:
 
 
 def emit(data: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(data, ensure_ascii=False))
-    if not data:
+    text = json.dumps(data, ensure_ascii=False) + ('\n' if data else '')
+    stream = getattr(sys.stdout, 'buffer', None)
+    if stream is None:
+        sys.stdout.write(text)
         return
-    sys.stdout.write('\n')
+    # UTF-8 bytes, as agents read them, whatever the console code page is.
+    sys.stdout.flush()
+    stream.write(text.encode('utf-8'))
+    stream.flush()
 
 
 def harness() -> str:
@@ -280,35 +305,115 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     return _contains_nested_command_shell(words[1:])
 
 
-def _windows_control_flow(command: str) -> bool:
-    # A lone '&' sequences commands in cmd.exe and PowerShell, like ';' in sh.
-    return fsx.WINDOWS and len(_windows_sequence_split(command)) > 1
+def _python_program_is_inline(args: list[str]) -> bool | None:
+    """True for ``-c``/stdin code, False for a script or ``-m`` module, None if no program is named."""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == '-':
+            return True
+        if arg == '--':
+            return False if index + 1 < len(args) else None
+        if not arg.startswith('-'):
+            return False
+        if not arg.startswith('--'):
+            flags = arg[1:]
+            for position, flag in enumerate(flags):
+                if flag == 'c':
+                    return True
+                if flag == 'm':
+                    return False
+                if flag in 'WX':
+                    index += position == len(flags) - 1
+                    break
+        index += 1
+    return None
+
+
+def _awk_programs(args: list[str]) -> list[str]:
+    """Inline awk program texts; a program read with ``-f`` is a file, not inline text."""
+    programs: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in {'-e', '--source'}:
+            programs.extend(args[index + 1:index + 2])
+            index += 2
+            continue
+        if arg in {'-F', '-v', '-f', '--field-separator', '--assign', '--file'}:
+            index += 2
+            continue
+        if arg == '--':
+            programs.extend(args[index + 1:index + 2])
+            break
+        if arg.startswith('-') and len(arg) > 1:
+            index += 1
+            continue
+        if not any(other in {'-f', '--file'} or other.startswith('-f') for other in args[:index]):
+            programs.append(arg)
+        break
+    return programs
+
+
+def _runs_inline_program(command: str, tokens: list[Any]) -> bool:
+    """Whether any simple command runs interpreter code given inline instead of as a file."""
+    here_document = any(token.operator and token.value in _HERE_DOCUMENT_OPERATORS for token in tokens)
+    for argv in _simple_commands(command):
+        if not argv:
+            continue
+        name, args = _executable_name(argv[0]), argv[1:]
+        if _PYTHON_INTERPRETER.match(name):
+            if here_document or _python_program_is_inline(args):
+                return True
+            continue
+        options = _INLINE_CODE_OPTIONS.get(name)
+        if options is not None and (here_document or any(arg.split('=', 1)[0] in options for arg in args)):
+            return True
+        cluster = _INLINE_CODE_CLUSTERS.get(name)
+        if cluster is not None and (here_document or any(
+            arg.startswith('-') and not arg.startswith('--') and any(flag in cluster for flag in arg[1:])
+            for arg in args
+        )):
+            return True
+        if name == 'deno' and args[:1] == ['eval']:
+            return True
+        if name in _AWK_INTERPRETERS and any(_AWK_EXECUTION.search(program) for program in _awk_programs(args)):
+            return True
+    return False
 
 
 def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
-        words = _split_words(command)
+        tokens = _shell_tokens(command)
     except ValueError:
         return {'shell': '<ambiguous>'}
+    if any(token.substitution for token in tokens):
+        return {'command.dynamic-substitution': '<ambiguous>'}
+    if _runs_inline_program(command, tokens):
+        return {'command.inline-program': '<ambiguous>'}
+    # ';' runs commands in sequence exactly like a newline; both keep root tracking linear.
+    if any(token.operator and token.value not in {'&&', ';', '\n'} and '<' not in token.value and '>' not in token.value
+           for token in tokens):
+        return {'command.control-flow': '<ambiguous>'}
+    words = [token.value for token in tokens]
     expects_command = True
-    for word in words:
-        if word in {'&&', '||', ';', '|'}:
+    for token in tokens:
+        word = token.value
+        if token.operator:
             expects_command = True
             continue
         if not expects_command:
             continue
         if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', word):
             continue
-        if word.startswith(('$', '`')) or '$(' in word or '${' in word:
+        if token.expansion:
             return {'command.dynamic-position': '<ambiguous>'}
         expects_command = False
     if any(_is_directory_command(word) for word in words) and os.environ.get('CDPATH'):
         return {'command.cdpath-environment': '<ambiguous>'}
     if any(word.startswith('CDPATH=') and word != 'CDPATH=' for word in words):
         return {'command.cdpath-assignment': '<ambiguous>'}
-    if re.search(r'(?:\|\||(?<!\|)\|(?!\|)|;|[()])', command) or _windows_control_flow(command):
-        return {'command.control-flow': '<ambiguous>'}
     assignment_index = 0
     while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
         name, value = words[0].split('=', 1)

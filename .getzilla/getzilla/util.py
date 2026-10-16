@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import sysconfig
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +90,9 @@ def run(
     merged = os.environ.copy()
     if env:
         merged.update(env)
+    if not env or 'PATH' not in env:
+        # Resolve the same user tools that command_exists() found; an explicit PATH is isolation.
+        merged['PATH'] = tool_search_path(merged.get('PATH', ''))
     try:
         options: dict[str, str] = {}
         if encoding is None and os.name == 'nt':
@@ -98,7 +103,7 @@ def run(
         if errors != 'strict':
             options['errors'] = errors
         return subprocess.run(
-            args,
+            resolve_command(args, merged.get('PATH', '')),
             cwd=cwd,
             text=True,
             capture_output=True,
@@ -121,8 +126,67 @@ def run(
         return subprocess.CompletedProcess(args, 124, stdout, stderr)
 
 
+def user_tool_dirs() -> list[Path]:
+    """Existing per-user directories where Getzilla's installers and updater put tools."""
+    home = Path.home()
+    dirs = [home / '.getzilla' / 'bin', home / '.local' / 'bin', home / '.grok' / 'bin']
+    appdata = os.environ.get('APPDATA')
+    if os.name == 'nt' and appdata:
+        version = f'Python{sys.version_info[0]}{sys.version_info[1]}'
+        dirs += [Path(appdata) / 'npm', Path(appdata) / 'Python' / version / 'Scripts']
+    return [path for path in dirs if path.is_dir()]
+
+
+def environment_scripts_dir() -> Path | None:
+    """Scripts directory of the running interpreter's virtual environment, if it runs in one.
+
+    Getzilla's own .venv holds the pinned ruff and bandit; it is never on a bare install's PATH.
+    """
+    if sys.prefix == sys.base_prefix:
+        return None
+    scripts = sysconfig.get_path('scripts')
+    return Path(scripts) if scripts and Path(scripts).is_dir() else None
+
+
+def tool_search_path(path: str | None = None) -> str:
+    """``path`` (default: this process's PATH) extended with Getzilla's tool directories.
+
+    Hooks, verifiers and agent subprocesses often lack the login PATH that the installers
+    extend. The running virtual environment comes first, as activation would put it, so its
+    pinned tools win; absent user tool directories are appended after every PATH entry.
+    """
+    current = os.environ.get('PATH', '') if path is None else path
+    entries = [entry for entry in current.split(os.pathsep) if entry]
+    scripts = environment_scripts_dir()
+    if scripts is not None:
+        key = os.path.normcase(os.path.abspath(scripts))
+        entries = [str(scripts), *(entry for entry in entries
+                                   if os.path.normcase(os.path.abspath(entry)) != key)]
+    known = {os.path.normcase(os.path.abspath(entry)) for entry in entries}
+    extra = [str(directory) for directory in user_tool_dirs()
+             if os.path.normcase(os.path.abspath(directory)) not in known]
+    return os.pathsep.join(entries + extra)
+
+
+def find_tool(name: str) -> str | None:
+    return shutil.which(name, path=tool_search_path())
+
+
+def resolve_command(args: list[str], path: str) -> list[str]:
+    """``args`` with a bare program name resolved against ``path`` on Windows.
+
+    CreateProcess searches the parent's PATH, not the child's, and appends only ``.exe``: npm's
+    ``.cmd`` shims (qwen, codex, gemini) and tools in the user directories would not start.
+    POSIX exec already searches the child's PATH, so ``args`` is returned unchanged there.
+    """
+    if os.name != 'nt' or not args or os.path.dirname(args[0]):
+        return args
+    found = shutil.which(args[0], path=path)
+    return [found, *args[1:]] if found else args
+
+
 def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    return find_tool(name) is not None
 
 
 def git_output(root: Path, *args: str) -> str | None:
@@ -340,11 +404,15 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def tree_fingerprint(root: Path) -> str:
+def tree_fingerprint(root: Path, exclude: Iterable[str] = ()) -> str:
+    """HEAD plus the content of every changed path, except the exact repository paths in ``exclude``."""
+    skipped = {str(item).replace('\\', '/') for item in exclude}
     digest = hashlib.sha256()
     head = git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
     for rel in changed_files(root):
+        if rel.replace('\\', '/') in skipped:
+            continue
         digest.update(os.fsencode(rel))
         path = root / rel
         try:

@@ -4,6 +4,7 @@ import contextlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterator
@@ -52,19 +53,20 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
 
 def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     script = root / '.grok/hooks' / name
+    # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
     proc = subprocess.run(
-        ['python3', str(script)],
+        [sys.executable, str(script)],
         cwd=root,
-        input=json.dumps(payload, ensure_ascii=False),
-        text=True,
+        input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         capture_output=True,
         check=False,
     )
+    stdout = proc.stdout.decode('utf-8', errors='replace')
     try:
-        data = json.loads(proc.stdout.strip() or '{}')
+        data = json.loads(stdout.strip() or '{}')
     except json.JSONDecodeError:
         data = {}
-    return proc.returncode, data, proc.stderr
+    return proc.returncode, data, proc.stderr.decode('utf-8', errors='replace')
 
 
 def prepare_review_source(root: Path) -> dict[str, str]:

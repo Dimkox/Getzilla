@@ -956,6 +956,7 @@ class ArchitectureModelTests(unittest.TestCase):
         with self.assertRaises(ARCH.ArchitectureError):
             ARCH.load_architecture(root)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
     def test_authority_and_repository_reads_fail_when_nofollow_is_unavailable(self) -> None:
         system = _system()
         system["contracts"] = [{
@@ -982,6 +983,7 @@ class ArchitectureModelTests(unittest.TestCase):
                 "unsafe",
             )
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW and FIFOs')
     def test_generated_diagrams_reject_unavailable_nofollow_and_unsafe_files(self) -> None:
         root = self._repo()
         rendered = DIAGRAMS.render_diagrams(ARCH.load_architecture(root))
@@ -1733,6 +1735,7 @@ class ArchitectureModelTests(unittest.TestCase):
             [("unsafe_repository_artifact", "linked-source")],
         )
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are POSIX-only")
     def test_repository_drift_fails_closed_on_special_artifacts(self) -> None:
         root = self._repo()
         os.mkfifo(root / "untrusted-pipe")

@@ -57,7 +57,7 @@ def classified_inventory(inventory, groups):
 
 class LandingArchitectureBoundaryTests(unittest.TestCase):
     def test_every_actual_landing_source_has_exact_owner_and_boundary(self):
-        inventory = {str(path.relative_to(ROOT)) for path in (ROOT / PREFIX).rglob("landing*.py")}
+        inventory = {path.relative_to(ROOT).as_posix() for path in (ROOT / PREFIX).rglob("landing*.py")}
         classified_inventory(inventory, GROUPS)
         snapshot = fixture.ARCHITECTURE.load_architecture(ROOT)
         for group, paths in GROUPS.items():

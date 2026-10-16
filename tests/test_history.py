@@ -423,9 +423,12 @@ class HistoryTests(unittest.TestCase):
             path.write_text(json.dumps(snapshot()))
             link = root / "link.json"
             link.symlink_to(path)
-            fifo = root / "fifo"
-            os.mkfifo(fifo)
-            for target in (root, link, fifo, root / "absent"):
+            targets = [root, link, root / "absent"]
+            if hasattr(os, "mkfifo"):  # FIFOs are POSIX-only
+                fifo = root / "fifo"
+                os.mkfifo(fifo)
+                targets.append(fifo)
+            for target in targets:
                 with self.subTest(target=target.name), self.assertRaises(HistoryError):
                     load_history(target)
 

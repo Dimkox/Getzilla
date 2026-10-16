@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import signal
 import sys
 import tempfile
@@ -34,6 +33,8 @@ from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
+    find_tool,
+    tool_search_path,
     changed_file_statuses,
     changed_files,
     command_exists,
@@ -42,6 +43,7 @@ from .util import (
     read_text_limited,
     run,
     tree_fingerprint,
+    resolve_command,
 )
 from .workflow_artifacts import WorkflowArtifactError, validate_stored_workflow
 from .verification_scope import (
@@ -489,8 +491,12 @@ def _workflow_artifacts_check(
 def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None) -> CheckResult:
     environment = os.environ.copy()
     environment.update(env or {})
+    if 'PATH' not in (env or {}):
+        # Run the same user-installed tool that command_exists() found.
+        environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
-        proc = execute(command, root, environment, timeout=timeout)
+        # The report keeps the command as written; only the launch resolves it (Windows .cmd shims).
+        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout)
     except RunCancelled as exc:
         proc = exc.result
         exc.checks = [CheckResult(
@@ -579,17 +585,17 @@ def _select_local_pr_target(root: Path) -> tuple[str, str] | dict[str, str] | No
                 'path': 'git-config:init.defaultBranch',
                 'message': 'configured default branch is not a valid Git branch name',
             }
-        configured_candidates = _existing_ref_candidates(
-            root,
-            [f'refs/remotes/origin/{configured_name}', f'refs/heads/{configured_name}'],
-        )
-        if configured_candidates:
-            return configured_candidates[0]
 
-    for refs in (
-        ['refs/remotes/origin/main', 'refs/remotes/origin/master'],
-        ['refs/heads/main', 'refs/heads/master'],
+    # Remote-tracking refs come first: init.defaultBranch names new repositories (Git for Windows
+    # sets master system wide), so a local branch of that name must not outrank origin/main.
+    for configured_ref, refs in (
+        (f'refs/remotes/origin/{configured_name}', ['refs/remotes/origin/main', 'refs/remotes/origin/master']),
+        (f'refs/heads/{configured_name}', ['refs/heads/main', 'refs/heads/master']),
     ):
+        if configured_name:
+            configured_candidates = _existing_ref_candidates(root, [configured_ref])
+            if configured_candidates:
+                return configured_candidates[0]
         candidates = _existing_ref_candidates(root, refs)
         distinct = {resolved for _, resolved in candidates}
         if len(distinct) > 1:
@@ -1705,7 +1711,7 @@ def _opengrep(root: Path) -> CheckResult:
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
-    executable = shutil.which('opengrep')
+    executable = find_tool('opengrep')
     if executable is None:
         return CheckResult('opengrep', 'skip', 'opengrep not available')
     refusal = _unpinned_opengrep(Path(executable))

@@ -558,6 +558,7 @@ class GovernanceLoaderTests(unittest.TestCase):
             with self.assertRaisesRegex(GovernanceError, "changed while reading"):
                 load_governance(root)
 
+    @unittest.skipUnless(os.name == "posix", 'renames an open authority tree; Windows refuses that rename')
     def test_loader_pins_one_root_identity_for_the_complete_snapshot(self) -> None:
         root = self._fixture()
         original = root.with_name(f"{root.name}-original")
@@ -593,6 +594,7 @@ class GovernanceLoaderTests(unittest.TestCase):
             with self.assertRaisesRegex(GovernanceError, "repository root changed"):
                 load_governance(root)
 
+    @unittest.skipUnless(os.name == "posix", 'renames an open authority tree; Windows refuses that rename')
     def test_loader_rejects_nested_authority_directory_replacement(self) -> None:
         for directory, swap_after in (("schemas", 1), ("governance", 4)):
             with self.subTest(directory=directory):
@@ -653,6 +655,7 @@ class GovernanceLoaderTests(unittest.TestCase):
                 with self.assertRaisesRegex(GovernanceError, "frozen v1"):
                     load_governance(root)
 
+    @unittest.skipUnless(os.name == "posix", 'O_NONBLOCK and dir_fd are POSIX')
     def test_loader_requires_nonzero_nonblocking_open_before_any_read(self) -> None:
         root = self._fixture()
         real_open = os.open
@@ -1658,7 +1661,8 @@ class GovernanceHandoffTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            timeout=10,
+            # A hang guard, not a budget: handoff runs hundreds of git processes, ~30s on Windows.
+            timeout=120,
         )
 
     def test_handoff_has_exact_closed_immutable_v1_shape(self) -> None:
@@ -2234,6 +2238,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 recorder.observe("third", b"f")
         self.assertEqual(caught.exception.code, "limit")
 
+    @unittest.skipUnless(os.name == "posix", 'reads through a POSIX repository descriptor')
     def test_exhausted_budget_stops_reading_more_distinct_evidence(self) -> None:
         root, _ = self._repository()
         for name in ("first", "second", "third"):
@@ -2250,7 +2255,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 self.assertEqual(reads.call_count, 2)
 
     def test_projection_refuses_special_files_symlinks_and_invalid_utf8(self) -> None:
-        for case in ("symlink", "fifo", "device", "oversize", "invalid-utf8"):
+        for case in ("symlink", *(("fifo",) if hasattr(os, "mkfifo") else ()), "device", "oversize", "invalid-utf8"):
             with self.subTest(case=case):
                 root, _ = self._repository()
                 path = root / "decisions.md"
@@ -2270,6 +2275,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     governance.open_projection_snapshot(root)
 
+    @unittest.skipUnless(os.name == "posix", 'O_NONBLOCK character devices are POSIX')
     def test_projection_reader_refuses_a_real_character_device_descriptor(self) -> None:
         descriptor = os.open(os.devnull, os.O_RDONLY | os.O_NONBLOCK)
         self.addCleanup(os.close, descriptor)
@@ -2282,7 +2288,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "io")
 
     def test_projection_pins_content_and_refuses_name_or_root_swap(self) -> None:
-        for case in ("content", "name", "root"):
+        # Renaming the open name or root is POSIX-only; Windows refuses to rename open files.
+        for case in ("content", *(("name", "root") if os.name == "posix" else ())):
             with self.subTest(case=case):
                 root, _ = self._repository()
                 moved = root.with_name(root.name + "-moved")

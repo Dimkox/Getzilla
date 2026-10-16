@@ -14,6 +14,16 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import repo
 
 
+def _case_insensitive_filesystem() -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        probe = Path(directory) / 'probe'
+        probe.write_text('x', encoding='utf-8')
+        return (Path(directory) / 'PROBE').exists()
+
+
+_CASE_INSENSITIVE_FS = _case_insensitive_filesystem()
+
+
 class RepoLanguageDisclosureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory(prefix='repo-language-')
@@ -156,6 +166,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(profile.languages, [])
         self.assertEqual(self.scan(profile)['non_regular'], 2)
 
+    @unittest.skipIf(_CASE_INSENSITIVE_FS, 'case variants are one file on this filesystem')
     def test_case_variant_package_is_disclosed_but_not_confirmed(self) -> None:
         self.write('package.SWIFT', 'import PackageDescription\nlet package = Package(name: "Case")')
         profile = repo.detect_repo(self.root)
@@ -163,6 +174,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(self.detected(profile), ['swift'])
         self.assertIn('manifest-case-variant:package.SWIFT', profile.signals)
 
+    @unittest.skipIf(_CASE_INSENSITIVE_FS, 'case variants are one file on this filesystem')
     def test_case_conflict_is_disclosed_without_losing_canonical_legacy_language(self) -> None:
         self.write('package.json', '{}')
         self.write('PACKAGE.JSON', '{"scripts":{"other":"node other"}}')
@@ -191,6 +203,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(self.scan(profile)['unknown_extensions'], {'.zig': 1})
         self.assertIn('undetected-source-extension:.zig=1', profile.signals)
 
+    @unittest.skipUnless(os.name == 'posix', 'intercepts the POSIX descriptor-relative walk')
     def test_unreadable_file_discloses_extension_without_confirmation(self) -> None:
         self.write('Main.swift', 'print("hi")')
         original_open = os.open
@@ -205,6 +218,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(self.scan(profile)['status'], 'incomplete')
         self.assertEqual(self.scan(profile)['unreadable'], 1)
 
+    @unittest.skipUnless(os.name == 'posix', 'intercepts the POSIX descriptor-relative walk')
     def test_unreadable_directory_makes_empty_verdict_incomplete(self) -> None:
         self.write('src/Main.swift', 'print("hi")')
         original_open = os.open
@@ -335,6 +349,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(self.scan(profile)['bytes'], 0)
         self.assertIn('source-bytes:3', self.scan(profile)['incomplete_reasons'])
 
+    @unittest.skipUnless(os.name == 'posix', 'intercepts the POSIX descriptor-relative walk')
     def test_symlink_swap_before_file_open_cannot_read_outside_repository(self) -> None:
         source = self.write('Main.swift', '1234')
         outside = Path(self.tmp.name) / 'outside.swift'
@@ -351,6 +366,7 @@ class RepoLanguageDisclosureTests(unittest.TestCase):
         self.assertEqual(self.scan(profile)['bytes'], 0)
         self.assertEqual(self.scan(profile)['unreadable'], 1)
 
+    @unittest.skipUnless(os.name == 'posix', 'intercepts the POSIX descriptor-relative walk')
     def test_symlink_swap_before_directory_open_cannot_traverse_outside(self) -> None:
         self.write('src/Main.swift', '1234')
         outside = Path(self.tmp.name) / 'outside'

@@ -17,6 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla.util import find_tool
 from getzilla.doctor import run_doctor
 from getzilla import architecture as architecture_module
 from getzilla import receipts as receipts_module
@@ -307,11 +308,11 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue((root / '.getzilla/getzilla/__init__.py').is_file())
             self.assertFalse((root / '.getzilla/getzilla/verification.py').exists())
             for check in (_ruff(root), _bandit(root)):
-                self.assertEqual(check.status, 'pass' if shutil.which(check.name) else 'skip')
+                self.assertEqual(check.status, 'pass' if find_tool(check.name) else 'skip')
         with full_project_copy() as root:
             source = root / '.getzilla/getzilla/verification.py'
             self.assertEqual(source.read_bytes(), (ROOT / '.getzilla/getzilla/verification.py').read_bytes())
-            if shutil.which('bandit'):
+            if find_tool('bandit'):
                 self.assertEqual(_bandit(root).status, 'pass')
                 (root / '.getzilla/getzilla/_unsafe_probe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
                 self.assertEqual(_bandit(root).status, 'fail')
@@ -753,7 +754,8 @@ class VerificationTests(unittest.TestCase):
         with patch.object(util_module.subprocess, 'run', return_value=completed) as invoke:
             default_result = util_module.run(['cmd'], cwd=ROOT)
         self.assertEqual(default_result.stdout, 'ordinary output')
-        self.assertNotIn('encoding', invoke.call_args.kwargs)
+        # Strict by default; Windows names UTF-8 because its default is the ANSI code page.
+        self.assertEqual(invoke.call_args.kwargs.get('encoding'), 'utf-8' if os.name == 'nt' else None)
         self.assertNotIn('errors', invoke.call_args.kwargs)
 
         timeout = subprocess.TimeoutExpired(['cmd'], 1, output=b'partial-\xff', stderr=b'err-\xfe')
@@ -813,6 +815,15 @@ class VerificationTests(unittest.TestCase):
             self.assertIsNotNone(contracts)
             self.assertEqual(contracts['status'], 'fail')
             self.assertTrue(any(item['path'] == contract for item in contracts['details']))
+
+    def test_remote_target_outranks_a_local_branch_named_by_init_default_branch(self) -> None:
+        # Git for Windows sets init.defaultBranch=master system wide; origin/main still wins.
+        with _divergent_pr_graph({'legacy.md': 'legacy\n'}) as (root, _route_base, target, _merge_base):
+            current = subprocess.check_output(['git', 'branch', '--show-current'], cwd=root,
+                                              text=True, encoding='utf-8').strip()
+            subprocess.run(['git', 'config', 'init.defaultBranch', current], cwd=root, check=True)
+            self.assertEqual(verification_module._select_local_pr_target(root),
+                             ('refs/remotes/origin/main', target))
 
     def test_pr_git_diff_check_accepts_clean_distinct_committed_ranges(self) -> None:
         with _divergent_pr_graph({'legacy.md': 'legacy\n'}) as (
@@ -1271,6 +1282,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'pass')
             self.assertEqual(report['architecture']['status'], 'not_configured')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
     def test_adoption_marker_read_fails_when_nofollow_is_unavailable(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1282,6 +1294,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertIn('no-follow', _check(report, 'architecture')['summary'])
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
     def test_clean_legacy_repository_remains_unconfigured_without_nofollow(self) -> None:
         with project_copy(git=False) as root:
             (root / 'architecture').mkdir(exist_ok=True)
@@ -1292,6 +1305,7 @@ class VerificationTests(unittest.TestCase):
                 report = verify(root, mode='fast', record=False)
             self.assertEqual(report['architecture']['status'], 'not_configured')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
     def test_clean_legacy_without_architecture_avoids_descriptor_only_metadata(self) -> None:
         with project_copy(git=False) as root:
             architecture = root / 'architecture'

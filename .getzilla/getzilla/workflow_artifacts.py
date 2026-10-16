@@ -10,7 +10,7 @@ import ctypes
 import errno
 import threading
 import unicodedata
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 try:
@@ -285,7 +285,10 @@ def _strict_json(raw: bytes, *, limit: int) -> Any:
 
 
 def _relative_path(root: Path, path: Path | str) -> str:
-    raw = os.fspath(path)
+    # Text is untrusted repository-relative input: a backslash is a filename character on POSIX
+    # and a separator on Windows, so it is refused. A Path was built by this platform and keeps
+    # its native separators (every absolute Windows path has backslashes).
+    raw = path.as_posix() if isinstance(path, Path) else os.fspath(path)
     if not isinstance(raw, str) or "\\" in raw or CONTROL.search(raw):
         raise WorkflowArtifactError("path contains a control character or backslash", code="path")
     candidate = Path(path)
@@ -295,6 +298,10 @@ def _relative_path(root: Path, path: Path | str) -> str:
         except ValueError as exc:
             raise WorkflowArtifactError("path escapes repository", code="path") from exc
     pure = PurePosixPath(candidate.as_posix())
+    # Windows does not call '/etc/passwd' absolute (no drive), and 'C:x' names another drive:
+    # joined to the root, both leave the repository.
+    if pure.is_absolute() or PureWindowsPath(pure.as_posix()).anchor:
+        raise WorkflowArtifactError("path escapes repository", code="path")
     if not pure.parts or any(part in {"", ".", ".."} for part in pure.parts):
         raise WorkflowArtifactError("invalid repository-relative path", code="path")
     value = pure.as_posix()

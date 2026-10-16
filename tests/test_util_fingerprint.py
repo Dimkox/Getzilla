@@ -47,7 +47,10 @@ class FingerprintTests(unittest.TestCase):
 
     def test_untracked_scratch_create_edit_remove_does_not_change_binding(self) -> None:
         before = util.tree_fingerprint(self.root)
-        for rel in ('.qwen/tmp/probe.txt', '.qwen/tmp/nested/space and\nnewline.txt'):
+        names = ['.qwen/tmp/probe.txt', '.qwen/tmp/nested/space and name.txt']
+        if os.name == 'posix':
+            names.append('.qwen/tmp/nested/space and\nnewline.txt')  # no newline in Windows names
+        for rel in names:
             with self.subTest(rel=rel):
                 path = self.write(rel)
                 self.assertEqual([], util.changed_files(self.root))
@@ -117,6 +120,7 @@ class FingerprintTests(unittest.TestCase):
         path.symlink_to(os.fsdecode(b'target-\xfe'))
         self.assert_bound('source-link', before)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX filenames are bytes; Windows names are UTF-16')
     def test_changed_file_json_preserves_filesystem_names_in_utf8_document(self) -> None:
         rel = os.fsdecode(b'source-\xff.py')
         payload = {'changed_files': [rel], 'ordinary_unicode': 'Обзор'}
@@ -124,6 +128,7 @@ class FingerprintTests(unittest.TestCase):
         util.dump_json(path, payload)
         self.assertEqual(payload, json.loads(path.read_bytes().decode('utf-8')))
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX filenames are bytes; Windows names are UTF-16')
     def test_verifier_json_output_roundtrips_filesystem_names_and_unicode(self) -> None:
         report = {'status': 'pass', 'changed_files': [os.fsdecode(b'source-\xff.py'), 'Обзор.py']}
         output = io.StringIO()

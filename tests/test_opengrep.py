@@ -23,18 +23,27 @@ from getzilla.quality_gates import required_check_refused  # noqa: E402
 RULES = ROOT / '.getzilla/sast/rules'
 
 
+# Windows finds a program through PATHEXT, so the fake there is a .cmd running the same Python.
+FAKE_NAME = 'opengrep.cmd' if os.name == 'nt' else 'opengrep'
+
+
 def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0) -> str:
     """Write a fake ``opengrep`` that records each run in ``ran`` and return its sha256."""
-    script = directory / 'opengrep'
     body = payload if isinstance(payload, str) else json.dumps(payload)
-    script.write_text(textwrap.dedent(f'''\
-        #!{sys.executable}
+    program = textwrap.dedent(f'''\
         import pathlib, sys
         pathlib.Path({str(directory / 'ran')!r}).touch()
         sys.stdout.write({body!r})
         sys.exit({exit_code})
-    '''), encoding='utf-8')
-    script.chmod(0o755)
+    ''')
+    script = directory / FAKE_NAME
+    if os.name == 'nt':
+        (directory / 'opengrep.py').write_text(program, encoding='utf-8')
+        script.write_text(f'@"{sys.executable}" "{directory / "opengrep.py"}" %*\r\n',
+                          encoding='utf-8', newline='')
+    else:
+        script.write_text(f'#!{sys.executable}\n{program}', encoding='utf-8')
+        script.chmod(0o755)
     return hashlib.sha256(script.read_bytes()).hexdigest()
 
 
@@ -57,7 +66,9 @@ class OpengrepCheckTests(unittest.TestCase):
     def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True) -> V.CheckResult:
         digest = _fake_opengrep(self.bin, payload, exit_code) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
-        with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64):
+        # Hide per-user tool directories too, so only this fixture PATH can supply opengrep.
+        with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64), \
+                mock.patch('getzilla.util.user_tool_dirs', return_value=[]):
             return V._opengrep(self.root)
 
     def test_binary_on_path_that_does_not_match_the_pin_is_refused_unexecuted(self) -> None:
@@ -74,7 +85,7 @@ class OpengrepCheckTests(unittest.TestCase):
         result = self._run({'results': [], 'errors': []})
         self.assertEqual(result.status, 'pass')
         self.assertTrue((self.bin / 'ran').exists())
-        self.assertEqual(Path(result.command[0]), self.bin / 'opengrep')
+        self.assertEqual(Path(result.command[0]), self.bin / FAKE_NAME)
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))

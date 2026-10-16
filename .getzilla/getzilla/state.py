@@ -23,6 +23,9 @@ from .util import (
 
 APPROVAL_SCOPES = {'production', 'external-write', 'protected-path'}
 APPROVAL_SOURCES = {'standing-user-consent', 'explicit-user-consent'}
+# A protected-path grant authorizes writing its exact files, so their own content is not part of
+# its tree binding; every other tree or commit change still invalidates it.
+GRANTED_RESOURCES_BINDING = 'tree-except-granted-resources'
 SCOPE_ACTIONS = {
     'production': {
         'git-push-branch',
@@ -152,8 +155,43 @@ def get_active_route(root: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+CLOSED_CHANGE_STATUSES = frozenset({'released', 'archived', 'cancelled'})
+
+
+class ActiveChangeConflict(RuntimeError):
+    """A new route would orphan the open change package bound to another route."""
+
+    def __init__(self, change_id: str, change_route_id: str, route_id: str) -> None:
+        self.change_id = change_id
+        self.change_route_id = change_route_id
+        self.route_id = route_id
+        super().__init__(
+            f'open change package {change_id} is bound to route {change_route_id}; '
+            f'refusing to activate route {route_id}. Finish or cancel the change first.'
+        )
+
+
+def open_change_binding(root: Path) -> tuple[str, str] | None:
+    """Return (change_id, route_id) of the active change package while it is still open."""
+    change = get_active_change(root) or {}
+    change_id, rel = change.get('change_id'), change.get('path')
+    if not isinstance(change_id, str) or not isinstance(rel, str) or not rel:
+        return None
+    package = (root / rel).resolve()
+    if not package.is_relative_to((root / 'engineering/changes').resolve()):
+        return None
+    state = load_json(package / 'state.json')
+    if not isinstance(state, dict) or state.get('status') in CLOSED_CHANGE_STATUSES:
+        return None
+    route_id = state.get('route_id')
+    return (change_id, route_id) if isinstance(route_id, str) and route_id else None
+
+
 def set_active_route(root: Path, route: dict[str, Any]) -> None:
     with runtime_lock(root, 'route'):
+        binding = open_change_binding(root)
+        if binding and binding[1] != route['route_id']:
+            raise ActiveChangeConflict(binding[0], binding[1], route['route_id'])
         dump_json(active_route_path(root), route)
         route_dir = runtime_dir(root) / 'routes'
         route_dir.mkdir(parents=True, exist_ok=True)
@@ -352,7 +390,10 @@ def add_approval(
         'route_id': route.get('route_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
-        'grant_binding_digest': tree_fingerprint(root),
+        **({'binding': GRANTED_RESOURCES_BINDING} if normalized_scope == 'protected-path' else {}),
+        'grant_binding_digest': tree_fingerprint(
+            root, normalized_resources if normalized_scope == 'protected-path' else (),
+        ),
         'created_at': now.isoformat(timespec='seconds'),
         'expires_at': (now + timedelta(minutes=ttl_minutes)).isoformat(timespec='seconds'),
     }
@@ -421,7 +462,14 @@ def has_valid_approval(
         legacy_tree_fingerprint = approval.get('tree_fingerprint')
         if grant_binding_digest is not None and legacy_tree_fingerprint is not None:
             continue
-        if (grant_binding_digest or legacy_tree_fingerprint) != current_binding_digest:
+        binding = approval.get('binding')
+        if binding is None:
+            expected_digest = current_binding_digest
+        elif binding == GRANTED_RESOURCES_BINDING and approval.get('scope') == 'protected-path':
+            expected_digest = tree_fingerprint(root, approval.get('resources') or [])
+        else:
+            continue
+        if (grant_binding_digest or legacy_tree_fingerprint) != expected_digest:
             continue
         if action and action not in set(approval.get('actions') or []):
             continue

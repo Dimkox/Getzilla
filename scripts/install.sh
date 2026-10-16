@@ -33,9 +33,10 @@
 #   GETZILLA_SKIP_GROK=1  do not install the Grok Build CLI (when the agent is grok)
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
-# At the end of every run (first install or re-run) the installer offers to update
-# third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec
-# Kit, vibevm, the CVE database, OpenGrep) and runs scripts/getzilla_update.py only
+# At the end of every run (first install or re-run) the installer always updates the
+# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers
+# to update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit,
+# vibevm) to their latest versions and runs scripts/getzilla_update.py for them only
 # after you answer yes. Without a terminal it only prints that command.
 #
 # Everything runs inside main(), so a partially downloaded script does nothing.
@@ -68,6 +69,8 @@ main() {
   fi
 
   fetch_getzilla "$repo" "$ref" "$home"
+  link_getzilla_command "$home"
+  setup_python_env "$home" "$python"
 
   if [ "${GETZILLA_SKIP_AGENT:-0}" != "1" ]; then
     configure_agent "$home" "$python" "$agent" "$provider"
@@ -85,6 +88,7 @@ main() {
     (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
   fi
 
+  update_security_data "$home" "$python"
   offer_tool_update "$home" "$python"
 
   if [ "$doctor_status" -eq 0 ]; then
@@ -95,6 +99,7 @@ main() {
   cat <<EOF
 
 Next:
+  0. Every Getzilla tool is one command: getzilla help
   1. New project:      cd "$home" && $python scripts/install_into.py --materialize-new /path/to/new/project
      Existing project: cd "$home" && $python scripts/install_into.py --plan /path/to/your/project
   2. In your project run: $(agent_command "$agent")
@@ -258,13 +263,67 @@ node_ok() {
   have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= ${1:-20} ? 0 : 1)" >/dev/null 2>&1
 }
 
+# Pinned official Node.js archives with their published SHA-256 (nodejs.org SHASUMS256.txt).
+# Distribution packages are often too old (Ubuntu 24.04 ships Node.js 18) and pull in hundreds
+# of node-* packages; the archive installs for the current user without root.
+node_archive() {
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64) echo "node-v24.20.0-linux-x64.tar.gz 855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec" ;;
+    Linux-aarch64|Linux-arm64) echo "node-v24.20.0-linux-arm64.tar.gz 3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013" ;;
+    Darwin-x86_64) echo "node-v24.20.0-darwin-x64.tar.gz 9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
+    Darwin-arm64) echo "node-v24.20.0-darwin-arm64.tar.gz 40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
+  esac
+}
+
+checksum_ok() {
+  if have sha256sum; then
+    echo "$2  $1" | sha256sum -c - >/dev/null 2>&1
+  else
+    echo "$2  $1" | shasum -a 256 -c - >/dev/null 2>&1
+  fi
+}
+
+install_node_archive() {
+  local spec name digest version dir tmp
+  spec="$(node_archive)"
+  [ -n "$spec" ] && have curl || return 1
+  name="${spec% *}"
+  digest="${spec#* }"
+  version="${name#node-v}"
+  version="${version%%-*}"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL "https://nodejs.org/dist/v$version/$name" -o "$tmp/$name" || ! checksum_ok "$tmp/$name" "$digest"; then
+    rm -rf "$tmp"
+    say "Node.js $version download failed or did not match its published SHA-256."
+    return 1
+  fi
+  dir="$HOME/.local/lib/nodejs"
+  mkdir -p "$dir" "$HOME/.local/bin"
+  rm -rf "$dir/${name%.tar.gz}"
+  tar -xzf "$tmp/$name" -C "$dir"
+  rm -rf "$tmp"
+  for tool in node npm npx; do
+    ln -sf "$dir/${name%.tar.gz}/bin/$tool" "$HOME/.local/bin/$tool"
+  done
+  export PATH="$HOME/.local/bin:$PATH"
+  hash -r
+  # Global npm packages (the agent CLIs) then land next to it in ~/.local/bin, without root.
+  npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true
+}
+
 ensure_node() {
   local minimum="${1:-20}"
   node_ok "$minimum" && return 0
   say "Installing Node.js ($minimum or newer is needed)..."
   if [ "$(uname -s)" = "Darwin" ] && have brew; then
     brew install node || true
-  elif have apt-get; then
+  else
+    install_node_archive || true
+  fi
+  hash -r
+  node_ok "$minimum" && return 0
+  # Distribution packages only as a fallback.
+  if have apt-get; then
     as_root apt-get install -y nodejs npm </dev/null || true
   elif have dnf; then
     as_root dnf install -y nodejs npm </dev/null || true
@@ -377,19 +436,50 @@ configure_agent() {
   fi
 }
 
+update_security_data() {
+  # Not optional: without fresh vulnerability data the first gates would scan against an
+  # empty or stale CVE database. A network failure warns instead of failing the install.
+  local home="$1" python="$2"
+  say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
+  (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
+    || printf 'WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "%s" && %s scripts/getzilla_update.py --only osv --only opengrep\n' "$home" "$python" >&2
+}
+
+setup_python_env() {
+  # Getzilla's own environment with the pinned test and quality tools (PEP 668 safe).
+  local home="$1" python="$2"
+  say "Creating Getzilla's Python environment with the pinned test and quality tools..."
+  if "$python" -m venv "$home/.venv" </dev/null \
+    && "$home/.venv/bin/python" -m pip install --disable-pip-version-check -q \
+      -r "$home/.getzilla/config/python-test-requirements.txt" \
+      -r "$home/.getzilla/config/python-quality-requirements.txt" </dev/null; then
+    say "Python environment: $home/.venv"
+  else
+    printf 'WARNING: could not create %s/.venv; verify will report missing coverage, ruff and bandit.\n' "$home" >&2
+  fi
+}
+
+link_getzilla_command() {
+  # One `getzilla <command>` for every tool, next to the agent CLIs in ~/.local/bin.
+  local home="$1"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"
+  say "getzilla command: $HOME/.local/bin/getzilla (add ~/.local/bin to PATH if it is not found)"
+}
+
 offer_tool_update() {
   local home="$1" python="$2" answer=""
   if can_ask; then
-    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]: ' n)"
+    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]: ' n)"
   fi
   case "$answer" in
     y|Y|yes|YES|Yes)
       say "Updating third-party tools..."
-      (cd "$home" && "$python" scripts/getzilla_update.py) \
+      (cd "$home" && "$python" scripts/getzilla_update.py --only agents --only sources) \
         || say "Some updates failed (FAIL lines above); run the same command again later."
       ;;
     *)
-      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py"
+      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py --only agents --only sources"
       ;;
   esac
 }

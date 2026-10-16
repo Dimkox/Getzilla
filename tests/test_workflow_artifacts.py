@@ -151,14 +151,15 @@ class WorkflowSourceTests(unittest.TestCase):
             specs = root / ".specify/specs"
             specs.mkdir(parents=True)
             fifo = specs / "pipe.md"
-            os.mkfifo(fifo)
-            manifest = _write_manifest(
-                root,
-                [{"source_type": "spec-kit", "source_version": "1", "role": "spec", "path": ".specify/specs/pipe.md"}],
-            )
-            with self.assertRaises(self.artifacts.WorkflowArtifactError):
-                self.artifacts.load_source_manifest(root, manifest)
-            fifo.unlink()
+            if hasattr(os, "mkfifo"):  # FIFOs are POSIX-only
+                os.mkfifo(fifo)
+                manifest = _write_manifest(
+                    root,
+                    [{"source_type": "spec-kit", "source_version": "1", "role": "spec", "path": ".specify/specs/pipe.md"}],
+                )
+                with self.assertRaises(self.artifacts.WorkflowArtifactError):
+                    self.artifacts.load_source_manifest(root, manifest)
+                fifo.unlink()
 
             decomposed = "e\u0301.md"
             self.assertNotEqual(decomposed, unicodedata.normalize("NFC", decomposed))
@@ -205,6 +206,18 @@ class WorkflowSourceTests(unittest.TestCase):
                 manifest = _write_manifest(root, [entry])
                 with self.assertRaises(self.artifacts.WorkflowArtifactError):
                     self.artifacts.load_source_manifest(root, manifest)
+
+
+class RelativePathTests(unittest.TestCase):
+    def test_rooted_and_drive_paths_never_pass_as_repository_relative(self) -> None:
+        from getzilla import workflow_artifacts as artifacts
+
+        root = Path(tempfile.gettempdir()).resolve()
+        for value in ('/etc/passwd', 'C:/Windows/win.ini', 'C:secret.txt', '//server/share/x'):
+            with self.subTest(value=value), self.assertRaises(artifacts.WorkflowArtifactError):
+                artifacts._relative_path(root, value)
+        self.assertEqual(artifacts._relative_path(root, root / 'docs' / 'plan.md'), 'docs/plan.md')
+        self.assertEqual(artifacts._relative_path(root, 'docs/plan.md'), 'docs/plan.md')
 
 
 class WorkflowCompileTests(unittest.TestCase):
