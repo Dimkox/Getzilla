@@ -1,0 +1,20 @@
+{
+  "schema_version": "release-state-v1",
+  "source": {
+    "version": "2.2.2",
+    "state": "source_candidate"
+  },
+  "published": {
+    "version": "2.2.1",
+    "tag": "v2.2.1",
+    "tag_object": "5bec32144e82bec3c4a789a4b9cb3ce75dc97024",
+    "commit": "05f85f12b72b3a897c45c24e172fac8317120b7c",
+    "tree": "ea0e67c678c90764196dadce09910954d6be0371",
+    "published_at": "2026-10-09T03:47:35Z",
+    "artifact": {
+      "name": "getzilla-2.2.1.zip",
+      "sha256": "0eb872f02f96f246965004637c2c1d6b32cadb988b6c84513a55b251f7fefc68",
+      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip"
+    }
+  }
+}
