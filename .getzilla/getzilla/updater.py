@@ -79,7 +79,8 @@ def home_dir() -> Path:
 
 
 def _default_runner(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=900, check=False)  # nosec B603
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          timeout=900, check=False)  # nosec B603
 
 
 def _default_fetch(url: str) -> bytes:

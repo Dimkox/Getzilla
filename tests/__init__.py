@@ -9,8 +9,13 @@ encoding under the same test.
 """
 import os
 import pathlib
+import sys
+import warnings
 
 if os.name == 'nt':
+    if not sys.flags.utf8_mode:
+        warnings.warn('run the tests in UTF-8 mode on Windows: getzilla test, or python -X utf8 -m pytest',
+                      stacklevel=1)
     _write_text = pathlib.Path.write_text
 
     def _write_text_lf(self, data, encoding=None, errors=None, newline=None):

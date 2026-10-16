@@ -76,6 +76,10 @@ def test_workers() -> int:
 def run_tests(args: list[str]) -> int:
     targets = args or ['tests']
     python = project_python(HOME)
+    # UTF-8 mode on Windows: tests decode CLI output and fixtures as UTF-8, as on POSIX; product
+    # code names its encodings (tests/test_text_writes.py) so this cannot hide a product bug. The
+    # environment variable reaches the xdist workers and every child, unlike -X utf8.
+    environment = {**os.environ, 'PYTHONUTF8': '1'} if os.name == 'nt' else None
     probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
     if probe.returncode == 0:
         workers = test_workers()
@@ -85,7 +89,7 @@ def run_tests(args: list[str]) -> int:
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
         command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, env=environment, check=False).returncode
 
 
 def main(argv: list[str]) -> int:

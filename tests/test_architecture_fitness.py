@@ -2755,6 +2755,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
             self.assertEqual(diff.artifacts[0].status, 'deleted')
 
+    @unittest.skipUnless(os.name == "posix", 'fails the selector drain; Windows drains blobs with threads')
     def test_stream_git_blob_setup_failure_is_typed_and_stops_child(self) -> None:
         repo = GitArchitectureRepo(self)
         repo.model(_system(), _rules())
@@ -2790,6 +2791,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             if stream is not None and not stream.closed:
                 stream.close()
 
+    @unittest.skipUnless(os.name == "posix", 'fails the selector drain; Windows drains blobs with threads')
     def test_stream_git_blob_stops_child_on_unnamed_exception(self) -> None:
         repo = GitArchitectureRepo(self)
         repo.model(_system(), _rules())
@@ -7082,7 +7084,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
                             stderr_limit=1024,
                             timeout=timeout,
                         )
-                    self.assertLess(time.monotonic() - started, 0.4)
+                    # Process start and pipe-thread shutdown take longer on Windows.
+                    self.assertLess(time.monotonic() - started, 0.4 if os.name == "posix" else 2.0)
                     self.assertFalse(sentinel.exists())
 
     @unittest.skipUnless(os.name == "posix", 'the selector capture path is POSIX; Windows reads pipes with threads')

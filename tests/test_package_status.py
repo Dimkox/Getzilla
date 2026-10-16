@@ -101,7 +101,8 @@ class PackageStatusTests(unittest.TestCase):
         env.pop('PYTHONDONTWRITEBYTECODE', None)
         return subprocess.run(
             [sys.executable, str(root / 'scripts' / script), *args],
-            cwd=root, env=env, capture_output=True, text=True, timeout=20, check=False,
+            # A hang guard, not a budget: status runs many git processes (slow on Windows).
+            cwd=root, env=env, capture_output=True, text=True, timeout=120, check=False,
         )
 
     def test_fresh_status_never_creates_runtime_bytecode_or_changes_index(self):
@@ -340,6 +341,7 @@ class PackageStatusTests(unittest.TestCase):
                 result = self.inspect(root)
             self.assertIn('file_unavailable', self.codes(result))
 
+    @unittest.skipUnless(os.name == 'posix', 'Windows refuses to replace a file that is open for reading')
     def test_replaced_file_is_detected_before_its_bytes_are_accepted(self):
         with project_copy() as root:
             _, active, _, package = self.prepare(root)

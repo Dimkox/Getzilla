@@ -28,7 +28,8 @@ Runner = Callable[[list[str]], dict[str, Any]]
 def run_command(argv: list[str]) -> dict[str, Any]:
     """Run one argv without a shell; a missing tool or timeout is a recorded result, not an error."""
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT, check=False)
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              timeout=_TIMEOUT, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return {'argv': argv, 'code': None, 'stdout': '', 'stderr': f'{type(exc).__name__}: {exc}'}
     return {'argv': argv, 'code': proc.returncode,

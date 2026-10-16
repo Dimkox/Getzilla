@@ -45,6 +45,20 @@ class TextWriteTests(unittest.TestCase):
                     offenders.append(f'{path.relative_to(ROOT).as_posix()}:{node.lineno}')
         self.assertEqual(offenders, [], 'text read without encoding= decodes the ANSI code page on Windows')
 
+    def test_text_mode_subprocess_names_an_encoding(self) -> None:
+        offenders = []
+        for path in PRODUCT:
+            tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or any(keyword.arg is None for keyword in node.keywords):
+                    continue  # **options: the caller chose the decoding (util.run names UTF-8 on Windows)
+                values = {keyword.arg: keyword.value for keyword in node.keywords}
+                textual = any(isinstance(values.get(name), ast.Constant) and values[name].value is True
+                              for name in ('text', 'universal_newlines'))
+                if textual and 'encoding' not in values:
+                    offenders.append(f'{path.relative_to(ROOT).as_posix()}:{node.lineno}')
+        self.assertEqual(offenders, [], 'text=True without encoding= decodes the ANSI code page on Windows')
+
 
 if __name__ == '__main__':
     unittest.main()

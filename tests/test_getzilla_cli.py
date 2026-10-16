@@ -40,6 +40,24 @@ class GetzillaCliTests(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertTrue((ROOT / 'scripts' / script).is_file(), script)
 
+    def test_windows_test_run_uses_utf8_mode(self) -> None:
+        from unittest import mock
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs.get('env')))
+            return subprocess.CompletedProcess(command, 0)
+
+        for name, utf8 in (('nt', '1'), ('posix', None)):
+            calls.clear()
+            with mock.patch.object(cli.os, 'name', name), mock.patch.object(cli.subprocess, 'run', fake_run), \
+                    mock.patch.object(cli, 'project_python', return_value='python'), \
+                    mock.patch.object(cli, 'test_workers', return_value=2):
+                self.assertEqual(cli.run_tests(['tests/test_x.py']), 0)
+            command, environment = calls[-1]
+            self.assertEqual(command[1:3], ['-m', 'pytest'], name)
+            self.assertEqual((environment or {}).get('PYTHONUTF8'), utf8, name)
+
     def test_arguments_pass_through_to_the_script(self) -> None:
         proc = run('route', '--help')
         self.assertEqual(proc.returncode, 0, proc.stderr)
