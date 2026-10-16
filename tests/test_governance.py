@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -592,6 +593,31 @@ class GovernanceLoaderTests(unittest.TestCase):
             side_effect=swap_after_four_reads,
         ):
             with self.assertRaisesRegex(GovernanceError, "repository root changed"):
+                load_governance(root)
+
+    def test_loader_refuses_a_root_that_gains_an_entry_while_loading(self) -> None:
+        root = self._fixture()
+        real_read = governance._read_pinned_authority_bytes
+        reads = 0
+
+        def add_entry_after_four_reads(*args: object, **kwargs: object) -> bytes:
+            nonlocal reads
+            data = real_read(*args, **kwargs)
+            reads += 1
+            if reads == 4:
+                (root / "late-entry").write_bytes(b"late\n")
+                # Step the timestamp so a coarse clock cannot hide the change.
+                info = os.lstat(root)
+                os.utime(root, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+            return data
+
+        with mock.patch(
+            "getzilla.governance._read_pinned_authority_bytes",
+            side_effect=add_entry_after_four_reads,
+        ):
+            with self.assertRaisesRegex(
+                GovernanceError, "repository root changed while loading"
+            ):
                 load_governance(root)
 
     @unittest.skipUnless(os.name == "posix", 'renames an open authority tree; Windows refuses that rename')
@@ -2350,6 +2376,99 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["code"], "io")
         self.assertNotIn("projections", emitted[0])
+
+    def _architecture_evidence_file(self) -> Path:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name) / "evidence"
+        directory.mkdir()
+        evidence = directory / "architecture-evidence.json"
+        evidence.write_bytes(_canonical_bytes({"architecture": "evidence"}))
+        return evidence
+
+    def _load_architecture_evidence_then(
+        self, evidence: Path, change: Callable[[], None]
+    ) -> object:
+        real_load_bytes = governance.load_bytes
+
+        def parse_then_change(*args: object, **kwargs: object) -> object:
+            document = real_load_bytes(*args, **kwargs)
+            change()
+            return document
+
+        with mock.patch("getzilla.governance.load_bytes", side_effect=parse_then_change):
+            return governance.load_architecture_evidence(evidence)
+
+    def test_architecture_evidence_loads_while_its_directory_gains_and_loses_entries(self) -> None:
+        # Evidence often sits in a shared directory such as /tmp, where other
+        # processes add and remove their own files while the handoff loads it.
+        evidence = self._architecture_evidence_file()
+        directory = evidence.parent
+        changes = 0
+
+        def neighbour_comes_and_goes() -> None:
+            nonlocal changes
+            changes += 1
+            neighbour = directory / f"neighbour-{changes}.tmp"
+            neighbour.write_bytes(b"neighbour\n")
+            neighbour.unlink()
+            # Step the timestamp so a coarse clock cannot hide the change.
+            info = os.lstat(directory)
+            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+
+        real_open_dir = governance.fsx.open_dir
+
+        def open_dir_after_a_neighbour(*args: object, **kwargs: object) -> object:
+            neighbour_comes_and_goes()
+            return real_open_dir(*args, **kwargs)
+
+        with mock.patch("getzilla.governance.fsx.open_dir", side_effect=open_dir_after_a_neighbour):
+            document = self._load_architecture_evidence_then(evidence, neighbour_comes_and_goes)
+
+        self.assertEqual(document, {"architecture": "evidence"})
+        self.assertEqual(changes, 2)
+
+    def test_architecture_evidence_refuses_a_replaced_changed_or_moved_evidence_file(self) -> None:
+        def replaced(evidence: Path) -> None:
+            replacement = evidence.with_name("replacement.json")
+            replacement.write_bytes(evidence.read_bytes())
+            os.replace(replacement, evidence)
+
+        def appended(evidence: Path) -> None:
+            with evidence.open("ab") as handle:
+                handle.write(b"\n")
+
+        def removed(evidence: Path) -> None:
+            evidence.unlink()
+
+        def symlinked(evidence: Path) -> None:
+            target = evidence.with_name("target.json")
+            evidence.rename(target)
+            evidence.symlink_to(target.name)
+
+        def directory_swapped(evidence: Path) -> None:
+            directory = evidence.parent
+            directory.rename(directory.with_name("moved"))
+            directory.mkdir()
+            (directory / evidence.name).write_bytes(
+                (directory.with_name("moved") / evidence.name).read_bytes()
+            )
+
+        cases: dict[str, tuple[Callable[[Path], None], str]] = {
+            "replaced": (replaced, "architecture evidence changed while loading"),
+            "appended": (appended, "architecture evidence changed while loading"),
+            "removed": (removed, "architecture evidence changed while loading"),
+        }
+        # Links and directory renames under the reader stay POSIX-only, like the projection swaps.
+        if os.name == "posix":
+            cases["symlinked"] = (symlinked, "architecture evidence changed while loading")
+            cases["directory_swapped"] = (directory_swapped, "repository root changed while loading")
+        for case, (change, message) in cases.items():
+            with self.subTest(case=case):
+                evidence = self._architecture_evidence_file()
+                with self.assertRaisesRegex(GovernanceError, message) as caught:
+                    self._load_architecture_evidence_then(evidence, lambda: change(evidence))
+                self.assertEqual(caught.exception.code, "io")
 
 
 if __name__ == "__main__":
