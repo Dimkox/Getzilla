@@ -585,17 +585,17 @@ def _select_local_pr_target(root: Path) -> tuple[str, str] | dict[str, str] | No
                 'path': 'git-config:init.defaultBranch',
                 'message': 'configured default branch is not a valid Git branch name',
             }
-        configured_candidates = _existing_ref_candidates(
-            root,
-            [f'refs/remotes/origin/{configured_name}', f'refs/heads/{configured_name}'],
-        )
-        if configured_candidates:
-            return configured_candidates[0]
 
-    for refs in (
-        ['refs/remotes/origin/main', 'refs/remotes/origin/master'],
-        ['refs/heads/main', 'refs/heads/master'],
+    # Remote-tracking refs come first: init.defaultBranch names new repositories (Git for Windows
+    # sets master system wide), so a local branch of that name must not outrank origin/main.
+    for configured_ref, refs in (
+        (f'refs/remotes/origin/{configured_name}', ['refs/remotes/origin/main', 'refs/remotes/origin/master']),
+        (f'refs/heads/{configured_name}', ['refs/heads/main', 'refs/heads/master']),
     ):
+        if configured_name:
+            configured_candidates = _existing_ref_candidates(root, [configured_ref])
+            if configured_candidates:
+                return configured_candidates[0]
         candidates = _existing_ref_candidates(root, refs)
         distinct = {resolved for _, resolved in candidates}
         if len(distinct) > 1:
