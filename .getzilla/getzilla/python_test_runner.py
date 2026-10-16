@@ -74,7 +74,7 @@ def selected_workers(root: Path) -> int | None:
     if os.environ.get('_GETZILLA_TEST_CHILD') == '1':
         return 0
     if value == 'auto':
-        if os.name != 'posix':
+        if not _parallel_process_cleanup_supported():
             return 0
         try:
             available = len(os.sched_getaffinity(0))
@@ -141,7 +141,8 @@ class CoreTestRun:
 
 
 def _stop(process: subprocess.Popen) -> None:
-    """Stop only the new session created by execute; repeated calls are safe."""
+    """Stop only the session or Job Object created by execute; repeated calls are safe."""
+    job = fsx.owned_job(process)
     if os.name == 'posix':
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -161,6 +162,15 @@ def _stop(process: subprocess.Popen) -> None:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+    elif job is not None:
+        # The job holds every descendant, also those whose parent already exited;
+        # Windows has no catchable SIGTERM, so termination is immediate.
+        try:
+            emptied = job.terminate(_KILL_REAP_TIMEOUT)
+        finally:
+            job.close()  # kill-on-close remains the last resort if termination failed
+        if not emptied:
+            raise RunnerError('owned process tree refused to exit after Job Object termination')
     elif process.poll() is None:
         if fsx.WINDOWS:
             # taskkill /T ends the live tree; without a Job Object, descendants that
@@ -235,17 +245,14 @@ def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: C
 
 
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
-    """Bound output and stop this invocation's process group on interruption."""
+    """Bound output and stop this invocation's process tree on interruption."""
     started = time.monotonic()
     retained: dict[str, ProcessResult] = {}
     with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled) as stdout, \
             _output_file(retained, 'stderr', cancelled) as stderr:
         cancelled.check(ProcessResult(command, 128 + (cancelled() or 0), terminal_state='cancelled'))
         try:
-            process = subprocess.Popen(
-                command, cwd=root, env=environment, stdout=stdout, stderr=stderr,
-                **fsx.process_group_kwargs(),
-            )
+            process = fsx.owned_popen(command, cwd=root, env=environment, stdout=stdout, stderr=stderr)
         except OSError as exc:
             detail = str(exc)
             if command and command[0] not in detail:
@@ -350,8 +357,12 @@ def parallel_engine_ready(measured: bool) -> bool:
 
 
 def _parallel_process_cleanup_supported() -> bool:
-    """Whether this host can safely own and clean up the parallel process group."""
-    return os.name == 'posix'
+    """Whether this host can own and clean up the whole parallel process tree.
+
+    POSIX uses a new session per owned child; Windows uses a kill-on-close Job
+    Object per owned child (``fsx.owned_popen``).
+    """
+    return os.name == 'posix' or fsx.process_jobs_supported()
 
 
 def select_engine(workers: int, measured: bool) -> tuple[int, str]:
@@ -374,10 +385,15 @@ def select_engine(workers: int, measured: bool) -> tuple[int, str]:
 
 
 def _pytest_command(workers: int, distribution: str) -> list[str]:
-    if os.name != 'posix':
-        raise RunnerError('parallel process cleanup requires POSIX; use GETZILLA_TEST_WORKERS=0')
+    if not _parallel_process_cleanup_supported():
+        raise RunnerError('parallel process cleanup requires POSIX sessions or Windows Job Objects; '
+                          'use GETZILLA_TEST_WORKERS=0')
+    # Windows os.devnull is 'nul', which pytest resolves to the device path \\.\nul. Its parent bounds
+    # nothing, so collection and conftest lookup would climb every directory up to the drive root and
+    # race other processes' temporary directories there; the project root bounds both instead.
+    confcutdir = ['--confcutdir=.'] if os.name == 'nt' else []
     return [sys.executable, '-m', 'pytest', '-c', os.devnull, '-p', 'xdist.plugin', '-p', 'no:cacheprovider',
-            '--import-mode=prepend', '--rootdir=.', '-o', 'python_files=test*.py', '-q', '-n', str(workers),
+            '--import-mode=prepend', '--rootdir=.', *confcutdir, '-o', 'python_files=test*.py', '-q', '-n', str(workers),
             f'--dist={distribution}', '--max-worker-restart=0', '--durations=20', '-ra']
 
 
@@ -421,7 +437,7 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     out_handle = stdout.open('wb')
                     err_handle = stderr.open('wb')
                     try:
-                        process = subprocess.Popen(
+                        process = fsx.owned_popen(
                             [
                                 sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
                                 f'--rcfile={config}', '-m', 'unittest', 'discover',
@@ -431,7 +447,6 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                             env={**environment, '_GETZILLA_TEST_CHILD': '1'},
                             stdout=out_handle,
                             stderr=err_handle,
-                            **fsx.process_group_kwargs(),
                         )
                     except OSError as exc:
                         out_handle.close()
@@ -446,6 +461,9 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     if process.poll() is None:
                         continue
                     active.remove(item)
+                    job = fsx.owned_job(process)
+                    if job is not None:
+                        job.close()  # a finished shard's leftover descendants end with its job
                     completed.append(ProcessResult(
                         [
                             sys.executable, '-m', 'coverage', 'run', '--parallel-mode',

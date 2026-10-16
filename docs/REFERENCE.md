@@ -134,7 +134,9 @@ The existing runner remains unchanged without opt-in. To select automatic worker
 
 On Linux, `auto` uses the minimum of 28, process affinity or CPU-count fallback, and finite CPU quotas visible through actual cgroup membership and mounts. Finite quotas use `max(1, quota // period)`; malformed, unreadable or ambiguous capacity conservatively selects one worker. This does not establish hidden ancestor limits, reserved CPU time or available PID/memory capacity.
 
-Where this runner cannot provide its required parallel-process cleanup, a positive request selects the existing `unittest-degraded` engine before execution. Supported parallel execution retains its strict pins; measured serial execution retains pinned coverage. An actual failed parallel run is never retried serially. The implementation lives in `.getzilla/getzilla/python_test_runner.py` and its private `_cpu_capacity.py` helper; native Windows and older-interpreter qualification remain separate from fixture-based evidence.
+On Windows, `auto` uses the minimum of 28 and the logical CPU count; Windows has no cgroup quotas or `sched_getaffinity`. Each owned child starts suspended, joins its own Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway right, and only then runs. Cancellation, timeout, the output limit, normal child exit and controller exit therefore end the whole process tree, including descendants whose parent already exited. This is the counterpart of the POSIX session that the runner stops with `SIGTERM`, then `SIGKILL`.
+
+Where this runner cannot provide its required parallel-process cleanup (a POSIX session or a Windows Job Object), a positive request selects the existing `unittest-degraded` engine before execution. Supported parallel execution retains its strict pins; measured serial execution retains pinned coverage. An actual failed parallel run is never retried serially. The implementation lives in `.getzilla/getzilla/python_test_runner.py` and its private `_cpu_capacity.py` helper; native Windows and older-interpreter qualification remain separate from fixture-based evidence.
 
 ## Bounded local M8
 

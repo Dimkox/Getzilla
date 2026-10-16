@@ -17,7 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
-from getzilla import python_test_runner
+from getzilla import fsx, python_test_runner, verification
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
@@ -85,6 +85,34 @@ def v2_capacity(*, membership: str = '/team/job', mount_root: str = '/',
             f'32 24 0:28 {mount_root} {mountpoint} rw,nosuid shared:7 - cgroup2 cgroup rw\n'
         ),
     }
+
+
+def windows_process_running(pid: int, recorded_ns: int) -> bool:
+    """Whether the process that recorded ``pid`` at ``recorded_ns`` still runs; a reused pid does not count."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        if kernel32.WaitForSingleObject(handle, 1000) == 0:  # WAIT_OBJECT_0: exited
+            return False
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(item) for item in times)):
+            return True
+        created = ((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime) * 100 - 11644473600 * 10**9
+        return created <= recorded_ns
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 class NamedSmokeTests(unittest.TestCase):
@@ -197,7 +225,7 @@ class NamedSmokeTests(unittest.TestCase):
                 verify_named_tests(root, ['tests.test_named'], budget=10)
 
 
-@unittest.skipUnless(os.name == 'posix', 'auto capacity is measured on POSIX; Windows runs serially')
+@unittest.skipUnless(os.name == 'posix', 'cgroup capacity fixtures name POSIX paths; Windows auto is tested below')
 class PythonTestCapacityTests(unittest.TestCase):
     def test_auto_applies_nested_v2_quota_and_tighter_visible_ancestors(self) -> None:
         for leaf, parent, expected in (
@@ -385,7 +413,7 @@ class PythonTestCapacityTests(unittest.TestCase):
             self.assertEqual(selected_workers(root), 22)
             self.assertEqual(reads, [])
         with fixture(workers='auto') as root, capacity_files(root, {}) as reads, \
-             patch.object(os, 'name', 'nt'):
+             patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=False):
             self.assertEqual(selected_workers(root), 0)
             self.assertEqual(reads, [])
 
@@ -467,8 +495,12 @@ class PythonTestRunnerTests(unittest.TestCase):
                 })
 
     def assert_descendant_stopped(self, pid_file: Path) -> None:
+        if os.name == 'nt':
+            if windows_process_running(int(pid_file.read_text()), pid_file.stat().st_mtime_ns):
+                self.fail('owned descendant continued after process cleanup')
+            return
         if sys.platform != 'linux':
-            self.skipTest('process-group verification reads /proc; Linux-only')
+            self.skipTest('descendant verification reads /proc on Linux or process handles on Windows')
         status = Path('/proc') / pid_file.read_text() / 'status'
         for _ in range(100):
             try:
@@ -541,15 +573,83 @@ class PythonTestRunnerTests(unittest.TestCase):
             with patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1', 'GETZILLA_TEST_WORKERS': '22'}):
                 self.assertEqual(selected_workers(root), 0)
 
-    @unittest.skipIf(os.name == 'posix', 'Windows has no owned process group to clean up')
-    def test_auto_runs_serially_without_posix_process_groups(self) -> None:
-        with fixture(workers='auto') as root:
+    def test_auto_runs_serially_without_owned_tree_cleanup(self) -> None:
+        with fixture(workers='auto') as root, \
+             patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=False):
             self.assertEqual(selected_workers(root), 0)
-        self.assertEqual(python_test_runner.select_engine(4, True), (0, 'unittest-degraded'))
-        with self.assertRaisesRegex(RunnerError, 'requires POSIX'):
-            python_test_runner._pytest_command(4, 'worksteal')
+            self.assertEqual(python_test_runner.select_engine(4, True), (0, 'unittest-degraded'))
+            with self.assertRaisesRegex(RunnerError, 'requires POSIX sessions or Windows Job Objects'):
+                python_test_runner._pytest_command(4, 'worksteal')
 
-    @unittest.skipUnless(os.name == 'posix', 'auto capacity is measured on POSIX; Windows runs serially')
+    def test_windows_auto_counts_logical_cpus_without_cgroup_reads(self) -> None:
+        # Windows has no sched_getaffinity and no cgroups: auto is the bounded CPU count.
+        for cpus, expected in ((8, 8), (96, 28), (None, 1)):
+            with self.subTest(cpus=cpus), fixture(workers='auto') as root, \
+                 capacity_files(root, {}) as reads, \
+                 patch.object(sys, 'platform', 'win32'), \
+                 patch.object(os, 'sched_getaffinity', side_effect=AttributeError, create=True), \
+                 patch.object(os, 'cpu_count', return_value=cpus), \
+                 patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
+                self.assertEqual(selected_workers(root), expected)
+                self.assertEqual(reads, [])
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job Object capability')
+    def test_windows_job_objects_select_parallel_engine(self) -> None:
+        self.assertTrue(fsx.process_jobs_supported())
+        self.assertTrue(python_test_runner._parallel_process_cleanup_supported())
+        with fixture(workers='auto') as root:
+            self.assertEqual(selected_workers(root), min(28, os.cpu_count() or 1))
+        expected = (4, 'pytest-xdist') if parallel_engine_ready(False) else (0, 'unittest-degraded')
+        self.assertEqual(python_test_runner.select_engine(4, False), expected)
+        command = python_test_runner._pytest_command(4, 'worksteal')
+        self.assertEqual(command[command.index('-n') + 1], '4')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job Object')
+    def test_windows_job_holds_descendants_until_terminated(self) -> None:
+        with tempfile.TemporaryDirectory(prefix='grok-runner-job-') as directory:
+            pid_file = Path(directory) / 'grandchild.pid'
+            grandchild = (f'import os, time; open({str(pid_file)!r} + ".tmp", "w").write(str(os.getpid())); '
+                          f'os.replace({str(pid_file)!r} + ".tmp", {str(pid_file)!r}); time.sleep(60)')
+            code = f'import subprocess, sys, time\nsubprocess.Popen([sys.executable, "-c", {grandchild!r}])\ntime.sleep(60)\n'
+            process = fsx.owned_popen([sys.executable, '-c', code])
+            job = fsx.owned_job(process)
+            self.assertIsNotNone(job)
+            try:
+                deadline = time.monotonic() + 20
+                while not pid_file.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_file.exists(), 'grandchild did not start')
+                # A venv python.exe is a launcher with its own child, so count at least two.
+                self.assertGreaterEqual(job.active_processes(), 2)
+                self.assertTrue(job.terminate(5))
+                self.assertEqual(job.active_processes(), 0)
+                self.assertEqual(process.wait(timeout=5), 1)
+            finally:
+                job.close()
+            self.assert_descendant_stopped(pid_file)
+        job.close()
+        self.assertTrue(job.terminate(1))
+        self.assertEqual(job.active_processes(), 0)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job Object')
+    def test_windows_job_assignment_failure_kills_the_suspended_child(self) -> None:
+        started: list[subprocess.Popen] = []
+        real_popen = subprocess.Popen
+
+        def popen(*args, **kwargs):
+            started.append(real_popen(*args, **kwargs))
+            return started[-1]
+
+        with fixture() as root, patch.object(subprocess, 'Popen', side_effect=popen), \
+             patch.object(fsx.ProcessJob, 'assign_suspended', side_effect=OSError(5, 'assignment refused')):
+            result = execute([sys.executable, '-c', 'open("ran", "x").close()'], root, os.environ.copy())
+            self.assertEqual(result.returncode, 127)
+            self.assertIn('assignment refused', result.stderr)
+            self.assertEqual(len(started), 1)
+            self.assertIsNotNone(started[0].returncode)
+            self.assertFalse((root / 'ran').exists(), 'a child outside its job must never run')
+
+    @unittest.skipUnless(os.name == 'posix', 'cgroup capacity fixtures name POSIX paths; Windows auto is tested above')
     def test_auto_uses_available_logical_cpus_with_a_bound(self) -> None:
         with fixture(workers='auto') as root:
             with capacity_files(root, v2_capacity(membership='/'), cpus=22):
@@ -606,8 +706,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 self.assertEqual(python_test_runner.main(), 0)
             self.assertIn('workers=0; engine=unittest-degraded', output.getvalue())
 
-    @unittest.skipUnless(os.name == 'posix', 'xdist runs only where the owned process group can be cleaned up')
-    def test_posix_cleanup_capability_keeps_xdist_and_strict_pins(self) -> None:
+    def test_cleanup_capability_keeps_xdist_and_strict_pins(self) -> None:
         with patch.object(python_test_runner, '_parallel_process_cleanup_supported',
                           return_value=True, create=True), \
              patch.object(python_test_runner, 'parallel_engine_ready', return_value=True):
@@ -617,6 +716,8 @@ class PythonTestRunnerTests(unittest.TestCase):
                 command = python_test_runner._pytest_command(2, distribution)
                 self.assertEqual(command[command.index('-n') + 1], '2')
                 self.assertIn(f'--dist={distribution}', command)
+                # Windows '-c nul' would leave collection unbounded above the project root.
+                self.assertEqual('--confcutdir=.' in command, os.name == 'nt')
 
     def test_measured_core_uses_parallel_coverage_without_xdist_pins(self) -> None:
         with fixture() as root:
@@ -750,7 +851,6 @@ class PythonTestRunnerTests(unittest.TestCase):
                               result.summary)
                 self.assertFalse(list(root.glob('result-*')))
 
-    @unittest.skipUnless(os.name == 'posix', 'the parallel coverage fallback needs POSIX process-group cleanup')
     def test_repo_root_without_optin_uses_measured_parallel_coverage_fallback(self) -> None:
         # The Trust CI image lacks pytest/xdist, so measured PR verification must still
         # avoid the legacy serial coverage timeout without requiring a repo-local opt-in file.
@@ -765,13 +865,23 @@ class PythonTestRunnerTests(unittest.TestCase):
             versions = {'coverage': python_test_runner.PINS['coverage'], 'engine': 'coverage-unittest-parallel'}
             coverage_metadata = {'files': ['.getzilla/getzilla/python_test_runner.py']}
 
-        with patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
+        real_command_check = verification._command_check
+
+        def without_pilot(root, name, *args, **kwargs):
+            # The pilot suite is its own check (it does not pass on Windows yet); this test is about Core wiring.
+            if name == 'pilot-unittest':
+                return CheckResult(name, 'pass', 'fixture')
+            return real_command_check(root, name, *args, **kwargs)
+
+        with patch('getzilla.verification._command_check', side_effect=without_pilot), \
+             patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
              patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
              patch('getzilla.verification._factory_unit', return_value=[]), \
              patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \
              patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
             results = {check.name: check for check in _python(repo_root, mode='pr')}
         self.assertIn('python-unittest', results)
+        self.assertIsNotNone(runner.call_args, results)
         self.assertEqual(runner.call_args.args[2], 2)
         self.assertIn('coverage-unittest-parallel', results['python-unittest'].summary)
 
@@ -790,8 +900,11 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.status, 'pass', result.stderr)
             self.assertEqual(len(list(root.glob('result-*'))), 5)
 
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'process-group verification reads /proc; Linux-only')
+    @unittest.skipUnless(sys.platform.startswith('linux') or os.name == 'nt',
+                         'descendant verification reads /proc on Linux or process handles on Windows')
     def test_sigterm_cancels_owned_group_and_restores_previous_handler(self) -> None:
+        # On Windows terminate() is TerminateProcess: no handler runs, and the
+        # controller's kill-on-close Job Object ends the child it owned.
         with fixture() as root:
             pid_file = root / 'terminated-child.pid'
             child_code = f'import os,time; from pathlib import Path; Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)'
@@ -815,7 +928,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 if controller.poll() is None:
                     controller.kill()
                     controller.wait(timeout=5)
-                if pid_file.exists():
+                if os.name == 'posix' and pid_file.exists():
                     child_pid = int(pid_file.read_text())
                     try:
                         if os.getpgid(child_pid) == child_pid:
@@ -860,7 +973,8 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertIn('timeout', result.stderr)
             self.assert_descendant_stopped(pid_file)
 
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'process-group verification reads /proc; Linux-only')
+    @unittest.skipUnless(sys.platform.startswith('linux') or os.name == 'nt',
+                         'descendant verification reads /proc on Linux or process handles on Windows')
     def test_controller_exit_stops_owned_descendant_process(self) -> None:
         with fixture() as root:
             pid_file = root / 'orphan.pid'
@@ -872,6 +986,70 @@ class PythonTestRunnerTests(unittest.TestCase):
             result = execute([sys.executable, '-c', code], root, os.environ.copy())
             self.assertEqual(result.returncode, 0)
             self.assert_descendant_stopped(pid_file)
+
+    @unittest.skipUnless(sys.platform.startswith('linux') or os.name == 'nt',
+                         'descendant verification reads /proc on Linux or process handles on Windows')
+    def test_term_resistant_grandchild_is_killed_on_every_stop_path(self) -> None:
+        # The grandchild ignores SIGTERM/SIGINT/SIGBREAK and, on Windows, first asks to
+        # break away from the job. Its parent waits until it is ready, then exits,
+        # floods output, sleeps into the timeout, or loses its controller. Only
+        # owning the whole tree (SIGKILL after the grace, or the Job Object) ends it.
+        grandchild = (
+            'import os, signal, sys, time\n'
+            'for name in ("SIGTERM", "SIGINT", "SIGBREAK"):\n'
+            '    if hasattr(signal, name):\n'
+            '        signal.signal(getattr(signal, name), signal.SIG_IGN)\n'
+            'with open(sys.argv[1] + ".tmp", "w") as output:\n'
+            '    output.write(str(os.getpid()))\n'
+            'os.replace(sys.argv[1] + ".tmp", sys.argv[1])\n'
+            'time.sleep(60)\n'
+        )
+        child = (
+            'import os, subprocess, sys, time\n'
+            'pid_file, then = sys.argv[1], sys.argv[2]\n'
+            f'command = [sys.executable, "-c", {grandchild!r}, pid_file]\n'
+            'try:\n'
+            '    subprocess.Popen(command, creationflags=getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))\n'
+            'except OSError:\n'
+            '    subprocess.Popen(command)\n'
+            'while not os.path.exists(pid_file):\n'
+            '    time.sleep(0.01)\n'
+            'if then == "flood":\n'
+            '    sys.stdout.write("x" * 65536)\n'
+            '    sys.stdout.flush()\n'
+            'if then != "exit":\n'
+            '    time.sleep(60)\n'
+        )
+        for then in ('exit', 'flood', 'timeout', 'controller'):
+            with self.subTest(then=then), fixture() as root:
+                pid_file = root / 'grandchild.pid'
+                command = [sys.executable, '-c', child, str(pid_file), 'sleep' if then == 'controller' else then]
+                if then == 'controller':
+                    code = (
+                        'import os\nfrom pathlib import Path\n'
+                        'from getzilla.python_test_runner import execute\n'
+                        f'execute({command!r}, Path.cwd(), os.environ.copy())\n'
+                    )
+                    environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
+                    controller = subprocess.Popen([sys.executable, '-c', code], cwd=root, env=environment)
+                    try:
+                        deadline = time.monotonic() + 30
+                        while not pid_file.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        self.assertTrue(pid_file.exists(), 'grandchild did not start')
+                        controller.terminate()
+                        self.assertNotEqual(controller.wait(timeout=10), 0)
+                    finally:
+                        if controller.poll() is None:
+                            controller.kill()
+                            controller.wait(timeout=5)
+                else:
+                    with patch.object(python_test_runner, 'OUTPUT_LIMIT', 1024):
+                        result = execute(command, root, os.environ.copy(), timeout=5 if then == 'timeout' else 30)
+                    self.assertTrue(pid_file.exists(), f'grandchild did not start: {result.stderr}')
+                    self.assertEqual(result.returncode, 0 if then == 'exit' else 124, result.stderr)
+                    self.assertEqual(result.cleanup_error, '')
+                self.assert_descendant_stopped(pid_file)
 
     def test_coverage_below_threshold_and_worker_data_loss_fail(self) -> None:
         for scenario in ('below-threshold', 'missing-worker'):
