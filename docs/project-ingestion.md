@@ -84,3 +84,23 @@ unsupported filesystem, 5 stale plan, 6 operation or target conflict, 7 verifica
   An existing `.gitignore` is kept unchanged and Getzilla's local ignores go to
   `.git/info/exclude`.
 - Existing Git repositories keep their history and use the regular install flow, not this one.
+
+## Which flow applies (routing)
+
+`getzilla.project_ingestion.route_ingestion({'path': ..., 'kind': ...})` picks the flow:
+
+| Input | Route |
+|---|---|
+| Folder without `.git`, not inside another repository | `zero_git_plan` (this document) |
+| Folder with a `.git` directory or `.git` file (linked worktree, submodule) | `existing_git_baseline` |
+| Fetched snapshot (`kind: remote_snapshot` with an `origin` the caller recorded) | `existing_git_baseline` with the snapshot's own history |
+| Subdirectory of a repository, declared kind contradicting what is on disk, unborn repository, unknown kind | `blocked` with a reason |
+
+The existing-Git baseline (`inspect_git_input`) records the object format, HEAD commit and tree,
+whether the working tree is dirty (with a digest of the changed files), and whether history is
+shallow or a partial clone. It runs Git with `--no-optional-locks`, isolated configuration and
+network protocols disabled: it never fetches, commits, initialises or rewrites anything. An
+unborn repository is not treated as a folder without Git; its first commit is a separate action.
+Nothing is claimed about history before the earliest available commit (`prehistory: not_recorded`).
+Fetching a remote is the caller's separate, authorised step; workflow records already in the
+project (`.getzilla/AGBP_SYNC.json`, `.getzilla/source-baseline.json`) are reported by digest and reused.
