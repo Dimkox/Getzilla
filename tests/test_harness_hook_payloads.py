@@ -9,12 +9,24 @@ and allow it, so each case below must be denied exactly like its Grok twin.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
 from tests._support import PROJECT, project_copy, run_hook
+
+
+def _posix_shell() -> str | None:
+    """bash, which runs these hook commands; on Windows the Git Bash that Claude Code uses."""
+    if os.name != 'nt':
+        return shutil.which('bash')
+    git = shutil.which('git')
+    if git is None:
+        return None
+    bash = Path(git).resolve().parents[1] / 'bin' / 'bash.exe'
+    return str(bash) if bash.is_file() else None
 
 
 class HarnessHookPayloadTests(unittest.TestCase):
@@ -255,7 +267,10 @@ class GeneratedHookCommandTests(unittest.TestCase):
             command = hooks['PreToolUse'][0]['hooks'][0]['command']
         sub = root / 'src' / 'deep'
         sub.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.run(['bash', '-c', command], cwd=sub, input=json.dumps(payload), text=True,
+        shell = _posix_shell()
+        if shell is None:
+            self.skipTest('no POSIX shell (Git Bash on Windows) to run the generated hook command')
+        proc = subprocess.run([shell, '-c', command], cwd=sub, input=json.dumps(payload), text=True,
                               capture_output=True, timeout=120)
         return proc.returncode, proc.stdout.strip()
 

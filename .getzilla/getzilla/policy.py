@@ -25,6 +25,11 @@ from .shell_targets import control_plane_shell_mutation
 WORKFLOW_DISPATCH_POLICY = 'workflow-dispatch is forbidden'
 
 
+def _readings_differ(command: str) -> bool:
+    """On Windows a backslash is a separator to cmd.exe/PowerShell and an escape to Git Bash."""
+    return fsx.WINDOWS and '\\' in command
+
+
 def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
@@ -40,6 +45,15 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
     if len(command) > _LEGACY_COMMAND_LIMIT:
         return 'oversize-command'
+    action = _bash_sensitive_action(root, command)
+    if action is None and _readings_differ(command):
+        # Git Bash's reading of backslashes is classified too (see evaluate_pre_tool).
+        with _legacy.posix_reading():
+            action = _bash_sensitive_action(root, command)
+    return action
+
+
+def _bash_sensitive_action(root: Path, command: str) -> str | None:
     action = _legacy_production_action(command)
     if action:
         return action
@@ -110,11 +124,15 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.
     # The structured target parser above supersedes only its old substring-based shell guard.
-    return _legacy_evaluate_pre_tool(
-        root,
-        event,
-        _skip_substring_control_plane_guard=True,
-    )
+    verdict = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+    if verdict[0] and _readings_differ(command):
+        # Claude Code runs Git Bash on Windows, where `cat .e\nv` reads .env: the union of
+        # both readings is enforced, never the more permissive one.
+        with _legacy.posix_reading():
+            posix = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+        if not posix[0]:
+            return posix
+    return verdict
 
 
 def __getattr__(name: str) -> Any:
