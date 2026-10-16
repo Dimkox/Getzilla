@@ -121,7 +121,10 @@ TOOL_ALIASES = {
 
 
 def read_payload() -> dict[str, Any]:
-    raw = sys.stdin.read()
+    # Agents send UTF-8 JSON. Text-mode stdin uses the console code page on Windows (cp1251 on
+    # a Russian system), which turned Cyrillic prompts into mojibake, so decode the bytes here.
+    stream = getattr(sys.stdin, 'buffer', None)
+    raw = stream.read().decode('utf-8-sig', errors='replace') if stream is not None else sys.stdin.read()
     if not raw.strip():
         return {}
     try:
@@ -132,10 +135,15 @@ def read_payload() -> dict[str, Any]:
 
 
 def emit(data: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(data, ensure_ascii=False))
-    if not data:
+    text = json.dumps(data, ensure_ascii=False) + ('\n' if data else '')
+    stream = getattr(sys.stdout, 'buffer', None)
+    if stream is None:
+        sys.stdout.write(text)
         return
-    sys.stdout.write('\n')
+    # UTF-8 bytes, as agents read them, whatever the console code page is.
+    sys.stdout.flush()
+    stream.write(text.encode('utf-8'))
+    stream.flush()
 
 
 def harness() -> str:
