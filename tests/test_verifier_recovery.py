@@ -100,6 +100,7 @@ class VerifierRecoveryTests(unittest.TestCase):
             self.assertEqual(stored['status'], 'fail')
             self.assertEqual(stored['details']['checks'][-1]['name'], 'report-publication')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_during_report_publication_keeps_completed_pass(self):
         class InterruptedOutput(io.StringIO):
             def write(self, text):
@@ -189,6 +190,7 @@ class VerifierRecoveryTests(unittest.TestCase):
                     self.assertEqual((original['status'], original['stdout']), (verdict, 'retained'))
                     json.dumps(report, ensure_ascii=True)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_before_dispatch_spawns_nothing_and_overwrites_old_pass(self):
         with routed_fixture() as (root, route):
             receipts.write_receipt(root, 'verification', 'pass')
@@ -212,6 +214,7 @@ class VerifierRecoveryTests(unittest.TestCase):
             self.assertEqual(stored['status'], 'fail')
             self.assertEqual(stored['details']['terminal_state'], 'cancelled')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_post_result_cancellation_preserves_test_failure(self):
         with routed_fixture() as (root, _):
             original_fingerprint = verifier.tree_fingerprint
@@ -233,6 +236,7 @@ class VerifierRecoveryTests(unittest.TestCase):
             self.assertEqual((report['status'], report['check_status'], report['terminal_state']), ('fail', 'fail', 'cancelled'))
             self.assertEqual(next(c for c in report['checks'] if c['name'] == 'python-unittest')['summary'], 'assertion failed')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_during_publication_records_terminal_failure(self):
         with routed_fixture() as (root, route):
             original_replace = receipts.os.replace
@@ -283,6 +287,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
                         self.assertIn(f'{label} output close fault', result.cleanup_error)
                     self.assertEqual(closed, {'stdout': True, 'stderr': True})
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_output_close_keeps_primary_cancellation_and_result(self):
         original_stop = runner._stop
 
@@ -332,6 +337,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
                 for label in labels:
                     self.assertIn(f'{label} output close fault', check.stderr)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_signal_during_output_close_keeps_completed_result(self):
         for label in ('stdout', 'stderr'):
             with self.subTest(label=label), output_close_faults((label,), signal_on_close=label) as closed:
@@ -360,6 +366,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
         self.assertEqual(check.summary, 'exit=0')
         self.assertIn('cleanup failed', check.stderr)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_before_spawn_has_result_and_restores_handlers(self):
         previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
         with runner._cancellation():
@@ -423,6 +430,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
         self.assertIn('original output', result.stdout)
         self.assertIn('cleanup failed', result.cleanup_error)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_running_term_resistant_child_is_reaped_and_unrelated_child_survives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -473,6 +481,7 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
 
 
 class DurableReceiptRecoveryTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'POSIX link-and-stat publication; Windows publishes by rename')
     def test_first_post_link_stat_fault_preserves_in_place_foreign_bytes(self):
         replacements = (b'foreign in-place replacement', b'{"binding":{"kind":"foreignxxxxx"},"details":{},"schema_version":1}\n')
         for replacement in replacements:
@@ -499,6 +508,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                 self.assertEqual(files[0].read_bytes(), replacement)
                 self.assertFalse(list(files[0].parent.glob('*.tmp')))
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX link-and-stat publication; Windows publishes by rename')
     def test_second_post_link_stat_fault_cleans_unchanged_bytes_across_ctime_boundary(self):
         with routed_fixture() as (root, route):
             original_stat = receipts.os.stat
@@ -525,6 +535,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertFalse(list(receipts.receipt_dir(root, route['route_id']).rglob('reports/*.json')))
             self.assertFalse(list(receipts.receipt_dir(root, route['route_id']).rglob('*.tmp')))
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX link-and-stat publication; Windows publishes by rename')
     def test_report_helper_does_not_adopt_replacement_between_link_and_stat(self):
         with routed_fixture() as (root, route):
             original_link = receipts.os.link
@@ -542,6 +553,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(files[0].read_bytes(), b'foreign replacement')
             self.assertFalse(list(files[0].parent.glob('*.tmp')))
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX link-and-stat publication; Windows publishes by rename')
     def test_report_helper_post_link_stat_fault_cleans_descriptor_owned_artifact(self):
         with routed_fixture() as (root, route):
             original_stat = receipts.os.stat
@@ -711,7 +723,8 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
 
     def test_spilled_report_missing_tampered_and_unsafe_files_fail_closed(self):
-        for mutation in ('missing', 'tampered', 'symlink-file', 'symlink-directory', 'fifo', 'oversized'):
+        mutations = ('missing', 'tampered', 'symlink-file', 'symlink-directory', 'fifo', 'oversized')
+        for mutation in (m for m in mutations if m != 'fifo' or hasattr(os, 'mkfifo')):
             with self.subTest(mutation=mutation), routed_fixture() as (root, route):
                 receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
                 receipt = receipts.get_receipt(root, route['route_id'], 'verification')
@@ -778,7 +791,9 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                     receipts.get_receipt(root, route['route_id'], 'verification')
 
     def test_spilled_report_publication_faults_retire_prior_pass(self):
-        for boundary in ('write', 'link', 'file-fsync', 'directory-fsync', 'cancel', 'post-rename-cancel'):
+        # Windows cannot fsync a directory and publishes by rename (see receipts.py).
+        boundaries = ('write', 'link', 'file-fsync', 'directory-fsync', 'cancel', 'post-rename-cancel')
+        for boundary in boundaries if os.name == 'posix' else ('write', 'link', 'file-fsync', 'cancel'):
             with self.subTest(boundary=boundary), routed_fixture() as (root, route):
                 receipts.write_receipt(root, 'verification', 'pass')
                 original_fsync = receipts.os.fsync
@@ -875,7 +890,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertTrue(any('head' in gap for gap in receipts.validate_evidence(root, receipt_route)))
 
     def test_faults_never_leave_a_valid_pass_or_partial_receipt(self):
-        for boundary in ('write', 'replace', 'file-fsync', 'directory-fsync'):
+        for boundary in ('write', 'replace', 'file-fsync', *(('directory-fsync',) if os.name == 'posix' else ())):
             with self.subTest(boundary=boundary), routed_fixture() as (root, route):
                 receipts.write_receipt(root, 'verification', 'pass')
                 original_fsync = receipts.os.fsync

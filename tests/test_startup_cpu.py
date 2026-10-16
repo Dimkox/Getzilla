@@ -79,6 +79,7 @@ class ChooseCapacityTests(unittest.TestCase):
         self.assertEqual(result['verified_cpus'], '0-15')
 
 
+@unittest.skipUnless(hasattr(os, 'sched_getaffinity'), 'Linux affinity API required')
 class MeasureTests(unittest.TestCase):
     def measure(self, *, affinity: set[int], reserve: int = 0, allowed: str = '0-3'):
         calls: list[list[str]] = []

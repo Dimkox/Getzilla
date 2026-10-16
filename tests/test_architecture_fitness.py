@@ -283,6 +283,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(analyzed["NODE-A"]["owner"], "original-owner")
         self.assertNotIn("src/evil.py", diff.changed_paths)
 
+    @unittest.skipUnless(os.name == "posix", 'newline and tab are filename characters only on POSIX')
     def test_git_changed_paths_are_nul_safe_and_deterministic(self) -> None:
         repo, base = self._repo()
         repo.write_text("odd\nname.py", "VALUE = 1\n")
@@ -293,6 +294,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(first.changed_paths, ("odd\nname.py", "tab\tname.py"))
         self.assertEqual(first.digest, second.digest)
 
+    @unittest.skipUnless(os.name == "posix", 'newline and tab are filename characters only on POSIX')
     def test_worktree_diff_binds_untracked_content_and_line_counts(self) -> None:
         repo, base = self._repo()
         repo.write_text("odd\nworktree.py", "VALUE = 1\n")
@@ -2767,7 +2769,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         spawned: list = []
 
         def fake_popen(args, **kwargs):
-            proc = real_popen(["sleep", "120"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = real_popen([sys.executable, "-c", "import time; time.sleep(120)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               start_new_session=True)
             spawned.append(proc)
             return proc
@@ -2802,7 +2804,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         spawned: list = []
 
         def fake_popen(args, **kwargs):
-            proc = real_popen(["sleep", "120"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = real_popen([sys.executable, "-c", "import time; time.sleep(120)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               start_new_session=True)
             spawned.append(proc)
             return proc
@@ -2829,6 +2831,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             if stream is not None and not stream.closed:
                 stream.close()
 
+    @unittest.skipUnless(os.name == "posix", 'Windows has no directory descriptors; fsx pins path identity instead')
     def test_profile_worktree_blob_closes_directory_when_descriptor_close_fails(self) -> None:
         repo = GitArchitectureRepo(self)
         repo.model(_system(), _rules())
@@ -7082,6 +7085,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     self.assertLess(time.monotonic() - started, 0.4)
                     self.assertFalse(sentinel.exists())
 
+    @unittest.skipUnless(os.name == "posix", 'the selector capture path is POSIX; Windows reads pipes with threads')
     def test_capped_process_reaps_children_when_selector_setup_fails(self) -> None:
         real_popen = DIFF.subprocess.Popen
         for stage in ("selector", "set_blocking", "register"):

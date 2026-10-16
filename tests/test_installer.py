@@ -151,7 +151,8 @@ class InstallerTests(unittest.TestCase):
             for name in MODULE.ROOT_HOOK_SHIMS:
                 self.assertEqual(payload[name].content, payload[MODULE.ROOT_HOOK_SHIM_TEMPLATE].content)
                 self.assertEqual(payload[name].content, old)
-                self.assertEqual(payload[name].mode, 0o640)
+                if os.name == 'posix':  # Windows keeps only a read-only bit
+                    self.assertEqual(payload[name].mode, 0o640)
 
     def test_installed_fixture_reset_leaf_is_byte_identical_and_importable(self) -> None:
         relative = "factory/tests/postgres_fixture_reset.py"
@@ -737,7 +738,8 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(
                     hashlib.sha256(installed.read_bytes()).hexdigest(), item["sha256"]
                 )
-                self.assertEqual(stat.S_IMODE(installed.stat().st_mode), item["mode"])
+                if os.name == "posix":  # Windows keeps only a read-only bit
+                    self.assertEqual(stat.S_IMODE(installed.stat().st_mode), item["mode"])
             for relative in (
                 "engineering/changes",
                 "engineering/adr",
@@ -778,7 +780,7 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("Offline historical evidence", history_help.stdout)
 
     def test_materialize_new_rejects_existing_symlink_and_special_targets(self) -> None:
-        for kind in ("directory", "symlink", "fifo"):
+        for kind in ("directory", "symlink", *(("fifo",) if hasattr(os, "mkfifo") else ())):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
                 parent = Path(tmp)
                 target = parent / "target"
@@ -800,6 +802,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
                 self.assertEqual(_stage_names(parent), [])
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_materialize_new_loses_target_creation_race_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
@@ -863,6 +866,7 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse(os.path.lexists(target))
             self.assertEqual(_stage_names(parent), [])
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_materialize_new_parent_relocation_does_not_touch_outside_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -886,6 +890,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(_stage_names(parent), [])
             self.assertFalse(os.path.lexists(target))
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_materialize_new_rejects_ancestor_swaps_during_parent_binding(self) -> None:
         for boundary in ("intermediate ancestor", "final parent"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
@@ -1018,6 +1023,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(_stage_names(root), [])
                 self.assertEqual(outside.read_bytes(), b"outside unchanged\n")
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_source_reads_are_nofollow_and_bounded_at_the_descriptor(self) -> None:
         cases = ("managed", "agents", "agents helper", "factory readme", "bitrix", "toolchain")
         for family in cases:
@@ -1134,6 +1140,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertTrue(swapped)
                 self.assertLessEqual(path_bytes_read, 33)
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_known_owned_constructor_failures_remove_every_created_entry(self) -> None:
         for boundary in ("stage fstat", "directory fstat", "file fstat"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
@@ -1181,6 +1188,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
                 self.assertEqual(_stage_names(parent), [])
 
+    @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     def test_constructor_gap_swaps_preserve_unproven_replacements(self) -> None:
         for boundary in ("stage", "nested directory", "file"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:

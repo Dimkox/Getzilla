@@ -272,7 +272,7 @@ class PackageStatusTests(unittest.TestCase):
                 self.assertIn(code, self.codes(result))
 
     def test_selected_path_cannot_escape_and_symlink_ancestors_or_fifo_are_not_read(self):
-        for kind in ('traversal', 'absolute', 'ancestor', 'leaf', 'fifo'):
+        for kind in ('traversal', 'absolute', 'ancestor', 'leaf', *(('fifo',) if hasattr(os, 'mkfifo') else ())):
             with self.subTest(kind=kind), project_copy() as root:
                 route, active, _, package = self.prepare(root, complete=True)
                 outside = root.parent / 'outside'
@@ -566,6 +566,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertEqual(result['dirty_product_paths'], ['feature.py'])
             self.assertTrue(result['uncommitted_product_zero_ahead'])
 
+    @unittest.skipUnless(os.name == 'posix', 'newline and tab are filename characters only on POSIX')
     def test_git_paths_are_lossless_for_staging_renames_deletions_and_untracked_files(self):
         with project_copy(git=True) as root:
             (root / 'old name.py').write_text('same\n', encoding='utf-8')
