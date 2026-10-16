@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Iterable, Mapping, Protocol
 
 from .source_models import canonical_json, domain_digest
 
@@ -366,7 +366,7 @@ class LocalGitRefBackend:
         self.protected, self.complete, self.depth = frozenset(protected), complete, equivalence_depth
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(['git', '-C', str(self.repo), *args], capture_output=True, text=True,
+        return subprocess.run(['git', '-C', str(self.repo), *args], capture_output=True, text=True, encoding="utf-8", errors="surrogateescape",
                               check=check, env=_isolated_env())
 
     def snapshot(self) -> RefsSnapshot:

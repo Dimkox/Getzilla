@@ -1,7 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://getzilla.app/schemas/admission-plan-v1.schema.json",
-  "title": "Getzilla Zero-Git admission plan (immutable; plan_id is the digest of every other field)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -47,15 +46,11 @@
       "type": "string"
     },
     "source_digest": {
-      "oneOf": [
-        {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
     },
     "path_profile": {
       "const": "portable-v1"
@@ -185,5 +180,6 @@
     "consistency_mode": {
       "const": "quiesced_two_pass"
     }
-  }
+  },
+  "description": "Getzilla Zero-Git admission plan (immutable; plan_id is the digest of every other field)"
 }

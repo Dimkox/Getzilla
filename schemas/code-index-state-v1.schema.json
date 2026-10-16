@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/code-index-state-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "input_identity",
+    "graph_input",
+    "files",
+    "symbols",
+    "imports",
+    "calls",
+    "coverage",
+    "generation_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "code-index-state-v1"
+    },
+    "generation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "input_identity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "graph_input": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "source",
+        "files",
+        "omitted",
+        "config"
+      ],
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": [
+            "source_kind"
+          ]
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "language",
+          "sha256"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^file:"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "language": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "qualname",
+          "kind",
+          "span"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^sym:"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "qualname": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "function",
+              "async_function",
+              "class"
+            ]
+          },
+          "span": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        }
+      }
+    },
+    "imports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "source_file",
+          "module",
+          "target_file",
+          "resolution",
+          "reason",
+          "line"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "module": {
+            "type": "string"
+          },
+          "target_file": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "resolution": {
+            "enum": [
+              "internal",
+              "external",
+              "unresolved"
+            ]
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "line": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "caller",
+          "expression",
+          "targets",
+          "resolution",
+          "reason",
+          "line"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "caller": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resolution": {
+            "enum": [
+              "exact",
+              "candidate",
+              "external",
+              "unresolved"
+            ]
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "line": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "files_in_scope",
+        "parsed_complete",
+        "incomplete",
+        "unsupported_language",
+        "unknown_language",
+        "omitted",
+        "complete",
+        "claim"
+      ]
+    }
+  },
+  "description": "Getzilla code graph generation export (no source text)"
+}
