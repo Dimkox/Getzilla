@@ -1,0 +1,870 @@
+{
+  "audit_snapshot": {
+    "main": "c2bf95d62f8491525848ac2643b1f30fc8c438cf",
+    "open_prs": 0,
+    "refs": 46,
+    "tree": "9f20ca23c2b51c6b39417cadd6e0c62ed65a9515"
+  },
+  "captured_at": "2026-10-16T10:48:30+00:00",
+  "coverage": {
+    "api_branch_pages": 1,
+    "api_branches": 50,
+    "api_pull_pages": 1,
+    "api_pulls": 53,
+    "git_ls_remote_heads": 50,
+    "git_ls_remote_tags": 3,
+    "ls_remote_matches_api_branches": true,
+    "missing_objects": [],
+    "pagination_complete": true,
+    "unique_ref_names": true
+  },
+  "execution_ref": {
+    "commit": "c2bf95d62f8491525848ac2643b1f30fc8c438cf",
+    "ref": "refs/heads/main",
+    "tree": "9f20ca23c2b51c6b39417cadd6e0c62ed65a9515"
+  },
+  "heads": [
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "Dimkox-patch-1",
+      "object_present": true,
+      "oid": "772814116a937bb8f1e0704900c045828f3b7d63",
+      "ref": "refs/heads/Dimkox-patch-1"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "chore/vibevm-adapter-2026-10-06",
+      "object_present": true,
+      "oid": "91ce6ddf4d0f568cbfe75be55983dcc381eb21a3",
+      "ref": "refs/heads/chore/vibevm-adapter-2026-10-06"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "chore/vibevm-adapter-owner-commit",
+      "object_present": true,
+      "oid": "c5ca752fc787ba7784dc1175f9b2070b72c8fb35",
+      "ref": "refs/heads/chore/vibevm-adapter-owner-commit"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "chore/workflow-sources-2026-10-06",
+      "object_present": true,
+      "oid": "78df03e986d55675eea801d15f2b662fe25b6291",
+      "ref": "refs/heads/chore/workflow-sources-2026-10-06"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "ci/windows-full-suite-nightly",
+      "object_present": true,
+      "oid": "5a3cdc7eaa773fa85a3b60282c924537971ba8ae",
+      "ref": "refs/heads/ci/windows-full-suite-nightly"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "codex/getzilla-seo-v111",
+      "object_present": true,
+      "oid": "4e5f56348b340dc7e30137577df9fd3dd9cb8d41",
+      "ref": "refs/heads/codex/getzilla-seo-v111"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "docs/plain-readme",
+      "object_present": true,
+      "oid": "57d916215df5f82f46b022c9a368d660c8c6b21b",
+      "ref": "refs/heads/docs/plain-readme"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "docs/ste100-communication-rule",
+      "object_present": true,
+      "oid": "c81cfbb497fe7a5bde3925c477e23fdc56292444",
+      "ref": "refs/heads/docs/ste100-communication-rule"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/bootstrap-installer",
+      "object_present": true,
+      "oid": "f0aa1ee2de0fd9a7394886fc8c531556fe54204d",
+      "ref": "refs/heads/feat/bootstrap-installer"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/ci-gate-by-visibility",
+      "object_present": true,
+      "oid": "e07cfbed1d529dcb9ad92bebaab4b24716fb1732",
+      "ref": "refs/heads/feat/ci-gate-by-visibility"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 11,
+      "name": "feat/cursor-enterprise-rules-20261008-6685422",
+      "object_present": true,
+      "oid": "b1415e8682ea43d94743cc6bea36f0a384574493",
+      "ref": "refs/heads/feat/cursor-enterprise-rules-20261008-6685422"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/cursor-enterprise-rules-20261008-6685422-v2",
+      "object_present": true,
+      "oid": "f5a07da3f1e62dd239d9be2a73bff3fda2dd7a4c",
+      "ref": "refs/heads/feat/cursor-enterprise-rules-20261008-6685422-v2"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/getzilla-landing-site",
+      "object_present": true,
+      "oid": "7ee7b019e74502b6371fe8f320ea397393109101",
+      "ref": "refs/heads/feat/getzilla-landing-site"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/known-vulnerabilities",
+      "object_present": true,
+      "oid": "0297ae10f8fa20390ab7e1e3c7e0bc3f49b51561",
+      "ref": "refs/heads/feat/known-vulnerabilities"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/opengrep-taint",
+      "object_present": true,
+      "oid": "4ae04470247468e8a35db9470ea5d81cd2a954ed",
+      "ref": "refs/heads/feat/opengrep-taint"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/openrouter-default",
+      "object_present": true,
+      "oid": "65887dc1d7fb0e8408e9bf30970d768fb34e119b",
+      "ref": "refs/heads/feat/openrouter-default"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/tool-updater",
+      "object_present": true,
+      "oid": "b88715a93016a7df52d02787c2b9b32138cc2450",
+      "ref": "refs/heads/feat/tool-updater"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/trust-ci-paid-private",
+      "object_present": true,
+      "oid": "e82e9c90c624457741e62cff8847532df9e92a73",
+      "ref": "refs/heads/feat/trust-ci-paid-private"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "feat/windows-native",
+      "object_present": true,
+      "oid": "6a0fdbb5c51b5851371733c24be6bd3f6ffce533",
+      "ref": "refs/heads/feat/windows-native"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 1,
+      "name": "feat/windows-parallel-runner-20261016",
+      "object_present": true,
+      "oid": "90eb50adffcda37b59f950d8cb3ed3c1fed29ffa",
+      "ref": "refs/heads/feat/windows-parallel-runner-20261016"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/codex-cmd-hooks-20261011",
+      "object_present": true,
+      "oid": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "ref": "refs/heads/fix/codex-cmd-hooks-20261011"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/factory-frozen-migration-digest",
+      "object_present": true,
+      "oid": "e9742d7c44f032ba518a30eace256cf5f8d5f2e8",
+      "ref": "refs/heads/fix/factory-frozen-migration-digest"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/factory-jsonschema-test-dependency",
+      "object_present": true,
+      "oid": "28cc90a3e6b1ab738a1409f0706e427f66b5edf4",
+      "ref": "refs/heads/fix/factory-jsonschema-test-dependency"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/factory-landing-publication-overlayfs",
+      "object_present": true,
+      "oid": "1ae40195f4534721e6b1e16643f60691921acfbb",
+      "ref": "refs/heads/fix/factory-landing-publication-overlayfs"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/factory-linux-adapter-host-skip",
+      "object_present": true,
+      "oid": "481a616b50091fd7437be91f9c11288d810a3867",
+      "ref": "refs/heads/fix/factory-linux-adapter-host-skip"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 1,
+      "name": "fix/governance-root-identity-20261016",
+      "object_present": true,
+      "oid": "8ab59d0be5cdd1959e4ece37946c58a620a47bac",
+      "ref": "refs/heads/fix/governance-root-identity-20261016"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/hook-policy-bypasses",
+      "object_present": true,
+      "oid": "5bd27c0ce20116b1e3472055b9d529970ebfcf69",
+      "ref": "refs/heads/fix/hook-policy-bypasses"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/hook-policy-followup",
+      "object_present": true,
+      "oid": "9dce006fa08cf69a1dc077054a40c76f4f8263a0",
+      "ref": "refs/heads/fix/hook-policy-followup"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/main-ci-repairs",
+      "object_present": true,
+      "oid": "47b9a4877c15850577c03afcdcf15df25626d816",
+      "ref": "refs/heads/fix/main-ci-repairs"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 20,
+      "name": "fix/opengrep-runtime-hash",
+      "object_present": true,
+      "oid": "036e564845f6dcbfa34cb9661937882b735286a2",
+      "ref": "refs/heads/fix/opengrep-runtime-hash"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/opengrep-runtime-hash-v2",
+      "object_present": true,
+      "oid": "9882b44f22241a3c87a76143e4daf81903d00085",
+      "ref": "refs/heads/fix/opengrep-runtime-hash-v2"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/policy-parser-gaps-64",
+      "object_present": true,
+      "oid": "7bf3d23d10cf7afbabedb09d518006a16d90ce96",
+      "ref": "refs/heads/fix/policy-parser-gaps-64"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/queue-analysis-loop-widening",
+      "object_present": true,
+      "oid": "8d6655a09538cccf3889b12e23e62af1b00c8d3a",
+      "ref": "refs/heads/fix/queue-analysis-loop-widening"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 3,
+      "name": "fix/trust-ci-runner-loader-escape-20261016",
+      "object_present": true,
+      "oid": "5a06731c43c0029b8643db10f6312b142ea979ca",
+      "ref": "refs/heads/fix/trust-ci-runner-loader-escape-20261016"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/trust-ci-vulnerable-pins",
+      "object_present": true,
+      "oid": "d7c1a90da2a541b1c73e96339cf885165f41f8d2",
+      "ref": "refs/heads/fix/trust-ci-vulnerable-pins"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 13,
+      "name": "fix/updater-supply-chain",
+      "object_present": true,
+      "oid": "0eb43ab05a7aa2b8d7f02c7d391efa383e65b018",
+      "ref": "refs/heads/fix/updater-supply-chain"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/verifiable-installer-63",
+      "object_present": true,
+      "oid": "a3e43bebc9ed8bca7cd17c4cb097ef1878f19ee5",
+      "ref": "refs/heads/fix/verifiable-installer-63"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/verify-bandit-required",
+      "object_present": true,
+      "oid": "c624d09f4872ce59fd8463cba8e8a02353b222e3",
+      "ref": "refs/heads/fix/verify-bandit-required"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/verify-control-env-20261011",
+      "object_present": true,
+      "oid": "cb814ffb83c1be1efaefc5cc38e0372d785e06db",
+      "ref": "refs/heads/fix/verify-control-env-20261011"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/verify-known-vulns-details",
+      "object_present": true,
+      "oid": "8ed86f41763c12161812999d0c8b0fee4e8d255e",
+      "ref": "refs/heads/fix/verify-known-vulns-details"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/verify-osv-gate-not-optional",
+      "object_present": true,
+      "oid": "c5e77002041c3e7372e3b8e43d31e5cdb5138660",
+      "ref": "refs/heads/fix/verify-osv-gate-not-optional"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 1,
+      "name": "fix/windows-git-pointer-20261016",
+      "object_present": true,
+      "oid": "3cbf223b0cc42547d54fc9b9cc85325d32b469df",
+      "ref": "refs/heads/fix/windows-git-pointer-20261016"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "fix/windows-install-20261015",
+      "object_present": true,
+      "oid": "a984551bdafa8a101eb680aedd064d509e98a131",
+      "ref": "refs/heads/fix/windows-install-20261015"
+    },
+    {
+      "ancestor_of_main": false,
+      "commits_not_in_main": 6,
+      "name": "landing",
+      "object_present": true,
+      "oid": "0fa2b57cb6d2bb4f5819447df094770c27dd9d6e",
+      "ref": "refs/heads/landing"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "main",
+      "object_present": true,
+      "oid": "c2bf95d62f8491525848ac2643b1f30fc8c438cf",
+      "ref": "refs/heads/main"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "port/from-adaptive-grok-242",
+      "object_present": true,
+      "oid": "9159d5ab475004c2a2f6b1c88dbe61ee0b641264",
+      "ref": "refs/heads/port/from-adaptive-grok-242"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "readiness/72-production-20261009",
+      "object_present": true,
+      "oid": "89b131e7b20afeafc02bf859131e449fa618c702",
+      "ref": "refs/heads/readiness/72-production-20261009"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "sync/upstream",
+      "object_present": true,
+      "oid": "72fc571d0275b471f86703a6ceb49e3f5f7502ac",
+      "ref": "refs/heads/sync/upstream"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "test/queue-widening-summary-soundness",
+      "object_present": true,
+      "oid": "251de81217e26ccc332920ec3f6cf12d449d607a",
+      "ref": "refs/heads/test/queue-widening-summary-soundness"
+    },
+    {
+      "ancestor_of_main": true,
+      "commits_not_in_main": 0,
+      "name": "trust-ci/owner-profiles",
+      "object_present": true,
+      "oid": "684f60008071c284f8ffa5f398ff82e91c973c78",
+      "ref": "refs/heads/trust-ci/owner-profiles"
+    }
+  ],
+  "pull_requests": [
+    {
+      "base": "main",
+      "head": "port/from-adaptive-grok-242",
+      "head_oid": "9159d5ab475004c2a2f6b1c88dbe61ee0b641264",
+      "merged": true,
+      "number": 1,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "trust-ci/owner-profiles",
+      "head_oid": "684f60008071c284f8ffa5f398ff82e91c973c78",
+      "merged": true,
+      "number": 2,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "sync/upstream",
+      "head_oid": "ace0e0a7d7424629e30f2d40293110b2a4985d80",
+      "merged": true,
+      "number": 3,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "docs/plain-readme",
+      "head_oid": "57d916215df5f82f46b022c9a368d660c8c6b21b",
+      "merged": true,
+      "number": 4,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "chore/workflow-sources-2026-10-06",
+      "head_oid": "78df03e986d55675eea801d15f2b662fe25b6291",
+      "merged": true,
+      "number": 5,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "chore/vibevm-adapter-2026-10-06",
+      "head_oid": "91ce6ddf4d0f568cbfe75be55983dcc381eb21a3",
+      "merged": true,
+      "number": 6,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/bootstrap-installer",
+      "head_oid": "f0aa1ee2de0fd9a7394886fc8c531556fe54204d",
+      "merged": true,
+      "number": 7,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "chore/vibevm-adapter-owner-commit",
+      "head_oid": "c5ca752fc787ba7784dc1175f9b2070b72c8fb35",
+      "merged": true,
+      "number": 8,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/ci-gate-by-visibility",
+      "head_oid": "e07cfbed1d529dcb9ad92bebaab4b24716fb1732",
+      "merged": true,
+      "number": 9,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/windows-native",
+      "head_oid": "6a0fdbb5c51b5851371733c24be6bd3f6ffce533",
+      "merged": true,
+      "number": 10,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/getzilla-landing-site",
+      "head_oid": "7ee7b019e74502b6371fe8f320ea397393109101",
+      "merged": true,
+      "number": 11,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/trust-ci-paid-private",
+      "head_oid": "e82e9c90c624457741e62cff8847532df9e92a73",
+      "merged": true,
+      "number": 12,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/known-vulnerabilities",
+      "head_oid": "0297ae10f8fa20390ab7e1e3c7e0bc3f49b51561",
+      "merged": true,
+      "number": 13,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/opengrep-taint",
+      "head_oid": "4ae04470247468e8a35db9470ea5d81cd2a954ed",
+      "merged": true,
+      "number": 14,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "codex/getzilla-seo-v111",
+      "head_oid": "4e5f56348b340dc7e30137577df9fd3dd9cb8d41",
+      "merged": true,
+      "number": 15,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "sync/upstream",
+      "head_oid": "72fc571d0275b471f86703a6ceb49e3f5f7502ac",
+      "merged": true,
+      "number": 16,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/openrouter-default",
+      "head_oid": "c2ef4962c8c0a0858a95aafb6e12dccf8309aa14",
+      "merged": true,
+      "number": 17,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/tool-updater",
+      "head_oid": "b88715a93016a7df52d02787c2b9b32138cc2450",
+      "merged": true,
+      "number": 18,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/openrouter-default",
+      "head_oid": "65887dc1d7fb0e8408e9bf30970d768fb34e119b",
+      "merged": true,
+      "number": 24,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/queue-analysis-loop-widening",
+      "head_oid": "8d6655a09538cccf3889b12e23e62af1b00c8d3a",
+      "merged": true,
+      "number": 29,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/trust-ci-vulnerable-pins",
+      "head_oid": "d7c1a90da2a541b1c73e96339cf885165f41f8d2",
+      "merged": true,
+      "number": 30,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/main-ci-repairs",
+      "head_oid": "47b9a4877c15850577c03afcdcf15df25626d816",
+      "merged": true,
+      "number": 31,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/factory-frozen-migration-digest",
+      "head_oid": "e9742d7c44f032ba518a30eace256cf5f8d5f2e8",
+      "merged": true,
+      "number": 43,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/factory-landing-publication-overlayfs",
+      "head_oid": "1ae40195f4534721e6b1e16643f60691921acfbb",
+      "merged": true,
+      "number": 44,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/factory-linux-adapter-host-skip",
+      "head_oid": "481a616b50091fd7437be91f9c11288d810a3867",
+      "merged": true,
+      "number": 45,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/factory-jsonschema-test-dependency",
+      "head_oid": "28cc90a3e6b1ab738a1409f0706e427f66b5edf4",
+      "merged": true,
+      "number": 46,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/verify-known-vulns-details",
+      "head_oid": "8ed86f41763c12161812999d0c8b0fee4e8d255e",
+      "merged": true,
+      "number": 47,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/verify-osv-gate-not-optional",
+      "head_oid": "c5e77002041c3e7372e3b8e43d31e5cdb5138660",
+      "merged": true,
+      "number": 48,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/verify-bandit-required",
+      "head_oid": "c624d09f4872ce59fd8463cba8e8a02353b222e3",
+      "merged": true,
+      "number": 49,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "test/queue-widening-summary-soundness",
+      "head_oid": "251de81217e26ccc332920ec3f6cf12d449d607a",
+      "merged": true,
+      "number": 50,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/updater-supply-chain",
+      "head_oid": "0eb43ab05a7aa2b8d7f02c7d391efa383e65b018",
+      "merged": false,
+      "number": 52,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/approve-wildcard-grants",
+      "head_oid": "cd44d8130dcad84484a461328c2051ca2c4172bb",
+      "merged": true,
+      "number": 53,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/hook-policy-bypasses",
+      "head_oid": "5bd27c0ce20116b1e3472055b9d529970ebfcf69",
+      "merged": true,
+      "number": 54,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/cursor-enterprise-rules-20261008-6685422",
+      "head_oid": "b1415e8682ea43d94743cc6bea36f0a384574493",
+      "merged": false,
+      "number": 55,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/identity-provenance-comment",
+      "head_oid": "23e39a7611fb04c5a754e4b10f296a18f50f926e",
+      "merged": true,
+      "number": 57,
+      "state": "closed"
+    },
+    {
+      "base": "fix/updater-supply-chain",
+      "head": "fix/opengrep-runtime-hash",
+      "head_oid": "036e564845f6dcbfa34cb9661937882b735286a2",
+      "merged": false,
+      "number": 58,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/hook-policy-followup",
+      "head_oid": "655c16a47e24075d4525e084efe0b9a70c872e5b",
+      "merged": true,
+      "number": 59,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/hook-policy-review2",
+      "head_oid": "95c4cb4099dc98df499c83ab9edadcd0dcd017a8",
+      "merged": true,
+      "number": 62,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "ci/windows-full-suite-nightly",
+      "head_oid": "5a3cdc7eaa773fa85a3b60282c924537971ba8ae",
+      "merged": true,
+      "number": 65,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/opengrep-runtime-hash-v2",
+      "head_oid": "9882b44f22241a3c87a76143e4daf81903d00085",
+      "merged": true,
+      "number": 66,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "feat/cursor-enterprise-rules-20261008-6685422-v2",
+      "head_oid": "f5a07da3f1e62dd239d9be2a73bff3fda2dd7a4c",
+      "merged": true,
+      "number": 67,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/verifiable-installer-63",
+      "head_oid": "a3e43bebc9ed8bca7cd17c4cb097ef1878f19ee5",
+      "merged": true,
+      "number": 68,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/policy-parser-gaps-64",
+      "head_oid": "7bf3d23d10cf7afbabedb09d518006a16d90ce96",
+      "merged": true,
+      "number": 69,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "docs/ste100-communication-rule",
+      "head_oid": "c81cfbb497fe7a5bde3925c477e23fdc56292444",
+      "merged": true,
+      "number": 70,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "readiness/72-production-20261009",
+      "head_oid": "89b131e7b20afeafc02bf859131e449fa618c702",
+      "merged": true,
+      "number": 74,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/verify-control-env-20261011",
+      "head_oid": "cb814ffb83c1be1efaefc5cc38e0372d785e06db",
+      "merged": true,
+      "number": 77,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/codex-cmd-hooks-20261011",
+      "head_oid": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "merged": true,
+      "number": 79,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "Dimkox-patch-1",
+      "head_oid": "772814116a937bb8f1e0704900c045828f3b7d63",
+      "merged": true,
+      "number": 81,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/windows-install-20261015",
+      "head_oid": "a984551bdafa8a101eb680aedd064d509e98a131",
+      "merged": true,
+      "number": 82,
+      "state": "closed"
+    },
+    {
+      "base": "main",
+      "head": "fix/windows-git-pointer-20261016",
+      "head_oid": "3cbf223b0cc42547d54fc9b9cc85325d32b469df",
+      "merged": false,
+      "number": 83,
+      "state": "open"
+    },
+    {
+      "base": "main",
+      "head": "fix/governance-root-identity-20261016",
+      "head_oid": "8ab59d0be5cdd1959e4ece37946c58a620a47bac",
+      "merged": false,
+      "number": 84,
+      "state": "open"
+    },
+    {
+      "base": "main",
+      "head": "feat/windows-parallel-runner-20261016",
+      "head_oid": "90eb50adffcda37b59f950d8cb3ed3c1fed29ffa",
+      "merged": false,
+      "number": 85,
+      "state": "open"
+    },
+    {
+      "base": "main",
+      "head": "fix/trust-ci-runner-loader-escape-20261016",
+      "head_oid": "5a06731c43c0029b8643db10f6312b142ea979ca",
+      "merged": false,
+      "number": 86,
+      "state": "open"
+    }
+  ],
+  "repository": "Dimkox/Getzilla",
+  "schema": "getzilla-repository-snapshot-v1",
+  "tags": [
+    {
+      "oid": "5d5b45f42f8a9f2bc0303b4d16b5d4e54caad5b9",
+      "ref": "refs/tags/v2.2.0"
+    },
+    {
+      "oid": "5bec32144e82bec3c4a789a4b9cb3ce75dc97024",
+      "ref": "refs/tags/v2.2.1"
+    },
+    {
+      "oid": "05f85f12b72b3a897c45c24e172fac8317120b7c",
+      "ref": "refs/tags/v2.2.1^{}"
+    }
+  ]
+}

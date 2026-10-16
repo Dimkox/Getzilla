@@ -6,6 +6,19 @@
   "observed_main_sha": "540c12f93e798c2f483455a5086ab0018ac3216e",
   "product_version": "2.2.2",
   "latest_published_release": "v2.2.1",
+  "source_installers": {
+    "record_scope": "Installer bytes of the source candidate; README and QUICKSTART run the published installers in published_release until a release publishes these.",
+    "status": "source_candidate",
+    "version": "2.2.2",
+    "installers": {
+      "scripts/install.sh": {
+        "sha256": "5c4b7737e564bed1ffd9fe7e883a8d36a2c9d76ffeabebf3d3f794147bbaca62"
+      },
+      "scripts/install.ps1": {
+        "sha256": "5c757c6957e0ebb085d616a08175689f1270301af9c7930f39c29edeb0f8d7af"
+      }
+    }
+  },
   "bootstrap_entrypoint": "START_HERE.md",
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
