@@ -193,7 +193,7 @@ class InstallScriptContractTests(unittest.TestCase):
                          '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
                          '@google/gemini-cli@latest', '@github/copilot@latest', 'GEMINI_API_KEY',
                          'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok',
-                         'scripts/getzilla_update.py', '[y/N]'):
+                         'scripts/getzilla_update.py', 'getzilla_baseline.py'):
                 self.assertIn(name, text)
         self.assertIn('https://claude.ai/install.sh', shell)
         self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
@@ -218,18 +218,20 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
 
     def test_both_installers_always_refresh_vulnerability_data(self) -> None:
-        # The CVE database and OpenGrep are part of a working install: refreshed on every run
-        # without a question, before the optional [y/N] update of the other tools.
+        # The CVE database, OpenGrep and the pinned workflow baseline are part of a working install:
+        # installed on every run without a question, and a failure stops the install (owner decision
+        # 2026-10-16: mandatory, no option to skip).
         shell = SHELL.read_text(encoding='utf-8')
         powershell = POWERSHELL.read_text(encoding='utf-8')
         self.assertIn('scripts/getzilla_update.py --only osv --only opengrep', shell)
         self.assertIn("@('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')", powershell)
         self.assertLess(shell.index('  update_security_data "$home" "$python"\n'),
-                        shell.index('  offer_tool_update "$home" "$python"\n'))
+                        shell.index('  install_workflow_baseline "$home" "$python"\n'))
         self.assertLess(powershell.index('    Update-SecurityData $Python $GetzillaHome\n'),
-                        powershell.index('    Request-ToolUpdate $Python $GetzillaHome\n'))
+                        powershell.index('    Install-WorkflowBaseline $Python $GetzillaHome\n'))
         for text in (shell, powershell):
-            self.assertNotIn('vibevm, CVE database, OpenGrep) to their latest versions now? [y/N]', text)
+            self.assertNotIn('to their latest versions now? [y/N]', text)
+            self.assertNotIn('WARNING: vulnerability data is not up to date', text)
 
     def test_shell_installer_prefers_pinned_node_archive_over_old_distro_packages(self) -> None:
         # Ubuntu 24.04 ships Node.js 18: a bare install never got an agent CLI from apt.
@@ -334,7 +336,17 @@ class InstallScriptContractTests(unittest.TestCase):
 @unittest.skipIf(sys.platform == 'win32' or shutil.which('bash') is None or shutil.which('git') is None,
                  'needs bash and git')
 class InstallScriptEndToEndTests(unittest.TestCase):
+    def _fake_uv(self) -> str:
+        # The pinned uv, so the installer does not reach PyPI; Spec Kit's `uv tool install` succeeds.
+        fake_bin = Path(tempfile.mkdtemp(prefix='getzilla-fake-uv-'))
+        self.addCleanup(shutil.rmtree, fake_bin, True)
+        uv = fake_bin / 'uv'
+        uv.write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
+        uv.chmod(0o755)
+        return str(fake_bin)
+
     def _run(self, home: Path, **extra: str) -> subprocess.CompletedProcess[str]:
+        extra.setdefault('PATH', f'{self._fake_uv()}:{os.environ["PATH"]}')
         env = _clean_env(
             GETZILLA_HOME=str(home),
             GETZILLA_REPO=ROOT.as_uri(),
@@ -358,7 +370,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
             self.assertIn('Getzilla is ready in', result.stdout)
             self.assertIn('Install plan for', result.stdout)
-            self.assertIn('Third-party tools were not updated. To update them:', result.stdout)
+            self.assertIn('Installing the pinned workflow baseline', result.stdout)
             self.assertFalse((Path.home() / '.getzilla' / 'update.lock').exists())
             self.assertTrue((home / 'scripts/install_into.py').is_file())
             self.assertEqual(sorted(path.name for path in project.iterdir()), [])  # plan is read-only
@@ -397,6 +409,8 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             )
             fake_bin = Path(tmp) / 'bin'
             fake_bin.mkdir()
+            (fake_bin / 'uv').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
+            (fake_bin / 'uv').chmod(0o755)
             (fake_bin / 'qwen').write_text('#!/bin/sh\nexit 0\n')
             (fake_bin / 'qwen').chmod(0o755)
             result = subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)

@@ -300,6 +300,10 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
         results += update_osv(fetch, root)
     if 'opengrep' in wanted:
         results += update_opengrep(fetch, root)
+    if 'baseline' in wanted:
+        from .baseline import install_user
+        results += [Result(step.component, step.status, step.detail)
+                    for step in install_user(root, run=run, which=which)]
     return results
 
 
@@ -373,8 +377,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--now', action='store_true', help='update now (the default)')
     parser.add_argument('--if-due', action='store_true',
                         help='update only when GETZILLA_UPDATE_INTERVAL_HOURS (default 1) has passed since the last run')
-    parser.add_argument('--only', action='append', choices=('agents', 'sources', 'osv', 'opengrep'),
-                        help='limit to one component (repeatable)')
+    parser.add_argument('--only', action='append', choices=('agents', 'sources', 'osv', 'opengrep', 'baseline'),
+                        help='limit to one component (repeatable); baseline installs the pinned Superpowers, BMAD '
+                             'and Spec Kit (never part of the default latest-version update)')
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--status', action='store_true', help='print the last update results and exit')
     args = parser.parse_args(argv)

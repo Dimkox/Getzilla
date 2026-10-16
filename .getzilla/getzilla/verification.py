@@ -2323,6 +2323,37 @@ def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
         {'severity': 'warning', 'path': '.getzilla/runtime/hook-events.jsonl', 'code': 'hook-degraded', 'message': message}]), metadata
 
 
+CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machine; security tools are checked by their own steps'
+NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
+
+
+def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[str, object]]:
+    """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
+    import os
+    from .baseline import detect_agent, inspect
+    from .updater import home_dir
+    if os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true':
+        return CheckResult('workflow-baseline', 'skip', CI_BASELINE_SKIP), {'status': 'not_run', 'reason': 'ci'}
+    if not (root / '.getzilla' / 'AGBP_SYNC.json').is_file():
+        return CheckResult('workflow-baseline', 'skip', NOT_INSTALLED_SKIP), {'status': 'not_run', 'reason': 'source'}
+    agent = detect_agent(root)
+    try:
+        status = inspect(home_dir(), root, agent)
+    except (OSError, ValueError, KeyError) as exc:
+        return CheckResult('workflow-baseline', 'fail' if mode in {'pr', 'release'} else 'skip',
+                           f'WORKFLOW_BASELINE_UNAVAILABLE: {_failure_message(exc)}'), {'status': 'error'}
+    metadata = {'status': 'complete' if status.complete else 'incomplete', 'agent': agent, **status.to_dict()}
+    workflow_missing = [item for item in status.missing if not item.startswith('SECURITY_BASELINE_MISSING')]
+    if not workflow_missing:
+        return CheckResult('workflow-baseline', 'pass', f'pinned Superpowers, BMAD and Spec Kit connected for {agent}'), metadata
+    message = (', '.join(workflow_missing) + '. Install: scripts/getzilla_update.py --only baseline; connect: '
+               f'scripts/getzilla_baseline.py apply --project . --agent {agent}')
+    if mode in {'pr', 'release'}:
+        return CheckResult('workflow-baseline', 'fail', message), metadata
+    return CheckResult('workflow-baseline', 'pass', 'will fail pr/release: ' + message, details=[
+        {'severity': 'warning', 'path': '.', 'code': 'workflow-baseline-missing', 'message': message}]), metadata
+
+
 def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, record: bool = True, *,
            keep_going: bool = False) -> dict[str, object]:
     report = {
@@ -2493,6 +2524,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     hook_check, hook_metadata = _hook_health_check(root, route, mode, diff_metadata)
     dispatch.add(hook_check)
     report['hook_health'] = hook_metadata
+    baseline_check, baseline_metadata = _workflow_baseline_check(root, mode)
+    dispatch.add(baseline_check)
+    report['workflow_baseline'] = baseline_metadata
     state.stage = 'repository'
     dispatch.run('git-diff-check', lambda: _git_diff_check(root, mode, git_ranges))
     # Preserve the successful report inventory order while authority checks run first.
