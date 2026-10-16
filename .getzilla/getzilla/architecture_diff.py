@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -16,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import fsx
 from .architecture import (
@@ -56,6 +58,29 @@ _GIT_BLOB_CACHE: dict[tuple[object, ...], dict[str, bytes | None]] = {}
 _MATERIALIZED_STATE_CACHE: dict[tuple[object, ...], "_ArchitectureState | None"] = {}
 _GIT_BLOB_CACHE_LIMIT = 512
 _MATERIALIZED_STATE_CACHE_LIMIT = 128
+# Probe keys of the bindings `git rev-parse` already confirmed in the open binding scope.
+_PROBED_BINDINGS: contextvars.ContextVar[set[tuple[object, ...]] | None] = contextvars.ContextVar(
+    "getzilla_probed_git_bindings", default=None
+)
+
+
+@contextlib.contextmanager
+def git_binding_scope() -> Iterator[None]:
+    """Cross-check each exact Git binding with Git once for one bounded operation.
+
+    Inside the scope every Git operation still re-derives its binding from the filesystem and
+    verifies it afterwards; only the `git rev-parse` cross-check is reused, and only while the
+    registrations and the Git config files it depends on keep their exact identities. A nested
+    scope joins the outer one; the scope ends with the outermost operation.
+    """
+    if _PROBED_BINDINGS.get() is not None:
+        yield
+        return
+    token = _PROBED_BINDINGS.set(set())
+    try:
+        yield
+    finally:
+        _PROBED_BINDINGS.reset(token)
 
 
 def _binding_key(binding: "_GitBinding") -> tuple[object, ...]:
@@ -446,6 +471,18 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
 
 
+def _config_identities(directories: tuple[Path, ...]) -> tuple[object, ...]:
+    """Identities of the config files that can change what `git rev-parse` reports."""
+    identities: list[object] = []
+    for directory in directories:
+        for name in ("config", "config.worktree"):
+            try:
+                identities.append((name, _git_path_identity(directory / name)))
+            except FileNotFoundError:
+                identities.append((name, None))
+    return tuple(identities)
+
+
 def _git_binding(root: Path) -> _GitBinding:
     try:
         named_root = Path(os.path.abspath(root))
@@ -459,6 +496,7 @@ def _git_binding(root: Path) -> _GitBinding:
         if stat.S_ISDIR(registration.st_mode):
             git_directory = dot_git
             absent_registrations = (dot_git / "commondir",)
+            config_directories: tuple[Path, ...] = (git_directory,)
         elif stat.S_ISREG(registration.st_mode):
             content = _git_pointer(dot_git)
             if not content.startswith(b"gitdir: ") or not content.endswith(b"\n") or b"\0" in content:
@@ -481,12 +519,19 @@ def _git_binding(root: Path) -> _GitBinding:
             backlink_path = Path(os.fsdecode(backlink_content[:-1]))
             if (git_directory / backlink_path).resolve(strict=True) != dot_git:
                 raise ArchitectureError("Git worktree backlink does not match root", code="git")
+            config_directories = (git_directory, common_directory)
         else:
             raise ArchitectureError("Git worktree registration is not a directory or regular file", code="git")
         if not stat.S_ISDIR(git_directory.lstat().st_mode):
             raise ArchitectureError("Git directory is not a non-symlink directory", code="git")
         binding = _GitBinding(repository, git_directory, tuple(registrations.items()), absent_registrations)
         binding.verify()
+        probed = _PROBED_BINDINGS.get()
+        probe_key: tuple[object, ...] | None = None
+        if probed is not None:
+            probe_key = (*_binding_key(binding), _config_identities(config_directories))
+            if probe_key in probed:
+                return binding
         returncode, output, _error = _run_capped(
             _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
                          safe_directory=repository, git_directory=git_directory),
@@ -496,6 +541,8 @@ def _git_binding(root: Path) -> _GitBinding:
         if returncode or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
         binding.verify()
+        if probed is not None and probe_key is not None:
+            probed.add(probe_key)
         return binding
     except ArchitectureError:
         raise
@@ -604,11 +651,31 @@ def _head_commit(root: Path) -> str:
     return _exact_commit(root, value.decode("ascii").strip(), label="head_sha")
 
 
-def _git_blob(root: Path, sha: str, path: str, *, required: bool = False) -> bytes | None:
-    value = _git_blobs(root, sha, (path,))[path]
-    if value is None and required:
+def _required_blob(values: dict[str, bytes | None], path: str) -> bytes:
+    value = values[path]
+    if value is None:
         raise ArchitectureError(f"required Git object path is missing: {path}", code="missing")
     return value
+
+
+def _git_blob(root: Path, sha: str, path: str, *, required: bool = False) -> bytes | None:
+    values = _git_blobs(root, sha, (path,))
+    return _required_blob(values, path) if required else values[path]
+
+
+def _git_blobs_each(root: Path, sha: str, paths: tuple[str, ...]) -> dict[str, bytes | None]:
+    """Read paths that used to be read one at a time in one bounded `cat-file --batch`.
+
+    The values and per-path cache entries are those of one read per path. Only the batch's
+    aggregate caps are new, so a batch they refuse falls back to one read per path, which
+    succeeds or fails exactly as those reads always did.
+    """
+    try:
+        return _git_blobs(root, sha, paths, remember_paths=True)
+    except ArchitectureError as exc:
+        if exc.code != "limit":
+            raise
+    return {path: _git_blob(root, sha, path) for path in paths}
 
 
 @dataclass(frozen=True)
@@ -619,6 +686,7 @@ class ArchitectureBaseSelection:
     bootstrap_baseline: bool
 
 
+@git_binding_scope()
 def select_architecture_comparison_base(
     root: Path,
     route: dict[str, Any] | None,
@@ -629,10 +697,9 @@ def select_architecture_comparison_base(
         candidate if isinstance(candidate, str) else _head_commit(root),
         label="architecture_route_base_sha",
     )
-    marker_present = _git_blob(root, route_base, _ADOPTION_PATH) is not None
-    model_present = tuple(
-        _git_blob(root, route_base, path) is not None for path in _MODEL_PATHS
-    )
+    route_values = _git_blobs_each(root, route_base, (_ADOPTION_PATH, *_MODEL_PATHS))
+    marker_present = route_values[_ADOPTION_PATH] is not None
+    model_present = tuple(route_values[path] is not None for path in _MODEL_PATHS)
     if model_present not in {(False, False), (True, True)}:
         raise ArchitectureError(
             "route-base architecture model is partially missing",
@@ -644,10 +711,7 @@ def select_architecture_comparison_base(
             code="missing",
         )
     if model_present == (True, True):
-        marker_value = _git_blob(root, route_base, _ADOPTION_PATH, required=True)
-        parse_adoption_marker(
-            _required_output(marker_value, operation="read route-base adoption marker")
-        )
+        parse_adoption_marker(_required_blob(route_values, _ADOPTION_PATH))
     if model_present == (True, True):
         comparison_base = route_base
         base_kind = "route_model"
@@ -1112,8 +1176,9 @@ def _materialized_state(
     if cache_key in _MATERIALIZED_STATE_CACHE:
         binding.verify()
         return _MATERIALIZED_STATE_CACHE[cache_key]
-    model_values = tuple(_git_blob(root, sha, path) for path in _MODEL_PATHS)
-    marker_value = _git_blob(root, sha, _ADOPTION_PATH)
+    model_and_marker = _git_blobs_each(root, sha, (*_MODEL_PATHS, _ADOPTION_PATH))
+    model_values = tuple(model_and_marker[path] for path in _MODEL_PATHS)
+    marker_value = model_and_marker[_ADOPTION_PATH]
     if model_values == (None, None):
         if marker_value is not None:
             raise ArchitectureError(
@@ -1128,7 +1193,8 @@ def _materialized_state(
     if marker_value is None:
         raise ArchitectureError("architecture adoption marker is missing", code="missing")
     adoption = parse_adoption_marker(marker_value)
-    schema_values = tuple(_git_blob(root, sha, path, required=True) for path in _SCHEMA_PATHS)
+    schema_blobs = _git_blobs_each(root, sha, _SCHEMA_PATHS)
+    schema_values = tuple(_required_blob(schema_blobs, path) for path in _SCHEMA_PATHS)
     with tempfile.TemporaryDirectory(prefix="adaptive-architecture-object-") as directory:
         materialized = Path(directory)
         for path, value in zip((*_MODEL_PATHS, *_SCHEMA_PATHS), (*model_values, *schema_values)):
@@ -1136,8 +1202,10 @@ def _materialized_state(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {path}"))
         snapshot = load_architecture(materialized)
-        for contract in snapshot.system["contracts"]:
-            value = _git_blob(root, sha, contract["path"], required=True)
+        contracts = snapshot.system["contracts"]
+        contract_blobs = _git_blobs_each(root, sha, tuple(contract["path"] for contract in contracts))
+        for contract in contracts:
+            value = _required_blob(contract_blobs, contract["path"])
             target = materialized / contract["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {contract['path']}"))
@@ -1379,7 +1447,9 @@ def read_diff_file(root: Path, diff: ArchitectureDiff, path: str, side: str = "h
     return _git_blob(repository, _required_head(diff.head_sha), path)
 
 
-def _git_blobs(root: Path, sha: str, paths: tuple[str, ...]) -> dict[str, bytes | None]:
+def _git_blobs(
+    root: Path, sha: str, paths: tuple[str, ...], *, remember_paths: bool = False
+) -> dict[str, bytes | None]:
     requested = tuple(sorted(set(paths)))
     if len(requested) > MAX_CHANGED_PATHS:
         raise ArchitectureError("diff file batch path limit exceeded", code="limit")
@@ -1458,6 +1528,10 @@ def _git_blobs(root: Path, sha: str, paths: tuple[str, ...]) -> dict[str, bytes 
     if cursor != len(output):
         raise ArchitectureError("unexpected trailing Git blob batch output", code="git")
     _remember_blob_cache(cache_key, dict(values))
+    if remember_paths:
+        # The entries a one-path read of each path would have left behind.
+        for path in requested:
+            _remember_blob_cache((*_binding_key(binding), "blobs", sha, (path,)), {path: values[path]})
     return values
 
 
@@ -1541,6 +1615,7 @@ def _tree_inventory_digest(
     return _digest(os.fsdecode(raw))
 
 
+@git_binding_scope()
 def diff_architecture(
     root: Path | str,
     *,

@@ -18,7 +18,7 @@ from .architecture import (
     preflight_architecture, validate_repository_drift,
 )
 from .architecture_diagrams import artifact_digests, compare_generated, render_diagrams
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .architecture_fitness import diff_architecture, evaluate_fitness
 from .quality_gates import evaluate_quality_gate, required_check_refused
 from .receipts import (
@@ -209,6 +209,7 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
     return CheckResult("architecture-inputs", "pass", "bounded model and referenced-input preflight executed")
 
 
+@git_binding_scope()
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,

@@ -26,6 +26,7 @@ from .architecture_diff import (
     _exact_commit,
     _git_blobs as _read_exact_git_blobs,
     _git_object_id_length,
+    git_binding_scope,
     run_git_bounded,
 )
 from .spec import SpecError, _schema_preflight, validate_schema
@@ -2923,6 +2924,7 @@ def governance_summary(
     }
 
 
+@git_binding_scope()
 def build_governance_handoff(
     snapshot: GovernanceSnapshot,
     *,

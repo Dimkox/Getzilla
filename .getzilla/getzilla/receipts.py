@@ -28,7 +28,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -488,6 +488,7 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
+@git_binding_scope()
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],

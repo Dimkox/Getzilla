@@ -2733,6 +2733,60 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 DIFF.read_diff_files(repo.root, worktree, (paths[0], paths[1]))
             self.assertEqual(worktree_blob.call_count, 2)
 
+    def test_materialized_model_reads_are_batched_and_fall_back_under_the_aggregate_cap(self) -> None:
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": f"CONTRACT-BATCH-{index}",
+                "kind": "json_schema",
+                "path": f"engineering/contracts/batch-{index}.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            }
+            for index in range(6)
+        ]
+        system["nodes"][0]["public_contracts"] = [item["id"] for item in system["contracts"]]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, _rules())
+        for index in range(6):
+            repo.write_json(
+                f"engineering/contracts/batch-{index}.json",
+                _json_schema({f"field{index}": {"type": "string"}}),
+            )
+        head = repo.commit("batched model")
+        real_git = DIFF._git
+
+        def materialize() -> tuple[str, int]:
+            DIFF._GIT_BLOB_CACHE.clear()
+            DIFF._MATERIALIZED_STATE_CACHE.clear()
+            batches: list[list[str]] = []
+
+            def observed(root: Path, arguments: list[str], **kwargs: object) -> bytes | None:
+                if any(argument.startswith("--batch") for argument in arguments):
+                    batches.append(arguments)
+                return real_git(root, arguments, **kwargs)
+
+            with patch.object(DIFF, "_git", side_effect=observed):
+                digest = FIT.diff_architecture(repo.root, base_sha=head, head_sha=head).digest
+            return digest, len(batches)
+
+        digest, batches = materialize()
+        # Model and marker, schemas, contracts: one batch each; the base side reuses them.
+        self.assertEqual(batches, 3)
+        paths = (
+            "architecture/system.yaml", "architecture/rules.yaml", "architecture/adoption.json",
+            "schemas/architecture-system.schema.json", "schemas/architecture-rules.schema.json",
+            *(item["path"] for item in system["contracts"]),
+        )
+        largest = max(int(repo.git("cat-file", "-s", f"{head}:{path}")) for path in paths)
+        # Every blob fits the cap alone but some group does not: that group is read one path
+        # at a time, as before batching, with the same result.
+        with patch.object(DIFF, "MAX_GIT_OUTPUT_BYTES", largest):
+            capped_digest, capped_batches = materialize()
+        self.assertEqual(capped_digest, digest)
+        self.assertGreater(capped_batches, batches)
+
     def test_analysis_memory_constants_are_pinned(self) -> None:
         # Analysis memory caps remain unchanged; the finite streamed aggregate
         # identity budget covers the measured 123 MB release-archive cleanup.

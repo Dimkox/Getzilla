@@ -1665,6 +1665,38 @@ class GovernanceHandoffTests(unittest.TestCase):
             timeout=120,
         )
 
+    def test_handoff_cross_checks_the_binding_once_and_batches_architecture_reads(self) -> None:
+        root, snapshot, head, architecture = self._clean_fixture()
+        self.assertGreater(len(architecture_diff.load_architecture(root).system["contracts"]), 20)
+        for cache in (
+            architecture_diff._GIT_BLOB_CACHE,
+            architecture_diff._GIT_COMMIT_CACHE,
+            architecture_diff._GIT_FORMAT_CACHE,
+            architecture_diff._MATERIALIZED_STATE_CACHE,
+        ):
+            cache.clear()
+        real_run = architecture_diff._run_capped
+        commands: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            commands.append(command)
+            return real_run(command, **kwargs)
+
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=observed):
+            handoff = build_governance_handoff(
+                snapshot, architecture=architecture, base_sha=head, head_sha=head, now=self.NOW,
+            )
+        self.assertEqual(handoff.exact_head_sha, head)
+        probes = [command for command in commands if "--absolute-git-dir" in command]
+        blob_batches = [
+            command for command in commands if any(argument.startswith("--batch") for argument in command)
+        ]
+        # One Git cross-check for the one binding and a blob batch per read group, not one
+        # cross-check per Git operation and one cat-file per contract (726 processes before).
+        self.assertEqual(len(probes), 1)
+        self.assertLess(len(blob_batches), 10)
+        self.assertLess(len(commands), 50)
+
     def test_handoff_has_exact_closed_immutable_v1_shape(self) -> None:
         _, snapshot, head, architecture = self._clean_fixture()
 
@@ -2171,6 +2203,42 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         (git_directory / "commondir").write_text(str(foreign / ".git") + "\n", encoding="utf-8")
         with self.assertRaises(ArchitectureError):
             architecture_diff._git(linked, ["rev-parse", "HEAD"])
+
+    def test_binding_scope_reuses_only_an_unchanged_cross_checked_binding(self) -> None:
+        root, head = self._repository()
+        foreign, _ = self._repository()
+        linked = root.parent / f"{root.name}-scope-linked"
+        self.addCleanup(shutil.rmtree, linked, True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked), head], cwd=root, check=True)
+        real_run = architecture_diff._run_capped
+        probes: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            if "--absolute-git-dir" in command:
+                probes.append(command)
+            return real_run(command, **kwargs)
+
+        expected = (head + "\n").encode()
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=observed):
+            for _ in range(2):
+                self.assertEqual(architecture_diff._git(root, ["rev-parse", "HEAD"]), expected)
+            self.assertEqual(len(probes), 2)
+            with architecture_diff.git_binding_scope():
+                for worktree in (root, linked, root, linked):
+                    self.assertEqual(architecture_diff._git(worktree, ["rev-parse", "HEAD"]), expected)
+                with architecture_diff.git_binding_scope():
+                    self.assertEqual(architecture_diff._git(root, ["rev-parse", "HEAD"]), expected)
+                self.assertEqual(len(probes), 4)
+                # An in-place config edit leaves .git itself untouched; it is still cross-checked again.
+                with (root / ".git" / "config").open("a", encoding="utf-8") as config:
+                    config.write(f"[core]\n\tworktree = {foreign}\n")
+                with self.assertRaises(ArchitectureError):
+                    architecture_diff._git(root, ["rev-parse", "HEAD"])
+                self.assertEqual(len(probes), 5)
+                (linked / ".git").write_text(f"gitdir: {foreign / '.git'}\n", encoding="utf-8")
+                with self.assertRaises(ArchitectureError):
+                    architecture_diff._git(linked, ["rev-parse", "HEAD"])
+            self.assertIsNone(architecture_diff._PROBED_BINDINGS.get())
 
     def test_regular_repository_cannot_redirect_its_common_object_store(self) -> None:
         root, _ = self._repository()
