@@ -13,9 +13,16 @@ path that was swapped between the ``lstat`` and the ``open``.
 from __future__ import annotations
 
 import errno
+import functools
 import os
 import stat
-from typing import Iterator, Union
+import time
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Iterator, Union
+import weakref
+
+if TYPE_CHECKING:
+    import subprocess
 
 WINDOWS = os.name == 'nt'
 
@@ -286,6 +293,197 @@ def kill_process_tree(pid: int) -> None:
         return
     import signal
     os.killpg(pid, signal.SIGKILL)
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+_JOB_BASIC_ACCOUNTING_INFORMATION = 1
+_JOB_EXTENDED_LIMIT_INFORMATION = 9
+_CREATE_SUSPENDED = 0x4
+_PROCESS_TERMINATE = 0x0001
+_PROCESS_SET_QUOTA = 0x0100
+_PROCESS_SUSPEND_RESUME = 0x0800
+
+
+@functools.cache
+def _job_api() -> SimpleNamespace:
+    """kernel32/ntdll entry points and structures for Job Objects (Windows only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+            ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+            ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+            ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+            ('SchedulingClass', wintypes.DWORD),
+        ]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ('BasicLimitInformation', BasicLimits), ('IoInfo', ctypes.c_uint64 * 6),
+            ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+            ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t),
+        ]
+
+    class Accounting(ctypes.Structure):
+        _fields_ = [
+            ('TotalUserTime', ctypes.c_int64), ('TotalKernelTime', ctypes.c_int64),
+            ('ThisPeriodTotalUserTime', ctypes.c_int64), ('ThisPeriodTotalKernelTime', ctypes.c_int64),
+            ('TotalPageFaultCount', wintypes.DWORD), ('TotalProcesses', wintypes.DWORD),
+            ('ActiveProcesses', wintypes.DWORD), ('TotalTerminatedProcesses', wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    ntdll = ctypes.WinDLL('ntdll')
+    for name, argtypes, restype in (
+        ('CreateJobObjectW', [wintypes.LPVOID, wintypes.LPCWSTR], wintypes.HANDLE),
+        ('SetInformationJobObject', [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD], wintypes.BOOL),
+        ('QueryInformationJobObject',
+         [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPDWORD], wintypes.BOOL),
+        ('AssignProcessToJobObject', [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        ('TerminateJobObject', [wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+        ('OpenProcess', [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+        ('CloseHandle', [wintypes.HANDLE], wintypes.BOOL),
+    ):
+        function = getattr(kernel32, name)
+        function.argtypes = argtypes
+        function.restype = restype
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    return SimpleNamespace(ctypes=ctypes, kernel32=kernel32, ntdll=ntdll,
+                           ExtendedLimits=ExtendedLimits, Accounting=Accounting)
+
+
+def _win_error(api: SimpleNamespace, function: str) -> OSError:
+    error = api.ctypes.get_last_error()
+    return OSError(errno.EIO, f'{function} failed ({error})')
+
+
+class ProcessJob:
+    """A Windows Job Object that owns a child and every process it starts.
+
+    The job has ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` and no breakaway right,
+    so descendants cannot leave it. Terminating the job, or closing its only
+    handle (also when this process exits or the job is garbage-collected),
+    ends the whole tree, including descendants whose own parent already
+    exited: the Windows counterpart of ``killpg`` on a new session.
+    """
+
+    def __init__(self) -> None:
+        api = _job_api()
+        handle = api.kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise _win_error(api, 'CreateJobObjectW')
+        self._api = api
+        self._handle = handle
+        self._close = weakref.finalize(self, api.kernel32.CloseHandle, handle)
+        limits = api.ExtendedLimits()
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not api.kernel32.SetInformationJobObject(
+                handle, _JOB_EXTENDED_LIMIT_INFORMATION, api.ctypes.byref(limits), api.ctypes.sizeof(limits)):
+            error = _win_error(api, 'SetInformationJobObject')
+            self.close()
+            raise error
+
+    def assign_suspended(self, pid: int) -> None:
+        """Put a child created with ``CREATE_SUSPENDED`` in this job, then let it run.
+
+        The child runs no code before it is in the job, so it cannot start a
+        descendant outside it. ``NtResumeProcess`` resumes it because
+        ``subprocess`` closes the initial thread handle.
+        """
+        kernel32 = self._api.kernel32
+        process = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE | _PROCESS_SUSPEND_RESUME, False, pid)
+        if not process:
+            raise _win_error(self._api, 'OpenProcess')
+        try:
+            if not kernel32.AssignProcessToJobObject(self._handle, process):
+                raise _win_error(self._api, 'AssignProcessToJobObject')
+            status = self._api.ntdll.NtResumeProcess(process)
+            if status < 0:
+                raise OSError(errno.EIO, f'NtResumeProcess failed (0x{status & 0xFFFFFFFF:08x})')
+        finally:
+            kernel32.CloseHandle(process)
+
+    def active_processes(self) -> int:
+        """Processes still running in the job (zero once it is closed)."""
+        if not self._close.alive:
+            return 0
+        accounting = self._api.Accounting()
+        if not self._api.kernel32.QueryInformationJobObject(
+                self._handle, _JOB_BASIC_ACCOUNTING_INFORMATION, self._api.ctypes.byref(accounting),
+                self._api.ctypes.sizeof(accounting), None):
+            raise _win_error(self._api, 'QueryInformationJobObject')
+        return int(accounting.ActiveProcesses)
+
+    def terminate(self, timeout: float) -> bool:
+        """End every process in the job; True once none is left within ``timeout`` seconds."""
+        if not self._close.alive:
+            return True
+        if not self._api.kernel32.TerminateJobObject(self._handle, 1):
+            raise _win_error(self._api, 'TerminateJobObject')
+        deadline = time.monotonic() + timeout
+        while self.active_processes():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return True
+
+    def close(self) -> None:
+        """Close the job handle; anything still inside the job is killed. Repeated calls are safe."""
+        self._close()
+
+
+_owned_jobs: weakref.WeakKeyDictionary[subprocess.Popen, ProcessJob] = weakref.WeakKeyDictionary()
+
+
+@functools.cache
+def process_jobs_supported() -> bool:
+    """Whether this host can create the kill-on-close Job Objects ``owned_popen`` uses (Windows only)."""
+    if not WINDOWS:
+        return False
+    try:
+        ProcessJob().close()
+    except OSError:
+        return False
+    return True
+
+
+def owned_popen(args: list[str], **kwargs: object) -> subprocess.Popen:
+    """``subprocess.Popen`` for a child whose whole process tree can be stopped.
+
+    POSIX starts a new session, so ``killpg`` reaches every descendant that
+    stays in it. Windows starts the child suspended in a new process group,
+    assigns it to a new :class:`ProcessJob` before it runs, then resumes it;
+    every descendant inherits the job. ``owned_job`` returns that job, which
+    lives as long as the returned ``Popen`` object.
+    """
+    import subprocess
+    if not WINDOWS:
+        return subprocess.Popen(args, start_new_session=True, **kwargs)
+    job = ProcessJob()
+    try:
+        process = subprocess.Popen(
+            args, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED, **kwargs,
+        )
+    except BaseException:
+        job.close()
+        raise
+    try:
+        job.assign_suspended(process.pid)
+    except BaseException:
+        process.kill()
+        process.wait()
+        job.close()
+        raise
+    _owned_jobs[process] = job
+    return process
+
+
+def owned_job(process: subprocess.Popen) -> ProcessJob | None:
+    """The Job Object ``owned_popen`` started ``process`` in, or ``None`` (POSIX, other processes)."""
+    return _owned_jobs.get(process)
 
 
 def close_dir(handle: DirHandle | None) -> None:
