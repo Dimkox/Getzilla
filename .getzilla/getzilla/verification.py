@@ -2304,6 +2304,25 @@ def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
     return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
 
 
+def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
+                       diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
+    """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
+    from .hook_health import route_degraded_events, summary
+    events = route_degraded_events(root, route)
+    metadata = summary(events)
+    if not events:
+        return CheckResult('hook-health', 'pass', 'no hook failed open during this route'), metadata
+    effective = str(diff_metadata.get('effective_risk') or (route or {}).get('risk') or 'low')
+    message = (f"{len(events)} hook call(s) failed open during this route ({', '.join(metadata['by_hook'])}); "
+               'Getzilla policy did not run for them')
+    if effective == 'high' and mode in {'pr', 'release'}:
+        return CheckResult('hook-health', 'fail', (
+            f'HOOKS_DEGRADED_ON_HIGH_RISK: {message}. Fix the hook error, start a new route and verify the '
+            'high-risk change again under working hooks.')), metadata
+    return CheckResult('hook-health', 'pass', message, details=[
+        {'severity': 'warning', 'path': '.getzilla/runtime/hook-events.jsonl', 'code': 'hook-degraded', 'message': message}]), metadata
+
+
 def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, record: bool = True, *,
            keep_going: bool = False) -> dict[str, object]:
     report = {
@@ -2471,6 +2490,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cost_check, cost_metadata = _cost_guard_check(root, route, mode, git_ranges)
     dispatch.add(cost_check)
     report['cost_guard'] = cost_metadata
+    hook_check, hook_metadata = _hook_health_check(root, route, mode, diff_metadata)
+    dispatch.add(hook_check)
+    report['hook_health'] = hook_metadata
     state.stage = 'repository'
     dispatch.run('git-diff-check', lambda: _git_diff_check(root, mode, git_ranges))
     # Preserve the successful report inventory order while authority checks run first.

@@ -67,6 +67,29 @@ def _is_git(word: str) -> bool:
     return Path(word).name == 'git'
 
 
+def record_degraded(hook: str, error: BaseException | str | None = None, payload: dict[str, Any] | None = None) -> None:
+    """Append a HOOK_DEGRADED event: this hook let an action through because its own code failed.
+
+    Never raises, and imports nothing from getzilla, because it runs exactly when that failed.
+    """
+    with contextlib.suppress(Exception):
+        import datetime
+
+        start = Path(str((payload or {}).get('cwd') or os.getcwd()))
+        root = next((path for path in (start, *start.parents) if (path / '.getzilla').is_dir()), None)
+        if root is None:
+            return
+        runtime = root / '.getzilla' / 'runtime'
+        runtime.mkdir(parents=True, exist_ok=True)
+        detail = error if isinstance(error, str) else (f'{type(error).__name__}: {error}' if error else 'unknown')
+        event = {
+            'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'kind': 'HOOK_DEGRADED', 'hook': hook, 'harness': harness(), 'error': str(detail)[:300],
+        }
+        with (runtime / 'hook-events.jsonl').open('a', encoding='utf-8', newline='\n') as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+
+
 def run_hook(main: Callable[[], None], fallback: dict[str, Any]) -> None:
     """Run a hook entry point.
 

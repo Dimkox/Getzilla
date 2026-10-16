@@ -263,6 +263,8 @@ P0: H01–H03, C01–C03, E02, E03, **F02**. P1: L01, E01, E04, F01, F03, S01–
 - [ ] **Step 4: Re-run.** Ожидаемо: PASS.
 - [ ] **Step 5: Commit** `feat(stop-gate): verification claims need a matching receipt`.
 
+**Как реализовано (2026-10-17):** режим stop-гейта задаётся не ключом в `policy.json` (закрытый набор ключей), а правилом «strict при эффективном риске high» с переопределением `GETZILLA_STOP_GATE_MODE`. Фразы-утверждения — id `verification-claim` в словаре языковых пакетов. Запись сбоев работает и при неимпортируемом `_lib` (только стандартная библиотека). Документация: `docs/hook-health.md`.
+
 ### Task E04: `getzilla ci protect --plan`
 
 **Files:**
