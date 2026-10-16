@@ -153,6 +153,7 @@ class CloseFailureFile:
 
 
 class ManifestTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'models a POSIX host without O_NOFOLLOW; Windows uses the fsx engine')
     def test_manifest_import_and_legacy_helpers_work_without_posix_open_flags(self) -> None:
         fake_os = types.ModuleType('os')
         unavailable = {'O_CLOEXEC', 'O_DIRECTORY', 'O_NOFOLLOW'}
@@ -211,6 +212,7 @@ class ManifestTests(unittest.TestCase):
 
             self.assertEqual(verify_manifest(alias), [])
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'counts descriptors in /proc/self/fd; Linux-only')
     def test_post_open_fstat_failures_close_descriptors_and_normalize(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'project'
@@ -276,6 +278,19 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(required - rels, set())
 
 
+class PackageHostTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'posix', 'the refusal is for hosts without POSIX ownership and umask')
+    def test_release_packaging_refuses_a_non_posix_host_before_any_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'out' / 'release.zip'
+            proc = subprocess.run([sys.executable, str(ROOT / 'scripts/package_stack.py'), '--output', str(output)],
+                                  cwd=ROOT, capture_output=True, text=True, encoding='utf-8', check=False)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn('requires a POSIX host', proc.stderr)
+            self.assertFalse(output.parent.exists())
+
+
+@unittest.skipUnless(os.name == 'posix', 'release packaging is POSIX-only (owner, umask, descriptor-relative checks)')
 class PackageTests(unittest.TestCase):
     @staticmethod
     def _init_release_repository(root: Path) -> None:

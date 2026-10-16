@@ -1091,7 +1091,13 @@ def _default_output(root: Path) -> str:
     return f'dist/getzilla-v{version}.zip'
 
 
+POSIX_ONLY = ('release packaging requires a POSIX host (Linux or macOS): it relies on owner, umask and '
+              'descriptor-relative publication checks; build the release on the release host or in CI')
+
+
 def main() -> None:
+    if os.name != 'posix':
+        raise SystemExit(f'package_stack: {POSIX_ONLY}')
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', default=None)
     args = parser.parse_args()
