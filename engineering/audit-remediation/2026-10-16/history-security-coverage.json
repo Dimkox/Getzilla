@@ -1,0 +1,61 @@
+{
+  "blobs_with_findings": 41,
+  "coverage": {
+    "blobs_over_limit": 0,
+    "blobs_scanned": 6101,
+    "bytes_scanned": 91735281,
+    "fsck_exit_code": 0,
+    "not_covered": [
+      "server-side unreachable objects",
+      "history never pushed to this repository",
+      "contents of opaque archives"
+    ],
+    "opaque_blobs_not_inspected": 0,
+    "pull_refs": 57,
+    "reachable_blobs": 6101,
+    "reachable_objects": 8375,
+    "refs": 109,
+    "shallow": false
+  },
+  "findings_by_rule": {
+    "generic-assignment": 3,
+    "github-token": 1,
+    "google-api-key": 1,
+    "openai-api-key": 17,
+    "private-key": 1,
+    "url-credentials": 20
+  },
+  "raw_findings": "private evidence store (not committed)",
+  "scanner": {
+    "name": "getzilla-builtin-secret-rules",
+    "rules_digest": "bba21f8e9dbc5b857039d911dab63c5f796c1b368140ffb618ef59296b5f37b2",
+    "version": "1"
+  },
+  "schema": "getzilla-history-security-coverage-v1",
+  "source": "git clone --mirror of github.com/Dimkox/Getzilla (all heads, tags and refs/pull/*)",
+  "triage": {
+    "classes": {
+      "generic-assignment": "fixture passwords/tokens in factory and trust-ci tests",
+      "openai-api-key/github-token/google-api-key": "sequential placeholder tokens (e.g. ending ABCDEF, abcdef, pqrstu, edface) in tests/test_agent_setup.py and tests/test_install_scripts.py",
+      "private-key": "PEM header asserted in tests/test_trust_ci_setup.py",
+      "url-credentials": "local PostgreSQL DSNs to 127.0.0.1/localhost/postgres in tests, compose.test.yaml, *.env.example and change evidence"
+    },
+    "classification": "synthetic test or example values; no live credential identified",
+    "distinct_matches": 22,
+    "paths_with_matches": [
+      "engineering/changes/*/evidence/*.md",
+      "factory/.env.example",
+      "factory/README.md",
+      "factory/tests/*",
+      "tests/test_agent_setup.py",
+      "tests/test_ci_gate.py",
+      "tests/test_install_scripts.py",
+      "tests/test_trust_ci_setup.py",
+      "trust-ci/compose.test.yaml",
+      "trust-ci/env/*.env.example",
+      "trust-ci/tests/*"
+    ],
+    "readiness": "no blocking incident; this is not a certificate that history contains no secret (rule-based scan, server-side unreachable objects not covered)",
+    "reviewed_by": "agent (not an independent security review)"
+  }
+}
