@@ -119,6 +119,7 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertIn('clean committed HEAD', refused.stderr)
             self.assertEqual(receipt.read_text(), 'prior evidence')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal exit status (128 + signal)')
     def test_named_smoke_cancellation_retains_signal_and_identity_without_receipt(self):
         script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         body = '__import__("os").kill(__import__("os").getppid(), 15); time.sleep(5)'
@@ -196,6 +197,7 @@ class NamedSmokeTests(unittest.TestCase):
                 verify_named_tests(root, ['tests.test_named'], budget=10)
 
 
+@unittest.skipUnless(os.name == 'posix', 'auto capacity is measured on POSIX; Windows runs serially')
 class PythonTestCapacityTests(unittest.TestCase):
     def test_auto_applies_nested_v2_quota_and_tighter_visible_ancestors(self) -> None:
         for leaf, parent, expected in (
@@ -539,6 +541,15 @@ class PythonTestRunnerTests(unittest.TestCase):
             with patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1', 'GETZILLA_TEST_WORKERS': '22'}):
                 self.assertEqual(selected_workers(root), 0)
 
+    @unittest.skipIf(os.name == 'posix', 'Windows has no owned process group to clean up')
+    def test_auto_runs_serially_without_posix_process_groups(self) -> None:
+        with fixture(workers='auto') as root:
+            self.assertEqual(selected_workers(root), 0)
+        self.assertEqual(python_test_runner.select_engine(4, True), (0, 'unittest-degraded'))
+        with self.assertRaisesRegex(RunnerError, 'requires POSIX'):
+            python_test_runner._pytest_command(4, 'worksteal')
+
+    @unittest.skipUnless(os.name == 'posix', 'auto capacity is measured on POSIX; Windows runs serially')
     def test_auto_uses_available_logical_cpus_with_a_bound(self) -> None:
         with fixture(workers='auto') as root:
             with capacity_files(root, v2_capacity(membership='/'), cpus=22):
@@ -595,6 +606,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 self.assertEqual(python_test_runner.main(), 0)
             self.assertIn('workers=0; engine=unittest-degraded', output.getvalue())
 
+    @unittest.skipUnless(os.name == 'posix', 'xdist runs only where the owned process group can be cleaned up')
     def test_posix_cleanup_capability_keeps_xdist_and_strict_pins(self) -> None:
         with patch.object(python_test_runner, '_parallel_process_cleanup_supported',
                           return_value=True, create=True), \
@@ -738,6 +750,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                               result.summary)
                 self.assertFalse(list(root.glob('result-*')))
 
+    @unittest.skipUnless(os.name == 'posix', 'the parallel coverage fallback needs POSIX process-group cleanup')
     def test_repo_root_without_optin_uses_measured_parallel_coverage_fallback(self) -> None:
         # The Trust CI image lacks pytest/xdist, so measured PR verification must still
         # avoid the legacy serial coverage timeout without requiring a repo-local opt-in file.
@@ -777,6 +790,7 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.status, 'pass', result.stderr)
             self.assertEqual(len(list(root.glob('result-*'))), 5)
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'process-group verification reads /proc; Linux-only')
     def test_sigterm_cancels_owned_group_and_restores_previous_handler(self) -> None:
         with fixture() as root:
             pid_file = root / 'terminated-child.pid'
@@ -846,6 +860,7 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertIn('timeout', result.stderr)
             self.assert_descendant_stopped(pid_file)
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'process-group verification reads /proc; Linux-only')
     def test_controller_exit_stops_owned_descendant_process(self) -> None:
         with fixture() as root:
             pid_file = root / 'orphan.pid'
@@ -872,7 +887,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 (root / '.coveragerc').write_text(
                     '[run]\nbranch = True\nsource = subject\n[report]\nfail_under = 74\n'
                 )
-                if scenario == 'missing-worker' and not parallel_engine_ready(measured=True):
+                if scenario == 'missing-worker' and python_test_runner.select_engine(2, True)[1] != 'pytest-xdist':
                     self.skipTest('xdist worker data-loss is unobservable on a degraded serial engine')
                 if scenario == 'missing-worker':
                     (root / 'conftest.py').write_text(
@@ -956,6 +971,8 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertRaises(RunnerError, selected_workers, root)
         with fixture(workers=0) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': 'invalid'}):
             self.assertRaises(RunnerError, selected_workers, root)
+        if not hasattr(os, 'mkfifo'):
+            return  # a FIFO configuration is a POSIX-only case
         with fixture() as root:
             config = root / '.getzilla-test-runner.json'
             config.unlink()
