@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .risk_terms import load_vocabulary, uncovered_script
 from .repo import RepoProfile, detect_repo
 from .util import git_default_base, load_json, now_utc, tree_fingerprint, unique_ordered
 
@@ -56,16 +57,8 @@ SECURITY_KEYWORD_ALIASES: dict[str, tuple[str, ...]] = {
     'роль': ('ролью',),
 }
 
-HIGH_RISK = (
-    'production', 'прод', 'deploy', 'деплой', 'delete', 'удалить данные', 'drop table', 'truncate',
-    'auth', 'oauth', 'permission', 'права доступа', 'billing', 'платеж', 'payment', 'pii', 'персональн',
-    'secret', 'credential', 'пароль', 'irreversible', 'необрат', 'sap write', '1c write', '1с запись',
-    'prompt injection', 'tenant isolation', 'изоляция арендат',
-)
-MEDIUM_RISK = (
-    'migration', 'миграц', 'api', 'event', 'событи', 'integration', 'интеграц', 'database', 'sql',
-    'legacy', 'рефактор', 'module install', 'установка модуля', 'cache', 'кеш', 'agent', 'агент битрикс',
-)
+# The risk vocabulary lives in .getzilla/config/risk-terms/: English base plus language packs
+# (getzilla.risk_terms). A trailing "*" in a term matches a word prefix.
 
 FOLLOW_UP_RE = re.compile(
     r'^\s*(да|нет|ок|окей|делай|продолжай|согласен|согласна|go|continue|yes|no|вариант\s+[abcабв123]|[abcабв123])\s*[.!]?\s*$',
@@ -363,6 +356,12 @@ def _has_term(text: str, term: str) -> bool:
     needle = term.lower().strip()
     if not needle:
         return False
+    if '*' in needle:
+        # Stem terms: every token is a whole word, or a word prefix when it ends with '*';
+        # tokens must be adjacent. 'оплат*' matches 'оплаты' but not 'переоплата'.
+        parts = [re.escape(token[:-1]) + r'\w*' if token.endswith('*') else re.escape(token) + r'(?![\w])'
+                 for token in needle.split()]
+        return re.search(r'(?<![\w])' + r'\s+'.join(parts), haystack, re.UNICODE) is not None
     if ' ' in needle:
         return needle in haystack
     return re.search(r'(?<![\w])' + re.escape(needle) + r'(?![\w])', haystack, re.UNICODE) is not None
@@ -370,13 +369,23 @@ def _has_term(text: str, term: str) -> bool:
 
 def _risk(text: str, intent: str, domains: list[str]) -> tuple[str, list[str]]:
     rationale: list[str] = []
-    high = [word for word in HIGH_RISK if _has_term(text, word)]
-    medium = [word for word in MEDIUM_RISK if _has_term(text, word)]
+    try:
+        vocabulary = load_vocabulary()
+    except (OSError, ValueError) as error:
+        # A broken vocabulary must not make every prompt look harmless.
+        return 'medium', [f'risk vocabulary unavailable ({str(error)[:120]}); medium-risk floor']
+    high = [word for word in vocabulary.high if _has_term(text, word)]
+    medium = [word for word in vocabulary.medium if _has_term(text, word)]
     if high or intent in {'incident', 'release'} or 'security' in domains:
         rationale.append('high-risk signal: ' + ', '.join(high[:5]) if high else f'high-risk intent/domain: {intent}')
         return 'high', rationale
     if medium or intent in {'architecture', 'refactor'} or any(d in domains for d in ('integration', 'data', 'api', 'event', 'ai')):
         rationale.append('medium-risk integration, contract, data, AI, or modernization work')
+        return 'medium', rationale
+    script = uncovered_script(text, vocabulary)
+    if script is not None:
+        rationale.append(f'PROMPT_LANGUAGE_NOT_COVERED:{script}: no risk-terms pack reads this prompt; medium-risk floor. '
+                         'Add one: getzilla risk-terms scaffold --lang <code> --script ' + script)
         return 'medium', rationale
     rationale.append('bounded change without high-risk signals')
     return 'low', rationale
