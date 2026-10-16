@@ -102,9 +102,9 @@ services:
       - sh
       - -ec
       - |
-        docker pull "$TRUST_CI_RUNNER_IMAGE"
-        resolved="$(docker image inspect "$TRUST_CI_RUNNER_IMAGE" --format '{{index .RepoDigests 0}}')"
-        test "$resolved" = "$TRUST_CI_RUNNER_IMAGE"
+        docker pull "$$TRUST_CI_RUNNER_IMAGE"
+        resolved="$$(docker image inspect "$$TRUST_CI_RUNNER_IMAGE" --format '{{index .RepoDigests 0}}')"
+        test "$$resolved" = "$$TRUST_CI_RUNNER_IMAGE"
     depends_on:
       docker-engine:
         condition: service_healthy
