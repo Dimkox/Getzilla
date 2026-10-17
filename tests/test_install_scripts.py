@@ -1,7 +1,10 @@
 """One-command installers: scripts/install.sh and scripts/install.ps1.
 
 The shell installer is exercised end to end against a local clone of this
-repository (no network: Grok install skipped, Git and Python already present).
+repository, in a throwaway HOME and without network: the security data and the
+workflow baseline come from a fixture mirror (GETZILLA_UPDATE_MIRROR), pip
+from stand-in wheels, and every proxy variable points at a closed port.
+GETZILLA_E2E_TOOLCHAINS=1 adds one run against the real download hosts.
 The PowerShell installer is checked statically here; it is parsed and run under
 pwsh when that is available on the host.
 """
@@ -17,13 +20,20 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
+
+from tests._support import offline_mirror
 
 ROOT = Path(__file__).resolve().parents[1]
 SHELL = ROOT / 'scripts/install.sh'
 POWERSHELL = ROOT / 'scripts/install.ps1'
 RAW = 'https://raw.githubusercontent.com/Dimkox/Getzilla/main/scripts/'
+E2E = os.environ.get('GETZILLA_E2E_TOOLCHAINS') == '1'
+# Any HTTP(S) request the offline installer still makes fails at once instead of downloading.
+NO_NETWORK = {name: 'http://127.0.0.1:9' for name in
+              ('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')}
 
 
 def _toolchain_windows_install(tool: str) -> str:
@@ -36,6 +46,31 @@ def _clean_env(**extra: str) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith('GETZILLA_')}
     env.update(extra)
     return env
+
+
+def _wheelhouse(base: Path) -> Path:
+    """Empty stand-in wheels at the pinned versions of Getzilla's test and quality tools, for pip offline."""
+    house = base / 'wheels'
+    house.mkdir()
+    for name in ('python-test-requirements.txt', 'python-quality-requirements.txt'):
+        for line in (ROOT / '.getzilla/config' / name).read_text(encoding='utf-8').splitlines():
+            requirement = line.split('#', 1)[0].strip()
+            if not requirement:
+                continue
+            project, version = requirement.split('==')
+            dist = re.sub(r'[-_.]+', '_', project).lower()
+            info = f'{dist}-{version}.dist-info'
+            with zipfile.ZipFile(house / f'{dist}-{version}-py3-none-any.whl', 'w') as wheel:
+                wheel.writestr(f'{info}/METADATA', f'Metadata-Version: 2.1\nName: {project}\nVersion: {version}\n')
+                wheel.writestr(f'{info}/WHEEL', 'Wheel-Version: 1.0\nGenerator: getzilla-tests\n'
+                                                'Root-Is-Purelib: true\nTag: py3-none-any\n')
+                wheel.writestr(f'{info}/RECORD', f'{info}/METADATA,,\n{info}/WHEEL,,\n{info}/RECORD,,\n')
+    return house
+
+
+def _branch() -> str:
+    return subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True,
+                          check=True).stdout.strip()
 
 
 class InstallScriptContractTests(unittest.TestCase):
@@ -336,102 +371,122 @@ class InstallScriptContractTests(unittest.TestCase):
 @unittest.skipIf(sys.platform == 'win32' or shutil.which('bash') is None or shutil.which('git') is None,
                  'needs bash and git')
 class InstallScriptEndToEndTests(unittest.TestCase):
-    def _fake_uv(self) -> str:
+    def setUp(self) -> None:
+        # A throwaway HOME: the installer links ~/.local/bin/getzilla, keeps its state in ~/.getzilla and
+        # writes shell profiles and agent settings, none of which may touch the account running the tests.
+        self.tmp = Path(tempfile.mkdtemp(prefix='getzilla-install-e2e-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.user_home = self.tmp / 'user'
+        self.user_home.mkdir()
+        self.fake_bin = self.tmp / 'bin'
+        self.fake_bin.mkdir()
         # The pinned uv, so the installer does not reach PyPI; Spec Kit's `uv tool install` succeeds.
-        fake_bin = Path(tempfile.mkdtemp(prefix='getzilla-fake-uv-'))
-        self.addCleanup(shutil.rmtree, fake_bin, True)
-        uv = fake_bin / 'uv'
-        uv.write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
-        uv.chmod(0o755)
-        return str(fake_bin)
+        (self.fake_bin / 'uv').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
+        (self.fake_bin / 'uv').chmod(0o755)
+        self._offline: dict[str, str] = {}
+
+    def _require_branch(self) -> None:
+        if _branch() == 'HEAD':
+            self.skipTest('detached checkout: no branch to clone')
+
+    def _install(self, home: Path, *, network: bool = False, **extra: str) -> subprocess.CompletedProcess[str]:
+        env = _clean_env(HOME=str(self.user_home), GETZILLA_HOME=str(home), GETZILLA_REPO=ROOT.as_uri(),
+                         GETZILLA_REF=_branch(), PATH=f'{self.fake_bin}:{os.environ["PATH"]}')
+        if not network:
+            if not self._offline:
+                self._offline = {'GETZILLA_UPDATE_MIRROR': str(offline_mirror(self.tmp)), 'PIP_NO_INDEX': '1',
+                                 'PIP_FIND_LINKS': str(_wheelhouse(self.tmp)), **NO_NETWORK}
+            for name in ('no_proxy', 'NO_PROXY'):
+                env.pop(name, None)
+            env.update(self._offline)
+        env.update(extra)
+        return subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True,
+                              timeout=1800 if network else 600)
 
     def _run(self, home: Path, **extra: str) -> subprocess.CompletedProcess[str]:
-        extra.setdefault('PATH', f'{self._fake_uv()}:{os.environ["PATH"]}')
-        env = _clean_env(
-            GETZILLA_HOME=str(home),
-            GETZILLA_REPO=ROOT.as_uri(),
-            GETZILLA_REF=subprocess.run(
-                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True
-            ).stdout.strip(),
-            GETZILLA_SKIP_AGENT='1',
-            **extra,
-        )
-        return subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
+        return self._install(home, GETZILLA_SKIP_AGENT='1', **extra)
 
     def test_installs_from_a_local_clone_and_reports_ready(self) -> None:
-        if subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True,
-                          text=True).stdout.strip() == 'HEAD':
-            self.skipTest('detached checkout: no branch to clone')
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / 'Getzilla'
-            project = Path(tmp) / 'project'
-            project.mkdir()
-            result = self._run(home, GETZILLA_PROJECT=str(project))
-            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
-            self.assertIn('Getzilla is ready in', result.stdout)
-            self.assertIn('Install plan for', result.stdout)
-            self.assertIn('Installing the pinned workflow baseline', result.stdout)
-            self.assertFalse((Path.home() / '.getzilla' / 'update.lock').exists())
-            self.assertTrue((home / 'scripts/install_into.py').is_file())
-            self.assertEqual(sorted(path.name for path in project.iterdir()), [])  # plan is read-only
+        self._require_branch()
+        home = self.tmp / 'Getzilla'
+        project = self.tmp / 'project'
+        project.mkdir()
+        result = self._run(home, GETZILLA_PROJECT=str(project))
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertIn('Getzilla is ready in', result.stdout)
+        self.assertIn('Install plan for', result.stdout)
+        self.assertIn(f'Python environment: {home}/.venv', result.stdout)
+        self.assertIn('Installing the pinned workflow baseline', result.stdout)
+        self.assertIn('Offline mirror', result.stdout)
+        state = self.user_home / '.getzilla'
+        self.assertFalse((state / 'update.lock').exists())
+        self.assertEqual(sorted(path.parent.name for path in state.glob('osv/*/all.zip')),
+                         sorted(['PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems']))
+        self.assertTrue(os.access(state / 'bin/opengrep', os.X_OK))
+        self.assertEqual(sorted(path.name for path in (state / 'baseline').iterdir()), ['bmad', 'spec-kit', 'superpowers'])
+        self.assertEqual((self.user_home / '.local/bin/getzilla').readlink(), home / 'bin/getzilla')
+        self.assertTrue((home / 'scripts/install_into.py').is_file())
+        self.assertEqual(sorted(path.name for path in project.iterdir()), [])  # plan is read-only
 
-            again = self._run(home)
-            self.assertEqual(again.returncode, 0, again.stdout[-2000:] + again.stderr[-2000:])
-            self.assertIn('Updating Getzilla in', again.stdout)
+        again = self._run(home)
+        self.assertEqual(again.returncode, 0, again.stdout[-2000:] + again.stderr[-2000:])
+        self.assertIn('Updating Getzilla in', again.stdout)
+        self.assertIn('already installed, sha256 verified', again.stdout)
 
     def test_rejects_an_unknown_agent_before_downloading(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / 'Getzilla'
-            result = self._run(home, GETZILLA_AGENT='cursor')
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok', result.stderr)
-            self.assertFalse(home.exists())
+        home = self.tmp / 'Getzilla'
+        result = self._run(home, GETZILLA_AGENT='cursor')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok', result.stderr)
+        self.assertFalse(home.exists())
 
     def test_defaults_to_qwen_with_openrouter_and_configures_from_the_key(self) -> None:
-        if subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True,
-                          text=True).stdout.strip() == 'HEAD':
-            self.skipTest('detached checkout: no branch to clone')
+        self._require_branch()
         key = 'sk-or-v1-feedfacefeedfacefeedfacefeedface'
-        with tempfile.TemporaryDirectory() as tmp:
-            user_home = Path(tmp) / 'user'
-            user_home.mkdir()
-            env = _clean_env(
-                HOME=str(user_home),
-                GETZILLA_HOME=str(Path(tmp) / 'Getzilla'),
-                GETZILLA_REPO=ROOT.as_uri(),
-                GETZILLA_REF=subprocess.run(
-                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=ROOT, capture_output=True, text=True,
-                    check=True,
-                ).stdout.strip(),
-                GETZILLA_NONINTERACTIVE='1',
-                OPENROUTER_API_KEY=key,
-                PATH=f'{Path(tmp) / "bin"}:{os.environ["PATH"]}',
-            )
-            fake_bin = Path(tmp) / 'bin'
-            fake_bin.mkdir()
-            (fake_bin / 'uv').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
-            (fake_bin / 'uv').chmod(0o755)
-            (fake_bin / 'qwen').write_text('#!/bin/sh\nexit 0\n')
-            (fake_bin / 'qwen').chmod(0o755)
-            result = subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True, timeout=600)
-            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
-            self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
-            self.assertIn('Qwen Code: already installed.', result.stdout)
-            self.assertNotIn(key, result.stdout + result.stderr)
-            self.assertIn(f"export OPENROUTER_API_KEY='{key}'",
-                          (user_home / '.getzilla/openrouter.env').read_text(encoding='utf-8'))
-            self.assertIn('.getzilla/openrouter.env', (user_home / '.bashrc').read_text(encoding='utf-8'))
-            self.assertIn('In your project run: qwen', result.stdout)
+        (self.fake_bin / 'qwen').write_text('#!/bin/sh\nexit 0\n')
+        (self.fake_bin / 'qwen').chmod(0o755)
+        result = self._install(self.tmp / 'Getzilla', GETZILLA_NONINTERACTIVE='1', OPENROUTER_API_KEY=key)
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
+        self.assertIn('Qwen Code: already installed.', result.stdout)
+        self.assertNotIn(key, result.stdout + result.stderr)
+        self.assertIn(f"export OPENROUTER_API_KEY='{key}'",
+                      (self.user_home / '.getzilla/openrouter.env').read_text(encoding='utf-8'))
+        self.assertIn('.getzilla/openrouter.env', (self.user_home / '.bashrc').read_text(encoding='utf-8'))
+        self.assertIn('In your project run: qwen', result.stdout)
 
     def test_refuses_a_foreign_folder(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / 'occupied'
-            home.mkdir()
-            (home / 'keep.txt').write_text('mine', encoding='utf-8')
-            result = self._run(home)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('is not a Getzilla checkout', result.stderr)
-            self.assertEqual((home / 'keep.txt').read_text(encoding='utf-8'), 'mine')
+        home = self.tmp / 'occupied'
+        home.mkdir()
+        (home / 'keep.txt').write_text('mine', encoding='utf-8')
+        result = self._run(home)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('is not a Getzilla checkout', result.stderr)
+        self.assertEqual((home / 'keep.txt').read_text(encoding='utf-8'), 'mine')
+
+    @unittest.skipUnless(E2E, 'downloads the OSV database, OpenGrep, the pinned workflow sources and PyPI tools')
+    def test_installs_the_real_security_data_and_baseline_from_the_network(self) -> None:
+        self._require_branch()
+        if str(ROOT / '.getzilla') not in sys.path:
+            sys.path.insert(0, str(ROOT / '.getzilla'))
+        from getzilla import baseline, updater
+
+        home = self.tmp / 'Getzilla'
+        result = self._install(home, network=True, GETZILLA_SKIP_AGENT='1')
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertIn('Getzilla is ready in', result.stdout)
+        self.assertNotIn('Offline mirror', result.stdout)
+        state = self.user_home / '.getzilla'
+        for ecosystem in updater.OSV_ECOSYSTEMS:
+            with zipfile.ZipFile(state / 'osv' / ecosystem / 'all.zip') as archive:
+                self.assertGreater(len(archive.namelist()), 100, ecosystem)
+        asset = updater.OPENGREP_ASSETS[updater._platform_key()]
+        self.assertEqual(hashlib.sha256((state / 'bin/opengrep').read_bytes()).hexdigest(), asset[1])
+        for component_id, item in baseline.components().items():
+            head = subprocess.run(['git', '-C', str(state / 'baseline' / component_id), 'rev-parse', 'HEAD'],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(head, item['pinned_commit'], component_id)
+        self.assertTrue((home / '.venv/bin/ruff').is_file())
 
 
 if __name__ == '__main__':

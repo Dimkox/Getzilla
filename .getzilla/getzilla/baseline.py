@@ -70,9 +70,17 @@ def _head(run: Runner, target: Path) -> str | None:
     return (process.stdout or '').strip() if process.returncode == 0 else None
 
 
+def _upstream(url: str) -> str:
+    return url
+
+
 def install_user(home: Path, *, run: Runner = default_runner, which: Callable[[str], str | None] = shutil.which,
-                 config: Mapping[str, Mapping[str, Any]] | None = None) -> list[Step]:
-    """Pinned workflow sources and tools for this user; a mismatch or a missing prerequisite fails."""
+                 config: Mapping[str, Mapping[str, Any]] | None = None,
+                 locate: Callable[[str], str] = _upstream) -> list[Step]:
+    """Pinned workflow sources and tools for this user; a mismatch or a missing prerequisite fails.
+
+    ``locate`` maps each upstream Git URL to the one to use (the updater's offline mirror).
+    """
     config = config or components()
     steps: list[Step] = []
     root = pinned_checkout(home)
@@ -86,7 +94,8 @@ def install_user(home: Path, *, run: Runner = default_runner, which: Callable[[s
         if target.exists():
             shutil.rmtree(target)
         process = run(['git', '-c', 'advice.detachedHead=false', 'clone', '-q', '--depth', '1', '--branch',
-                       component['upstream_tag'], f"https://github.com/{component['repository']}.git", str(target)], None)
+                       component['upstream_tag'], locate(f"https://github.com/{component['repository']}.git"), str(target)],
+                      None)
         if process.returncode != 0:
             steps.append(Step(f'baseline:{component_id}', 'fail', f"clone {component['upstream_tag']}: {_tail(process)}"))
             continue
@@ -102,8 +111,9 @@ def install_user(home: Path, *, run: Runner = default_runner, which: Callable[[s
         if not which('uv'):
             steps.append(Step('baseline:specify-cli', 'fail', 'uv is required for the Spec Kit CLI; install uv and re-run'))
         else:
+            source = locate(f"https://github.com/{spec_kit['repository']}.git")
             process = run([which('uv') or 'uv', 'tool', 'install', '--force', 'specify-cli', '--from',
-                           f"git+https://github.com/{spec_kit['repository']}.git@{spec_kit['upstream_tag']}"], None)
+                           f"git+{source}@{spec_kit['upstream_tag']}"], None)
             steps.append(Step('baseline:specify-cli', 'ok' if process.returncode == 0 else 'fail',
                               spec_kit['upstream_tag'] if process.returncode == 0 else _tail(process)))
     if 'bmad' in config:
