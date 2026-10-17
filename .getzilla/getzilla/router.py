@@ -284,6 +284,15 @@ def _has_operational_intent(text: str) -> bool:
     return False
 
 
+LEADING_BUILD = re.compile(
+    r'^\s*(?:please\s+|пожалуйста,?\s+)?'
+    r'(?:implement|build|create|add|develop|introduce|'
+    r'реализ\w*|внедр\w*|сдела\w*|добав\w*|созда\w*|разработа\w*)\b',
+    re.IGNORECASE,
+)
+PROCESS_INTENTS = frozenset({'review', 'research', 'docs'})
+
+
 def _best_intent(text: str, *, operational_intent: bool) -> str:
     scores = _score(text, INTENT_KEYWORDS)
     scores.pop('release', None)
@@ -294,8 +303,14 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
 
     # Active incidents retain containment priority. Explicit operational requests
     # then outrank defect/review/PR transport; incidental release nouns do not.
+    # A task that opens with a build imperative ("Implement ...", "Реализуй ...") is delivery work:
+    # later process words ("independent reviews", "docs", "research") must not turn it into a
+    # read-only review route without a write owner.
+    leading_build = bool(LEADING_BUILD.match(text))
     for intent in ('incident', 'release', 'bugfix', 'review', 'refactor', 'architecture', 'research', 'docs'):
         if scores.get(intent):
+            if leading_build and intent in PROCESS_INTENTS:
+                continue
             return intent
 
     lowered = text.lower().strip()
@@ -310,7 +325,7 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
     )
     if scores.get('test') and (test_primary or not scores.get('feature')):
         return 'test'
-    if scores.get('feature'):
+    if scores.get('feature') or leading_build:
         return 'feature'
     if scores.get('test'):
         return 'test'
