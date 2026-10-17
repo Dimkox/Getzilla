@@ -23,6 +23,9 @@ class ShellQuotingTests(unittest.TestCase):
         cls.stack = contextlib.ExitStack()
         cls.root = cls.stack.enter_context(project_copy(git=True))
         cls.other = cls.stack.enter_context(project_copy(git=True))
+        # The reads below name README.md; a missing path would be refused by path hints instead.
+        for root in (cls.root, cls.other):
+            (root / 'README.md').write_bytes(b'allow deny' + bytes([10]))
         for root in (cls.root, cls.other):
             set_active_route(root, build_route(root, 'Fix shell quoting regression', 'quoted-data').to_dict())
 
