@@ -78,6 +78,23 @@ def _broken_local_links(document: Path, root: Path) -> list[str]:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_runtime_state_is_never_walked_or_counted(self) -> None:
+        # A Getzilla checkout used as a workspace fills .getzilla/runtime with worktrees and receipts.
+        # They are not payload and must not hit the managed-source entry limit (install plans failed with
+        # "managed source entry limit exceeded" on a checkout with ~578k runtime entries).
+        runtime = Path(tempfile.mkdtemp(prefix="walk-limit-", dir=ROOT / ".getzilla" / "runtime"))
+        try:
+            nested = runtime / "worktrees" / "big"
+            nested.mkdir(parents=True)
+            for index in range(MODULE.MAX_MANAGED_SOURCE_ENTRIES + 10):
+                (nested / f"f{index}").touch()
+            payload = MODULE.build_payload(ROOT)
+            runtime_paths = sorted(entry.path for entry in payload if entry.path.startswith(".getzilla/runtime/"))
+            self.assertEqual(runtime_paths, [".getzilla/runtime/.gitkeep"])
+        finally:
+            import shutil
+            shutil.rmtree(runtime)
+
     def test_installed_grok_skills_equal_canonical_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / 'consumer'
