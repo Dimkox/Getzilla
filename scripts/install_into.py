@@ -569,6 +569,9 @@ class _SourceTree:
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name == "__pycache__":
                     continue
+                if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
+                    # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.
+                    continue
                 child, _identity_value = _open_child_directory(
                     descriptor, name, _identity(metadata)
                 )
