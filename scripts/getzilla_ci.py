@@ -61,6 +61,11 @@ def main(argv: list[str] | None = None, **dependencies: object) -> int:
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--plan', action='store_true', help='read-only: report visibility, gate and planned writes')
+    mode.add_argument('--protect-plan', action='store_true',
+                      help='read-only: print the branch protection that makes the Getzilla checks binding')
+    mode.add_argument('--protect-apply', action='store_true',
+                      help='apply that branch protection with gh (changes repository settings; needs --yes)')
+    parser.add_argument('--yes', action='store_true', help='confirm --protect-apply')
     mode.add_argument(
         '--write', action='store_true',
         help='public: create the workflow (never overwrites a different file); private: write nothing',
@@ -78,6 +83,30 @@ def main(argv: list[str] | None = None, **dependencies: object) -> int:
     args = parser.parse_args(argv)
     runner = dependencies.get('runner', ci_gate.run_command)
     options = {key: value for key, value in dependencies.items() if key in {'runner', 'fetch', 'which'}}
+    if args.protect_plan or args.protect_apply:
+        try:
+            target = ci_gate.resolve_target_root(Path(args.target), runner=runner)  # type: ignore[arg-type]
+            slug = ci_gate.repository_slug(target, runner=runner)  # type: ignore[arg-type]
+            branch = args.branch or ci_gate.default_branch(target, runner=runner)[0]  # type: ignore[arg-type]
+        except (ci_gate.CiGateError, OSError) as exc:
+            print(f'getzilla_ci: {exc}', file=sys.stderr)
+            return 2
+        if not slug:
+            print('getzilla_ci: no GitHub repository slug for this checkout', file=sys.stderr)
+            return 2
+        plan = ci_gate.protection_plan(target, slug, branch)
+        print(json.dumps(plan, ensure_ascii=True, indent=2, sort_keys=True))
+        if args.protect_plan:
+            return 0
+        if not args.yes:
+            print('getzilla_ci: --protect-apply changes repository settings; rerun with --yes to confirm', file=sys.stderr)
+            return 2
+        result = ci_gate.apply_protection(plan, runner=runner)  # type: ignore[arg-type]
+        if result.returncode != 0:
+            print(f'getzilla_ci: applying branch protection failed: {result.stderr.strip()[:300]}', file=sys.stderr)
+            return 1
+        print('getzilla_ci: branch protection applied')
+        return 0
     try:
         target = ci_gate.resolve_target_root(Path(args.target), runner=runner)  # type: ignore[arg-type]
         action = ci_gate.apply_gate if args.write else ci_gate.plan_gate
