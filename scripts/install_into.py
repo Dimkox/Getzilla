@@ -178,6 +178,86 @@ _UNSUPPORTED_RENAME_ERRNOS = frozenset(
 )
 
 
+AGENT_COMPONENT_PATHS = {
+    # Generated per-agent harness output; the canonical sources (.grok hooks/agents/rules, .agents/skills) are core.
+    "claude": (".claude/",),
+    "codex": (".codex/",),
+    "qwen": (".qwen/",),
+    "gemini": (".gemini/",),
+    "grok": (".grok/skills/",),
+    "copilot": (".github/hooks/", ".github/agents/"),
+    "cursor": (".cursor/",),
+}
+KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
+
+
+def component_of(path: str) -> str:
+    """core, factory or agent:<name> for one payload path."""
+    if path.startswith("factory/"):
+        return "factory"
+    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
+        if path.startswith(prefixes):
+            return f"agent:{agent}"
+    return "core"
+
+
+class PayloadSelection:
+    """Which components an installation materializes. ``full()`` is the compatibility layout."""
+
+    def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False) -> None:
+        unknown = sorted(set(agents) - set(KNOWN_AGENTS))
+        if unknown:
+            raise UnsafeInstallTarget(f"unknown agent(s): {', '.join(unknown)}")
+        self.agents, self.factory, self.full = tuple(agents), factory, full
+
+    @classmethod
+    def full_layout(cls) -> "PayloadSelection":
+        return cls(KNOWN_AGENTS, factory=True, full=True)
+
+    def includes(self, path: str) -> bool:
+        if self.full:
+            return True
+        component = component_of(path)
+        if component == "core":
+            return True
+        if component == "factory":
+            return self.factory
+        return component.split(":", 1)[1] in self.agents
+
+    def to_dict(self) -> dict[str, object]:
+        return {"agents": list(self.agents), "factory": self.factory, "full": self.full}
+
+
+def detect_agents(target: Path) -> tuple[str, ...]:
+    """Agents to install for: GETZILLA_AGENT, else agents whose folders the target already has, else qwen."""
+    chosen = os.environ.get("GETZILLA_AGENT", "").strip().lower()
+    if chosen in KNOWN_AGENTS:
+        return (chosen,)
+    found = []
+    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
+        if agent == "grok":
+            marker = target / ".grok" / "skills"
+        else:
+            marker = target / prefixes[0].rstrip("/")
+        if agent in {"cursor"}:
+            marker = target / ".cursor" / "rules" / "getzilla"
+        if marker.exists():
+            found.append(agent)
+    return tuple(found) or ("qwen",)
+
+
+def footprint(payload: "tuple[InstallEntry, ...]", selection: "PayloadSelection | None" = None) -> dict[str, dict[str, object]]:
+    components: dict[str, dict[str, object]] = {}
+    for entry in payload:
+        name = component_of(entry.path)
+        item = components.setdefault(name, {"files": 0, "bytes": 0, "included": True})
+        item["files"] = int(item["files"]) + 1
+        item["bytes"] = int(item["bytes"]) + len(entry.content)
+        if selection is not None:
+            item["included"] = selection.includes(entry.path)
+    return dict(sorted(components.items()))
+
+
 class UnsafeInstallTarget(RuntimeError):
     pass
 
@@ -674,6 +754,18 @@ def build_payload(
     source: Path,
     *,
     profile_kind: str = "generic",
+    selection: "PayloadSelection | None" = None,
+) -> tuple[InstallEntry, ...]:
+    payload = _build_full_payload(source, profile_kind=profile_kind)
+    if selection is None or selection.full:
+        return payload
+    return tuple(entry for entry in payload if selection.includes(entry.path))
+
+
+def _build_full_payload(
+    source: Path,
+    *,
+    profile_kind: str = "generic",
 ) -> tuple[InstallEntry, ...]:
     if profile_kind not in {"generic", "bitrix"}:
         raise UnsafeInstallTarget(f"unsupported explicit profile kind: {profile_kind}")
@@ -970,8 +1062,10 @@ def _make_plan(
     include_dependencies: bool,
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
+    selection: PayloadSelection | None = None,
 ) -> dict[str, object]:
-    selected_payload = payload if payload is not None else build_payload(source)
+    full_payload = build_payload(source)
+    selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
     kept = _kept_local(target) if state == "directory" else frozenset()
     kept_digests = _kept_local_digests(target) if state == "directory" else {}
@@ -1011,6 +1105,13 @@ def _make_plan(
         "target_state": state,
         "kept": keep_reports,
         "entries": [entry.manifest() for entry in deliverable],
+        "selection": (selection or PayloadSelection.full_layout()).to_dict(),
+        "components": footprint(full_payload, selection),
+        "post_install": [
+            {"component": "baseline:security", "installed_by": "scripts/getzilla_update.py --only osv --only opengrep"},
+            {"component": "baseline:workflow", "installed_by": "scripts/getzilla_baseline.py apply"},
+        ],
+        "on_demand": "components left out are added when needed: getzilla components add agent:<name>|factory",
         "legacy_migration": _legacy_migration(target) if state == "directory" else [],
         "dependency_advice": _dependency_advice(
             source,
@@ -1468,8 +1569,9 @@ def _materialize_new(
     *,
     include_dependencies: bool,
     include_optional: bool,
+    selection: PayloadSelection | None = None,
 ) -> dict[str, object]:
-    payload = build_payload(source)
+    payload = build_payload(source, selection=selection)
     plan = _make_plan(
         source,
         target,
@@ -1611,6 +1713,12 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true", help="Alias for planning.")
     parser.add_argument(
+        "--agents",
+        help="Comma-separated agents to install for (default: GETZILLA_AGENT, the agent folders the target "
+             "already has, else qwen). Other agents and factory/ are added when needed.",
+    )
+    parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
+    parser.add_argument(
         "--with-ci",
         action="store_true",
         help="Not supported here; use scripts/getzilla_ci.py --write after the repository has a GitHub remote.",
@@ -1636,12 +1744,21 @@ def main() -> None:
     if args.materialize_new and args.dry_run:
         parser.error("--dry-run is planning and cannot be combined with --materialize-new")
     target = Path(args.target)
+    if args.full_layout:
+        selection = PayloadSelection.full_layout()
+    else:
+        agents = tuple(item.strip().lower() for item in (args.agents or "").split(",") if item.strip())
+        try:
+            selection = PayloadSelection(agents or detect_agents(target))
+        except UnsafeInstallTarget as exc:
+            parser.error(str(exc))
     if args.materialize_new:
         result = _materialize_new(
             ROOT,
             target,
             include_dependencies=not args.no_deps,
             include_optional=args.all_deps,
+            selection=selection,
         )
     else:
         result = _make_plan(
@@ -1649,6 +1766,7 @@ def main() -> None:
             target,
             include_dependencies=not args.no_deps,
             include_optional=args.all_deps,
+            selection=selection,
         )
         if not args.plan:
             print(LEGACY_PLAN_NOTICE)

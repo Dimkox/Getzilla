@@ -86,7 +86,7 @@ main() {
 
   if [ -n "${GETZILLA_NEW_PROJECT:-}" ]; then
     say "Creating a new project at $GETZILLA_NEW_PROJECT ..."
-    (cd "$home" && "$python" scripts/install_into.py --materialize-new "$GETZILLA_NEW_PROJECT")
+    (cd "$home" && "$python" scripts/install_into.py --materialize-new "$GETZILLA_NEW_PROJECT" --agents "$agent")
     say "Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project..."
     (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_baseline.py apply \
       --project "$GETZILLA_NEW_PROJECT" --agent "$agent") \
