@@ -183,6 +183,7 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 ## Development discipline
 
 - Inspect the relevant code, contracts, migrations, tests, configuration, and recent patterns before editing.
+- Locate a file before reading it (`rg --files | rg -i <name>`); never guess paths. Every miss costs a full model call over the whole context. When none of the paths a read names exist, the PreToolUse hook refuses it and lists the closest real paths.
 - Prefer the smallest coherent vertical change.
 - Add a failing test or characterization test before behavior changes when practical.
 - Do not introduce a service, database, queue, framework, or dependency without explicit architectural justification.
