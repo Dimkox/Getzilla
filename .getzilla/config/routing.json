@@ -35,32 +35,77 @@
     "php_implementer"
   ],
   "analysis_floors": {
-    "always": ["repo_explorer"],
-    "feature_like": ["task_analyst"],
-    "standard": ["architect", "docs_researcher"]
+    "always": [
+      "repo_explorer"
+    ],
+    "feature_like": [
+      "task_analyst"
+    ],
+    "standard": [
+      "architect",
+      "docs_researcher"
+    ]
   },
   "analysis_domain_agents": {
-    "bitrix": ["bitrix_architect"],
-    "api": ["integration_architect"],
-    "event": ["integration_architect"],
-    "integration": ["integration_architect"],
-    "data": ["data_architect"],
-    "ai": ["ai_architect"]
+    "bitrix": [
+      "bitrix_architect"
+    ],
+    "api": [
+      "integration_architect"
+    ],
+    "event": [
+      "integration_architect"
+    ],
+    "integration": [
+      "integration_architect"
+    ],
+    "data": [
+      "data_architect"
+    ],
+    "ai": [
+      "ai_architect"
+    ]
   },
   "review_floors": {
-    "delivery": ["code_reviewer", "test_reviewer"],
-    "docs": ["code_reviewer"],
-    "review_intent": ["code_reviewer", "test_reviewer"],
-    "release": ["release_reviewer"]
+    "delivery": [
+      "code_reviewer",
+      "test_reviewer"
+    ],
+    "docs": [
+      "code_reviewer"
+    ],
+    "review_intent": [
+      "code_reviewer",
+      "test_reviewer"
+    ],
+    "release": [
+      "release_reviewer"
+    ],
+    "trivial": [
+      "code_reviewer"
+    ]
   },
   "review_domain_agents": {
-    "bitrix": ["bitrix_reviewer"],
-    "data": ["data_reviewer"],
-    "security": ["security_reviewer"],
-    "ai": ["security_reviewer"],
-    "integration": ["security_reviewer"]
+    "bitrix": [
+      "bitrix_reviewer"
+    ],
+    "data": [
+      "data_reviewer"
+    ],
+    "security": [
+      "security_reviewer"
+    ],
+    "ai": [
+      "security_reviewer"
+    ],
+    "integration": [
+      "security_reviewer"
+    ]
   },
   "review_risk_agents": {
-    "high": ["security_reviewer", "release_reviewer"]
+    "high": [
+      "security_reviewer",
+      "release_reviewer"
+    ]
   }
 }

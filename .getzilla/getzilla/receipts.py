@@ -989,7 +989,8 @@ def validate_evidence(
         'spec_fingerprint',
     }
     escalated = _escalated_evidence(root, route_id, required, current)
-    for kind in [*required, *escalated]:
+    waived = _waived_evidence(root, route_id, required, current)
+    for kind in [*[item for item in required if item not in waived], *escalated]:
         try:
             receipt = get_receipt(root, route_id, kind)
         except RuntimeError as exc:
@@ -1074,6 +1075,29 @@ def _escalated_evidence(root: Path, route_id: str, required: list[str], current:
     diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}
     added = diff.get('added_evidence') if isinstance(diff.get('added_evidence'), list) else []
     return [kind for kind in added if isinstance(kind, str) and kind in RECEIPT_KINDS and kind not in required]
+
+
+def _waived_evidence(root: Path, route_id: str, required: list[str], current: str) -> list[str]:
+    """Reviews a current, passing verification proved unnecessary (TRIVIAL_PROVEN_BY_DIFF); never verification."""
+    if 'verification' not in required:
+        return []
+    try:
+        receipt = get_receipt(root, route_id, 'verification')
+    except RuntimeError:
+        return []
+    if not isinstance(receipt, dict) or receipt.get('status') != 'pass' or receipt.get('stale') is True \
+            or receipt.get('tree_fingerprint') != current:
+        return []
+    details = receipt.get('details') if isinstance(receipt.get('details'), dict) else {}
+    diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}
+    if diff.get('profile_reason') != 'TRIVIAL_PROVEN_BY_DIFF' or diff.get('effective_risk') != 'low':
+        return []
+    raw = diff.get('waived_evidence') if isinstance(diff.get('waived_evidence'), list) else []
+    waived = [kind for kind in raw if isinstance(kind, str) and kind in RECEIPT_KINDS and kind != 'verification']
+    kept = [kind for kind in required if kind not in waived]
+    if not any(kind.endswith('_review') for kind in kept):
+        return []  # one independent review always stays
+    return waived
 
 
 def invalidate_receipts(root: Path, route_id: str, reason: str) -> None:

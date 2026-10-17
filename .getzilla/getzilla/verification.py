@@ -2263,6 +2263,14 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     escalation = escalate_route(route, worst.risk, root)
     metadata.update(effective_risk=escalation['effective_risk'], added_reviewers=escalation['added_reviewers'],
                     added_evidence=escalation['added_evidence'])
+    from .router import trivial_waiver
+    waived = trivial_waiver(route, escalation['effective_risk'], profile, root)
+    metadata['waived_evidence'] = waived
+    if waived:
+        metadata['profile_reason'] = 'TRIVIAL_PROVEN_BY_DIFF'
+        return CheckResult('diff-risk', 'pass', (
+            f"{summary}; TRIVIAL_PROVEN_BY_DIFF: prose-only change at low risk, verification and one independent "
+            f"review are enough (not required: {', '.join(waived)})")), metadata
     if not escalation['added_evidence']:
         return CheckResult('diff-risk', 'pass', f"{summary}; route risk {metadata['route_risk']} covers it"), metadata
     missing = validate_evidence(root, {**route, 'required_evidence': escalation['added_evidence']},

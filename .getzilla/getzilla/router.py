@@ -643,6 +643,27 @@ def escalate_route(route: dict[str, object], risk: str, root: Path) -> dict[str,
             'added_reviewers': added_reviewers, 'added_evidence': added_evidence}
 
 
+def trivial_waiver(route: dict[str, object], effective_risk: str, profile: str, root: Path) -> list[str]:
+    """Evidence a proven-trivial change no longer needs: delivery-floor reviews beyond the trivial floor.
+
+    Only when the exact-head diff is prose-only (`profile == 'trivial'`) and nothing raised the risk
+    above low. Verification and at least one independent review always stay; risk and domain
+    reviews are never waived.
+    """
+    if profile != 'trivial' or effective_risk != 'low' or str(route.get('risk') or 'low') != 'low':
+        return []
+    cfg = load_routing_config(root)
+    floors = cfg.get('review_floors') if isinstance(cfg.get('review_floors'), dict) else {}
+    trivial = set(_string_list(floors.get('trivial'))) or {'code_reviewer'}
+    delivery = _string_list(floors.get('delivery'))
+    waivable = {REVIEW_EVIDENCE[agent] for agent in delivery if agent not in trivial and agent in REVIEW_EVIDENCE}
+    kept_reviews = {REVIEW_EVIDENCE[agent] for agent in trivial if agent in REVIEW_EVIDENCE}
+    required = [str(item) for item in route.get('required_evidence') or []]
+    if not kept_reviews & set(required):
+        return []  # never leave a route without an independent review
+    return [kind for kind in required if kind in waivable]
+
+
 def route_context(route: Route | dict[str, object]) -> str:
     data = route.to_dict() if isinstance(route, Route) else route
     analysis = ', '.join(data.get('analysis_agents', [])) or 'none'
