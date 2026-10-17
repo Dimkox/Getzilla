@@ -1995,11 +1995,16 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         names.append('coverage')
     if uses_pytest_runner or has_unittest_files:
         dispatch.batch(names, lambda: _core_python_checks(root, mode, uses_pytest_runner, keep_going=keep_going))
+    factory_exit = root / 'factory/tests/run_disposable_exit.py'
+    installed = (root / '.getzilla' / 'AGBP_SYNC.json').is_file()
+    if installed and mode in {'pr', 'release'} and factory_exit.is_file():
+        # An installed project runs source and unit checks only: the factory's container/database exit
+        # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
+        dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
     if uses_pytest_runner:
         return results
     _dispatch_factory_unit(root, dispatch)
-    factory_exit = root / 'factory/tests/run_disposable_exit.py'
-    if mode in {'pr', 'release'} and factory_exit.is_file():
+    if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
             if os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox' else
@@ -2401,6 +2406,7 @@ def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
         {'severity': 'warning', 'path': '.getzilla/runtime/hook-events.jsonl', 'code': 'hook-degraded', 'message': message}]), metadata
 
 
+CONSUMER_INFRA_SKIP = 'consumer source-only/unit-only policy prohibits infrastructure execution'
 CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machine; security tools are checked by their own steps'
 NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
 

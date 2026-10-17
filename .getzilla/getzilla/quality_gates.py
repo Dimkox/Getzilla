@@ -86,7 +86,10 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
     if name == "workflow-baseline":
         return summary.startswith(("CI runner: ", "not an installed Getzilla project"))
     if name == "factory-postgres-exit":
-        return summary == "repository-sandbox has no nested-container/database capability"
+        return summary in {
+            "repository-sandbox has no nested-container/database capability",
+            "consumer source-only/unit-only policy prohibits infrastructure execution",
+        }
     if name in {"architecture", "governance", "workflow-artifacts"}:
         return summary in {
             "architecture is not configured",

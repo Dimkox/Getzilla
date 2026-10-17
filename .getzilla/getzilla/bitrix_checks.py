@@ -19,6 +19,7 @@ class Finding:
 
 
 CORE_PREFIXES = ('bitrix/',)
+CUSTOM_LOCAL_PREFIXES = ('bitrix/local/', 'local/')
 DEBUG_PATTERNS = {
     'debug-output': re.compile(r'\b(?:var_dump|print_r)\s*\(|\bdd\s*\(|\bdie\s*\(', re.IGNORECASE),
     'dangerous-eval': re.compile(r'\b(?:eval|shell_exec|passthru|system)\s*\(', re.IGNORECASE),
@@ -31,6 +32,8 @@ def _module_roots(root: Path, changed: list[str]) -> list[Path]:
         parts = Path(rel).parts
         if len(parts) >= 3 and parts[0] == 'local' and parts[1] == 'modules':
             roots.add(root / 'local/modules' / parts[2])
+        if len(parts) >= 4 and parts[:3] == ('bitrix', 'local', 'modules'):
+            roots.add(root / 'bitrix/local/modules' / parts[3])
     return sorted(roots)
 
 
@@ -39,7 +42,7 @@ def check_bitrix(root: Path, changed: list[str]) -> list[Finding]:
 
     for rel in changed:
         normalized = rel.replace('\\', '/')
-        if normalized.startswith(CORE_PREFIXES):
+        if normalized.startswith(CORE_PREFIXES) and not any(normalized.startswith(prefix) for prefix in CUSTOM_LOCAL_PREFIXES):
             findings.append(Finding(
                 'error', 'core-modification', normalized,
                 'Bitrix core path changed. Move customization to local/ or approve protected-path explicitly.',
