@@ -65,7 +65,7 @@ class WorkflowSourceContractTests(unittest.TestCase):
         schema = json.loads((ROOT / 'schemas/workflow-source-v1.schema.json').read_text(encoding='utf-8'))
         enum = set(schema['properties']['source_type']['enum'])
         self.assertEqual(set(_components()), enum)
-        self.assertEqual(_config().get('policy'), 'verified_against; advisory parser, never an install target')
+        self.assertEqual(_config().get('policy'), 'verified_against; mandatory pinned baseline installed for the selected agent')
 
     def test_workflow_source_pins_are_semver_and_current(self) -> None:
         rows = _readme_rows()
@@ -84,6 +84,14 @@ class WorkflowSourceContractTests(unittest.TestCase):
             self.assertEqual(row['upstream'], component['repository'], component_id)
             self.assertEqual(row['observed_latest'], pinned, component_id)
             self.assertEqual(row['observed_at'], component['observed_at'], component_id)
+
+    def test_workflow_sources_pin_a_full_commit_and_an_install_mechanism(self) -> None:
+        for component_id, component in _components().items():
+            self.assertRegex(component['pinned_commit'], r'^[0-9a-f]{40}$', component_id)
+            self.assertIn('project', component['install'], component_id)
+        agents = {'claude', 'codex', 'qwen', 'gemini', 'grok', 'copilot'}
+        self.assertEqual(set(_components()['bmad']['install']['tools']), agents)
+        self.assertEqual(set(_components()['spec-kit']['install']['integrations']), agents)
 
     def test_workflow_source_observed_freshness_within_window(self) -> None:
         today = datetime.date.today()

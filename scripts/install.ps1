@@ -28,11 +28,11 @@
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
-# At the end of every run (first install or re-run) the installer always updates the
-# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers to
-# update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their
-# latest versions and runs scripts/getzilla_update.py for them only after you answer yes.
-# Without an interactive console it only prints that command.
+# Every run (first install or re-run) installs the mandatory baseline: the vulnerability data
+# (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified Superpowers, BMAD
+# and Spec Kit for your coding agent. There is no option to skip it: if any part does not
+# install, the installer stops with an error and says what to fix. Updating third-party tools
+# to newer versions stays a separate command: scripts/getzilla_update.py --only agents --only sources.
 #
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
@@ -102,10 +102,26 @@ function Install-Getzilla {
         Write-Step 'Checking this machine...'
         Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
         $DoctorExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    Update-SecurityData $Python $GetzillaHome
+    Install-WorkflowBaseline $Python $GetzillaHome
+
+    Push-Location $GetzillaHome
+    try {
         if ($env:GETZILLA_NEW_PROJECT) {
             Write-Step ("Creating a new project at " + $env:GETZILLA_NEW_PROJECT + " ...")
             Invoke-Python $Python @('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT)
             if ($LASTEXITCODE -ne 0) { throw 'Creating the new project failed; see the message above.' }
+            Write-Step 'Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project...'
+            Invoke-Python $Python @('scripts/getzilla_baseline.py', 'apply', '--project', $env:GETZILLA_NEW_PROJECT, '--agent', $Agent)
+            if ($LASTEXITCODE -ne 0) {
+                throw ('The baseline was not connected to ' + $env:GETZILLA_NEW_PROJECT + ' (FAIL lines above). Fix it and run: cd "' +
+                    $GetzillaHome + '"; ' + ($Python -join ' ') + ' scripts/getzilla_baseline.py apply --project "' +
+                    $env:GETZILLA_NEW_PROJECT + '" --agent ' + $Agent)
+            }
         } elseif ($env:GETZILLA_PROJECT) {
             Write-Step ("Install plan for " + $env:GETZILLA_PROJECT + " (read-only, nothing is written):")
             Invoke-Python $Python @('scripts/install_into.py', '--plan', $env:GETZILLA_PROJECT)
@@ -113,9 +129,6 @@ function Install-Getzilla {
     } finally {
         Pop-Location
     }
-
-    Update-SecurityData $Python $GetzillaHome
-    Request-ToolUpdate $Python $GetzillaHome
 
     $PythonText = $Python -join ' '
     Write-Host ''
@@ -478,37 +491,47 @@ function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) 
 }
 
 function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
-    # Not optional: without fresh vulnerability data the first gates would scan against an empty
-    # or stale CVE database. A network failure warns instead of failing the install.
+    # Not optional: without vulnerability data the gates would scan against an empty CVE
+    # database, so a failure stops the install instead of warning.
     Write-Step 'Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner...'
     Push-Location $GetzillaHome
     try {
         Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')
         if ($LASTEXITCODE -ne 0) {
-            Write-Host ('WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "' + $GetzillaHome + '"; ' +
-                ($Python -join ' ') + ' scripts/getzilla_update.py --only osv --only opengrep') -ForegroundColor Yellow
+            throw ('Vulnerability data did not install (FAIL lines above). Fix the network or the error and run this installer again (or: cd "' +
+                $GetzillaHome + '"; ' + ($Python -join ' ') + ' scripts/getzilla_update.py --only osv --only opengrep).')
         }
     } finally {
         Pop-Location
     }
 }
 
-function Request-ToolUpdate([string[]]$Python, [string]$GetzillaHome) {
-    $answer = 'n'
-    if (Test-CanAsk) {
-        $answer = Read-Choice 'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]' 'n'
+function Install-WorkflowBaseline([string[]]$Python, [string]$GetzillaHome) {
+    # Not optional: Superpowers, BMAD and Spec Kit at the pinned, commit-verified versions.
+    # BMAD runs on Node.js; Spec Kit installs through uv, which brings its own Python 3.11+.
+    if (-not (Install-Node 20)) { throw 'Node.js 20 or newer is required for the BMAD installer and could not be installed.' }
+    $venvPython = Join-Path $GetzillaHome '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        throw "Getzilla's Python environment ($GetzillaHome\.venv) is missing; it is needed for the Spec Kit installer."
     }
-    if ($answer -in @('y', 'Y', 'yes', 'Yes', 'YES')) {
-        Write-Step 'Updating third-party tools...'
-        Push-Location $GetzillaHome
-        try {
-            Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'agents', '--only', 'sources')
-            if ($LASTEXITCODE -ne 0) { Write-Step 'Some updates failed (FAIL lines above); run the same command again later.' }
-        } finally {
-            Pop-Location
+    $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
+    if (-not ($uvCommand -and ((& $uvCommand.Source --version 2>$null) -match '^uv 0\.11\.12\b'))) {
+        & $venvPython -m pip install --disable-pip-version-check --quiet 'uv==0.11.12'
+        if ($LASTEXITCODE -ne 0) { throw 'Installing uv 0.11.12 (needed for the pinned Spec Kit CLI) failed.' }
+    }
+    Write-Step 'Installing the pinned workflow baseline (Superpowers, BMAD, Spec Kit)...'
+    $previousPath = $env:Path
+    $env:Path = (Join-Path $GetzillaHome '.venv\Scripts') + ';' + $env:Path
+    Push-Location $GetzillaHome
+    try {
+        Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'baseline')
+        if ($LASTEXITCODE -ne 0) {
+            throw ('The workflow baseline did not install (FAIL lines above). Fix it and run this installer again (or: cd "' +
+                $GetzillaHome + '"; ' + ($Python -join ' ') + ' scripts/getzilla_update.py --only baseline).')
         }
-    } else {
-        Write-Step ("Third-party tools were not updated. To update them: cd `"$GetzillaHome`"; " + ($Python -join ' ') + ' scripts/getzilla_update.py --only agents --only sources')
+    } finally {
+        Pop-Location
+        $env:Path = $previousPath
     }
 }
 

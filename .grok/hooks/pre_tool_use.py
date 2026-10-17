@@ -21,6 +21,7 @@ for _p in _ROOT_CANDIDATES:
 
 try:
     from _lib import (
+        record_degraded,
         RootContext,
         agent_generation,
         agent_id,
@@ -32,8 +33,23 @@ try:
         tool_input,
         tool_name,
     )
-except Exception:
-    # If even _lib is missing, never block the agent
+except Exception as _lib_error:
+    # If even _lib is missing, never block the agent, but leave a trace that policy did not run.
+    # Standard library only: the Getzilla package is what failed to import.
+    import contextlib as _contextlib
+    with _contextlib.suppress(Exception):
+        import datetime as _datetime
+        import json as _json
+        _start = Path.cwd()
+        _root = next((_path for _path in (_start, *_start.parents) if (_path / '.getzilla').is_dir()), None)
+        if _root is not None:
+            (_root / '.getzilla' / 'runtime').mkdir(parents=True, exist_ok=True)
+            with (_root / '.getzilla' / 'runtime' / 'hook-events.jsonl').open('a', encoding='utf-8', newline='\n') as _handle:
+                _handle.write(_json.dumps({
+                    'ts': _datetime.datetime.now(_datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                    'kind': 'HOOK_DEGRADED', 'hook': 'pre_tool_use', 'harness': 'unknown',
+                    'error': f'{type(_lib_error).__name__}: {_lib_error}'[:300],
+                }) + '\n')
     print('{"decision":"allow"}')
     raise SystemExit(0)
 
@@ -316,8 +332,9 @@ def main() -> None:
         context = root_context(payload, current_input, current_tool)
         try:
             from getzilla.policy import evaluate_pre_tool, sensitive_action
-        except Exception:
-            # Soft: policy stack not importable → allow everything
+        except Exception as error:
+            # Soft: policy stack not importable → allow everything, but record that policy did not run
+            record_degraded('pre_tool_use', error, payload)
             emit(permission_output(True))
             return
 
@@ -358,8 +375,9 @@ def main() -> None:
 
         _deny(payload, current_tool, current_input, reason or 'Blocked by Getzilla policy',
               context=context, action=action or 'policy-denial')
-    except Exception:
-        # Fail-open: never lock the agent on hook bugs
+    except Exception as error:
+        # Fail-open: never lock the agent on hook bugs, but record that policy did not run
+        record_degraded('pre_tool_use', error)
         emit(permission_output(True))
 
 

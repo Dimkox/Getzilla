@@ -2399,6 +2399,19 @@ def evaluate_pre_tool(
                         f'Production action {target_action} on {resource} requires an exact delegated local grant '
                         'bound to the current SHA.'
                     )
+        from .cost_guard import paid_run_resource
+        from .util import runtime_dir
+
+        try:
+            paid_resource = paid_run_resource(command, runtime_dir(root))
+        except (OSError, ValueError):
+            paid_resource = None
+        if paid_resource:
+            from .human_gates import gate_block_reason
+
+            gate_reason = gate_block_reason(root, 'paid-run', 'paid-run', paid_resource)
+            if gate_reason:
+                return False, f'Live paid run of {paid_resource} is blocked: {gate_reason}'
         http_resource = _http_write_resource(command, root)
         if http_resource:
             from .human_gates import gate_block_reason

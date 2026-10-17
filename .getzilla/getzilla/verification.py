@@ -2227,6 +2227,133 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
     return report
 
 
+def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
+                     fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
+    """Exact-head diff risk; a route whose evidence is below the diff's risk does not pass pr/release."""
+    from .diff_risk import ORDER, DiffRiskError, classify_diff
+    from .project_ingestion import IngestionError
+    from .router import escalate_route
+    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
+    if not bases:
+        return CheckResult('diff-risk', 'skip', 'no comparison base in this mode; diff risk not computed'), {
+            'status': 'not_run'}
+    try:
+        risks = [classify_diff(root, base, 'HEAD') for base in bases]
+    except (DiffRiskError, IngestionError, OSError, ValueError) as exc:
+        status = 'fail' if mode in {'pr', 'release'} else 'skip'
+        return CheckResult('diff-risk', status, f'DIFF_RISK_UNAVAILABLE: {_failure_message(exc)}'), {
+            'status': 'error', 'error': _failure_message(exc)}
+    worst = max(risks, key=lambda item: ORDER[item.risk])
+    reasons = []
+    for item in risks:
+        reasons.extend(reason for reason in item.reasons if reason not in reasons)
+    gaps = sorted({gap for item in risks for gap in item.gaps})
+    profile = 'full' if worst.risk == 'high' else (
+        'trivial' if all(item.profile_candidate == 'trivial' for item in risks) else 'standard')
+    metadata: dict[str, object] = {
+        'status': 'computed', 'head': worst.head, 'tree': worst.tree, 'bases': bases, 'diff_risk': worst.risk,
+        'profile_candidate': profile, 'reasons': [dict(reason) for reason in reasons[:50]],
+        'reason_count': len(reasons), 'gaps': gaps, 'rules_digest': worst.rules_digest,
+        'route_risk': route.get('risk') if route else None, 'effective_risk': worst.risk,
+        'added_reviewers': [], 'added_evidence': [], 'missing_evidence': [],
+    }
+    summary = f'diff risk {worst.risk} ({len(reasons)} reasons, profile {profile})'
+    if not route:
+        return CheckResult('diff-risk', 'pass', f'{summary}; no active route to escalate'), metadata
+    escalation = escalate_route(route, worst.risk, root)
+    metadata.update(effective_risk=escalation['effective_risk'], added_reviewers=escalation['added_reviewers'],
+                    added_evidence=escalation['added_evidence'])
+    if not escalation['added_evidence']:
+        return CheckResult('diff-risk', 'pass', f"{summary}; route risk {metadata['route_risk']} covers it"), metadata
+    missing = validate_evidence(root, {**route, 'required_evidence': escalation['added_evidence']},
+                                current_fingerprint=fingerprint)
+    metadata['missing_evidence'] = missing
+    details = [{'severity': 'error' if mode in {'pr', 'release'} else 'warning', 'path': reason['path'],
+                'code': reason['rule'], 'message': f"{reason['risk']} risk"} for reason in reasons[:20]]
+    if missing and mode in {'pr', 'release'}:
+        return CheckResult('diff-risk', 'fail', (
+            f"ROUTE_ESCALATED_EVIDENCE_MISSING: the change is {worst.risk} risk but the route was "
+            f"{metadata['route_risk']}; required now: {', '.join(escalation['added_evidence'])}"), details=details), metadata
+    note = 'escalated evidence present' if not missing else (
+        'escalated evidence will be required in pr/release: ' + ', '.join(escalation['added_evidence']))
+    return CheckResult('diff-risk', 'pass', f'{summary}; {note}', details=details), metadata
+
+
+def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
+                      git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
+    """Paid or unbounded operations need a budget contract and a tested bound before pr/release."""
+    from . import cost_guard
+    from .project_ingestion import IngestionError
+    from .receipts import _exact_head
+    from .util import runtime_dir
+    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
+    if not bases and not cost_guard.route_has_cost_signal(route):
+        return CheckResult('cost-guard', 'skip', 'no comparison base and no paid-operation signal'), {'status': 'not_run'}
+    active = get_active_change(root) or {}
+    package = root / str(active['path']) if active.get('path') else None
+    try:
+        report = cost_guard.evaluate(root, route, mode, bases, 'HEAD', package)
+        head = _exact_head(root) or 'HEAD'
+        cost_guard.write_state(runtime_dir(root), head, report.findings)
+    except (IngestionError, OSError, ValueError) as exc:
+        status = 'fail' if mode in {'pr', 'release'} else 'skip'
+        return CheckResult('cost-guard', status, f'COST_GUARD_UNAVAILABLE: {_failure_message(exc)}'), {
+            'status': 'error', 'error': _failure_message(exc)}
+    details = [{'severity': 'error' if report.status == 'fail' else 'warning', 'path': '.', 'code': problem.split(':', 1)[0],
+                'message': problem} for problem in report.problems[:20]]
+    return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
+
+
+def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
+                       diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
+    """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
+    from .hook_health import route_degraded_events, summary
+    events = route_degraded_events(root, route)
+    metadata = summary(events)
+    if not events:
+        return CheckResult('hook-health', 'pass', 'no hook failed open during this route'), metadata
+    effective = str(diff_metadata.get('effective_risk') or (route or {}).get('risk') or 'low')
+    message = (f"{len(events)} hook call(s) failed open during this route ({', '.join(metadata['by_hook'])}); "
+               'Getzilla policy did not run for them')
+    if effective == 'high' and mode in {'pr', 'release'}:
+        return CheckResult('hook-health', 'fail', (
+            f'HOOKS_DEGRADED_ON_HIGH_RISK: {message}. Fix the hook error, start a new route and verify the '
+            'high-risk change again under working hooks.')), metadata
+    return CheckResult('hook-health', 'pass', message, details=[
+        {'severity': 'warning', 'path': '.getzilla/runtime/hook-events.jsonl', 'code': 'hook-degraded', 'message': message}]), metadata
+
+
+CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machine; security tools are checked by their own steps'
+NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
+
+
+def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[str, object]]:
+    """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
+    import os
+    from .baseline import detect_agent, inspect
+    from .updater import home_dir
+    if os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true':
+        return CheckResult('workflow-baseline', 'skip', CI_BASELINE_SKIP), {'status': 'not_run', 'reason': 'ci'}
+    if not (root / '.getzilla' / 'AGBP_SYNC.json').is_file():
+        return CheckResult('workflow-baseline', 'skip', NOT_INSTALLED_SKIP), {'status': 'not_run', 'reason': 'source'}
+    agent = detect_agent(root)
+    try:
+        status = inspect(home_dir(), root, agent)
+    except (OSError, ValueError, KeyError) as exc:
+        return CheckResult('workflow-baseline', 'fail' if mode in {'pr', 'release'} else 'skip',
+                           f'WORKFLOW_BASELINE_UNAVAILABLE: {_failure_message(exc)}'), {'status': 'error'}
+    metadata = {'status': 'complete' if status.complete else 'incomplete', 'agent': agent, **status.to_dict()}
+    workflow_missing = [item for item in status.missing if not item.startswith('SECURITY_BASELINE_MISSING')]
+    if not workflow_missing:
+        return CheckResult('workflow-baseline', 'pass', f'pinned Superpowers, BMAD and Spec Kit connected for {agent}'), metadata
+    message = (', '.join(workflow_missing) + '. Install: scripts/getzilla_update.py --only baseline; connect: '
+               f'scripts/getzilla_baseline.py apply --project . --agent {agent}')
+    if mode in {'pr', 'release'}:
+        return CheckResult('workflow-baseline', 'fail', message), metadata
+    return CheckResult('workflow-baseline', 'pass', 'will fail pr/release: ' + message, details=[
+        {'severity': 'warning', 'path': '.', 'code': 'workflow-baseline-missing', 'message': message}]), metadata
+
+
 def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, record: bool = True, *,
            keep_going: bool = False) -> dict[str, object]:
     report = {
@@ -2384,6 +2511,22 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
 
     results = state.results
+    state.stage = 'diff-risk'
+    cancellation.check()
+    diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
+    dispatch.add(diff_check)
+    report['diff_risk'] = diff_metadata
+    state.stage = 'cost-guard'
+    cancellation.check()
+    cost_check, cost_metadata = _cost_guard_check(root, route, mode, git_ranges)
+    dispatch.add(cost_check)
+    report['cost_guard'] = cost_metadata
+    hook_check, hook_metadata = _hook_health_check(root, route, mode, diff_metadata)
+    dispatch.add(hook_check)
+    report['hook_health'] = hook_metadata
+    baseline_check, baseline_metadata = _workflow_baseline_check(root, mode)
+    dispatch.add(baseline_check)
+    report['workflow_baseline'] = baseline_metadata
     state.stage = 'repository'
     dispatch.run('git-diff-check', lambda: _git_diff_check(root, mode, git_ranges))
     # Preserve the successful report inventory order while authority checks run first.

@@ -1,0 +1,84 @@
+{
+  "schema": "getzilla-router-risk-golden-v1",
+  "note": "Regression contract for prompt risk. 'risk' is exact; 'min_risk' is a floor. Prompts come from the 2026-10-16 honest-defaults probe.",
+  "cases": [
+    {
+      "prompt": "add a checkout with saved cards",
+      "risk": "high"
+    },
+    {
+      "prompt": "fix login for existing accounts",
+      "risk": "high"
+    },
+    {
+      "prompt": "почини логин после вчерашнего обновления",
+      "risk": "high"
+    },
+    {
+      "prompt": "сделай вход через Google",
+      "risk": "high"
+    },
+    {
+      "prompt": "перепиши обработку оплаты заказа",
+      "risk": "high"
+    },
+    {
+      "prompt": "списывай деньги с карты каждый месяц",
+      "risk": "high"
+    },
+    {
+      "prompt": "добавь оплату картой на сайт",
+      "risk": "high"
+    },
+    {
+      "prompt": "сделай возврат средств покупателю",
+      "risk": "high"
+    },
+    {
+      "prompt": "add a refund button for orders",
+      "risk": "high"
+    },
+    {
+      "prompt": "users cannot sign in after the update",
+      "risk": "high"
+    },
+    {
+      "prompt": "сделай регистрацию пользователей",
+      "risk": "high"
+    },
+    {
+      "prompt": "сделай в n8n сценарий: генерируй 20 вариантов видео через Kling и выбери лучший",
+      "min_risk": "medium"
+    },
+    {
+      "prompt": "подключи OpenRouter и гоняй генерацию картинок, пока не получится хорошо",
+      "min_risk": "medium"
+    },
+    {
+      "prompt": "修复支付流程中的错误",
+      "min_risk": "medium",
+      "note": "no pack reads CJK: never low"
+    },
+    {
+      "prompt": "исправь опечатку в README",
+      "risk": "low",
+      "complexity": "micro"
+    },
+    {
+      "prompt": "поменяй логотип в шапке",
+      "risk": "low"
+    },
+    {
+      "prompt": "добавь карточку товара на главную",
+      "risk": "low"
+    },
+    {
+      "prompt": "вставь картинку в README",
+      "risk": "low"
+    },
+    {
+      "prompt": "добавь кнопку \"Скачать\" на страницу заказа",
+      "risk": "low"
+    }
+  ]
+}

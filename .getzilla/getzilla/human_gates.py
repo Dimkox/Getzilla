@@ -19,7 +19,10 @@ GATE_ACTIONS = {
     "scope_and_design_approval": {"kind": "transition", "description": "change transition to approved"},
     "production_action_approval": {"kind": "production", "description": "production actions and release preparation"},
     "migration_or_external_write_approval": {"kind": "external-write", "description": "migration or external-write actions"},
+    "paid_run_approval": {"kind": "paid-run", "description": "first live run of a paid or unbounded operation"},
 }
+PAID_RUN_ACTION = "paid-run"
+OPTIONAL_SCOPE_FILES = ("cost-contract.json",)
 PRODUCTION_ACTIONS = {
     "git-push-branch", "git-push-tag", "pull-request-merge", "docker-push", "npm-publish", "github-release"
 }
@@ -113,6 +116,10 @@ def _scope_digest(package: Path) -> str:
         except OSError as exc:
             raise ValueError(f"approved scope file is unavailable: {name}") from exc
         digest.update(hashlib.sha256(content).digest())
+    for name in OPTIONAL_SCOPE_FILES:  # bound when present, so older packages keep their digest
+        path = package / name
+        if path.is_file() and not path.is_symlink():
+            digest.update(name.encode("utf-8") + b"\1" + hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
 
@@ -258,6 +265,11 @@ def _decision_state(
         if gate == "production_action_approval" and (entry.get("action") not in PRODUCTION_ACTIONS or entry.get("resource") is not None):
             invalid = True
             continue
+        if gate == "paid_run_approval" and not (
+            entry.get("action") == PAID_RUN_ACTION and _exact_resource(entry.get("resource"))
+        ):
+            invalid = True
+            continue
         if gate == "migration_or_external_write_approval":
             target = entry.get("resource")
             plan_approval = entry.get("action") == MIGRATION_PLAN_ACTION and target is None
@@ -343,6 +355,8 @@ def record_gate_decision(
         raise ValueError("scope/design decisions cannot bind an action or resource")
     if gate == "production_action_approval" and (action not in PRODUCTION_ACTIONS or resource is not None):
         raise ValueError("production decisions require one supported exact action and no resource")
+    if gate == "paid_run_approval" and not (action == PAID_RUN_ACTION and _exact_resource(resource)):
+        raise ValueError("paid-run decisions require action=paid-run and one exact resource (n8n, a provider host or a file)")
     if gate == "migration_or_external_write_approval":
         plan_approval = action == MIGRATION_PLAN_ACTION and resource is None
         external_approval = action in EXTERNAL_ACTIONS and isinstance(resource, str) and bool(resource) and not any(char in resource for char in "*?[")
@@ -415,6 +429,10 @@ def gate_block_reason(root: Path, scope: str, action: str, resource: str | None 
         required.append("production_action_approval")
     if scope == "external-write" and "migration_or_external_write_approval" in gates:
         required.append("migration_or_external_write_approval")
+    if scope == "paid-run" and "paid_run_approval" in gates:
+        if not resource:
+            return "Route human gate paid_run_approval requires an exact paid-run resource"
+        required.append("paid_run_approval")
     for gate in required:
         status = _decision_state(root, gate, action=action, resource=resource)
         if status.get("state") != "approved":
@@ -445,6 +463,10 @@ def gate_transition_block_reason(root: Path, target: str, change_id: str | None 
         if status.get("state") != "approved":
             return f"Route human gate migration_or_external_write_approval is {status.get('state')}: {status.get('reason')}"
     return None
+
+
+def _exact_resource(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and not any(char in value for char in "*?[")
 
 
 def route_has_gate(root: Path, gate: str) -> bool:

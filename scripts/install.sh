@@ -33,11 +33,12 @@
 #   GETZILLA_SKIP_GROK=1  do not install the Grok Build CLI (when the agent is grok)
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
-# At the end of every run (first install or re-run) the installer always updates the
-# vulnerability data (the OSV CVE database and the pinned OpenGrep scanner), then offers
-# to update the other third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit,
-# vibevm) to their latest versions and runs scripts/getzilla_update.py for them only
-# after you answer yes. Without a terminal it only prints that command.
+# Every run (first install or re-run) installs the mandatory baseline: the vulnerability
+# data (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified
+# Superpowers, BMAD and Spec Kit for your coding agent. There is no option to skip it:
+# if any part does not install, the installer stops with an error and says what to fix.
+# Updating third-party tools to newer versions stays a separate command:
+# scripts/getzilla_update.py --only agents --only sources.
 #
 # Everything runs inside main(), so a partially downloaded script does nothing.
 
@@ -80,16 +81,20 @@ main() {
   local doctor_status=0
   (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
 
+  update_security_data "$home" "$python"
+  install_workflow_baseline "$home" "$python"
+
   if [ -n "${GETZILLA_NEW_PROJECT:-}" ]; then
     say "Creating a new project at $GETZILLA_NEW_PROJECT ..."
     (cd "$home" && "$python" scripts/install_into.py --materialize-new "$GETZILLA_NEW_PROJECT")
+    say "Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project..."
+    (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_baseline.py apply \
+      --project "$GETZILLA_NEW_PROJECT" --agent "$agent") \
+      || fail "The baseline was not connected to $GETZILLA_NEW_PROJECT (FAIL lines above). Fix it and run: cd \"$home\" && $python scripts/getzilla_baseline.py apply --project \"$GETZILLA_NEW_PROJECT\" --agent $agent"
   elif [ -n "${GETZILLA_PROJECT:-}" ]; then
     say "Install plan for $GETZILLA_PROJECT (read-only, nothing is written):"
     (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
   fi
-
-  update_security_data "$home" "$python"
-  offer_tool_update "$home" "$python"
 
   if [ "$doctor_status" -eq 0 ]; then
     printf '\nGetzilla is ready in %s\n' "$home"
@@ -437,12 +442,29 @@ configure_agent() {
 }
 
 update_security_data() {
-  # Not optional: without fresh vulnerability data the first gates would scan against an
-  # empty or stale CVE database. A network failure warns instead of failing the install.
+  # Not optional: without vulnerability data the gates would scan against an empty CVE
+  # database, so a failure stops the install instead of warning.
   local home="$1" python="$2"
   say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
   (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
-    || printf 'WARNING: vulnerability data is not up to date (FAIL lines above). Retry: cd "%s" && %s scripts/getzilla_update.py --only osv --only opengrep\n' "$home" "$python" >&2
+    || fail "Vulnerability data did not install (FAIL lines above). Fix the network or the error and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only osv --only opengrep)."
+}
+
+install_workflow_baseline() {
+  # Not optional: Superpowers, BMAD and Spec Kit at the pinned, commit-verified versions.
+  # BMAD runs on Node.js; Spec Kit installs through uv, which brings its own Python 3.11+.
+  local home="$1" python="$2" venv_python
+  ensure_node 20 || true
+  node_ok 20 || fail "Node.js 20 or newer is required for the BMAD installer and could not be installed."
+  venv_python="$home/.venv/bin/python"
+  [ -x "$venv_python" ] || fail "Getzilla's Python environment ($home/.venv) is missing; it is needed for the Spec Kit installer."
+  if ! { have uv && uv --version 2>/dev/null | grep -q '^uv 0\.11\.12\b'; }; then
+    "$venv_python" -m pip install --disable-pip-version-check --quiet "uv==0.11.12" </dev/null \
+      || fail "Installing uv 0.11.12 (needed for the pinned Spec Kit CLI) failed."
+  fi
+  say "Installing the pinned workflow baseline (Superpowers, BMAD, Spec Kit)..."
+  (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_update.py --only baseline) \
+    || fail "The workflow baseline did not install (FAIL lines above). Fix it and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only baseline)."
 }
 
 setup_python_env() {
@@ -465,23 +487,6 @@ link_getzilla_command() {
   mkdir -p "$HOME/.local/bin"
   ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"
   say "getzilla command: $HOME/.local/bin/getzilla (add ~/.local/bin to PATH if it is not found)"
-}
-
-offer_tool_update() {
-  local home="$1" python="$2" answer=""
-  if can_ask; then
-    answer="$(ask $'Update third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm) to their latest versions now? [y/N]: ' n)"
-  fi
-  case "$answer" in
-    y|Y|yes|YES|Yes)
-      say "Updating third-party tools..."
-      (cd "$home" && "$python" scripts/getzilla_update.py --only agents --only sources) \
-        || say "Some updates failed (FAIL lines above); run the same command again later."
-      ;;
-    *)
-      say "Third-party tools were not updated. To update them: cd \"$home\" && $python scripts/getzilla_update.py --only agents --only sources"
-      ;;
-  esac
 }
 
 fetch_getzilla() {

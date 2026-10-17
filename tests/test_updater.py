@@ -256,10 +256,15 @@ class UpdaterTests(unittest.TestCase):
             self.assertNotIn('getzilla_update.py', text, rel)
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        self.assertIn('[y/N]', shell)
-        self.assertIn('[y/N]', powershell)
-        self.assertIn('can_ask', shell[shell.index('offer_tool_update() {'):])
-        self.assertIn('Test-CanAsk', powershell[powershell.index('function Request-ToolUpdate'):])
+        # Installers install only the pinned baseline (owner decision 2026-10-16); moving tools to their
+        # latest versions is never run by an installer, only printed as a separate command.
+        for text in (shell, powershell):
+            for latest in ('--only agents', '--only sources', "'--only', 'agents'", "'--only', 'sources'"):
+                for line in text.splitlines():
+                    if latest in line and not line.lstrip().startswith('#'):
+                        self.fail(f'installer runs a latest-version update: {line.strip()}')
+        self.assertIn('--only baseline', shell)
+        self.assertIn("'--only', 'baseline'", powershell)
 
 if __name__ == '__main__':
     unittest.main()

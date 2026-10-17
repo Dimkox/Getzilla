@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.app/schemas/diff-risk-v1.schema.json",
+  "description": "Getzilla exact-head diff risk: what a change touches, independent of the prompt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "base", "head", "tree", "risk", "profile_candidate", "reasons", "changed", "coverage", "notes", "rules_digest"],
+  "properties": {
+    "schema_version": {"const": "diff-risk-v1"},
+    "base": {"type": ["null", "string"], "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+    "head": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+    "tree": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+    "risk": {"enum": ["low", "medium", "high"]},
+    "profile_candidate": {"enum": ["trivial", "standard", "full"]},
+    "reasons": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["rule", "path", "risk"],
+      "properties": {"rule": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}, "risk": {"enum": ["medium", "high"]}}}},
+    "changed": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["status", "path", "old_path"],
+      "properties": {"status": {"enum": ["A", "M", "D", "R", "C", "T"]}, "path": {"type": "string", "minLength": 1}, "old_path": {"type": ["null", "string"]}}}},
+    "coverage": {"type": "object", "additionalProperties": false, "required": ["complete", "gaps"],
+      "properties": {"complete": {"type": "boolean"}, "gaps": {"type": "array", "items": {"type": "string"}}}},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "rules_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -988,7 +988,8 @@ def validate_evidence(
         'spec_digest',
         'spec_fingerprint',
     }
-    for kind in required:
+    escalated = _escalated_evidence(root, route_id, required, current)
+    for kind in [*required, *escalated]:
         try:
             receipt = get_receipt(root, route_id, kind)
         except RuntimeError as exc:
@@ -1053,7 +1054,26 @@ def validate_evidence(
                 missing.append(f'{kind}: governance binding stale')
         elif "governance_digest" in receipt or "governance_evidence_digest" in receipt:
             missing.append(f'{kind}: governance binding stale')
+    if escalated:
+        missing = [f'{item} (required by exact-head diff risk)' if item.split(':', 1)[0] in escalated else item
+                   for item in missing]
     return missing
+
+
+def _escalated_evidence(root: Path, route_id: str, required: list[str], current: str) -> list[str]:
+    """Evidence the current verification receipt added because the diff was riskier than the route."""
+    if 'verification' not in required:
+        return []
+    try:
+        receipt = get_receipt(root, route_id, 'verification')
+    except RuntimeError:
+        return []
+    if not isinstance(receipt, dict) or receipt.get('tree_fingerprint') != current:
+        return []
+    details = receipt.get('details') if isinstance(receipt.get('details'), dict) else {}
+    diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}
+    added = diff.get('added_evidence') if isinstance(diff.get('added_evidence'), list) else []
+    return [kind for kind in added if isinstance(kind, str) and kind in RECEIPT_KINDS and kind not in required]
 
 
 def invalidate_receipts(root: Path, route_id: str, reason: str) -> None:

@@ -11,7 +11,7 @@ for _p in (Path.cwd(), Path.cwd() / ".getzilla"):
         sys.path.append(s)
 
 try:
-    from _lib import emit, read_payload, root_from
+    from _lib import emit, harness, read_payload, record_degraded, root_from, stop_hook_active
 except Exception:
     print('{}')
     raise SystemExit(0)
@@ -30,6 +30,23 @@ def main() -> None:
             return
 
         route = get_active_route(root)
+        if route:
+            try:
+                from getzilla.claim_check import BLOCKING_HARNESSES, stop_mode, unsupported_claim
+                from getzilla.hook_health import route_degraded_events
+
+                claim = unsupported_claim(root, route, payload)
+                degraded = route_degraded_events(root, route)
+            except Exception as error:  # noqa: BLE001 - the checks are advisory; record that they did not run
+                record_degraded('stop_gate', error, payload)
+                claim, degraded = None, []
+            if claim and stop_mode(root, route) == 'strict' and not stop_hook_active(payload):
+                if harness() in BLOCKING_HARNESSES:
+                    emit({'decision': 'block', 'reason': 'Getzilla stop gate: ' + claim})
+                    return
+                record_degraded('stop_gate', f'STRICT_BLOCK_UNSUPPORTED:{harness()}', payload)
+        else:
+            claim, degraded = None, []
         active = get_active_change(root)
         messages = []
         unsafe_inputs = False
@@ -47,6 +64,11 @@ def main() -> None:
         )
         if gaps:
             messages.insert(0, 'missing/stale evidence: ' + '; '.join(gaps))
+        if claim:
+            messages.insert(0, 'unsupported verification claim: ' + claim)
+        if degraded:
+            messages.append(f'{len(degraded)} hook call(s) failed open since this route started, so Getzilla policy '
+                            'did not run for them (.getzilla/runtime/hook-events.jsonl)')
         if messages:
             emit({'systemMessage': 'Adaptive note (non-blocking): ' + '; '.join(messages)})
             return
@@ -57,7 +79,8 @@ def main() -> None:
         reset_stop_attempt(root, route['route_id'])
         update_route(root, status='completed')
         emit({})
-    except Exception:
+    except Exception as error:
+        record_degraded('stop_gate', error)
         emit({})
 
 
