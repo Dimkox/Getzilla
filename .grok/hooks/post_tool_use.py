@@ -5,7 +5,7 @@ import os
 import sys
 
 try:
-    from _lib import agent_generation, agent_id, emit, read_payload, root_from, run_hook
+    from _lib import agent_generation, agent_id, emit, read_payload, root_from, run_hook, tool_input, tool_name
     from getzilla.agent_lifecycle import observe_tool
     from getzilla.receipts import invalidate_receipts
     from getzilla.state import get_active_route
@@ -38,9 +38,22 @@ def main() -> None:
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'PostToolUse',
-            'additionalContext': '',
+            'additionalContext': _path_hint(payload, root),
         }
     })
+
+
+def _path_hint(payload: dict, root) -> str:
+    """Closest real paths for any missing path a read command named (getzilla.path_hints)."""
+    try:
+        data = tool_input(payload)
+        command = data.get('command')
+        if tool_name(payload) != 'Bash' or not isinstance(command, str):
+            return ''
+        from getzilla.path_hints import command_cwd, hint
+        return hint(root, command, command_cwd(root, payload, data)) or ''
+    except Exception:
+        return ''
 
 
 if __name__ == '__main__':

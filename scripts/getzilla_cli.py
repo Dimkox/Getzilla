@@ -19,6 +19,7 @@ from getzilla.interpreter import project_python  # noqa: E402
 COMMANDS: dict[str, tuple[str, str]] = {
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),
+    'par': ('getzilla_par.py', 'run independent commands in parallel on the verified CPUs'),
     'route': ('getzilla_route.py', 'create or inspect the adaptive task route'),
     'status': ('getzilla_status.py', 'show the route, change package and agents'),
     'change': ('getzilla_change.py', 'manage engineering change packages'),

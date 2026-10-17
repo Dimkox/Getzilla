@@ -71,6 +71,7 @@ Nothing reaches a protected branch without the factory phase. The vibe phase dec
 5. After the CPU snapshot is recorded, inspect repository handoff/backlog/routes and build the dependency plan. Separately observe available agent slots: the current platform exposes **one controller plus 12 child-agent slots**; route `max_parallel_analysis=10` remains the routing cap, and test-process worker counts are a third independent limit. Never manufacture route permissions or add unselected agents to fill slots.
 6. Dispatch all independent route-permitted analyses, checks and reviews in parallel when their prerequisites are satisfied, scheduling available slots in waves. Spread eligible CPU-heavy child work across the verified effective CPU capacity, using the successfully probed affinity when needed and coordinating worker totals to avoid oversubscription. Record dependencies, isolation or resource limits that require serialization.
    Size the agent pool to the hardware: run many independent reviewers and implementers, up to one per verified effective logical CPU (bounded by the agent-slot and route caps). Workers share any idle cores and threads. Never leave verified capacity idle while independent work waits, and never oversubscribe it.
+   Run independent shell commands with `getzilla par -j <capacity> -- "cmd1" "cmd2"` (or `--each "<glob>" -- cmd {}`); the PreToolUse hook refuses serial batches of heavy commands (`a && b && c`, loops, `find -exec`) and test runners forced into one process, and answers with the parallel command. Prefix `GETZILLA_SERIAL=1` only when order truly matters, and say why.
 7. Keep exactly one write owner per isolated task/route/branch/worktree. Independent writers may run concurrently only on separate isolated task contours and worktrees; no two writers share a mutable candidate. Reviews remain independent and read-only.
 
 An explicitly delegated push of an exact isolated branch/HEAD before verification is **UNVERIFIED transport only**: materialize the exact action/resource grant and label the handoff unverified. It does not establish completion, authorize direct push to `main` or another protected/shared branch, or confer merge authority. Merge still requires a pull request, the App-owned policy-epoch Trust CI check on the exact up-to-date head and all required approvals.
@@ -183,6 +184,7 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 ## Development discipline
 
 - Inspect the relevant code, contracts, migrations, tests, configuration, and recent patterns before editing.
+- Locate a file before reading it (`rg --files | rg -i <name>`); never guess paths. Every miss costs a full model call over the whole context. When none of the paths a read names exist, the PreToolUse hook refuses it and lists the closest real paths.
 - Prefer the smallest coherent vertical change.
 - Add a failing test or characterization test before behavior changes when practical.
 - Do not introduce a service, database, queue, framework, or dependency without explicit architectural justification.
