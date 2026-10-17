@@ -27,6 +27,29 @@ Updating to newer upstream versions is separate: `scripts/getzilla_update.py --o
 fetches the latest releases for observation; a new version becomes the baseline only when
 `toolchain.json` (`pinned`, `upstream_tag`, `pinned_commit`) is updated and its verification tests pass.
 
+## Offline mirror
+
+`GETZILLA_UPDATE_MIRROR=/absolute/dir` makes `getzilla_update.py` (and so both installers) take every
+download from a local directory. Nothing is downloaded while it is set; agent CLI updates are skipped.
+
+```text
+<dir>/osv/<Ecosystem>/all.zip          same layout as GETZILLA_OSV_DB
+<dir>/opengrep/v<version>/<asset>      the pinned OpenGrep release assets
+<dir>/git/<owner>/<repo>.git           Git repositories with the pinned upstream tags
+<dir>/getzilla-mirror.json             optional: pins for stand-in files
+```
+
+The checks do not change: OSV archives must be complete zips, OpenGrep must match its SHA-256 and each
+source must resolve to its commit. With real files the pins are those in `updater.py` and `toolchain.json`.
+A mirror of small stand-in files (the installer tests use one, built by `tests/_support.offline_mirror`)
+names its own pins in `getzilla-mirror.json` (`{"opengrep": {"<asset>": "<sha256>"}, "baseline":
+{"<id>": "<commit>"}}`), and every result line says `pin from getzilla-mirror.json`. Do not use such a
+mirror for a real install: run `getzilla_update.py --only osv --only opengrep --only baseline` without
+the variable to replace stand-ins with the pinned files.
+
+The installer end-to-end tests use a stand-in mirror and need no network. To run them once against the
+real download hosts as well: `GETZILLA_E2E_TOOLCHAINS=1 python3 -m pytest tests/test_install_scripts.py`.
+
 ## Connecting a project
 
 ```text

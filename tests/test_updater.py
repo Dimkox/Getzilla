@@ -24,9 +24,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla import updater
+from getzilla import baseline, updater
 
-from tests._support import project_copy, run_hook
+from tests._support import offline_mirror, project_copy, run_hook
 
 
 
@@ -265,6 +265,94 @@ class UpdaterTests(unittest.TestCase):
                         self.fail(f'installer runs a latest-version update: {line.strip()}')
         self.assertIn('--only baseline', shell)
         self.assertIn("'--only', 'baseline'", powershell)
+
+
+class OfflineMirrorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self._tmp.name)
+        self.root = self.base / 'state'
+        self.mirror_dir = offline_mirror(self.base)
+        self.uv: list[list[str]] = []
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _mirror(self) -> updater.Mirror:
+        return updater.Mirror.from_environ({updater.MIRROR_ENV: str(self.mirror_dir)})
+
+    def _run(self, command: list[str], cwd: Path | None) -> subprocess.CompletedProcess:
+        if command[0] == 'fake-uv':
+            self.uv.append(command)
+            return subprocess.CompletedProcess(command, 0, '', '')
+        return baseline.default_runner(command, cwd)
+
+    def _update(self, mirror: updater.Mirror) -> dict[str, updater.Result]:
+        def network(*args, **kwargs):
+            raise AssertionError('the offline mirror must not reach the network')
+        with mock.patch.object(updater, '_default_fetch', network), \
+                mock.patch.object(updater.urllib.request, 'urlopen', network):
+            results = updater.run_all(self.root, run=self._run, which={'uv': 'fake-uv', 'npx': 'npx'}.get, mirror=mirror,
+                                      components=('agents', 'osv', 'opengrep', 'baseline'))
+        return {item.component: item for item in results}
+
+    def test_every_download_comes_from_the_mirror_with_its_pins(self) -> None:
+        results = self._update(self._mirror())
+        self.assertEqual(results.pop('agents').status, 'skip')
+        self.assertEqual({name: item.status for name, item in results.items() if item.status != 'ok'}, {})
+        for name, item in results.items():
+            self.assertIn(f'[offline mirror {self.mirror_dir}', item.detail, name)
+        for name in ('tool:opengrep', 'baseline:superpowers', 'baseline:bmad', 'baseline:spec-kit'):
+            self.assertIn(f'pin from {updater.MIRROR_MANIFEST}', results[name].detail, name)
+        self.assertNotIn('pin from', results['osv:PyPI'].detail)
+        self.assertEqual((self.root / 'osv/npm/all.zip').read_bytes(),
+                         (self.mirror_dir / 'osv/npm/all.zip').read_bytes())
+        asset, _ = updater.OPENGREP_ASSETS[updater._platform_key()]
+        installed = next((self.root / 'bin').glob('opengrep*'))
+        self.assertEqual(installed.read_bytes(),
+                         (self.mirror_dir / 'opengrep' / f'v{updater.OPENGREP_VERSION}' / asset).read_bytes())
+        spec_kit = baseline.components()['spec-kit']
+        source = (self.mirror_dir / 'git' / f"{spec_kit['repository']}.git").as_uri()
+        self.assertEqual(self.uv[0][-1], f"git+{source}@{spec_kit['upstream_tag']}")
+        again = self._update(self._mirror())
+        self.assertIn('already installed, sha256 verified', again['tool:opengrep'].detail)
+
+    def test_a_mirror_without_its_own_pins_must_match_the_release_pins(self) -> None:
+        (self.mirror_dir / updater.MIRROR_MANIFEST).unlink()
+        results = self._update(self._mirror())
+        self.assertEqual(results['osv:PyPI'].status, 'ok')
+        self.assertEqual(results['tool:opengrep'].status, 'fail')
+        self.assertIn('does not match pinned', results['tool:opengrep'].detail)
+        self.assertFalse((self.root / 'bin').exists() and any((self.root / 'bin').glob('opengrep*')))
+        for component_id in ('superpowers', 'bmad', 'spec-kit'):
+            self.assertEqual(results[f'baseline:{component_id}'].status, 'fail')
+            self.assertIn('PINNED_COMMIT_MISMATCH', results[f'baseline:{component_id}'].detail)
+            self.assertNotIn('pin from', results[f'baseline:{component_id}'].detail)
+
+    def test_mirror_refuses_foreign_urls_and_bad_settings(self) -> None:
+        mirror = self._mirror()
+        self.assertEqual(mirror.path(f'{updater.OSV_BUCKET}/Go/all.zip'), self.mirror_dir / 'osv/Go/all.zip')
+        self.assertEqual(mirror.path('https://github.com/obra/superpowers.git'),
+                         self.mirror_dir / 'git/obra/superpowers.git')
+        for url in ('https://example.com/all.zip', f'{updater.OSV_BUCKET}/../../etc/passwd',
+                    'https://github.com/a/..\\..\\b.git', f'{updater.OSV_BUCKET}/'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                mirror.path(url)
+        self.assertIsNone(updater.Mirror.from_environ({}))
+        for value in ('relative/mirror', str(self.base / 'missing')):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                updater.Mirror.from_environ({updater.MIRROR_ENV: value})
+        manifest = self.mirror_dir / updater.MIRROR_MANIFEST
+        for text in ('[]', '{"opengrep": {"opengrep_manylinux_x86": "abc"}}', '{"baseline": []}', 'not json'):
+            manifest.write_text(text, encoding='utf-8')
+            with self.subTest(manifest=text), self.assertRaises(ValueError):
+                self._mirror()
+        with mock.patch.dict(os.environ, {'GETZILLA_STATE_HOME': str(self.root), updater.MIRROR_ENV: str(self.mirror_dir)}), \
+                mock.patch.object(updater, 'run_all') as run_all, mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            self.assertEqual(updater.main(['--only', 'osv']), 2)
+        run_all.assert_not_called()
+        self.assertIn(updater.MIRROR_MANIFEST, err.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

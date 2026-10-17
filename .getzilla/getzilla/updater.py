@@ -4,6 +4,9 @@ Runs only when a person starts it (`python3 scripts/getzilla_update.py`); the
 installers offer it at the end and wait for an explicit yes. Nothing here
 touches a project: sources are cloned under ``~/.getzilla/vendor``, the OSV
 mirror lives in ``~/.getzilla/osv`` and tools in ``~/.getzilla/bin``.
+
+``GETZILLA_UPDATE_MIRROR=<dir>`` replaces every download host with a local
+directory and nothing reaches the network (see ``Mirror``).
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import io
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +30,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 STATE_FILE = 'update-state.json'
 LOCK_FILE = 'update.lock'
@@ -62,9 +66,18 @@ OPENGREP_ASSETS = {
     ('windows', 'amd64'): ('opengrep_windows_x86.exe', 'd3a45326ff63cabe90d94ebc679fcd4302440178a0e5bf0248a6f7b610db3b53'),
 }
 PATH_MARKER = '# Getzilla: tools in ~/.getzilla/bin'
+MIRROR_ENV = 'GETZILLA_UPDATE_MIRROR'
+MIRROR_MANIFEST = 'getzilla-mirror.json'
+# Where each download host lives inside an offline mirror; the first matching prefix wins.
+MIRROR_LAYOUT = (
+    (f'{OSV_BUCKET}/', 'osv'),
+    ('https://github.com/opengrep/opengrep/releases/download/', 'opengrep'),
+    ('https://github.com/', 'git'),
+)
 
 Runner = Callable[[list[str], Path | None], subprocess.CompletedProcess]
 Fetch = Callable[[str], bytes]
+Assets = Mapping[tuple[str, str], tuple[str, str]]
 
 
 @dataclass(frozen=True)
@@ -72,6 +85,67 @@ class Result:
     component: str
     status: str
     detail: str
+
+
+@dataclass(frozen=True)
+class Mirror:
+    """A local directory that replaces every download host (``GETZILLA_UPDATE_MIRROR``).
+
+    Layout: ``osv/<Ecosystem>/all.zip`` (the ``GETZILLA_OSV_DB`` layout of known_vulns),
+    ``opengrep/v<version>/<asset>`` and ``git/<owner>/<repo>.git``. The pins stay those in this
+    module and in toolchain.json, so a mirror of the real files needs nothing else. A mirror of
+    small stand-in files (a test fixture) names its own pins in ``getzilla-mirror.json``:
+    ``{"opengrep": {"<asset>": "<sha256>"}, "baseline": {"<id>": "<commit>"}}``; each result
+    then says that its pin came from the mirror.
+    """
+
+    root: Path
+    opengrep: Mapping[str, str]
+    baseline: Mapping[str, str]
+
+    @classmethod
+    def from_environ(cls, environ: Mapping[str, str] | None = None) -> Mirror | None:
+        raw = (environ if environ is not None else os.environ).get(MIRROR_ENV, '').strip()
+        if not raw:
+            return None
+        root = Path(raw).expanduser()
+        if not root.is_absolute() or not root.is_dir():
+            raise ValueError(f'{MIRROR_ENV}={raw} must be an absolute path to a directory')
+        manifest = root / MIRROR_MANIFEST
+        try:
+            pins = json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
+        except (OSError, ValueError) as exc:
+            raise ValueError(f'{manifest}: {exc}') from exc
+        if not isinstance(pins, dict):
+            raise ValueError(f'{manifest}: must be a JSON object')
+        return cls(root, _mirror_pins(pins, manifest, 'opengrep', r'[0-9a-f]{64}'),
+                   _mirror_pins(pins, manifest, 'baseline', r'[0-9a-f]{40}|[0-9a-f]{64}'))
+
+    def path(self, url: str) -> Path:
+        for prefix, folder in MIRROR_LAYOUT:
+            if url.startswith(prefix):
+                parts = url[len(prefix):].split('/')
+                if any(part in ('', '.', '..') or '\\' in part for part in parts):
+                    break
+                return self.root.joinpath(folder, *parts)
+        raise ValueError(f'{url} has no place in the offline mirror {self.root}')
+
+    def fetch(self, url: str) -> bytes:
+        return self.path(url).read_bytes()
+
+    def url(self, url: str) -> str:
+        return self.path(url).as_uri()
+
+    def note(self, pinned: bool) -> str:
+        return f' [offline mirror {self.root}' + (f'; pin from {MIRROR_MANIFEST}]' if pinned else ']')
+
+
+def _mirror_pins(pins: dict, manifest: Path, key: str, digest: str) -> dict[str, str]:
+    value = pins.get(key, {})
+    if not isinstance(value, dict) or not all(
+            isinstance(name, str) and isinstance(pin, str) and re.fullmatch(digest, pin) for name, pin in value.items()):
+        raise ValueError(f'{manifest}: "{key}" must map names to lowercase hex digests')
+    return dict(value)
 
 
 def home_dir() -> Path:
@@ -210,8 +284,9 @@ def _sha256_file(path: Path) -> str | None:
         return None
 
 
-def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None) -> list[Result]:
-    pinned = OPENGREP_ASSETS.get(key or _platform_key())
+def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None,
+                    assets: Assets = OPENGREP_ASSETS) -> list[Result]:
+    pinned = assets.get(key or _platform_key())
     if pinned is None:
         return [Result('tool:opengrep', 'skip', f'no OpenGrep build for {key or _platform_key()}')]
     asset_name, expected = pinned
@@ -289,7 +364,10 @@ def _add_windows_user_path(directory: str) -> bool:
 
 
 def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _default_fetch,
-            which: Callable[[str], str | None] = shutil.which, components: tuple[str, ...] | None = None) -> list[Result]:
+            which: Callable[[str], str | None] = shutil.which, components: tuple[str, ...] | None = None,
+            mirror: Mirror | None = None) -> list[Result]:
+    if mirror is not None:
+        return _run_from_mirror(root, mirror, run=run, which=which, components=components)
     wanted = set(components or ('agents', 'sources', 'osv', 'opengrep'))
     results: list[Result] = []
     if 'agents' in wanted:
@@ -304,6 +382,34 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
         from .baseline import install_user
         results += [Result(step.component, step.status, step.detail)
                     for step in install_user(root, run=run, which=which)]
+    return results
+
+
+def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable[[str], str | None],
+                     components: tuple[str, ...] | None) -> list[Result]:
+    """Every component from the offline mirror; nothing here reaches the network."""
+    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep'))
+    results: list[Result] = []
+    if 'agents' in wanted:
+        results.append(Result('agents', 'skip', f'{MIRROR_ENV} is set: agent CLIs update only from the network'))
+    if 'sources' in wanted:
+        results += [Result(item.component, item.status, item.detail + mirror.note(False))
+                    for item in update_sources(run, root, {name: mirror.url(url) for name, url in SOURCES.items()})]
+    if 'osv' in wanted:
+        results += [Result(item.component, item.status, item.detail + mirror.note(False))
+                    for item in update_osv(mirror.fetch, root)]
+    if 'opengrep' in wanted:
+        assets = {key: (asset, mirror.opengrep.get(asset, digest)) for key, (asset, digest) in OPENGREP_ASSETS.items()}
+        pinned = assets.get(_platform_key(), ('',))[0] in mirror.opengrep
+        results += [Result(item.component, item.status, item.detail + mirror.note(pinned))
+                    for item in update_opengrep(mirror.fetch, root, assets=assets)]
+    if 'baseline' in wanted:
+        from .baseline import components as baseline_components, install_user
+        config = {component_id: {**item, 'pinned_commit': mirror.baseline.get(component_id, item['pinned_commit'])}
+                  for component_id, item in baseline_components().items()}
+        for step in install_user(root, run=run, which=which, config=config, locate=mirror.url):
+            pinned = step.component.removeprefix('baseline:') in mirror.baseline
+            results.append(Result(step.component, step.status, step.detail + mirror.note(pinned)))
     return results
 
 
@@ -387,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.status:
         print(json.dumps(_load_state(root), indent=2, sort_keys=True))
         return 0
+    try:
+        mirror = Mirror.from_environ()
+    except ValueError as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 2
     now = time.time()
     if args.if_due and not args.now and not is_due(root, now):
         if not args.quiet:
@@ -397,7 +508,9 @@ def main(argv: list[str] | None = None) -> int:
             if not args.quiet:
                 print('Another Getzilla update is running.')
             return 0
-        results = run_all(root, components=tuple(args.only) if args.only else None)
+        if mirror is not None and not args.quiet:
+            print(f'Offline mirror {mirror.root} ({MIRROR_ENV}): nothing is downloaded.')
+        results = run_all(root, components=tuple(args.only) if args.only else None, mirror=mirror)
         if not args.only or 'osv' in args.only or 'opengrep' in args.only:
             with contextlib.suppress(Exception):
                 export_environment(root)
