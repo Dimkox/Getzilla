@@ -351,6 +351,7 @@ footer a { color: #C9CECB; }
   .band { padding-bottom: 72px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.claim-ref{margin-left:.1em;text-decoration:none}.claim-conditions{font-size:.875rem;margin-top:.75rem}
 </style>
 </head>
 <body>
@@ -422,10 +423,10 @@ footer a { color: #C9CECB; }
               <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Tests for checkout</b><span>Added and run on this exact version</span></div><span class="tag tag-ok">Passing</span></li>
               <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Old login</b><span>Re-checked, still works</span></div><span class="tag tag-ok">Passing</span></li>
               <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Review</b><span>Done by someone other than the author</span></div><span class="tag tag-ok">Approved</span></li>
-              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Final check outside the agent</b><span>Hidden tests the agent cannot edit</span></div><span class="tag tag-ok">Verified</span></li>
+              <li><svg aria-hidden="true"><use href="#ok"/></svg><div><b>Final check outside the agent</b><span>Hidden tests the agent cannot edit<a class="claim-ref" href="#claim-conditions" aria-label="Condition below">*</a></span></div><span class="tag tag-ok">Verified</span></li>
             </ul>
             <div class="merge">
-              <p class="before-only">Getzilla keeps this out of main until it is fixed.</p>
+              <p class="before-only">Getzilla keeps this out of main until it is fixed.<a class="claim-ref" href="#claim-conditions" aria-label="Condition below">*</a></p>
               <p class="after-only">Every check passed. Safe to merge.</p>
               <button class="btn btn-sm before-only" type="button" disabled>Merge blocked</button>
               <span class="btn btn-green btn-sm after-only" aria-hidden="true">Merge into main</span>
@@ -688,7 +689,8 @@ footer a { color: #C9CECB; }
       <div>
         <span class="eyebrow">Why you can trust it</span>
         <h2>The agent cannot grade its own homework</h2>
-        <p class="intro">The final check runs outside the agent’s reach: on a separate server, with tests the agent cannot see or edit. If a change is not proven, it does not get in, however confident the agent sounds.</p>
+        <p class="intro">The final check runs outside the agent’s reach: on a separate server, with tests the agent cannot see or edit. If a change is not proven, it does not get in, however confident the agent sounds.<a class="claim-ref" href="#claim-conditions" aria-label="Condition below">*</a></p>
+        <p class="claim-conditions" id="claim-conditions">* Blocking a merge and the final check outside the agent need Trust CI or GitHub branch protection that requires the Getzilla check. Without them Getzilla reports what is missing but cannot stop the merge.</p>
       </div>
       <div class="rules" role="table" aria-label="What gets into the main code">
         <div class="rule" role="row"><span role="cell">Tests pass on the exact version being merged</span><span class="v v-in" role="cell">Gets in</span></div>

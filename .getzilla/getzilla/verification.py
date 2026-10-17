@@ -30,6 +30,9 @@ from .receipts import (
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
 from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
+from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
+from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
+from .stacks import load_registry, stack_checks
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
@@ -1773,21 +1776,88 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
     except (json.JSONDecodeError, OSError, AttributeError):
         dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'invalid package.json'))
         return results
-    runner = 'npm' if command_exists('npm') else None
-    if not runner:
-        dispatch.run('node-tooling', lambda: CheckResult('node-tooling', 'skip', 'npm not available'))
-        return results
+    env = None
+    if not command_exists('npm'):
+        # No Node on this machine: deliver the pinned toolchain instead of skipping (stacks.json).
+        toolchain = _node_toolchain(root)
+        if not isinstance(toolchain, Toolchain):
+            dispatch.run('node-tooling', lambda: CheckResult('node-tooling', 'fail', toolchain.code,
+                                                             details=[toolchain.detail('package.json')]))
+            return results
+        env = toolchain.process_env()
+    node_env = {'env': env} if env else {}
+    manager, lockfile = node_lockfile(root)
+    if mode in {'pr', 'release'}:
+        if lockfile is None:
+            dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'fail', 'NODE_LOCK_MISSING', details=[{
+                'severity': 'error', 'code': 'NODE_LOCK_MISSING', 'path': 'package.json',
+                'message': 'no package-lock.json, pnpm-lock.yaml or yarn.lock: dependencies are not reproducible',
+            }]))
+        else:
+            install = _node_install_command(root, manager, lockfile)
+            dispatch.run(f'{manager}-install', lambda: _command_check(root, f'{manager}-install', install, 1800, **node_env))
     names = ['lint', 'typecheck', 'test', 'prettier', 'format']
     if mode in {'pr', 'release'}:
         names.append('build')
+    prefix = _node_manager_command(manager)
     for name in names:
         if name in scripts:
-            command = ['npm', 'run', name]
-            if name == 'test':
+            command = [*prefix, 'run', name]
+            if name == 'test' and manager == 'npm':
                 command.append('--')
                 command.append('--runInBand') if 'jest' in str(scripts[name]) else None
-            dispatch.run(f'npm-{name}', lambda: _command_check(root, f'npm-{name}', command, 900))
+            dispatch.run(f'{manager}-{name}', lambda: _command_check(root, f'{manager}-{name}', command, 900, **node_env))
+    if 'typecheck' not in scripts and (root / 'tsconfig.json').is_file() and mode in {'pr', 'release'}:
+        tsc = root / 'node_modules' / '.bin' / ('tsc.cmd' if os.name == 'nt' else 'tsc')
+        if tsc.is_file():
+            dispatch.run('tsc', lambda: _command_check(root, 'tsc', [str(tsc), '--noEmit'], 900, **node_env))
+        else:
+            dispatch.run('tsc', lambda: CheckResult('tsc', 'fail', 'tsconfig.json without an installed typescript', details=[{
+                'severity': 'error', 'code': 'TYPESCRIPT_NOT_INSTALLED', 'path': 'tsconfig.json',
+                'message': 'tsconfig.json is present and no typecheck script exists, but typescript is not installed',
+            }]))
     return results
+
+
+NODE_LOCKFILES = (('package-lock.json', 'npm'), ('npm-shrinkwrap.json', 'npm'), ('pnpm-lock.yaml', 'pnpm'),
+                  ('yarn.lock', 'yarn'))
+
+
+def node_lockfile(root: Path) -> tuple[str, str | None]:
+    """The package manager the lockfile implies, and the lockfile (None: not reproducible)."""
+    for name, manager in NODE_LOCKFILES:
+        if (root / name).is_file():
+            return manager, name
+    return 'npm', None
+
+
+def _node_manager_command(manager: str) -> list[str]:
+    # pnpm and yarn come from corepack at the version package.json pins ("packageManager").
+    return [manager] if manager == 'npm' or command_exists(manager) else ['corepack', manager]
+
+
+def _node_install_command(root: Path, manager: str, lockfile: str) -> list[str]:
+    prefix = _node_manager_command(manager)
+    if manager == 'npm':
+        return [*prefix, 'ci']
+    if manager == 'pnpm':
+        return [*prefix, 'install', '--frozen-lockfile']
+    try:
+        classic = (root / lockfile).read_text(encoding='utf-8', errors='replace')[:200].find('yarn lockfile v1') >= 0
+    except OSError:
+        classic = False
+    return [*prefix, 'install', '--frozen-lockfile' if classic else '--immutable']
+
+
+def _node_toolchain(root: Path) -> Toolchain | Blocker:
+    stack = load_registry(root).get('node')
+    if stack is None or stack.toolchain is None:
+        return Blocker('TOOLCHAIN_UNAVAILABLE', 'stacks.json has no Node toolchain')
+    version, _source = resolve_version(root, stack.toolchain)
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        # Ranges (engines.node ">=20", .nvmrc "lts/*") are not exact pins: use the tested default.
+        version = str(stack.toolchain['default_version'])
+    return ensure_toolchain('node', stack.toolchain, version)
 
 
 def _factory_unit(root: Path) -> list[CheckResult]:
@@ -2263,6 +2333,14 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     escalation = escalate_route(route, worst.risk, root)
     metadata.update(effective_risk=escalation['effective_risk'], added_reviewers=escalation['added_reviewers'],
                     added_evidence=escalation['added_evidence'])
+    from .router import trivial_waiver
+    waived = trivial_waiver(route, escalation['effective_risk'], profile, root)
+    metadata['waived_evidence'] = waived
+    if waived:
+        metadata['profile_reason'] = 'TRIVIAL_PROVEN_BY_DIFF'
+        return CheckResult('diff-risk', 'pass', (
+            f"{summary}; TRIVIAL_PROVEN_BY_DIFF: prose-only change at low risk, verification and one independent "
+            f"review are enough (not required: {', '.join(waived)})")), metadata
     if not escalation['added_evidence']:
         return CheckResult('diff-risk', 'pass', f"{summary}; route risk {metadata['route_risk']} covers it"), metadata
     missing = validate_evidence(root, {**route, 'required_evidence': escalation['added_evidence']},
@@ -2549,6 +2627,17 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         cancellation.check()
         for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
             dispatch.add(check)
+    state.stage = 'stacks'
+    cancellation.check()
+    # Every detected stack is either checked or reported as not verified (stacks.json).
+    if dispatch.blocked_by:
+        dispatch.run('stacks', None)
+        stack_metadata: dict[str, object] = {'status': 'not_run'}
+    else:
+        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check)
+        for check in stack_results:
+            dispatch.add(check)
+    report['stacks'] = stack_metadata
     state.stage = 'semgrep'
     cancellation.check()
     if _semgrep_config(root) is not None:

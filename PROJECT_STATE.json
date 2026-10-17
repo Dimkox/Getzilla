@@ -12,10 +12,10 @@
     "version": "2.2.2",
     "installers": {
       "scripts/install.sh": {
-        "sha256": "04f6d121187671c40e9adc33ed10899e78dfc44a1b6c1b1c2105eab07722976f"
+        "sha256": "70778e1b19ce9a2cc5ae5e279c95f95f2fbedc6ee9d8a0f5f4852b23c81cb18d"
       },
       "scripts/install.ps1": {
-        "sha256": "9aa577ae9d0987620098d658eab050f01a6df23a4ceb6ec286a82b0bc0ac999f"
+        "sha256": "93ab15ecbf8718445f73b4038747d30ee67b6a30980f617115babb9034267cce"
       }
     }
   },

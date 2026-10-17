@@ -2170,6 +2170,7 @@ class FailFastVerificationTests(unittest.TestCase):
             root = Path(directory)
             (root / 'package.json').write_text(json.dumps({'scripts': {'lint': 'lint', 'test': 'test', 'build': 'build'}}))
             (root / 'composer.json').write_text('{}')
+            (root / 'package-lock.json').write_text('{}')  # pr refuses a Node project without a lockfile first
             (root / 'vendor/bin').mkdir(parents=True)
             (root / 'vendor/bin/phpunit').write_text('fixture')
             for invoke in (lambda: _node(root, 'pr'), lambda: verification_module._composer(root, 'pr')):

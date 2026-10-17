@@ -64,3 +64,10 @@ for item in result.written:
     print(f'configured: {item}')
 for step in result.next_steps:
     print(f'next: {step}')
+# A project Getzilla was installed into gets this agent's harness files the first time it is set up.
+from getzilla.on_demand import ensure_components, is_installed_project  # noqa: E402
+
+if is_installed_project(Path.cwd()):
+    for added in ensure_components(Path.cwd(), [f'agent:{args.agent}'], source=ROOT):
+        if added.files:
+            print(f'project: added {len(added.files)} {added.component} files (recorded in .getzilla/managed-components.json)')

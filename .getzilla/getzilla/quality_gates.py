@@ -81,6 +81,8 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "no pinned dependencies in lockfiles or requirements"
     if name == "opengrep":
         return summary == "no OpenGrep rules installed"
+    if name.startswith("stack:"):
+        return summary == "no changed files of this stack"
     if name == "workflow-baseline":
         return summary.startswith(("CI runner: ", "not an installed Getzilla project"))
     if name == "factory-postgres-exit":

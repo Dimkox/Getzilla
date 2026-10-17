@@ -113,7 +113,7 @@ function Install-Getzilla {
     try {
         if ($env:GETZILLA_NEW_PROJECT) {
             Write-Step ("Creating a new project at " + $env:GETZILLA_NEW_PROJECT + " ...")
-            Invoke-Python $Python @('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT)
+            Invoke-Python $Python @('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT, '--agents', $Agent)
             if ($LASTEXITCODE -ne 0) { throw 'Creating the new project failed; see the message above.' }
             Write-Step 'Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project...'
             Invoke-Python $Python @('scripts/getzilla_baseline.py', 'apply', '--project', $env:GETZILLA_NEW_PROJECT, '--agent', $Agent)

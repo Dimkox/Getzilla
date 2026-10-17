@@ -398,6 +398,44 @@ def plan_gate(
     return plan
 
 
+def protection_plan(root: Path, slug: str, branch: str) -> dict[str, object]:
+    """The branch protection that makes the Getzilla checks binding on the exact head; nothing is sent.
+
+    Required status checks with `strict` (the head must be up to date), no force pushes and no
+    deletion of the default branch. Reviews and admin enforcement stay the owner's choice.
+    """
+    source = _join(root, SOURCE_WORKFLOW_PATH).is_file()
+    checks = ['linux', 'windows'] if source else [CHECK_NAME]
+    body = {
+        'required_status_checks': {'strict': True, 'contexts': checks},
+        'enforce_admins': False,
+        'required_pull_request_reviews': None,
+        'restrictions': None,
+        'allow_force_pushes': False,
+        'allow_deletions': False,
+    }
+    return {
+        'schema': 'getzilla-branch-protection-plan-v1', 'repository': slug, 'branch': branch, 'body': body,
+        'endpoint': f'repos/{slug}/branches/{branch}/protection', 'method': 'PUT',
+        'command': f'gh api -X PUT repos/{slug}/branches/{branch}/protection --input protection.json',
+        'note': 'Read-only plan. Applying it changes repository settings: the owner runs it, or passes --yes.',
+    }
+
+
+def apply_protection(plan: dict[str, object], *, runner: Runner = run_command) -> CommandResult:
+    """PUT the planned protection with gh; only called after an explicit --yes."""
+    import json
+    import tempfile
+
+    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+        json.dump(plan['body'], handle)
+        body_path = handle.name
+    try:
+        return runner(['gh', 'api', '-X', 'PUT', str(plan['endpoint']), '--input', body_path])
+    finally:
+        Path(body_path).unlink(missing_ok=True)
+
+
 def _create_exclusively(path: Path, content: bytes) -> bool:
     """Write a new file; False when something already occupies the path."""
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -565,8 +565,11 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(plan["target_state"], "absent")
             expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)}
             delivered = {entry["path"] for entry in plan["entries"]}
-            self.assertEqual(delivered - {"AGENTS.md"}, expected)
+            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD}, expected)
             for entry in plan["entries"]:
+                if entry["path"] == MODULE.STACK_SYNC_RECORD:  # synthesized: a fresh install keeps nothing local
+                    self.assertEqual(entry["sha256"], hashlib.sha256(MODULE.FRESH_SYNC_RECORD).hexdigest())
+                    continue
                 if entry["path"] in {"AGENTS.md", "factory/README.md"}:
                     continue
                 source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
@@ -1374,7 +1377,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(default.stdout.count(MODULE.LEGACY_PLAN_NOTICE), 1)
             self.assertEqual(_snapshot(existing), before)
             self.assertTrue((target / "scripts/getzilla_verify.py").is_file())
-            self.assertTrue((target / "factory/runtime/setup_manager.py").is_file())
+            self.assertFalse((target / "factory").exists())  # factory/ is added on demand (F03)
             self.assertFalse((target / ".github/workflows").exists())
             self.assertTrue((target / "scripts/getzilla_agent.py").is_file())
             self.assertFalse((target / ".getzilla/runtime/agent-state.json").exists())
@@ -1385,6 +1388,13 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(command.returncode, 0, command.stderr)
             self.assertEqual(json.loads(command.stdout)["agents"], [])
+            full = root / "full"
+            full_layout = subprocess.run(
+                [sys.executable, "scripts/install_into.py", "--materialize-new", "--full-layout", str(full)],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(full_layout.returncode, 0, full_layout.stdout + full_layout.stderr)
+            self.assertTrue((full / "factory/runtime/setup_manager.py").is_file())
 
     def test_with_ci_redirects_to_the_ci_gate_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -17,8 +17,38 @@ parser.add_argument(
     action='store_true',
     help='Print fallback/newer install commands for tools that are missing or below minimum.',
 )
+parser.add_argument(
+    '--enforcement',
+    action='store_true',
+    help='Report what Getzilla actually enforces here (advisory hooks, CI on the exact head, Trust CI) and exit.',
+)
+parser.add_argument('--json', action='store_true', help='with --enforcement: print the report as JSON')
 args = parser.parse_args()
 root = find_root()
+if args.enforcement:
+    import json
+
+    from getzilla.ci_gate import default_branch, repository_slug
+    from getzilla.enforcement import default_gh_client, inspect_enforcement
+
+    slug = repository_slug(root)
+    branch = default_branch(root)[0]
+    report = inspect_enforcement(root, slug=slug, branch=branch, github=default_gh_client(root))
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f'ENFORCEMENT level: {report.level}')
+        for agent, hook in sorted(report.hooks.items()):
+            print(f'  hooks {agent}: pre_tool_use={hook["pre_tool_use"]} stop_gate={hook["stop_gate"]} ({hook["config"]})')
+        print(f'  hook self-test: {report.self_test.get("status")}')
+        print(f'  stop gate: {report.stop_gate}')
+        print(f'  CI workflow: {report.ci_workflow or "missing"}')
+        protection = report.branch_protection
+        print(f'  branch protection ({protection.get("branch")}): {protection.get("state")}'
+              + (f', required checks {protection.get("required_checks")}' if protection.get('required_checks') else ''))
+        for note in report.notes:
+            print(f'  note: {note}')
+    raise SystemExit(0)
 items = run_doctor(root)
 for item in items:
     print(f'{item.status.upper():4} {item.name}: {item.message}')

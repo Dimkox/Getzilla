@@ -1,0 +1,76 @@
+{
+  "schema_version": "getzilla-landing-claims-v1",
+  "note": "Every behavioural claim on the landing page names the mechanism that keeps it and the tests that prove it. A claim with requires[] is shown with a condition footnote (#claim-conditions).",
+  "requirements": {
+    "branch-protection": "GitHub branch protection that requires the Getzilla check",
+    "trust-ci": "Trust CI"
+  },
+  "claims": [
+    {
+      "id": "out-of-main",
+      "marker": "keeps this out of main",
+      "text": "Getzilla keeps this out of main until it is fixed.",
+      "mechanism": "Required checks on main: the CI gate (getzilla ci) or Trust CI must pass on the exact head; getzilla doctor --enforcement reports whether main is actually protected.",
+      "tests": [
+        "tests/test_enforcement_report.py::EnforcementReportTests::test_protection_requiring_the_checks_is_ci_enforced",
+        "tests/test_enforcement_report.py::EnforcementReportTests::test_unprotected_or_partial_protection_stays_advisory"
+      ],
+      "requires": ["branch-protection", "trust-ci"]
+    },
+    {
+      "id": "tests-actually-ran",
+      "marker": "Tests that actually ran",
+      "text": "Tests that actually ran, on the exact version you ship",
+      "mechanism": "Verification receipts are bound to the reviewed tree; the stop gate refuses a \"tests passed\" claim without a current receipt.",
+      "tests": [
+        "tests/test_review_source.py::ReviewSourceTests::test_report_only_commit_binds_reviewed_tree",
+        "tests/test_stop_gate_claims.py::StopGateClaimTests::test_strict_mode_blocks_on_claude_and_codex",
+        "tests/test_stop_gate_claims.py::StopGateClaimTests::test_current_receipt_or_no_claim_is_quiet"
+      ],
+      "requires": []
+    },
+    {
+      "id": "own-homework",
+      "marker": "grade its own homework",
+      "text": "however confident the agent sounds.",
+      "mechanism": "The final check runs in Trust CI on a separate server against the exact commit, with holdout specifications the agent cannot read; reviews pass only for the reviewed identity.",
+      "tests": [
+        "trust-ci/tests/test_change_spec_holdout.py::HoldoutChangeSpecTests::test_independent_exact_sha_validation_passes",
+        "tests/test_review_source.py::ReviewSourceTests::test_pass_requires_reviewed_identity"
+      ],
+      "requires": ["trust-ci"]
+    },
+    {
+      "id": "hidden-tests",
+      "marker": "Hidden tests",
+      "text": "Hidden tests the agent cannot edit",
+      "mechanism": "Trust CI holdout change specifications live outside the repository and are validated against the exact commit.",
+      "tests": [
+        "trust-ci/tests/test_change_spec_holdout.py::HoldoutChangeSpecTests::test_independent_exact_sha_validation_passes",
+        "trust-ci/tests/test_change_spec_holdout.py::HoldoutChangeSpecTests::test_missing_sha_and_malformed_json_fail_closed"
+      ],
+      "requires": ["trust-ci"]
+    },
+    {
+      "id": "typo-light-touch",
+      "marker": "typo gets a light touch",
+      "text": "A typo gets a light touch.",
+      "mechanism": "Proven-trivial profile (L01): a prose-only diff at low risk needs verification and one review; a prompt alone or raised risk never waives.",
+      "tests": [
+        "tests/test_trivial_profile.py::TrivialProfileTests::test_readme_typo_waives_test_review_and_keeps_one_reviewer",
+        "tests/test_trivial_profile.py::TrivialProfileTests::test_prompt_alone_or_raised_risk_never_waives"
+      ],
+      "requires": []
+    },
+    {
+      "id": "payments-full",
+      "marker": "full treatment",
+      "text": "Payments and logins get the full treatment.",
+      "mechanism": "Risk is the maximum of the prompt and the diff (H01); payment and authentication terms route to the full profile.",
+      "tests": [
+        "tests/test_router_risk_golden.py::RouterRiskGoldenTests::test_golden_prompts"
+      ],
+      "requires": []
+    }
+  ]
+}

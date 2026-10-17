@@ -19,7 +19,7 @@ ROOT_ENTRIES = frozenset(
         "AGENTS.md", "CHANGELOG.md", "DARK_FACTORY_ROADMAP.md", "GROK_BUILD_HANDOFF.md",
         "FACTORY_TZ_v1.5_ADDENDUM_BB-01.md", "FACTORY_TZ_v1.5_ADDENDUM_QG-01.md",
         "FACTORY_UNIFIED_UPGRADE_TZ_v1.5_FINAL.md",
-        "LICENSE", "Makefile", "PROJECT_STATE.json", "QUICKSTART.md", "README.md", "RELEASE_STATE.json", "SECURITY.md",
+        "LICENSE", "Makefile", "PROJECT_STATE.json", "PSScriptAnalyzerSettings.psd1", "QUICKSTART.md", "README.md", "RELEASE_STATE.json", "SECURITY.md",
         "START_HERE.md", "VERSION", "architecture", "bandit.yaml", "bin", "decisions.md",
         "delivery", "docs", "engineering", "examples", "factory", "governance",
         "mistakes.md", "packages", "pilot", "ruff.toml", "schemas", "scripts",
