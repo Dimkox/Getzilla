@@ -28,6 +28,14 @@ def _tool_update_note() -> str | None:
         return None
 
 
+def _capacity_note(root) -> str | None:
+    try:
+        from getzilla.parallel import session_note
+        return session_note(root)
+    except Exception:
+        return None
+
+
 def main() -> None:
     payload = read_payload()
     root = root_from(payload)
@@ -41,6 +49,9 @@ def main() -> None:
     note = _tool_update_note()
     if note:
         context = f'{context} {note}'
+    capacity = _capacity_note(root)
+    if capacity:
+        context = f'{context} {capacity}'
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'SessionStart',

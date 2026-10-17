@@ -331,6 +331,24 @@ def _path_miss(current_tool: str, current_input: dict[str, Any], payload: dict[s
         return None
 
 
+def _serial_batch(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
+    """A serial batch of heavy commands is refused with the parallel command (getzilla.parallel)."""
+    command = current_input.get('command')
+    if current_tool != 'Bash' or root is None or not isinstance(command, str):
+        return None
+    try:
+        from getzilla.parallel import serial_refusal
+        from getzilla.path_hints import command_cwd
+        return serial_refusal(root, command, command_cwd(root, payload, current_input))
+    except Exception:
+        try:
+            sys.stderr.write('Getzilla: parallel guard unavailable; the command runs unchecked.\n')
+        except Exception:
+            # Diagnostics are advisory; an allowed command still runs.
+            return None
+        return None
+
+
 def main() -> None:
     try:
         payload = read_payload()
@@ -387,7 +405,8 @@ def main() -> None:
                 else:
                     raise
         if allowed:
-            miss = _path_miss(current_tool, current_input, payload, root)
+            miss = (_path_miss(current_tool, current_input, payload, root)
+                    or _serial_batch(current_tool, current_input, payload, root))
             emit(permission_output(miss is None, miss))
             return
 
