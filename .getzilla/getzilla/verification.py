@@ -30,6 +30,7 @@ from .receipts import (
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
 from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
+from .stacks import stack_checks
 from .state import get_active_change, get_active_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
@@ -2557,6 +2558,17 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         cancellation.check()
         for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
             dispatch.add(check)
+    state.stage = 'stacks'
+    cancellation.check()
+    # Every detected stack is either checked or reported as not verified (stacks.json).
+    if dispatch.blocked_by:
+        dispatch.run('stacks', None)
+        stack_metadata: dict[str, object] = {'status': 'not_run'}
+    else:
+        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check)
+        for check in stack_results:
+            dispatch.add(check)
+    report['stacks'] = stack_metadata
     state.stage = 'semgrep'
     cancellation.check()
     if _semgrep_config(root) is not None:
