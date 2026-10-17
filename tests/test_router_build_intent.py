@@ -49,6 +49,20 @@ class BuildIntentTests(unittest.TestCase):
         self.assertEqual(build_route(self.project, 'добавь тест на парсер').intent, 'test')
         self.assertEqual(build_route(self.project, 'Implement a fix for the broken login bug').intent, 'bugfix')
 
+    def test_do_a_review_or_research_stays_read_only(self) -> None:
+        for prompt, intent in (('Сделай ревью PR #12', 'review'), ('Сделай review изменений в оплате', 'review'),
+                               ('Сделай исследование конкурентов', 'research')):
+            with self.subTest(prompt=prompt):
+                route = build_route(self.project, prompt)
+                self.assertEqual(route.intent, intent)
+                self.assertIsNone(route.write_agent)
+
+    def test_document_as_the_object_stays_docs(self) -> None:
+        for prompt in ('Добавь README', 'Добавь документацию к API', 'Добавь раздел в README про установку'):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(build_route(self.project, prompt).intent, 'docs')
+        self.assertEqual(build_route(self.project, 'Сделай экспорт заказов в CSV').intent, 'feature')
+
 
 if __name__ == '__main__':
     unittest.main()
