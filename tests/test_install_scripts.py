@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -400,8 +401,17 @@ class InstallScriptEndToEndTests(unittest.TestCase):
                 env.pop(name, None)
             env.update(self._offline)
         env.update(extra)
-        return subprocess.run(['bash', str(SHELL)], env=env, capture_output=True, text=True,
-                              timeout=1800 if network else 600)
+        # Own process group: on a timeout the updater and its downloads stop with the installer
+        # instead of running on as orphans (a killed updater also left a stale update.lock).
+        process = subprocess.Popen(['bash', str(SHELL)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+        try:
+            stdout, stderr = process.communicate(timeout=3600 if network else 600)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     def _run(self, home: Path, **extra: str) -> subprocess.CompletedProcess[str]:
         return self._install(home, GETZILLA_SKIP_AGENT='1', **extra)
