@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -20,6 +21,7 @@ if str(STACK) not in sys.path:
 from getzilla import fsx
 from getzilla._policy_legacy import (
     _executable_name,
+    _nested_commands,
     _shell_tokens,
     _simple_commands,
     _unwrap_execution_wrappers,
@@ -35,11 +37,11 @@ _WINDOWS_DYNAMIC_COMMANDS = {'invoke-expression', 'iex'}
 # Interpreter code passed inline (option, stdin or here-document) is opaque to policy, unlike a
 # reviewable script file or module, so such invocations fail closed.
 _PYTHON_INTERPRETER = re.compile(r'^(?:python|pypy)(?:\d+(?:\.\d+)*)?$')
+_PHP_INTERPRETER = re.compile(r'^php(?:\d+(?:\.\d+)*)?$')
 _INLINE_CODE_OPTIONS = {
     'node': {'-e', '--eval', '-p', '--print', '-'},
     'nodejs': {'-e', '--eval', '-p', '--print', '-'},
     'bun': {'-e', '--eval', '-p', '--print'},
-    'php': {'-r'},
     'lua': {'-e', '-'},
     'luajit': {'-e', '-'},
     'rscript': {'-e'},
@@ -328,29 +330,213 @@ def _has_unsafe_dispatcher_composition(words: list[str]) -> bool:
     return _contains_nested_command_shell(words[1:])
 
 
-def _python_program_is_inline(args: list[str]) -> bool | None:
-    """True for ``-c``/stdin code, False for a script or ``-m`` module, None if no program is named."""
+def _lexical_program_path(value: str) -> str:
+    """Normalize Linux path spelling without opening or resolving a program or its symlinks."""
+    normalized = posixpath.normpath(value)
+    # normpath preserves exactly two leading slashes; Linux treats these as the same root.
+    return '/' + normalized.lstrip('/') if normalized.startswith('/') else normalized
+
+
+def _opaque_program_file(value: str, cwds: tuple[str, ...] = ()) -> bool:
+    """Stream/descriptor aliases are opaque even when written with lexical path variations."""
+    if (value in {'', '-'} or '\0' in value
+            or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', value) is not None):
+        return True
+    paths = {_lexical_program_path(value)}
+    if not value.startswith('/'):
+        paths.update(_lexical_program_path(posixpath.join(base, value)) for base in cwds)
+    return any(path == '/dev/stdin' or path.startswith('/dev/fd/')
+               or re.match(r'^/proc/(?:self|thread-self|\d+)/(?:task/\d+/)?fd/', path) is not None
+               for path in paths)
+
+
+def _program_directory_candidates(commands: list[Any], cwd: str | None) -> tuple[str, ...] | None:
+    """Conservative literal cwd candidates; never infer filesystem targets for program arguments."""
+    bases = {_lexical_program_path(cwd)} if cwd is not None else set()
+    for argv in commands:
+        if not argv or not _is_directory_command(argv[0]):
+            continue
+        args = argv[1:]
+        if args[:1] == ['--']:
+            args = args[1:]
+        if len(args) != 1 or args[0].startswith('-') or '\0' in args[0] or re.search(r'[$`*?\[\]{}()]', args[0]):
+            return None
+        directory = os.path.expanduser(args[0])
+        if directory.startswith('/'):
+            bases.add(_lexical_program_path(directory))
+        elif not bases:
+            return None
+        else:
+            # Nested shell cwd changes do not escape their shell. Retain earlier candidates
+            # instead of guessing a flattened command's scope; any stream candidate is denied.
+            bases.update(_lexical_program_path(posixpath.join(base, directory)) for base in tuple(bases))
+        if len(bases) > 32:
+            return None
+    return tuple(sorted(bases))
+
+
+def _python_program_is_inline(args: list[str], cwds: tuple[str, ...] = ()) -> bool:
+    """Recognize the program selector; unknown options and implicit stdin fail closed."""
     index = 0
+    diagnostic = False
     while index < len(args):
         arg = args[index]
-        if arg == '-':
-            return True
         if arg == '--':
-            return False if index + 1 < len(args) else None
-        if not arg.startswith('-'):
-            return False
-        if not arg.startswith('--'):
+            return index + 1 >= len(args) or _opaque_program_file(args[index + 1], cwds)
+        if arg == '-' or not arg.startswith('-'):
+            return _opaque_program_file(arg, cwds)
+        if arg in {'--help', '--help-env', '--help-xoptions', '--help-all', '--version'}:
+            diagnostic = True
+        elif arg.split('=', 1)[0] == '--check-hash-based-pycs':
+            if '=' not in arg:
+                index += 1
+            if index >= len(args) or args[index].split('=', 1)[-1] not in {'always', 'default', 'never'}:
+                return True
+        elif arg.startswith('--'):
+            return True
+        else:
             flags = arg[1:]
             for position, flag in enumerate(flags):
-                if flag == 'c':
+                if flag in 'ci':
                     return True
                 if flag == 'm':
-                    return False
+                    module = flags[position + 1:] or (args[index + 1] if index + 1 < len(args) else '')
+                    return not module or module.startswith('-') or _opaque_program_file(module, cwds)
                 if flag in 'WX':
-                    index += position == len(flags) - 1
+                    if position == len(flags) - 1:
+                        index += 1
+                        if index >= len(args):
+                            return True
                     break
+                if flag in 'h?V':
+                    diagnostic = True
+                elif flag not in 'bBdEIOPqRsSuvx':
+                    return True
         index += 1
-    return None
+    return not diagnostic
+
+
+def _php_program_is_inline(args: list[str], cwds: tuple[str, ...] = ()) -> bool:
+    """PHP accepts attached/clustered selectors; only explicit files/server/diagnostics are inspectable."""
+    index = 0
+    program = server = diagnostic = False
+    value_options = {'c', 'd', 'f', 'F', 'S', 't', 'z'}
+    long_values = {'--php-ini': 'c', '--define': 'd', '--file': 'f', '--process-file': 'F',
+                   '--server': 'S', '--docroot': 't', '--zend-extension': 'z',
+                   '--rf': '?', '--rc': '?', '--re': '?', '--rz': '?', '--ri': '?'}
+    while index < len(args):
+        arg = args[index]
+        if arg == '--':
+            return not (program or server or diagnostic)
+        if arg == '-' or not arg.startswith('-'):
+            return False if program else _opaque_program_file(arg, cwds)
+        if arg.startswith('--'):
+            option, separator, attached = arg.partition('=')
+            if option in {'--run', '--process-code', '--begin', '--end', '--interactive'}:
+                return True
+            if option in {'--help', '--info', '--modules', '--version', '--ini'}:
+                diagnostic = True
+                index += 1
+                continue
+            if option in {'--no-php-ini', '--syntax-check', '--syntax-highlight', '--strip', '--hide-args'}:
+                index += 1
+                continue
+            flag = long_values.get(option)
+            if flag is None:
+                return True
+            value = attached if separator else None
+        else:
+            flag = ''
+            value = None
+            for position, flag in enumerate(arg[1:]):
+                if flag in 'arRBE':
+                    return True
+                if flag in value_options:
+                    value = arg[position + 2:] or None
+                    break
+                if flag in 'himv?':
+                    diagnostic = True
+                elif flag not in 'nelHsw':
+                    return True
+            else:
+                index += 1
+                continue
+        if value is None:
+            index += 1
+            if index >= len(args):
+                return True
+            value = args[index]
+        if not value:
+            return True
+        if flag in {'f', 'F', 'z'} and _opaque_program_file(value, cwds):
+            return True
+        program = program or flag in {'f', 'F'}
+        server = server or flag == 'S'
+        diagnostic = diagnostic or flag == '?'
+        index += 1
+    return not (program or server or diagnostic)
+
+
+def _without_redirection_operands(command: str, tokens: list[Any]) -> str | None:
+    """Keep shell redirections out of argv, including adjacent numeric descriptor prefixes."""
+    characters = list(command)
+    for index, token in enumerate(tokens):
+        if not token.operator or ('<' not in token.value and '>' not in token.value):
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1].operator:
+            return None
+        start = token.start
+        if index and tokens[index - 1].end == start:
+            previous = tokens[index - 1]
+            if not previous.operator and command[previous.start:previous.end].isdigit():
+                start = previous.start
+        end = tokens[index + 1].end
+        characters[start:end] = ' ' * (end - start)
+    return ''.join(characters)
+
+
+def _shell_word_is_opaque(raw: str, token: Any) -> bool:
+    """Identify expansion without evaluating it; quoting/escaping keeps literal paths literal."""
+    if token.expansion or raw.startswith('~'):
+        return True
+    assignment = re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', raw) is not None
+    quote = ''
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if quote == "'":
+            if char == "'":
+                quote = ''
+        elif char == '\\':
+            index += 1
+        elif quote:
+            if char == quote:
+                quote = ''
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in '*?[{':
+            return True
+        elif char == '~' and assignment and raw[index - 1:index] in {'=', ':'}:
+            return True
+        index += 1
+    return False
+
+
+def _opaque_shell_words(command: str) -> str:
+    """Guard-only shadow: the argv selector, not an arbitrary data argument, decides opacity."""
+    chunks: list[str] = []
+    cursor = 0
+    for token in _shell_tokens(command):
+        if token.operator:
+            continue
+        raw = command[token.start:token.end]
+        if _shell_word_is_opaque(raw, token):
+            assignment = re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', raw)
+            marker = (assignment.group(0) if assignment else '') + '\0'
+            chunks.extend((command[cursor:token.start], shlex.quote(marker)))
+            cursor = token.end
+    chunks.append(command[cursor:])
+    return ''.join(chunks)
 
 
 def _awk_programs(args: list[str]) -> list[str]:
@@ -378,15 +564,42 @@ def _awk_programs(args: list[str]) -> list[str]:
     return programs
 
 
-def _runs_inline_program(command: str, tokens: list[Any]) -> bool:
+def _runs_inline_program(command: str, tokens: list[Any], *, depth: int = 0, cwd: str | None = None) -> bool:
     """Whether any simple command runs interpreter code given inline instead of as a file."""
     here_document = any(token.operator and token.value in _HERE_DOCUMENT_OPERATORS for token in tokens)
-    for argv in _simple_commands(command):
+    argv_command = _without_redirection_operands(command, tokens)
+    if argv_command is None or depth > 4:
+        return True
+    # The shared argv scanner discards quote provenance. Mark expanded words first;
+    # NUL is impossible in an executable pathname and never leaves this guard-only text.
+    commands = _simple_commands(argv_command)
+    shadow = _opaque_shell_words(argv_command)
+    shadow_commands = _simple_commands(shadow) if shadow != argv_command else commands
+    cwds = _program_directory_candidates(shadow_commands, cwd)
+    # Keep literal option recognition too (e.g. node --eval=$CODE, perl -e$CODE).
+    if shadow != argv_command:
+        commands = [*commands, *shadow_commands]
+    for argv in commands:
         if not argv:
             continue
+        if '\0' in argv[0]:
+            return True
+        # The shared scanner expands nested commands but drops their redirection operators.
+        # Reinspect their original text before an input filename can masquerade as a program.
+        for nested in _nested_commands(argv):
+            if isinstance(nested, str):
+                try:
+                    if _runs_inline_program(nested, _shell_tokens(nested), depth=depth + 1, cwd=cwd):
+                        return True
+                except ValueError:
+                    return True
         name, args = _executable_name(argv[0]), argv[1:]
         if _PYTHON_INTERPRETER.match(name):
-            if here_document or _python_program_is_inline(args):
+            if here_document or cwds is None or _python_program_is_inline(args, cwds):
+                return True
+            continue
+        if _PHP_INTERPRETER.match(name):
+            if here_document or cwds is None or _php_program_is_inline(args, cwds):
                 return True
             continue
         options = _INLINE_CODE_OPTIONS.get(name)
@@ -405,7 +618,7 @@ def _runs_inline_program(command: str, tokens: list[Any]) -> bool:
     return False
 
 
-def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str]:
+def _command_directory_aliases(command: str, *, depth: int = 0, cwd: str | None = None) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
         tokens = _shell_tokens(command)
@@ -413,7 +626,7 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
         return {'shell': '<ambiguous>'}
     if any(token.substitution for token in tokens):
         return {'command.dynamic-substitution': '<ambiguous>'}
-    if _runs_inline_program(command, tokens):
+    if _runs_inline_program(command, tokens, cwd=cwd):
         return {'command.inline-program': '<ambiguous>'}
     # ';' runs commands in sequence exactly like a newline; both keep root tracking linear.
     if any(token.operator and token.value not in {'&&', ';', '\n'} and '<' not in token.value and '>' not in token.value
@@ -482,7 +695,7 @@ def _command_directory_aliases(command: str, *, depth: int = 0) -> dict[str, str
                 return aliases
             aliases.update({
                 f'shell.{key}': value
-                for key, value in _command_directory_aliases(words[2], depth=depth + 1).items()
+                for key, value in _command_directory_aliases(words[2], depth=depth + 1, cwd=cwd).items()
             })
             return aliases
     directory_index = git_index = git_invocations = 0
@@ -588,7 +801,13 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
     }
     command = input_data.get('command')
     if tool == 'Bash' and isinstance(command, str):
-        command_values.update(_command_directory_aliases(command))
+        # Resolve only the declared execution directory, as the root checks below already do.
+        # Program arguments themselves receive lexical normalization and no filesystem access.
+        inline_base = session_paths[0] if session_paths else Path.cwd()
+        if command_values:
+            declared = Path(next(iter(command_values.values()))).expanduser()
+            inline_base = (declared if declared.is_absolute() else inline_base / declared).resolve()
+        command_values.update(_command_directory_aliases(command, cwd=str(inline_base)))
     if not command_values:
         status = 'session-root' if session_root is not None else 'missing-root'
         return RootContext(session_cwd, session_root, {}, session_root, status)
