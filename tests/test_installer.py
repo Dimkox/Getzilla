@@ -78,6 +78,33 @@ def _broken_local_links(document: Path, root: Path) -> list[str]:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_runtime_state_is_never_walked_or_counted(self) -> None:
+        # A Getzilla checkout used as a workspace fills .getzilla/runtime with worktrees and receipts.
+        # They are not payload and must not hit the managed-source entry limit (install plans failed with
+        # "managed source entry limit exceeded" on a checkout with ~578k runtime entries). The source is a
+        # private copy of the tracked files, so parallel tests never see the bulk runtime.
+        listing = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "getzilla"
+            for raw in listing.split(b"\0"):
+                if not raw:
+                    continue
+                relative = raw.decode("utf-8")
+                origin = ROOT / relative
+                if not origin.is_file() or origin.is_symlink():
+                    continue
+                destination = source / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(origin.read_bytes())
+                destination.chmod(origin.stat().st_mode & 0o777)
+            nested = source / ".getzilla" / "runtime" / "worktrees" / "big"
+            nested.mkdir(parents=True)
+            for index in range(MODULE.MAX_MANAGED_SOURCE_ENTRIES + 10):
+                (nested / f"f{index}").touch()
+            payload = MODULE.build_payload(source)
+        runtime_paths = sorted(entry.path for entry in payload if entry.path.startswith(".getzilla/runtime/"))
+        self.assertEqual(runtime_paths, [".getzilla/runtime/.gitkeep"])
+
     def test_installed_grok_skills_equal_canonical_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / 'consumer'

@@ -284,6 +284,25 @@ def _has_operational_intent(text: str) -> bool:
     return False
 
 
+LEADING_BUILD = re.compile(
+    r'^\s*(?:please\s+|пожалуйста,?\s+)?'
+    r'(?:implement|build|create|add|develop|introduce|'
+    r'реализ\w*|внедр\w*|добав\w*|созда\w*|разработа\w*|'
+    # "Сделай ревью / аудит / исследование" asks for a review, not for a build.
+    r'сдела\w*(?!\s+(?:ревью|review|аудит|обзор|исследован|research|анализ)))\b',
+    re.IGNORECASE,
+)
+# Routes without a write owner: a build imperative never lands on them.
+PROCESS_INTENTS = frozenset({'review', 'research'})
+# A docs route keeps its writer, so it stays docs when the document is the object of the verb.
+DOCS_OBJECT_WORDS = 4
+
+
+def _docs_is_object(text: str, build: re.Match[str]) -> bool:
+    head = ' '.join(text[build.end():].split()[:DOCS_OBJECT_WORDS]).lower()
+    return any(word in head for word in INTENT_KEYWORDS['docs'])
+
+
 def _best_intent(text: str, *, operational_intent: bool) -> str:
     scores = _score(text, INTENT_KEYWORDS)
     scores.pop('release', None)
@@ -294,8 +313,16 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
 
     # Active incidents retain containment priority. Explicit operational requests
     # then outrank defect/review/PR transport; incidental release nouns do not.
+    # A task that opens with a build imperative ("Implement ...", "Реализуй ...") is delivery work:
+    # later process words ("independent reviews", "research", "documentation") must not turn it
+    # into a read-only route without a write owner, or into a lighter docs route.
+    build = LEADING_BUILD.match(text)
     for intent in ('incident', 'release', 'bugfix', 'review', 'refactor', 'architecture', 'research', 'docs'):
         if scores.get(intent):
+            if build and intent in PROCESS_INTENTS:
+                continue
+            if build and intent == 'docs' and not _docs_is_object(text, build):
+                continue
             return intent
 
     lowered = text.lower().strip()
@@ -310,7 +337,7 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
     )
     if scores.get('test') and (test_primary or not scores.get('feature')):
         return 'test'
-    if scores.get('feature'):
+    if scores.get('feature') or build:
         return 'feature'
     if scores.get('test'):
         return 'test'
