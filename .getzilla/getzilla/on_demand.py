@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST = '.getzilla/managed-components.json'
-INSTALLED_MARKER = '.getzilla/AGBP_SYNC.json'
+# A synced project has the sync record; a fresh install has the core package and no record.
+INSTALLED_MARKERS = ('.getzilla/AGBP_SYNC.json', '.getzilla/getzilla/__init__.py')
+# Files that only a full Getzilla checkout has: a lean project cannot be the source of components.
+SOURCE_MARKERS = ('scripts/install_into.py', 'factory/pyproject.toml')
 
 
 @dataclass
@@ -39,12 +42,23 @@ def _installer(source: Path):
     return module
 
 
+def is_source_checkout(path: Path) -> bool:
+    return all((path / marker).is_file() for marker in SOURCE_MARKERS)
+
+
 def getzilla_home() -> Path:
-    return Path(os.environ.get('GETZILLA_HOME') or Path(__file__).resolve().parents[2])
+    """The full checkout components come from: $GETZILLA_HOME, this checkout, then ~/Getzilla."""
+    candidates = [Path(os.environ['GETZILLA_HOME'])] if os.environ.get('GETZILLA_HOME') else []
+    candidates += [Path(__file__).resolve().parents[2], Path.home() / 'Getzilla']
+    for candidate in candidates:
+        if is_source_checkout(candidate):
+            return candidate
+    raise RuntimeError('no full Getzilla checkout found to add components from; set GETZILLA_HOME '
+                       'to the folder the installer cloned (default ~/Getzilla)')
 
 
 def is_installed_project(root: Path) -> bool:
-    return (root / INSTALLED_MARKER).is_file()
+    return any((root / marker).is_file() for marker in INSTALLED_MARKERS)
 
 
 def load_manifest(root: Path) -> dict[str, Any]:

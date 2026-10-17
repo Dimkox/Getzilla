@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
-from getzilla.on_demand import MANIFEST, ensure_components, load_manifest  # noqa: E402
+from getzilla.on_demand import MANIFEST, ensure_components, is_installed_project, load_manifest  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location('install_into_on_demand_test', ROOT / 'scripts' / 'install_into.py')
 INSTALL = importlib.util.module_from_spec(SPEC)
@@ -76,7 +76,7 @@ class OnDemandTests(unittest.TestCase):
         self.assertFalse((self.target / 'factory').exists())
         self.assertFalse((self.target / '.claude').exists())
         self.assertTrue((self.target / '.qwen' / 'settings.json').is_file())
-        self.assertTrue((self.target / '.getzilla' / 'AGBP_SYNC.json').is_file())
+        self.assertTrue(is_installed_project(self.target))
         doctor = subprocess.run([sys.executable, str(self.target / 'scripts' / 'getzilla_doctor.py')], cwd=self.target,
                                 capture_output=True, text=True, timeout=300, check=False)
         failing = [line for line in doctor.stdout.splitlines() if line.startswith('FAIL') and
