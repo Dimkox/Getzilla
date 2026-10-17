@@ -129,6 +129,7 @@ MAX_SYNC_RECORD_BYTES = 65536
 # never deletes them itself.
 LEGACY_STACK_DIR = ".grok-stack"
 LEGACY_STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
+FRESH_SYNC_RECORD = b'{"kept_local": [], "kept_local_sha256": {}, "schema_version": 1}\n'
 # Directories an install made before the rename owns entirely.
 LEGACY_MANAGED_DIRS = (
     ".grok-stack",
@@ -750,13 +751,23 @@ def _source_entry(
     return InstallEntry(relative, content, mode)
 
 
+def with_fresh_sync_record(payload: tuple[InstallEntry, ...]) -> tuple[InstallEntry, ...]:
+    """A fresh install also writes its sync record: it marks an installed project (the mandatory
+    workflow baseline is checked there) and carries kept_local for later syncs; nothing is kept yet."""
+    entry = InstallEntry(STACK_SYNC_RECORD, FRESH_SYNC_RECORD, 0o644)
+    return tuple(sorted((*payload, entry), key=lambda item: item.path))
+
+
 def build_payload(
     source: Path,
     *,
     profile_kind: str = "generic",
     selection: "PayloadSelection | None" = None,
 ) -> tuple[InstallEntry, ...]:
-    payload = _build_full_payload(source, profile_kind=profile_kind)
+    # A projects sync record is that projects state, never payload (an installed project stays
+    # a complete source for the same payload).
+    payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
+                    if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD})
     if selection is None or selection.full:
         return payload
     return tuple(entry for entry in payload if selection.includes(entry.path))
@@ -1067,6 +1078,8 @@ def _make_plan(
     full_payload = build_payload(source)
     selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
+    if state == "absent" and payload is None:
+        selected_payload = with_fresh_sync_record(selected_payload)
     kept = _kept_local(target) if state == "directory" else frozenset()
     kept_digests = _kept_local_digests(target) if state == "directory" else {}
     payload_by_path = {entry.path: entry for entry in selected_payload}
@@ -1571,7 +1584,7 @@ def _materialize_new(
     include_optional: bool,
     selection: PayloadSelection | None = None,
 ) -> dict[str, object]:
-    payload = build_payload(source, selection=selection)
+    payload = with_fresh_sync_record(build_payload(source, selection=selection))
     plan = _make_plan(
         source,
         target,

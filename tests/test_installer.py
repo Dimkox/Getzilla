@@ -538,8 +538,11 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(plan["target_state"], "absent")
             expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)}
             delivered = {entry["path"] for entry in plan["entries"]}
-            self.assertEqual(delivered - {"AGENTS.md"}, expected)
+            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD}, expected)
             for entry in plan["entries"]:
+                if entry["path"] == MODULE.STACK_SYNC_RECORD:  # synthesized: a fresh install keeps nothing local
+                    self.assertEqual(entry["sha256"], hashlib.sha256(MODULE.FRESH_SYNC_RECORD).hexdigest())
+                    continue
                 if entry["path"] in {"AGENTS.md", "factory/README.md"}:
                     continue
                 source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
