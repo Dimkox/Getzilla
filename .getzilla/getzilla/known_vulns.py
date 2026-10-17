@@ -168,6 +168,39 @@ def _pairs_from_package_lock(text: str) -> Iterable[tuple[str, str]]:
     yield from walk(data.get('dependencies') or {})
 
 
+def _pairs_from_pnpm_lock(text: str) -> Iterable[tuple[str, str]]:
+    """pnpm-lock.yaml v6-v9: package keys under ``packages:`` ("/name@1.2.3" or "name@1.2.3(peer)")."""
+    section = False
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        if not raw.startswith(' '):
+            section = raw.rstrip() == 'packages:'
+            continue
+        match = re.match(r"^  '?/?((?:@[^@/\s']+/)?[^@/\s'(]+)[@/]([0-9][^():'\s]*)", raw) if section else None
+        if match:
+            yield match.group(1), match.group(2)
+
+
+def _pairs_from_yarn_lock(text: str) -> Iterable[tuple[str, str]]:
+    """yarn.lock v1 (classic) and berry: an entry header, then its ``version``."""
+    name = None
+    for raw in text.splitlines():
+        if raw and not raw.startswith((' ', '#')) and raw.rstrip().endswith(':'):
+            spec = raw.split(',', 1)[0].strip().strip('"').rstrip(':').strip('"')
+            at = spec.find('@', 1)
+            name = spec[:at] if at > 0 else None
+            if name == '__metadata':
+                name = None
+            continue
+        match = re.match(r'^  version:? "?([^"\s]+)"?$', raw)
+        if match and name:
+            version = match.group(1)
+            if re.match(r'^[0-9]', version) and '-use.local' not in version:
+                yield name, version
+            name = None
+
+
 def _pairs_from_go_mod(text: str) -> Iterable[tuple[str, str]]:
     block = False
     for raw in text.splitlines():
@@ -216,6 +249,8 @@ MANIFESTS: dict[str, tuple[str, Callable[[str], Iterable[tuple[str, str]]]]] = {
     'pyproject.toml': ('PyPI', _pairs_from_pyproject),
     'package-lock.json': ('npm', _pairs_from_package_lock),
     'npm-shrinkwrap.json': ('npm', _pairs_from_package_lock),
+    'pnpm-lock.yaml': ('npm', _pairs_from_pnpm_lock),
+    'yarn.lock': ('npm', _pairs_from_yarn_lock),
     'go.mod': ('Go', _pairs_from_go_mod),
     'Cargo.lock': ('crates.io', lambda text: _pairs_from_toml_packages(text, registry_only=True)),
     'composer.lock': ('Packagist', _pairs_from_composer_lock),

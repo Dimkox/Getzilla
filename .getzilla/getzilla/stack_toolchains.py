@@ -106,7 +106,7 @@ def default_fetch(url: str, destination: Path) -> None:
 
 
 def default_run(command: list[str], env: Mapping[str, str], cwd: Path | None) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=cwd, env=dict(env), text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=1800, check=False)
+    return subprocess.run(command, cwd=cwd, env=dict(env), text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=1800, check=False)
 
 
 # -- versions -------------------------------------------------------------------------------------
@@ -348,20 +348,40 @@ def installed(home: Path, version: str, key: str) -> bool:
     return isinstance(marker, dict) and marker.get('version') == version and marker.get('platform') == key
 
 
-def missing_requirements(spec: Mapping[str, Any], version: str, key: str, which: Which) -> Blocker | None:
+MSVC_COMPONENT = 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+
+
+def msvc_installed(run: Run, which: Which) -> bool:
+    """The MSVC linker is rarely on PATH; Visual Studio's own locator says whether the C++ tools exist."""
+    if which('link.exe'):
+        return True
+    vswhere = Path(os.environ.get('ProgramFiles(x86)') or r'C:\Program Files (x86)') / 'Microsoft Visual Studio' / 'Installer' / 'vswhere.exe'
+    if not vswhere.is_file():
+        return False
+    try:
+        proc = run([str(vswhere), '-latest', '-products', '*', '-requires', MSVC_COMPONENT, '-property', 'installationPath'],
+                   dict(os.environ), None)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and bool((proc.stdout or '').strip())
+
+
+def missing_requirements(spec: Mapping[str, Any], version: str, key: str, which: Which,
+                         run: Run = default_run) -> Blocker | None:
     for requirement in spec.get('requires', []):
         if key not in requirement.get('platforms', [key]):
             continue
         suffix = requirement.get('unless_channel_suffix')
         if suffix and version.endswith(suffix):
             continue
-        if which(requirement['probe']) is None:
+        present = msvc_installed(run, which) if requirement.get('detect') == 'msvc' else which(requirement['probe']) is not None
+        if not present:
             return Blocker(f'TOOLCHAIN_NEEDS_ADMIN:{requirement["id"]}', requirement['message'], requirement.get('command'))
     return None
 
 
 def _publish(staging: Path, home: Path, record: dict[str, Any]) -> None:
-    (staging / MARKER).write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding="utf-8", newline="\n")
+    (staging / MARKER).write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
     if home.exists() and not (home / MARKER).is_file():
         shutil.rmtree(home)  # an earlier attempt that never finished
     try:
@@ -404,7 +424,7 @@ def ensure_toolchain(stack: str, spec: Mapping[str, Any], version: str, *, fetch
     """Return the installed toolchain, installing it first when needed; never raises for a refusal."""
     key = key or platform_key()
     home = (root or toolchain_root()) / stack / version
-    blocker = missing_requirements(spec, version, key, which)
+    blocker = missing_requirements(spec, version, key, which, run)
     if blocker:
         return blocker
     if installed(home, version, key):

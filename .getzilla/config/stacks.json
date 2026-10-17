@@ -128,6 +128,7 @@
             "id": "msvc-build-tools",
             "platforms": ["windows-x64"],
             "unless_channel_suffix": "-gnu",
+            "detect": "msvc",
             "probe": "link.exe",
             "message": "the *-msvc Rust target links with the MSVC linker from Visual Studio Build Tools (C++ workload); it needs administrator rights, so Getzilla does not install it",
             "command": "winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override \"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\""
