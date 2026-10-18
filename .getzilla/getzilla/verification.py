@@ -2450,7 +2450,11 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
     state = _RunState(report)
     with _cancellation() as cancellation:
         try:
-            return _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
+            result = _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
+            if record:
+                from .route_metrics import record_verify
+                record_verify(root, result)
+            return result
         except (RunCancelled, KeyboardInterrupt, SystemExit) as exc:
             number = getattr(exc, 'signal_number', None)
             if isinstance(exc, KeyboardInterrupt):

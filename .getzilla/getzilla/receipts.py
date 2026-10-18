@@ -929,6 +929,8 @@ def write_receipt(
     finally:
         if publication is not None:
             publication.close()
+    from .route_metrics import record_receipt
+    record_receipt(root, route.get('route_id'), kind, status)
     return path
 
 
