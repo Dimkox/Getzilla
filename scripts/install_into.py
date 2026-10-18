@@ -593,6 +593,7 @@ class _SourceTree:
                 continue
             if any(
                 relative.startswith(skip) and not relative.endswith(".gitkeep")
+                and relative != ".getzilla/runtime/.gitignore"
                 for skip in SKIP_PREFIXES
             ):
                 continue

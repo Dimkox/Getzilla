@@ -1,6 +1,7 @@
 # Getzilla runtime state
 .getzilla/runtime/*
 !.getzilla/runtime/.gitkeep
+!.getzilla/runtime/.gitignore
 .getzilla/index/
 
 # Secrets and local environment
