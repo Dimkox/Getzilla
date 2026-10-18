@@ -402,7 +402,26 @@ def record_gate_decision(
     return {**entry, "evidence_path": path.relative_to(root).as_posix(), "notice": ARTIFACT_NOTICE}
 
 
+# Owner decision 2026-10-18: route human gates are flags. Their decisions are recorded and their
+# open state is shown (status, change history), but they never block a transition or an action,
+# except the first live paid run, which still needs an approved paid_run_approval decision.
+BLOCKING_GATES = frozenset({'paid_run_approval'})
+
+
+def open_gate_flags(root: Path) -> list[str]:
+    """Declared advisory gates that are not approved, as "gate: state" lines for history and status."""
+    try:
+        statuses = gate_statuses(root)
+    except Exception:  # a flag must never turn into a block
+        return []
+    return [f"{item.get('gate')}: {item.get('state')}" for item in statuses
+            if item.get('gate') not in BLOCKING_GATES and item.get('state') != 'approved']
+
+
 def gate_block_reason(root: Path, scope: str, action: str, resource: str | None = None) -> str | None:
+    """Only a paid run is blocked by a human gate; production and external-write gates are flags."""
+    if scope != 'paid-run':
+        return None
     from .state import get_active_change, get_active_route
 
     active_change = get_active_change(root)
@@ -441,6 +460,12 @@ def gate_block_reason(root: Path, scope: str, action: str, resource: str | None 
 
 
 def gate_transition_block_reason(root: Path, target: str, change_id: str | None = None) -> str | None:
+    """Change transitions are never blocked by human gates: open gates are recorded as flags instead."""
+    return None
+
+
+def _strict_transition_block_reason(root: Path, target: str, change_id: str | None = None) -> str | None:
+    """The former enforcing check, kept for the flag text: why a gate would have held this transition."""
     if target != "approved":
         return None
     route, _context_change, _context_package, context_error = _context(root)

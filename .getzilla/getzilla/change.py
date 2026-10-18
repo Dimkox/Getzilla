@@ -160,18 +160,22 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
         return state
     if target not in TRANSITIONS.get(current, set()):
         raise ValueError(f'Invalid transition {current} -> {target}')
-    from .human_gates import gate_transition_block_reason
+    from .human_gates import gate_transition_block_reason, open_gate_flags
 
     gate_reason = gate_transition_block_reason(root, target, change_id)
     if gate_reason:
         raise ValueError(gate_reason)
+    open_gates = open_gate_flags(root)
     if target == 'implementing' and not any(row.get('kind') == 'implementation' for row in state.get('checkpoints', [])):
         route = get_active_route(root) or {'route_id': state.get('route_id')}
         state.setdefault('checkpoints', []).append(_checkpoint(root, route, change_id, 'implementation'))
         state['checkpoint_mirror_pending'] = True
     state['status'] = target
     state['updated_at'] = now_utc()
-    state.setdefault('history', []).append({'from': current, 'to': target, 'at': now_utc(), 'reason': reason})
+    entry = {'from': current, 'to': target, 'at': now_utc(), 'reason': reason}
+    if open_gates:
+        entry['open_human_gates'] = open_gates  # flags: shown, never enforced
+    state.setdefault('history', []).append(entry)
     dump_json(path, state)
     _mirror_checkpoints(path.parent, state)
     update_route(root, status=target)
