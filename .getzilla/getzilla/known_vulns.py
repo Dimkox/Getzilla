@@ -35,7 +35,7 @@ except ModuleNotFoundError:
 
 OSV_API = 'https://api.osv.dev/v1'
 OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
-ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems')
+ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
 CONFIG_PATH = '.getzilla/config/known-vulnerabilities.json'
 DEFAULT_EXCLUDE = ('tests/**', '**/tests/**', '**/fixtures/**', '**/node_modules/**', '**/vendor/**', '.getzilla/runtime/**')
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
@@ -201,6 +201,17 @@ def _pairs_from_yarn_lock(text: str) -> Iterable[tuple[str, str]]:
             name = None
 
 
+def _pairs_from_gradle_lockfile(text: str) -> Iterable[tuple[str, str]]:
+    """gradle.lockfile: ``group:artifact:version=configurations``; OSV names Maven packages group:artifact."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or line.startswith('empty='):
+            continue
+        coordinates = line.split('=', 1)[0].split(':')
+        if len(coordinates) == 3 and all(coordinates):
+            yield f'{coordinates[0]}:{coordinates[1]}', coordinates[2]
+
+
 def _pairs_from_go_mod(text: str) -> Iterable[tuple[str, str]]:
     block = False
     for raw in text.splitlines():
@@ -255,6 +266,7 @@ MANIFESTS: dict[str, tuple[str, Callable[[str], Iterable[tuple[str, str]]]]] = {
     'Cargo.lock': ('crates.io', lambda text: _pairs_from_toml_packages(text, registry_only=True)),
     'composer.lock': ('Packagist', _pairs_from_composer_lock),
     'Gemfile.lock': ('RubyGems', _pairs_from_gemfile_lock),
+    'gradle.lockfile': ('Maven', _pairs_from_gradle_lockfile),
 }
 REQUIREMENTS_RE = re.compile(r'^(?:.*-)?requirements(?:[-_.][A-Za-z0-9_-]+)?\.txt$')
 

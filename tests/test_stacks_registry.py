@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -17,7 +16,8 @@ from getzilla.stacks import NOT_VERIFIED, Stack, detect_stacks, load_registry, s
 from getzilla.verification import CheckResult, verify  # noqa: E402
 
 OFFICIAL_HOSTS = ('https://nodejs.org/', 'https://static.rust-lang.org/', 'https://builds.dotnet.microsoft.com/',
-                  'https://www.powershellgallery.com/')
+                  'https://www.powershellgallery.com/', 'https://go.dev/', 'https://github.com/adoptium/',
+                  '{url}')  # {url}: a checksum file published next to the archive
 DIGEST_LENGTH = {'sha256': 64, 'sha512': 128, 'sha512-base64': 88}
 
 
@@ -133,15 +133,15 @@ class NotVerifiedTests(unittest.TestCase):
         self.assertEqual(metadata['checked'], ['cobol'])
 
     def test_verify_pr_report_carries_the_marker(self) -> None:
-        _write(self.root, {'go.mod': 'module example.com/x\n\ngo 1.22\n', 'main.go': 'package main\n'})
+        _write(self.root, {'Gemfile': 'source "https://rubygems.org"\n', 'app.rb': 'puts 1\n'})
         _git(self.root, 'init', '-q', '-b', 'main')
         _git(self.root, 'add', '-A')
         _git(self.root, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'base')
-        (self.root / 'main.go').write_text('package main\n\nfunc main() {}\n', encoding='utf-8')
+        (self.root / 'app.rb').write_text('puts 2\n', encoding='utf-8')
         report = verify(self.root, mode='fast', record=False, keep_going=True)
-        stack = next(check for check in report['checks'] if check['name'] == 'stack:go')
-        self.assertEqual(stack['details'][0]['code'], f'{NOT_VERIFIED}:go')
-        self.assertIn('go', report['stacks']['not_verified'])
+        stack = next(check for check in report['checks'] if check['name'] == 'stack:ruby')
+        self.assertEqual(stack['details'][0]['code'], f'{NOT_VERIFIED}:ruby')
+        self.assertIn('ruby', report['stacks']['not_verified'])
 
 
 if __name__ == '__main__':

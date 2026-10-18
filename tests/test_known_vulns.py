@@ -349,7 +349,7 @@ class DownloadTests(unittest.TestCase):
             self.assertFalse(list(Path(db).rglob('*.partial')))
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
-            KV.download_database(Path(db), ['Maven'], fetch=fetch)
+            KV.download_database(Path(db), ['Hex'], fetch=fetch)  # an ecosystem Getzilla does not download
 
 
 if __name__ == '__main__':
