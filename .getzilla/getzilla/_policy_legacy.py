@@ -34,6 +34,21 @@ DEFAULT_CONTROL_PLANE = [
     'session_start.py', 'session_end.py', 'stop_gate.py', 'subagent_start.py', 'subagent_stop.py',
     'tests/_support.py', 'tests/test_*.py', 'engineering/runbooks/publish-v*.md',
 ]
+AGENT_SCRATCH = '.getzilla/runtime/scratch'
+SCRATCH_HINT = ('Agent working files belong in .getzilla/runtime/scratch/, which needs no grant; '
+                'receipts, routes, grants and other runtime state stay protected.')
+
+
+def agent_scratch(root: Path, rel: str) -> bool:
+    """A repository path inside the agent scratch area, also after resolving symlinks."""
+    norm = posixpath.normpath(str(rel).replace('\\', '/'))
+    if norm.startswith('../') or not norm.startswith(AGENT_SCRATCH + '/'):
+        return False
+    base = os.path.realpath(os.path.join(str(root), AGENT_SCRATCH))
+    target = os.path.realpath(os.path.join(str(root), norm))
+    return target == base or target.startswith(base + os.sep)
+
+
 DEFAULT_PROTECTED = [
     '.git/**', '.env', '.env.*', '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
     *DEFAULT_CONTROL_PLANE, 'bitrix/**',
@@ -2538,9 +2553,10 @@ def evaluate_pre_tool(
 
     if is_write:
         for rel in normalized:
-            if _matches_any(rel, protected):
+            if _matches_any(rel, protected) and not agent_scratch(root, rel):
                 if not has_valid_approval(root, 'protected-path', action='protected-path-write', resource=rel):
-                    return False, f'Protected path edit requires an exact delegated grant for {rel}.'
+                    hint = f' {SCRATCH_HINT}' if rel.startswith('.getzilla/runtime/') else ''
+                    return False, f'Protected path edit requires an exact delegated grant for {rel}.{hint}'
 
     if tool == 'Agent' or lowered_tool in {'spawn_agent', 'agent'}:
         agent_type = _agent_type(tool_input)

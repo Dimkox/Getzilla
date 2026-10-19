@@ -109,11 +109,13 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
     if len(command) > _LEGACY_COMMAND_LIMIT:
         return False, f'Blocked a Bash command longer than {_LEGACY_COMMAND_LIMIT} characters before parsing it.'
     protected_targets, opaque = _shell_mutation(root, command, control_plane)
+    protected_targets = [target for target in protected_targets if not _legacy.agent_scratch(root, target)]
     if protected_targets:
         targets = ', '.join(protected_targets)
+        hint = f' {_legacy.SCRATCH_HINT}' if any(t.startswith('.getzilla/runtime/') for t in protected_targets) else ''
         return False, (
             f'Blocked control-plane shell mutation targeting {targets}; use a structured write '
-            '(Edit/Write/apply_patch) with an exact protected-path grant for each target.'
+            f'(Edit/Write/apply_patch) with an exact protected-path grant for each target.{hint}'
         )
     if opaque:
         return False, (
