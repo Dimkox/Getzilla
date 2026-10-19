@@ -195,7 +195,11 @@ def set_active_route(root: Path, route: dict[str, Any]) -> None:
         dump_json(active_route_path(root), route)
         route_dir = runtime_dir(root) / 'routes'
         route_dir.mkdir(parents=True, exist_ok=True)
+        new_route = not (route_dir / f"{route['route_id']}.json").exists()
         dump_json(route_dir / f"{route['route_id']}.json", route)
+    if new_route:
+        from .route_metrics import record_route
+        record_route(root, route)
 
 
 def update_route(root: Path, **updates: Any) -> dict[str, Any] | None:

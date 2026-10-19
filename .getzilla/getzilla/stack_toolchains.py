@@ -163,12 +163,22 @@ def read_pin(root: Path, pin: Mapping[str, str]) -> str | None:
 
 
 def resolve_version(root: Path, spec: Mapping[str, Any]) -> tuple[str, str]:
-    """The version a project pins (first pin file that names one), else the registry default."""
+    """The version a project pins (first pin file that names one), else the registry default.
+
+    A short pin (".java-version" = "21") maps to the full pinned release in ``partial_versions``.
+    """
+    partial = spec.get('partial_versions') or {}
     for pin in spec.get('pin_files', []):
         value = read_pin(root, pin)
         if value:
-            return value, pin['path']
+            return str(partial.get(value, value)), pin['path']
     return str(spec['default_version']), 'stacks.json'
+
+
+def template_fields(version: str) -> dict[str, str]:
+    """Names official archives use: major (21), URL-escaped (21.0.12.1%2B1) and file (21.0.12.1_1) forms."""
+    return {'version': version, 'major': version.split('.')[0].split('+')[0],
+            'version_url': version.replace('+', '%2B'), 'version_file': version.replace('+', '_')}
 
 
 # -- integrity ------------------------------------------------------------------------------------
@@ -200,7 +210,9 @@ def _manifest_digest(source: Mapping[str, Any], version: str, archive: str, fetc
     if not checksums:
         return None
     channel = '.'.join(version.split('.')[:2])
-    text = _fetch_text(fetch, checksums['url'].format(version=version, channel=channel))
+    fields = {**template_fields(version), 'channel': channel, 'archive': archive}
+    fields['url'] = source['url'].format(**fields)
+    text = _fetch_text(fetch, checksums['url'].format(**fields))
     if checksums['kind'] == 'sha256-list':
         for line in text.splitlines():
             parts = line.split()
@@ -216,6 +228,12 @@ def _manifest_digest(source: Mapping[str, Any], version: str, archive: str, fetc
                 for item in sdk.get('files', []):
                     if str(item.get('url', '')).endswith('/' + archive):
                         return item.get('hash')
+        return None
+    if checksums['kind'] == 'go-dl-json':
+        for release in json.loads(text):
+            for item in release.get('files', []):
+                if item.get('filename') == archive:
+                    return item.get('sha256')
         return None
     raise ToolchainError('TOOLCHAIN_UNAVAILABLE', f'unknown checksum manifest kind {checksums["kind"]!r}')
 
@@ -332,9 +350,12 @@ def _expand(value: str, home: Path, cache: Path) -> str:
 
 
 def _toolchain(stack: str, version: str, home: Path, spec: Mapping[str, Any], key: str, *, fetched: bool) -> Toolchain:
-    bins = (spec.get('bin') or {}).get('windows' if key.startswith('windows') else 'posix', ['bin'])
+    system = 'windows' if key.startswith('windows') else 'darwin' if key.startswith('darwin') else 'linux'
+    layout = spec.get('bin') or {}
+    bins = layout.get(system, layout.get('windows' if system == 'windows' else 'posix', ['bin']))
     cache = cache_root(stack)
-    env = {name: _expand(value, home, cache) for name, value in (spec.get('env') or {}).items()}
+    variables = {**(spec.get('env') or {}), **((spec.get('env_by_os') or {}).get(system) or {})}
+    env = {name: _expand(value, home, cache) for name, value in variables.items()}
     if 'PSModulePath' in env:
         env['PSModulePath'] = os.pathsep.join([env['PSModulePath'], os.environ.get('PSModulePath', '')]).rstrip(os.pathsep)
     return Toolchain(stack, version, home, tuple(home / item for item in bins), env, fetched)
@@ -398,9 +419,10 @@ def _install_archive(stack: str, version: str, spec: Mapping[str, Any], key: str
     template = (source.get('archives') or {}).get(key)
     if not template:
         raise ToolchainError(f'TOOLCHAIN_UNSUPPORTED_PLATFORM:{key}', f'{stack} {version} has no official archive for {key}')
-    archive = template.format(version=version)
+    fields = template_fields(version)
+    archive = template.format(**fields)
     digest = expected_digest(source, version, key, archive, fetch)
-    url = source['url'].format(version=version, archive=archive)
+    url = source['url'].format(**fields, archive=archive)
     downloaded = download_verified(url, digest, source['algorithm'], cache_root(stack) / 'downloads' / archive, fetch)
     staging = Path(tempfile.mkdtemp(prefix=f'.staging-{version}-', dir=home.parent))
     try:

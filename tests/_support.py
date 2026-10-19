@@ -33,7 +33,7 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
         runtime = root / '.getzilla/runtime'
         if runtime.exists():
             for child in runtime.iterdir():
-                if child.name == '.gitkeep':
+                if child.name in {'.gitkeep', '.gitignore'}:  # shipped files: runtime state stays out of Git
                     continue
                 if child.is_dir():
                     shutil.rmtree(child)

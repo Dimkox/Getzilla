@@ -103,7 +103,7 @@ class InstallerTests(unittest.TestCase):
                 (nested / f"f{index}").touch()
             payload = MODULE.build_payload(source)
         runtime_paths = sorted(entry.path for entry in payload if entry.path.startswith(".getzilla/runtime/"))
-        self.assertEqual(runtime_paths, [".getzilla/runtime/.gitkeep"])
+        self.assertEqual(runtime_paths, [".getzilla/runtime/.gitignore", ".getzilla/runtime/.gitkeep"])
 
     def test_installed_grok_skills_equal_canonical_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

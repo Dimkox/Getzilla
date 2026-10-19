@@ -430,8 +430,9 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         self.assertIn('Offline mirror', result.stdout)
         state = self.user_home / '.getzilla'
         self.assertFalse((state / 'update.lock').exists())
+        from getzilla import updater
         self.assertEqual(sorted(path.parent.name for path in state.glob('osv/*/all.zip')),
-                         sorted(['PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems']))
+                         sorted(updater.OSV_ECOSYSTEMS))
         self.assertTrue(os.access(state / 'bin/opengrep', os.X_OK))
         self.assertEqual(sorted(path.name for path in (state / 'baseline').iterdir()), ['bmad', 'spec-kit', 'superpowers'])
         self.assertEqual((self.user_home / '.local/bin/getzilla').readlink(), home / 'bin/getzilla')

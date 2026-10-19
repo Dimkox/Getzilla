@@ -37,7 +37,7 @@ LOCK_FILE = 'update.lock'
 LOCK_STALE_SECONDS = 3600
 DEFAULT_INTERVAL_HOURS = 1.0
 OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
-OSV_ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems')
+OSV_ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
 SOURCES = {
     'superpowers': 'https://github.com/obra/superpowers.git',
     'bmad': 'https://github.com/bmad-code-org/BMAD-METHOD.git',

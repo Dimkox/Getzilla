@@ -299,3 +299,77 @@ def powershell_checks(context: StackContext) -> list[Any]:
 
 
 RUNNERS['powershell'] = powershell_checks
+
+
+# -- Go -------------------------------------------------------------------------------------------
+
+def go_checks(context: StackContext) -> list[Any]:
+    toolchain = context.toolchain()
+    if not isinstance(toolchain, Toolchain):
+        return [toolchain]
+    env = toolchain.process_env()
+    results: list[Any] = []
+    for directory in _project_dirs(context, ('go.mod',)):
+        label = _label(context, directory)
+        formatted = context.command(directory, f'gofmt{label}', ['gofmt', '-l', '.'], 900, env=env)
+        unformatted = [line for line in (formatted.stdout or '').splitlines() if line.strip()]
+        if formatted.status == 'pass' and unformatted:
+            formatted.status, formatted.summary = 'fail', f'{len(unformatted)} file(s) need gofmt'
+            formatted.details.extend({'severity': 'error', 'code': 'gofmt', 'path': path,
+                                      'message': 'not gofmt-formatted'} for path in unformatted[:50])
+        results.append(formatted)
+        results.append(context.command(directory, f'go-vet{label}', ['go', 'vet', './...'], 1800, env=env))
+        if context.mode in {'pr', 'release'}:
+            results.append(context.command(directory, f'go-build{label}', ['go', 'build', './...'], 3600, env=env))
+            results.append(context.command(directory, f'go-test{label}', ['go', 'test', './...'], 3600, env=env))
+    return results
+
+
+RUNNERS['go'] = go_checks
+
+
+# -- Java / Kotlin ---------------------------------------------------------------------------------
+
+JAVA_BUILDS = ('pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts')
+
+
+def _wrapper(directory: Path) -> tuple[str, list[str]] | None:
+    windows = os.name == 'nt'
+    if any((directory / name).is_file() for name in ('build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts')):
+        script = directory / ('gradlew.bat' if windows else 'gradlew')
+        return ('gradle', [str(script), 'check', '--no-daemon']) if script.is_file() else None
+    script = directory / ('mvnw.cmd' if windows else 'mvnw')
+    return ('maven', [str(script), '-B', '-ntp', 'verify']) if script.is_file() else None
+
+
+def java_checks(context: StackContext) -> list[Any]:
+    if context.mode not in {'pr', 'release'}:
+        return [context.make('java', 'skip', 'Java builds run in pr and release mode', details=[{
+            'severity': 'info', 'code': 'java-pr-only', 'path': 'java',
+            'message': 'the project wrapper build (mvnw verify / gradlew check) runs in pr and release mode'}])]
+    results: list[Any] = []
+    directories = _project_dirs(context, JAVA_BUILDS)
+    for directory in directories:
+        label = _label(context, directory)
+        relative = directory.relative_to(context.root).as_posix()
+        if _wrapper(directory) is None:
+            results.append(_gap(context, f'java-wrapper{label}', 'BUILD_WRAPPER_MISSING', relative,
+                                'no mvnw or gradlew: Getzilla builds Java only through the project wrapper, '
+                                'never with a global Maven or Gradle'))
+        if (directory / 'pom.xml').is_file() and not (directory / 'gradle.lockfile').is_file():
+            results.append(_gap(context, f'maven-dependencies{label}', 'MAVEN_DEPENDENCIES_UNKNOWN', relative,
+                                'Maven has no lockfile: dependency versions are not reproducible and OSV cannot read them'))
+    toolchain = context.toolchain()
+    if not isinstance(toolchain, Toolchain):
+        return [*results, toolchain]
+    env = toolchain.process_env()
+    for directory in directories:
+        found = _wrapper(directory)
+        if found is None:
+            continue
+        tool, command = found
+        results.append(context.command(directory, f'{tool}-build{_label(context, directory)}', command, 3600, env=env))
+    return results
+
+
+RUNNERS['java'] = java_checks
