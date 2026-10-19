@@ -421,7 +421,7 @@ class Review2PosixTests(_Case):
         command = 'cat deploy/tls/server.key'
         patterns = legacy.DEFAULT_SECRET_READ
         legacy.shell_secret_reference(self.root, command, patterns)
-        key = (str(self.root), command, tuple(patterns), legacy._windows_reading())
+        key = (str(self.root), command, tuple(patterns), legacy._windows_reading(), b'')  # no project policy in this fixture
         self.assertIn(key, legacy._SECRET_SCAN_CACHE)
 
     def test_secret_scan_memo_never_crosses_readings(self) -> None:

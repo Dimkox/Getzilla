@@ -5,6 +5,7 @@ import contextlib
 import contextvars
 import fnmatch
 import itertools
+import json
 import os
 import posixpath
 import re
@@ -2158,11 +2159,62 @@ def _find_path_words(rest: list[str]) -> list[str]:
     return words
 
 
+# curl options whose values are hosts, headers, methods or numbers, never files (`--noproxy '*'`).
+# Options that read files (`-d @file`, `-T`, `-K`, `-w @file`, `--cacert`) stay checked.
+_CURL_NON_PATH_VALUES = frozenset({
+    '--noproxy', '-H', '--header', '-X', '--request', '-A', '--user-agent', '-m', '--max-time',
+    '--connect-timeout', '--retry', '--retry-delay', '--retry-max-time', '--resolve', '--limit-rate',
+})
+PROJECT_POLICY = '.getzilla/config/project-policy.json'
+
+
+def project_policy(root: Path) -> dict[str, Any]:
+    """Owner opt-ins kept by the project itself: never shipped or overwritten by a Getzilla sync, and a
+    protected path agents cannot write without a grant."""
+    try:
+        data = json.loads((root / PROJECT_POLICY).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _curl_path_words(rest: list[str]) -> list[str]:
+    words: list[str] = []
+    skip = False
+    for token in rest:
+        if skip:
+            skip = False
+            continue
+        if token in _CURL_NON_PATH_VALUES:
+            skip = True
+            continue
+        if token.startswith('--') and token.split('=', 1)[0] in _CURL_NON_PATH_VALUES:
+            continue
+        words.append(token)
+    return words
+
+
+def _consumer_secrets(root: Path, argv: list[str]) -> frozenset[str]:
+    """Secret paths the owner lets this exact script receive (project policy ``secret_consumers``)."""
+    consumers = project_policy(root).get('secret_consumers')
+    if not isinstance(consumers, list) or not argv:
+        return frozenset()
+    script = argv[1] if len(argv) > 1 and os.path.basename(argv[0]).startswith('python') else argv[0]
+    script = script.removeprefix('./')
+    allowed: set[str] = set()
+    for item in consumers:
+        if isinstance(item, dict) and item.get('script') == script and isinstance(item.get('secrets'), list):
+            allowed.update(str(secret) for secret in item['secrets'] if isinstance(secret, str) and secret)
+    return frozenset(allowed)
+
+
 def _secret_path_words(argv: list[str]) -> list[str] | None:
     """Path operands worth checking for secrets; ``None`` for an inert command (``echo``, ``ls``)."""
     name, rest = argv[0], argv[1:]
     if name in _INERT_SECRET and not any(_HAS_SUBST.search(token) for token in argv):
         return None
+    if name == 'curl':
+        return _curl_path_words(rest)
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:
@@ -2254,6 +2306,10 @@ def _argv_secret_reference(root: Path, argv: list[str], patterns: list[str], bud
     words = _secret_path_words(argv)
     if words is None:
         return None
+    handed = _consumer_secrets(root, argv)
+    if handed:
+        # The owner lets this script read these secrets itself; the agent still never names them elsewhere.
+        words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
     recursive = _is_recursive_reader(argv)
     for word in words:
         for variant in _brace_expand(word):
@@ -2289,7 +2345,7 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
 
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
-_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool], str | None] = {}
+_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | None] = {}
 
 
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
@@ -2304,7 +2360,12 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     so the hook never pays for the same scan twice (sensitive_action + evaluate_pre_tool).
     """
     # The reading is part of the key: Windows and Git Bash read the same text differently.
-    key = (str(root), command, tuple(patterns), _windows_reading())
+    # Owner opt-ins change the verdict, so the project policy is part of the key too.
+    try:
+        owner = (root / PROJECT_POLICY).read_bytes()
+    except OSError:
+        owner = b''
+    key = (str(root), command, tuple(patterns), _windows_reading(), owner)
     if key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
@@ -2387,7 +2448,10 @@ def evaluate_pre_tool(
                 if gate_reason:
                     return False, gate_reason
                 ref = (resource or '').removeprefix('delete:')
-                if target_action.startswith('git-push') and (ref in PROTECTED_BRANCHES or ref in {'--all', '--branches', '--mirror'}):
+                owner_branches = project_policy(root).get('agent_push_branches')
+                owner_branches = set(owner_branches) if isinstance(owner_branches, list) else set()
+                if target_action.startswith('git-push') and ((ref in PROTECTED_BRANCHES and ref not in owner_branches)
+                                                            or ref in {'--all', '--branches', '--mirror'}):
                     return False, f'Push to protected branch {resource} is forbidden for agents, with or without a grant.'
                 if resource is None:
                     return False, (
