@@ -1,0 +1,57 @@
+"""Agent working files in .getzilla/runtime/scratch/ need no grant; runtime authority state stays protected."""
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / '.getzilla'))
+
+from getzilla.policy import evaluate_pre_tool  # noqa: E402
+from tests._support import project_copy  # noqa: E402
+
+
+def bash(command: str) -> dict:
+    return {'tool_name': 'Bash', 'tool_input': {'command': command}}
+
+
+def write(root: Path, rel: str) -> dict:
+    return {'tool_name': 'Write', 'tool_input': {'file_path': str(root / rel), 'content': 'x\n'}}
+
+
+class AgentScratchTests(unittest.TestCase):
+    def test_scratch_writes_need_no_grant(self) -> None:
+        with project_copy(git=True) as root:
+            for event in (write(root, '.getzilla/runtime/scratch/bundle/notes.md'),
+                          bash('python3 -c pass > .getzilla/runtime/scratch/bundle/selection.json'),
+                          bash('cp README.md .getzilla/runtime/scratch/readme-copy.md')):
+                with self.subTest(event=str(event)[:80]):
+                    allowed, reason = evaluate_pre_tool(root, event)
+                    self.assertTrue(allowed, reason)
+
+    def test_runtime_authority_state_stays_protected_with_a_hint(self) -> None:
+        with project_copy(git=True) as root:
+            for rel in ('.getzilla/runtime/receipts/r1/verification.json', '.getzilla/runtime/active-route.json',
+                        '.getzilla/runtime/scratch/../receipts/x.json', '.getzilla/runtime/bundle/selection.json'):
+                with self.subTest(rel=rel):
+                    allowed, reason = evaluate_pre_tool(root, write(root, rel))
+                    self.assertFalse(allowed)
+                    self.assertIn('.getzilla/runtime/scratch/', reason or '')
+            allowed, reason = evaluate_pre_tool(root, bash('echo {} > .getzilla/runtime/active-route.json'))
+            self.assertFalse(allowed)
+            self.assertIn('scratch', reason or '')
+
+    def test_a_symlink_out_of_scratch_is_still_protected(self) -> None:
+        with project_copy(git=True) as root:
+            scratch = root / '.getzilla' / 'runtime' / 'scratch'
+            scratch.mkdir(parents=True)
+            (root / '.getzilla' / 'runtime' / 'receipts').mkdir(parents=True, exist_ok=True)
+            os.symlink('../receipts', scratch / 'escape')
+            allowed, _ = evaluate_pre_tool(root, write(root, '.getzilla/runtime/scratch/escape/x.json'))
+            self.assertFalse(allowed)
+
+
+if __name__ == '__main__':
+    unittest.main()
