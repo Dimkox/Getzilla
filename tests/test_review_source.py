@@ -156,6 +156,35 @@ class ReviewSourceTests(unittest.TestCase):
         with self.assertRaises((RuntimeError, ValueError, OSError)):
             self.record()
 
+    def test_rejects_unrelated_commit_with_identical_tree(self):
+        """#73: only the ancestry guard can reject this; the tree and every other input are unchanged."""
+        self.git('checkout', '-q', '--orphan', 'unrelated')
+        self.git('commit', '-qm', 'same tree, unrelated history')
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), self.git('rev-parse', self.source + '^{tree}'))
+        with self.assertRaisesRegex(RuntimeError, 'not an ancestor'):
+            self.record()
+
+    def test_micro_unsafe_selected_metadata_with_global_report_does_not_fall_back(self):
+        """#73: a committed conventional global report would be admitted if an unsafe read counted as absent."""
+        self.route.update(complexity='micro', risk='low')
+        set_active_route(self.root, self.route)
+        self.report = 'engineering/reviews/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent micro review.\n')
+        self.commit()
+        self.source = self.git('rev-parse', 'HEAD').strip()
+        selected = self.root / '.getzilla/runtime/active-change.json'
+        selected.unlink()
+        try:
+            selected.symlink_to(self.root / 'source.py')
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        with self.assertRaises((RuntimeError, ValueError)) as caught:
+            self.record()
+        self.assertNotIn('ancestor', str(caught.exception))
+        selected.unlink()
+        self.record()  # the same global report is admitted once the selection is genuinely absent
+
     def test_rejects_nonancestor(self):
         self.git('checkout', '--orphan', 'other')
         (self.root / 'source.py').write_text('other history\n')
