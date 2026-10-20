@@ -62,7 +62,10 @@ SECURITY_KEYWORD_ALIASES: dict[str, tuple[str, ...]] = {
 # (getzilla.risk_terms). A trailing "*" in a term matches a word prefix.
 
 FOLLOW_UP_RE = re.compile(
-    r'^\s*(да|нет|ок|окей|делай|продолжай|согласен|согласна|go|continue|yes|no|вариант\s+[abcабв123]|[abcабв123])\s*[.!]?\s*$',
+    r'^\s*(?:да|нет|ок|окей|ok|okay|делай|давай|продолжай|продолжи|согласен|согласна|go|go\s+on|continue|next|yes|no'
+    r'|и|ну|далее|дальше|и\s+дальше|и\s+что|(?:и\s+)?(?:что|че|чё)\s+дальше|(?:что|че|чё)\s+там(?:\s+ещ[её])?(?:\s+не\s+так)?'
+    r'|где\s+(?:результат|pr|пр)|статус|status|what\s+next|what\'s\s+next'
+    r'|вариант\s+[abcабв123]|[abcабв123])\s*[.!?…]*\s*$',
     re.IGNORECASE,
 )
 CLOSED_ROUTE_STATUSES = frozenset({'ready', 'released', 'completed', 'cancelled', 'archived'})
