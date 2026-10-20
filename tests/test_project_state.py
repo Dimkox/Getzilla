@@ -193,7 +193,7 @@ class ProjectStateTests(unittest.TestCase):
         readme = (ROOT / 'docs/REFERENCE.md').read_text(encoding='utf-8')
         active_line = next(line for line in start.splitlines() if line.startswith('- **Active delivery:**'))
         for document in (active_line, _section(readme, 'Current state')):
-            self.assertIn('2.2.2', document)
+            self.assertIn('2.3.0', document)
             self.assertIn('exact-head', document)
             self.assertIn('engineering/changes/20261004-task-b25860', readme)
         self.assertNotIn('20261002-assemble-2-1-1', active_line)
@@ -299,7 +299,7 @@ class ProjectStateTests(unittest.TestCase):
     def test_project_state_has_independent_milestone_axes_and_truthful_facts(self) -> None:
         state = self.state
         self.assertEqual(state["schema_version"], 2)
-        self.assertEqual(state["product_version"], "2.2.2")
+        self.assertEqual(state["product_version"], "2.3.0")
         self.assertEqual(state["latest_published_release"], "v2.2.1")
         self.assertEqual(state["historical_predecessor_identity"]["observed_main_sha"], OBSERVED_MAIN_SHA)
         self.assertRegex(state["historical_predecessor_identity"]["observed_at"], r"^2026-09-24T\d{2}:\d{2}:\d{2}Z$")

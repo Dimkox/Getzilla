@@ -35,7 +35,7 @@ class ReleaseStateTests(unittest.TestCase):
 
     def test_audit_222_221_fixture_valid(self) -> None:
         state = parse_release_state(fixture())
-        self.assertEqual((state.source_version, state.published_version), ('2.2.2', '2.2.1'))
+        self.assertEqual((state.source_version, state.published_version), ('2.3.0', '2.2.1'))
         self.assertTrue(validate_release_consistency(state, ROOT).ok, validate_release_consistency(state, ROOT).errors)
 
     def test_version_mismatch_blocks(self) -> None:
@@ -83,7 +83,7 @@ class ReleaseGateTests(unittest.TestCase):
     def test_all_exact_checks_allow_without_publishing(self) -> None:
         decision = self.decide()
         self.assertTrue(decision.allowed, decision.reasons)
-        self.assertEqual(decision.version, '2.2.2')
+        self.assertEqual(decision.version, '2.3.0')
 
     def test_wrong_head_green_ci_rejected(self) -> None:
         decision = self.decide(checks=[CheckRun(name, 'success', 'e' * 40) for name in REQUIRED])
@@ -103,8 +103,8 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn('SOURCE_CHANGED_AFTER_CHECKS', self.decide(metadata_tree_after_checks='9' * 40).reasons)
 
     def test_existing_tag_other_oid_rejected(self) -> None:
-        self.assertIn('TAG_POINTS_TO_OTHER_SOURCE', self.decide(existing_tags={'v2.2.2': 'a' * 40}).reasons)
-        self.assertTrue(self.decide(existing_tags={'v2.2.2': COMMIT}).allowed)
+        self.assertIn('TAG_POINTS_TO_OTHER_SOURCE', self.decide(existing_tags={'v2.3.0': 'a' * 40}).reasons)
+        self.assertTrue(self.decide(existing_tags={'v2.3.0': COMMIT}).allowed)
 
 
 class ArtifactReceiptTests(unittest.TestCase):
@@ -116,10 +116,10 @@ class ArtifactReceiptTests(unittest.TestCase):
         self.decision = decide_release(state, source_commit=COMMIT, source_tree=TREE, required_checks=REQUIRED,
                                        checks=[CheckRun(name, 'success', COMMIT) for name in REQUIRED],
                                        review={'tree': TREE, 'status': 'pass'}, existing_tags={})
-        self.artifact = self.base / 'dist' / 'getzilla-2.2.2.zip'
+        self.artifact = self.base / 'dist' / 'getzilla-2.3.0.zip'
         self.artifact.parent.mkdir()
         with zipfile.ZipFile(self.artifact, 'w') as archive:
-            archive.writestr('VERSION', '2.2.2\n')
+            archive.writestr('VERSION', '2.3.0\n')
 
     def test_artifact_matches_selected_source(self) -> None:
         receipt = artifact_receipt(self.decision, self.artifact, built_from_tree=TREE, toolchain={'python': '3.12'})
@@ -134,7 +134,7 @@ class ArtifactReceiptTests(unittest.TestCase):
         self.assertEqual(self.artifact.read_bytes(), before)
         self.assertNotEqual(path.parent, self.artifact.parent)
         with zipfile.ZipFile(self.artifact) as archive:
-            self.assertNotIn('release-2.2.2.json', archive.namelist())
+            self.assertNotIn('release-2.3.0.json', archive.namelist())
 
     def test_same_release_different_digest_rejected(self) -> None:
         receipt = artifact_receipt(self.decision, self.artifact, built_from_tree=TREE, toolchain={})
@@ -149,13 +149,13 @@ class ArtifactReceiptTests(unittest.TestCase):
     def test_failed_publish_not_reported_published(self) -> None:
         receipt = artifact_receipt(self.decision, self.artifact, built_from_tree=TREE, toolchain={})
         record_artifact(self.base / 'receipts', receipt)
-        self.assertEqual(mark_publication(self.base / 'receipts', '2.2.2', published=False)['publication_status'], 'failed')
+        self.assertEqual(mark_publication(self.base / 'receipts', '2.3.0', published=False)['publication_status'], 'failed')
 
     def test_post_publish_state_does_not_rewrite_artifact(self) -> None:
         receipt = artifact_receipt(self.decision, self.artifact, built_from_tree=TREE, toolchain={})
         record_artifact(self.base / 'receipts', receipt)
         before = self.artifact.read_bytes()
-        mark_publication(self.base / 'receipts', '2.2.2', published=True, url='https://example.invalid/r')
+        mark_publication(self.base / 'receipts', '2.3.0', published=True, url='https://example.invalid/r')
         self.assertEqual(self.artifact.read_bytes(), before)
 
     def test_disallowed_decision_builds_no_receipt(self) -> None:

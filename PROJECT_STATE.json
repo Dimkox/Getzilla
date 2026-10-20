@@ -4,12 +4,12 @@
   "default_branch": "main",
   "observed_at": "2026-10-11T02:13:17+00:00",
   "observed_main_sha": "540c12f93e798c2f483455a5086ab0018ac3216e",
-  "product_version": "2.2.2",
+  "product_version": "2.3.0",
   "latest_published_release": "v2.2.1",
   "source_installers": {
     "record_scope": "Installer bytes of the source candidate; README and QUICKSTART run the published installers in published_release until a release publishes these.",
     "status": "source_candidate",
-    "version": "2.2.2",
+    "version": "2.3.0",
     "installers": {
       "scripts/install.sh": {
         "sha256": "70778e1b19ce9a2cc5ae5e279c95f95f2fbedc6ee9d8a0f5f4852b23c81cb18d"
@@ -28,10 +28,10 @@
     "branch": "fix/codex-cmd-hooks-20261011",
     "pull_request": 79,
     "change_package": "engineering/changes/20261012-task-43786c",
-    "target_version": "2.2.2",
+    "target_version": "2.3.0",
     "source_base": "540c12f93e798c2f483455a5086ab0018ac3216e",
     "status": "source_candidate_pending_independent_review_and_exact_head_gates",
-    "next_action": "Prepare the 2.2.2 source candidate. Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
+    "next_action": "Prepare the 2.3.0 source candidate (2.2.2 was never published). Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority. Release 2.3.0: tag the exact merge commit, build getzilla-2.3.0.zip with scripts/package_stack.py, publish the GitHub Release, then record the publication.",
     "release_candidate_origin": {
       "route_id": "65799e00561a",
       "branch": "release/2.2.2-20261011",

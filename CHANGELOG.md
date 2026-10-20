@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.0 — 2026-10-20 (source candidate)
+
+2.2.2 was never published; its changes ship in 2.3.0 together with:
+
+- Honest defaults (P1, P2): stack registry with checksummed toolchains (Node, .NET, Rust, PowerShell, Go, Java), honest not-verified markers, per-route overhead metrics and `getzilla report`, human gates as advisory flags (only `paid_run_approval` blocks).
+- Hooks: path misses answered with real paths, independent heavy work in parallel on every verified CPU, agent scratch area `.getzilla/runtime/scratch/` without grants.
+- Owner opt-ins in `.getzilla/config/project-policy.json`: push to a listed protected branch with an exact grant, secret handoff to an exact script; hardened against redirection, wrappers, `cd` and hardlinks (#99–#102).
+- Control plane: per-session routes, short replies keep the task, argv literals are data, independent circuit-breaker objectives, and a policy that fails to load still refuses protected actions (#78, #80).
+- Cost guard: scheduled paid calls need `max_scheduled_runs_per_day`; `from google import genai` and xAI are recognised (#76).
+- Install: the plan classifies and preserves every untracked target path (#75); offline installer end-to-end tests; ported Pulse-local patches.
+- Trust CI installs from hashed lockfiles that the OSV scan reads (#42); harness writer race closed; deferred review findings fixed (#60, #71, #73); security model page (#63).
+
 ## 2.2.2 — 2026-10-11 (source candidate)
 
 - PR #79 candidate: inspect native Codex commands, record malformed/oversize denials with circuit guidance, and select the nearest installed project for generated hooks. Keep task workspaces under the canonical runtime directory.
