@@ -772,6 +772,39 @@ class ArchitectureFitnessTests(unittest.TestCase):
         )
         self.assertNotIn("pilot/tests/test_contracts.py", result.applicability.scanned_scope)
 
+    def test_package_relative_whole_module_import_is_not_a_queue_signal(self) -> None:
+        """#60: `from . import fsx` in a package directly under a source root is an ordinary import."""
+        system = _system()
+        system["nodes"][0]["type"] = "worker"
+        system["nodes"][0]["repository_paths"] = ["pkg/app"]
+        rules = _rules()
+        rules["background_job_policies"] = [{
+            "id": "FIT-JOBS", "node_types": ["worker"], "max_retries": 3, "require_idempotency": True,
+            "require_correlation_id": True, "terminal_actions": ["dead_letter"], "severity": "error",
+        }]
+        for label, after, flagged in (
+            ("ordinary sibling", "from . import fsx\nfsx.write()\n", False),
+            ("queue sibling", "from . import celery_jobs\n@celery_jobs.app.task\ndef stage():\n    return None\n", True),
+        ):
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(system, rules)
+                repo.write_text("pkg/app/__init__.py", "")
+                repo.write_text("pkg/app/fsx.py", "def write():\n    return 1\n")
+                repo.write_text("pkg/app/celery_jobs.py", "import celery\napp = celery.Celery('jobs')\n")
+                repo.write_text("pkg/app/tool.py", "VALUE = 1\n")
+                base = repo.commit("base")
+                repo.write_text("pkg/app/tool.py", after)
+                head = repo.commit(label)
+                report = self._evaluate(repo, base, head)
+                status = self._results(report)["background_job"].status
+                if flagged:
+                    self.assertEqual(status, "unsupported")
+                    self.assertIn("new_queue", report.triggers)
+                else:
+                    self.assertNotEqual(status, "unsupported")
+                    self.assertNotIn("new_queue", report.triggers)
+
     def test_source_only_queue_signals_fail_background_fitness(self) -> None:
         system = _system()
         system["nodes"][0]["type"] = "worker"
