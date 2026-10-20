@@ -2086,6 +2086,11 @@ def _resolve_import_module(current_package: str, module: str | None, level: int)
     return ".".join((*prefix, *suffix))
 
 
+def _imported_module(package: str, name: str) -> str:
+    """`from <package> import <name>` as a dotted module; a top-level package adds no leading dot (#60)."""
+    return f"{package}.{name}" if package else name
+
+
 def _module_package(path: str, source_roots: tuple[str, ...] = ()) -> str:
     relative = path
     matching_roots = [
@@ -2268,7 +2273,7 @@ def _queue_adapter_names(
         elif isinstance(node, ast.ImportFrom):
             module = _resolve_import_module(current_package, node.module, node.level)
             imports = tuple((
-                f"{module}.{alias.name}" if node.module is None else module,
+                _imported_module(module, alias.name) if node.module is None else module,
                 "" if node.module is None else alias.name,
                 alias.asname or alias.name,
                 alias.asname or alias.name,
