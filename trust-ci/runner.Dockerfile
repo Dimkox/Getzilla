@@ -14,9 +14,11 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/ci ci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements-test.txt ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir ".[test]" \
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements-test.txt \
+    && python -m pip install --no-cache-dir --no-deps ".[test]" \
+    && python -m pip install --no-cache-dir \
         coverage==7.15.4 \
         pytest==9.1.1 \
         pytest-xdist==3.8.0 \
