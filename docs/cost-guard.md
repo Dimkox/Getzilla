@@ -26,6 +26,7 @@ lists providers):
 | `PAID_CALL` | a call into a paid SDK, a provider host or a paid n8n node (informational) |
 | `UNBOUNDED_PAID_LOOP` | that call sits in a `while` loop with no counter, `itertools.count()`, a helper called from such a loop, or an n8n cycle through a paid node with no counter (`$runIndex`, a batch node) |
 | `UNBOUNDED_RETRY` | the call is under `@retry` without `stop=` or `backoff.on_exception` without `max_tries`/`max_time` |
+| `SCHEDULED_PAID_CALL` | the paid call is in a module that schedules work (`schedule`, APScheduler, Celery beat, croniter, rq-scheduler, huey); the contract must set `max_scheduled_runs_per_day`, otherwise `pr`/`release` fail with `COST_SCHEDULE_UNBOUNDED` |
 | `UNANALYSED_PAID_CALL` | another language mentions a provider host; loops there are not analysed |
 
 ## 3. The budget contract
