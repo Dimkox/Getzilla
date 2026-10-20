@@ -92,7 +92,8 @@ def normalize_name(ecosystem: str, name: str) -> str:
 
 def _pairs_from_requirements(text: str) -> Iterable[tuple[str, str]]:
     for raw in text.splitlines():
-        line = raw.split('#', 1)[0].strip()
+        # Hashed lockfiles end each requirement with a ` \` continuation before its --hash lines.
+        line = raw.split('#', 1)[0].strip().removesuffix('\\').strip()
         if not line or line.startswith('-'):
             continue
         match = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*===?\s*([A-Za-z0-9][A-Za-z0-9.+!_-]*)\s*(?:;.*)?$', line)

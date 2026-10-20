@@ -6,10 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements-test.txt ./
 COPY src ./src
 COPY tests ./tests
 COPY sql ./sql
-RUN python -m pip install --no-cache-dir ".[test]"
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements-test.txt \
+    && python -m pip install --no-cache-dir --no-deps ".[test]"
 
 CMD ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_postgres_integration.py", "-v"]

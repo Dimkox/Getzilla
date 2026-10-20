@@ -12,9 +12,10 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/trustci trustci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.txt ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements.txt \
+    && python -m pip install --no-cache-dir --no-deps .
 
 USER 10001:10001
 EXPOSE 8080
