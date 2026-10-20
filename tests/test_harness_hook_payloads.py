@@ -175,7 +175,17 @@ class HarnessHookPayloadTests(unittest.TestCase):
                     'tool_input': {'cmd': 'terraform destroy'},
                 }), text=True, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                decision = json.loads(result.stdout)['hookSpecificOutput']
+                self.assertEqual(decision['permissionDecision'], 'deny')
+                # The native cmd reached the destructive-command policy; an empty normalized command
+                # is denied too, but for another reason (#73).
+                self.assertIn('Blocked destructive command', json.dumps(decision, ensure_ascii=False))
+                allowed = subprocess.run(launcher, shell=True, cwd=consumer, input=json.dumps({
+                    'cwd': str(consumer), 'tool_name': 'exec_command', 'tool_input': {'cmd': 'git status --short'},
+                }), text=True, capture_output=True, timeout=20)
+                self.assertEqual(allowed.returncode, 0, allowed.stderr)
+                self.assertNotEqual(json.loads(allowed.stdout or '{}').get('hookSpecificOutput', {}).get('permissionDecision'),
+                                    'deny', allowed.stdout)
                 prompt_hook = consumer / '.grok/hooks/user_prompt_submit.py'
                 prompt_hook.write_text(prompt_hook.read_text().replace(
                     '    emit({', "    emit({'source_identity': __file__,"))
@@ -191,11 +201,21 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
 
     def test_codex_cmd_respects_command_workdir(self) -> None:
+        """#73: with an exact push grant only the workdir differs, so only root resolution can deny."""
+        from getzilla.router import build_route
+        from getzilla.state import add_approval, set_active_route
         with project_copy(git=True) as root:
+            subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/app.git'], cwd=root, check=True)
+            subprocess.run(['git', 'checkout', '-qb', 'feature'], cwd=root, check=True)
+            set_active_route(root, build_route(root, 'Publish the reviewed fix', 'workdir-test').to_dict())
+            add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
+            inside = self._pre_tool(root, 'exec_command', {'cmd': 'git push origin feature', 'workdir': str(root)})
+            self.assertEqual(inside['decision'], 'allow', inside)
             data = self._pre_tool(root, 'exec_command', {
                 'cmd': 'git push origin feature', 'workdir': str(root.parent),
             })
             self.assertEqual(data['decision'], 'deny', data)
+            self.assertIn('root resolution', data['reason'])
 
     def test_codex_read_only_cmd_is_allowed(self) -> None:
         with project_copy() as root:

@@ -5,7 +5,7 @@ description: Use whenever tests, review, CI evidence, or completion claims must 
 
 # Verification and Evidence
 
-Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying `python3 scripts/getzilla_verify.py --mode pr`.
+Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying gate: `python3 scripts/getzilla_verify.py --mode pr`, or `--mode focused-static-seo-landing` for a positively classified landing-only inventory.
 
 During implementation run only bounded checks; they create no receipt. Dispatch every review agent selected by the route. Each inspects the same committed candidate and returns the complete report to the coordinator out-of-band. After all reviews finish, the coordinator saves all reports in the change package, then commits and freezes the candidate. The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; any other difference makes every review stale. Then run the final gate once. Verification receipts include a repository fingerprint. Record passing reports with `scripts/getzilla_review.py` only after that final gate passes. Any change after review invalidates all receipts: repeat the independent reviews on the new tree, save the new reports, commit and freeze again, and run a new final gate. Never reuse evidence from another tree. Completion requires zero gaps in `python scripts/getzilla_status.py`.
 

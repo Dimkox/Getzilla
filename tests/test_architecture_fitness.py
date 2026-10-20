@@ -3748,6 +3748,29 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(result.status, "not_applicable")
         self.assertNotIn("new_network_client", report.triggers)
 
+    def test_each_vulnerability_scanner_destination_has_its_own_declared_edge(self) -> None:
+        """#73: the OSV query and the OSV mirror are separate destinations; dropping either edge is caught."""
+        known = (ROOT / '.getzilla/getzilla/known_vulns.py').read_text(encoding='utf-8')
+        self.assertIn("OSV_API = 'https://api.osv.dev/v1'", known)
+        self.assertIn("OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'", known)
+        destinations = {'EDGE-SCANNER-OSV-QUERY': 'NODE-OSV-API',
+                        'EDGE-SCANNER-OSV-MIRROR-DOWNLOAD': 'NODE-OSV-ADVISORY-BUCKET'}
+
+        def missing(system: dict) -> list[str]:
+            edges = {edge['id']: edge for edge in system['edges']}
+            return [edge_id for edge_id, target in destinations.items()
+                    if not (edge_id in edges and edges[edge_id]['from'] == 'NODE-LOCAL-VULNERABILITY-SCANNER'
+                            and edges[edge_id]['to'] == target and edges[edge_id]['protocol'] == 'https'
+                            and edges[edge_id]['network_policy'] == 'allowlisted_egress')]
+
+        system = ARCHITECTURE.load_architecture(ROOT).system
+        self.assertEqual(missing(system), [])
+        for dropped in destinations:
+            with self.subTest(dropped=dropped):
+                mutated = copy.deepcopy(system)
+                mutated['edges'] = [edge for edge in mutated['edges'] if edge['id'] != dropped]
+                self.assertEqual(missing(mutated), [dropped])
+
     def test_repository_vulnerability_scanner_requires_its_own_declared_https_edges(self) -> None:
         snapshot = ARCHITECTURE.load_architecture(ROOT)
         scanner_id = 'NODE-LOCAL-VULNERABILITY-SCANNER'

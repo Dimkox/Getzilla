@@ -16,7 +16,8 @@ DOCUMENTS = (*DELIVERY, '.agents/skills/verification-evidence/SKILL.md',
              '.grok/skills/verification-evidence/SKILL.md', '.getzilla/templates/change/evidence/README.md')
 ORDER = ('Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; '
          '3. save the complete review reports; 4. commit and freeze the candidate; '
-         '5. one final qualifying `python3 scripts/getzilla_verify.py --mode pr`.')
+         '5. one final qualifying gate: `python3 scripts/getzilla_verify.py --mode pr`, or '
+         '`--mode focused-static-seo-landing` for a positively classified landing-only inventory.')
 FROZEN = ('The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: '
           'before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; '
           'any other difference makes every review stale.')
@@ -63,6 +64,26 @@ class DeliverySequenceTests(unittest.TestCase):
                 gate = final.index('python3 scripts/getzilla_verify.py --mode pr\n')
                 self.assertLess(gate, final.index('scripts/getzilla_review.py code_review'))
                 self.assertLess(gate, RECEIPTS_AFTER_GATE.search(final).start())
+
+    def test_final_gate_is_selected_by_classification_before_any_verifier_runs(self) -> None:
+        """#71: classify the product inventory first, then run exactly one verifier."""
+        for rel in DELIVERY:
+            with self.subTest(document=rel):
+                final = read(rel).split('## 7. Final verification and receipts', 1)[1]
+                classify = final.index('First classify the final product changed-file inventory')
+                focused = final.index('python3 scripts/getzilla_verify.py --mode focused-static-seo-landing')
+                pr_gate = final.index('python3 scripts/getzilla_verify.py --mode pr\n')
+                self.assertLess(classify, focused)
+                self.assertLess(classify, pr_gate)
+                self.assertIn('exactly one final qualifying gate', final)
+                self.assertIn('Never run the PR gate and then a second gate.', final)
+
+    def test_reference_local_loop_never_moves_reviewed_state_to_ready(self) -> None:
+        """#73: docs/REFERENCE.md follows the frozen reviewing-state rule."""
+        text = ' '.join(read('docs/REFERENCE.md').split())
+        self.assertNotIn('reviews → `ready` → pull request', text)
+        self.assertIn('committed candidate frozen at `reviewing`', text)
+        self.assertIn('Do not transition tracked state to `ready` after freeze', text)
 
     def test_agents_md_keeps_all_reviews_and_invalidates_all_receipts(self) -> None:
         text = ' '.join(read('AGENTS.md').split())

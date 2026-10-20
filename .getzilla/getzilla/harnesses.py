@@ -288,7 +288,7 @@ def drift(root: Path) -> list[str]:
 
 
 @contextmanager
-def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str]]:
+def _chain(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[list[fsx.DirHandle], list[str], str]]:
     """Walk to rel's directory by descriptor, never following a link (no check-then-use race)."""
     *directories, name = rel.split('/')
     handles = [fsx.open_dir(root)]
@@ -298,14 +298,44 @@ def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx
                 with suppress(FileExistsError):
                     fsx.mkdir_at(handles[-1], part, 0o755)
             handles.append(fsx.open_dir_at(handles[-1], part))
-        yield handles[-1], name
+        yield handles, directories, name
     finally:
         for handle in reversed(handles):
             fsx.close_dir(handle)
 
 
+@contextmanager
+def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str]]:
+    with _chain(root, rel, create=create) as (handles, _directories, name):
+        yield handles[-1], name
+
+
+def _identity(info: os.stat_result) -> tuple[int, int]:
+    return info.st_dev, info.st_ino
+
+
+def _still_inside(root: Path, handles: list[fsx.DirHandle], directories: list[str]) -> None:
+    """Fail closed unless every opened directory is still the one a fresh lookup from root finds (#71).
+
+    A descriptor keeps pointing at a directory that another process renamed out of the
+    repository, so the write would land outside it and still report success.
+    """
+    current = root
+    for index, handle in enumerate(handles):
+        if index:
+            current = current / directories[index - 1]
+        try:
+            fresh = os.lstat(current)
+        except OSError as exc:
+            raise ValueError(f'nothing written; {current} moved while the harness was being written') from exc
+        if fsx.is_link(fresh) or _identity(fresh) != _identity(fsx.fstat_dir(handle)):
+            raise ValueError(f'nothing written; {current} moved while the harness was being written')
+
+
 def _write_file(root: Path, rel: str, content: bytes) -> None:
-    with _parent(root, rel, create=True) as (parent, name):
+    with _chain(root, rel, create=True) as (handles, directories, name):
+        parent = handles[-1]
+        _still_inside(root, handles, directories)
         temporary = f'.{name}.{secrets.token_hex(6)}.tmp'
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC
         descriptor = fsx.open_at(parent, temporary, flags, 0o644)
@@ -313,6 +343,7 @@ def _write_file(root: Path, rel: str, content: bytes) -> None:
             with os.fdopen(descriptor, 'wb') as stream:
                 fsx.fchmod(stream.fileno(), 0o644)
                 stream.write(content)
+            _still_inside(root, handles, directories)
             fsx.replace_at(parent, temporary, parent, name)
         except BaseException:
             with suppress(FileNotFoundError):
