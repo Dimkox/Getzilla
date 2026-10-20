@@ -115,6 +115,7 @@ Then follow [QUICKSTART.md](QUICKSTART.md).
 
 - [QUICKSTART.md](QUICKSTART.md): setup, step by step
 - [docs/REFERENCE.md](docs/REFERENCE.md): the full technical reference, with the current state, every subsystem and the release history
+- [docs/SECURITY.md](docs/SECURITY.md): the security model: threats, keys, what to do when a check fails, reviewer independence and their limits
 - [START_HERE.md](START_HERE.md): where a new AI agent or contributor starts
 - [AGENTS.md](AGENTS.md): the rules every agent follows
 - [docs/INVESTOR_DEMO.md](docs/INVESTOR_DEMO.md): a five-minute demo walkthrough
