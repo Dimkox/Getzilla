@@ -80,7 +80,8 @@ def ensure_components(root: Path, needs: list[str], *, source: Path | None = Non
     source = source or getzilla_home()
     installer = _installer(source)
     payload = installer.build_payload(source)
-    valid = {'factory', *(f'agent:{name}' for name in installer.KNOWN_AGENTS)}
+    valid = {'factory', *(f'agent:{name}' for name in installer.KNOWN_AGENTS),
+             *(f'compliance:{name}' for name in getattr(installer, 'KNOWN_COMPLIANCE', ()))}
     results = []
     manifest = load_manifest(root)
     for need in needs:
@@ -106,6 +107,18 @@ def ensure_components(root: Path, needs: list[str], *, source: Path | None = Non
             record['source_version'] = (source / 'VERSION').read_text(encoding='utf-8').strip() \
                 if (source / 'VERSION').is_file() else None
         results.append(added)
+    layers = sorted(need.split(':', 1)[1] for need in needs if need.startswith('compliance:'))
+    if layers:
+        # Adding a compliance layer is the opt-in itself; keep any layer enabled earlier.
+        config = root / '.getzilla/config/compliance.json'
+        try:
+            current = json.loads(config.read_text(encoding='utf-8')).get('enabled') or []
+        except (OSError, ValueError, AttributeError):
+            current = []
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({'schema_version': 'getzilla-compliance-v1',
+                                      'enabled': sorted(set(current) | set(layers))}, indent=2, sort_keys=True) + '\n',
+                          encoding='utf-8', newline='\n')
     if any(item.files for item in results):
         path = root / MANIFEST
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -25,6 +25,7 @@
 #   $env:OPENROUTER_API_KEY = '...'             your OpenRouter key (otherwise asked for, never echoed)
 #   $env:GETZILLA_SKIP_AGENT = '1'              do not install or configure the coding agent
 #   $env:GETZILLA_SKIP_GROK = '1'               do not install the Grok Build CLI (when the agent is grok)
+#   $env:GETZILLA_EU_AI_ACT = '1' or '0'        turn the optional EU AI Act checks on or off without asking
 #   $env:GETZILLA_NONINTERACTIVE = '1'          never ask; use the defaults above
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
@@ -85,6 +86,10 @@ function Install-Getzilla {
     $Agent = Select-Agent
     $Provider = Select-Provider $Agent
     Write-Step "Coding agent: $Agent (models: $Provider)"
+    $Compliance = Select-EuAiAct
+    if ($Compliance) { Write-Step 'EU AI Act checks: on (getzilla components add compliance:eu-ai-act)' }
+    $ComplianceArgs = @()
+    if ($Compliance) { $ComplianceArgs = @('--compliance', $Compliance) }
     if ($env:GETZILLA_SKIP_AGENT -eq '1') {
         Write-Step 'Skipping the coding agent (GETZILLA_SKIP_AGENT=1).'
     } else {
@@ -113,7 +118,7 @@ function Install-Getzilla {
     try {
         if ($env:GETZILLA_NEW_PROJECT) {
             Write-Step ("Creating a new project at " + $env:GETZILLA_NEW_PROJECT + " ...")
-            Invoke-Python $Python @('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT, '--agents', $Agent)
+            Invoke-Python $Python (@('scripts/install_into.py', '--materialize-new', $env:GETZILLA_NEW_PROJECT, '--agents', $Agent) + $ComplianceArgs)
             if ($LASTEXITCODE -ne 0) { throw 'Creating the new project failed; see the message above.' }
             Write-Step 'Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project...'
             Invoke-Python $Python @('scripts/getzilla_baseline.py', 'apply', '--project', $env:GETZILLA_NEW_PROJECT, '--agent', $Agent)
@@ -124,7 +129,10 @@ function Install-Getzilla {
             }
         } elseif ($env:GETZILLA_PROJECT) {
             Write-Step ("Install plan for " + $env:GETZILLA_PROJECT + " (read-only, nothing is written):")
-            Invoke-Python $Python @('scripts/install_into.py', '--plan', $env:GETZILLA_PROJECT)
+            Invoke-Python $Python (@('scripts/install_into.py', '--plan', $env:GETZILLA_PROJECT) + $ComplianceArgs)
+            if ($Compliance) {
+                Write-Step ('To turn on EU AI Act checks there: cd "' + $env:GETZILLA_PROJECT + '"; getzilla components add compliance:eu-ai-act')
+            }
         }
     } finally {
         Pop-Location
@@ -553,6 +561,35 @@ function Read-Choice([string]$Prompt, [string]$Default) {
     }
     if ($answer) { return $answer.Trim() }
     return $Default
+}
+
+# Offline hints only: the Windows time zone or the region of an EU member state. Nothing is looked
+# up on the network and the IP address is never used.
+function Test-EuHint {
+    $zones = @('W. Europe Standard Time', 'Central Europe Standard Time', 'Central European Standard Time',
+        'Romance Standard Time', 'GTB Standard Time', 'FLE Standard Time', 'E. Europe Standard Time',
+        'GMT Standard Time')
+    $regions = @('AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
+        'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE')
+    try {
+        if ([System.TimeZoneInfo]::Local.Id -in $zones) { return $true }
+        if ([System.Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName -in $regions) { return $true }
+    } catch {
+        return $false
+    }
+    return $false
+}
+
+# Returns 'eu-ai-act' when the optional checks are turned on, an empty string otherwise. Default: off.
+function Select-EuAiAct {
+    switch ("$env:GETZILLA_EU_AI_ACT".ToLowerInvariant()) {
+        { $_ -in @('1', 'yes', 'true', 'on') } { return 'eu-ai-act' }
+        { $_ -in @('0', 'no', 'false', 'off') } { return '' }
+    }
+    if (-not (Test-EuHint)) { return '' }
+    $answer = Read-Choice 'Does your project have users in the EU? Turn on EU AI Act checks (optional, can be added later) [y/N]' 'n'
+    if ($answer -in @('y', 'Y', 'yes', 'Yes', 'YES')) { return 'eu-ai-act' }
+    return ''
 }
 
 function Select-Agent {

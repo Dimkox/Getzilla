@@ -1,0 +1,79 @@
+{
+  "schema_version": "eu-ai-act-obligations-v1",
+  "regulation": "Regulation (EU) 2024/1689 (AI Act)",
+  "note": "Engineering evidence only, not legal advice. Application dates are informational and do not gate; check them against the Official Journal and later amendments before relying on them.",
+  "obligations": [
+    {
+      "id": "AIA-5",
+      "article": "Art. 5",
+      "title": "Prohibited AI practices",
+      "applies_to": ["prohibited", "high-risk", "limited", "minimal"],
+      "check": "classification",
+      "applies_from": "2025-02-02",
+      "priority": "P0"
+    },
+    {
+      "id": "AIA-50-1",
+      "article": "Art. 50(1)",
+      "title": "People are told they are interacting with an AI system",
+      "applies_to": ["high-risk", "limited"],
+      "check": "tested_symbol",
+      "field": "disclosure_symbol",
+      "applies_from": "2026-08-02",
+      "priority": "P0"
+    },
+    {
+      "id": "AIA-50-2",
+      "article": "Art. 50(2)",
+      "title": "Synthetic audio, image, video or text output is marked in a machine-readable format and detectable as generated",
+      "applies_to": ["high-risk", "limited"],
+      "check": "tested_symbol",
+      "field": "marking_symbol",
+      "when": "generates_content",
+      "applies_from": "2026-08-02",
+      "priority": "P0"
+    },
+    {
+      "id": "AIA-9",
+      "article": "Art. 9",
+      "title": "Risk management system, kept current over the lifecycle",
+      "applies_to": ["high-risk"],
+      "check": "risk_register",
+      "priority": "P1"
+    },
+    {
+      "id": "AIA-11",
+      "article": "Art. 11, Annex IV",
+      "title": "Technical documentation drawn up before release and kept up to date",
+      "applies_to": ["high-risk"],
+      "check": "audit_bundle",
+      "priority": "P1"
+    },
+    {
+      "id": "AIA-12",
+      "article": "Art. 12",
+      "title": "Automatic recording of events (logs)",
+      "applies_to": ["high-risk"],
+      "check": "tested_symbol",
+      "field": "logging_symbol",
+      "priority": "P1"
+    },
+    {
+      "id": "AIA-14",
+      "article": "Art. 14",
+      "title": "Human oversight",
+      "applies_to": ["high-risk"],
+      "check": "tested_symbol",
+      "field": "oversight_symbol",
+      "priority": "P1"
+    },
+    {
+      "id": "AIA-15",
+      "article": "Art. 15",
+      "title": "Accuracy, robustness and cybersecurity",
+      "applies_to": ["high-risk"],
+      "check": "verify",
+      "priority": "P1"
+    }
+  ]
+}
