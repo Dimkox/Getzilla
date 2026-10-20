@@ -78,7 +78,7 @@ def route_has_cost_signal(route: Mapping[str, Any] | None) -> bool:
 
 @dataclass(frozen=True)
 class CostFinding:
-    kind: str  # UNBOUNDED_PAID_LOOP, UNBOUNDED_RETRY, PAID_CALL, UNANALYSED_PAID_CALL
+    kind: str  # UNBOUNDED_PAID_LOOP, UNBOUNDED_RETRY, PAID_CALL, SCHEDULED_PAID_CALL, UNANALYSED_PAID_CALL
     path: str
     line: int
     detail: str
@@ -140,8 +140,9 @@ class _PythonCost(ast.NodeVisitor):
                 self.aliases.add(alias.asname or alias.name.split('.')[0])
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module and self._is_paid_module(node.module):
-            for alias in node.names:
+        for alias in node.names:
+            # `from google import genai` imports the paid module google.genai itself (#76).
+            if node.module and (self._is_paid_module(node.module) or self._is_paid_module(f'{node.module}.{alias.name}')):
                 self.aliases.add(alias.asname or alias.name)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -239,11 +240,37 @@ def python_findings(path: str, content: bytes, providers: Mapping[str, Any] | No
     first = _PythonCost(path, providers)
     first.visit(tree)
     paid_functions = frozenset(name for name in first.paid_function_names if name)
-    if not paid_functions:
-        return first.findings
-    second = _PythonCost(path, providers, paid_functions)  # calls to paid helpers inside loops count too
-    second.visit(tree)
-    return second.findings
+    findings = first.findings
+    if paid_functions:
+        second = _PythonCost(path, providers, paid_functions)  # calls to paid helpers inside loops count too
+        second.visit(tree)
+        findings = second.findings
+    return findings + _scheduled_findings(path, tree, findings, providers)
+
+
+def _scheduled_findings(path: str, tree: ast.AST, findings: list[CostFinding],
+                        providers: Mapping[str, Any]) -> list[CostFinding]:
+    """A paid call in a module that also schedules work repeats on every tick (#76)."""
+    paid = [item for item in findings if item.kind == 'PAID_CALL']
+    if not paid:
+        return []
+    modules = tuple(providers.get('python_scheduler_modules', ()))
+
+    def scheduler(name: str | None) -> bool:
+        return bool(name) and any(name == module or name.startswith(module + '.') for module in modules)
+
+    for node in ast.walk(tree):
+        names: list[str | None] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module]
+        elif isinstance(node, ast.Attribute) and node.attr == 'beat_schedule':
+            names = ['celery.schedules']
+        if any(scheduler(name) for name in names):
+            return [CostFinding('SCHEDULED_PAID_CALL', path, paid[0].line,
+                                f'{paid[0].detail} in a module that schedules work at line {getattr(node, "lineno", 0)}')]
+    return []
 
 
 def _strongly_connected(graph: Mapping[str, set[str]]) -> list[set[str]]:
@@ -364,6 +391,7 @@ def diff_cost_findings(root: Path, base: str | None, head: str) -> list[CostFind
 # --- C03: contract -------------------------------------------------------------------------------
 
 CONTRACT_FIELDS = {'schema_version', 'provider', 'max_calls', 'max_spend_usd_cents', 'stop_condition', 'alert',
+                   'max_scheduled_runs_per_day',
                    'limit_symbol'}
 
 
@@ -388,6 +416,10 @@ def contract_problems(contract: Any) -> list[str]:
             problems.append(f'COST_CONTRACT_INVALID: {name} must say what happens (10+ characters)')
     if not isinstance(contract.get('limit_symbol'), str) or not contract['limit_symbol'].isidentifier():
         problems.append('COST_CONTRACT_INVALID: limit_symbol must name the code identifier that enforces the limit')
+    if 'max_scheduled_runs_per_day' in contract:
+        runs = contract['max_scheduled_runs_per_day']
+        if not isinstance(runs, int) or isinstance(runs, bool) or runs < 1:
+            problems.append('COST_CONTRACT_INVALID: max_scheduled_runs_per_day must be a positive integer')
     return problems
 
 
@@ -481,6 +513,7 @@ def evaluate(root: Path, route: Mapping[str, Any] | None, mode: str, bases: list
     if not signal and not findings:
         return CostReport('pass', 'no paid or unbounded operation in the prompt or the diff')
     problems = [f'{item.kind}: {item.path}:{item.line} {item.detail}' for item in findings if item.blocking]
+    scheduled = [item for item in findings if item.kind == 'SCHEDULED_PAID_CALL']
     contract_path = package / CONTRACT_NAME if package is not None else None
     if contract_path is None or not contract_path.is_file():
         problems.append(f'COST_CONTRACT_MISSING: add {CONTRACT_NAME} to the active change package '
@@ -494,6 +527,11 @@ def evaluate(root: Path, route: Mapping[str, Any] | None, mode: str, bases: list
         if contract is not None:
             invalid = contract_problems(contract)
             problems.extend(invalid)
+            if scheduled and not invalid and 'max_scheduled_runs_per_day' not in contract:
+                # Default deny: a per-run limit does not bound a job that a scheduler repeats (#76).
+                item = scheduled[0]
+                problems.append(f'COST_SCHEDULE_UNBOUNDED: {item.path}:{item.line} is scheduled; '
+                                'set max_scheduled_runs_per_day in the budget contract')
             if not invalid:
                 code = sorted({item.path for item in findings if item.kind != 'UNANALYSED_PAID_CALL'}) or sorted(changed_code)
                 if not code or not bound_tested(root, head, contract['limit_symbol'], code, rules['tests']):

@@ -12,6 +12,7 @@
     "max_spend_usd_cents": {"type": "integer", "minimum": 1, "description": "Spend ceiling in USD cents (integers only: records are canonical JSON)"},
     "stop_condition": {"type": "string", "minLength": 10, "maxLength": 2000},
     "alert": {"type": "string", "minLength": 10, "maxLength": 2000},
-    "limit_symbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+    "limit_symbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "max_scheduled_runs_per_day": {"type": "integer", "minimum": 1, "description": "Required when the paid code is scheduled: how many runs per day the schedule may start"}
   }
 }
