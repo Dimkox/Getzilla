@@ -42,6 +42,7 @@ LEGACY_AWARE_FILES = frozenset(
     {
         "scripts/install_into.py",
         "tests/test_installer.py",
+        "tests/test_install_migration.py",
         "tests/test_getzilla_identity.py",
         "engineering/runbooks/getzilla-trust-ci-onboarding.md",
         "engineering/runbooks/getzilla-rename-rules.md",
