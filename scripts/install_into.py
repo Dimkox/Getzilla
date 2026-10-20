@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import ctypes
 import errno
 import hashlib
@@ -1016,6 +1017,47 @@ def _is_link_path(path: Path) -> bool:
         return False
 
 
+MAX_UNTRACKED_REPORT_ENTRIES = 2000
+_UNTRACKED_CLASSES = (
+    ("generated-metadata", re.compile(r"(?:^|/)(?:[^/]+\.egg-info|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(?:/|$)")),
+    ("evidence", re.compile(r"(?:^|/)(?:test-evidence|evidence)/")),
+    ("requirements", re.compile(r"(?:^|/)_bmad-output/|(?:^|/)[^/]*(?:\.factory\.json|requirements[^/]*\.(?:json|md|txt))$")),
+    ("agent-scratch", re.compile(r"^(?:\.qwen|\.grok|\.claude|\.codex|\.gemini|\.cursor|\.getzilla/runtime)/")),
+)
+
+
+def _existing_untracked(target: Path, owned: frozenset[str]) -> tuple[list[dict[str, str]], bool]:
+    """Untracked, non-ignored paths already in a git target, classified; the planner never removes any (#75).
+
+    Requirements and evidence are never "unfinished work": every path is reported with
+    action PRESERVE, and a path the payload would also write is reported as a conflict.
+    """
+    absolute = Path(os.path.abspath(target))
+    if not (absolute / ".git").exists():
+        return [], False
+    try:
+        proc = subprocess.run(  # nosec B603 B607 - fixed git argv, no shell
+            ["git", "-C", str(absolute), "ls-files", "--others", "--exclude-standard", "-z"],
+            capture_output=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return [], False
+    if proc.returncode != 0:
+        return [], False
+    paths = sorted(item for item in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if item)
+    report: list[dict[str, str]] = []
+    for relative in paths[:MAX_UNTRACKED_REPORT_ENTRIES]:
+        kind = next((name for name, pattern in _UNTRACKED_CLASSES if pattern.search(relative)), None) or (
+            "legacy-installation" if relative.startswith(tuple(item + "/" for item in LEGACY_MANAGED_DIRS)) else "user-change")
+        if relative in owned:
+            report.append({"action": "CONFLICT", "path": relative, "class": kind,
+                           "reason": "untracked target file at a path the installation would write"})
+        else:
+            report.append({"action": "PRESERVE", "path": relative, "class": kind,
+                           "reason": "not owned by the installation"})
+    return report, len(paths) > MAX_UNTRACKED_REPORT_ENTRIES
+
+
 def _legacy_migration(target: Path) -> list[dict[str, str]]:
     """Report pre-rename stack files in target; the planner never removes them itself."""
     absolute = Path(os.path.abspath(target))
@@ -1117,6 +1159,9 @@ def _make_plan(
         keep_reports.append({"action": "KEEP", "path": path, "state": keep_state,
                              "reason": "declared by target"})
     deliverable = tuple(entry for entry in selected_payload if entry.path not in kept)
+    untracked, untracked_truncated = (
+        _existing_untracked(target, frozenset(entry.path for entry in deliverable)) if state == "directory" else ([], False)
+    )
     return {
         "version": 1,
         "target_state": state,
@@ -1130,6 +1175,8 @@ def _make_plan(
         ],
         "on_demand": "components left out are added when needed: getzilla components add agent:<name>|factory",
         "legacy_migration": _legacy_migration(target) if state == "directory" else [],
+        "existing_untracked": untracked,
+        "existing_untracked_truncated": untracked_truncated,
         "dependency_advice": _dependency_advice(
             source,
             include_dependencies=include_dependencies,
