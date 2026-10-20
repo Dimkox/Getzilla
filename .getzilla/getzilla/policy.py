@@ -109,7 +109,9 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
     if len(command) > _LEGACY_COMMAND_LIMIT:
         return False, f'Blocked a Bash command longer than {_LEGACY_COMMAND_LIMIT} characters before parsing it.'
     protected_targets, opaque = _shell_mutation(root, command, control_plane)
-    protected_targets = [target for target in protected_targets if not _legacy.agent_scratch(root, target)]
+    if not _legacy.creates_hardlink(command):
+        # A new hardlink in scratch would be a second name for its source inode (#102).
+        protected_targets = [target for target in protected_targets if not _legacy.agent_scratch(root, target)]
     if protected_targets:
         targets = ', '.join(protected_targets)
         hint = f' {_legacy.SCRATCH_HINT}' if any(t.startswith('.getzilla/runtime/') for t in protected_targets) else ''

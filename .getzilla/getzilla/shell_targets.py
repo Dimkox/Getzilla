@@ -223,6 +223,10 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
         return _operands(argv, {'-m', '--mode', '-Z', '--context'})
     if command in {'rmdir', 'rm', 'rename'}:
         return _operands(argv)
+    if command == 'link':
+        # `link FILE NEW`: NEW becomes a second name for FILE's inode.
+        operands = _operands(argv)
+        return operands[1:] if len(operands) > 1 else operands
     if command == 'truncate':
         return _operands(argv, {'-s', '--size', '-r', '--reference'})
     if command in {'chmod', 'chown', 'chgrp'}:

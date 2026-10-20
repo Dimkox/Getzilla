@@ -46,7 +46,30 @@ def agent_scratch(root: Path, rel: str) -> bool:
         return False
     base = os.path.realpath(os.path.join(str(root), AGENT_SCRATCH))
     target = os.path.realpath(os.path.join(str(root), norm))
-    return target == base or target.startswith(base + os.sep)
+    if not (target == base or target.startswith(base + os.sep)):
+        return False
+    try:
+        # A second name for an inode may be a protected file outside scratch (#102).
+        return not (os.path.isfile(target) and os.stat(target).st_nlink > 1)
+    except OSError:
+        return True
+
+
+def creates_hardlink(command: str) -> bool:
+    """``ln`` without -s, ``link`` or ``cp -l``: the new name shares the source inode (#102)."""
+    for argv in _simple_commands(command):
+        if argv is None:
+            return True
+        name, rest = argv[0], argv[1:]
+        options = [arg for arg in rest if arg.startswith('-') and arg != '-']
+        if name == 'link':
+            return True
+        if name == 'ln' and not any(arg in {'--symbolic', '-s'} or (not arg.startswith('--') and 's' in arg[1:])
+                                    for arg in options):
+            return True
+        if name == 'cp' and any(arg == '--link' or (not arg.startswith('--') and 'l' in arg[1:]) for arg in options):
+            return True
+    return False
 
 
 DEFAULT_PROTECTED = [
@@ -2193,34 +2216,102 @@ def project_policy(root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_CURL_HEADER_OPTIONS = frozenset({'-H', '--header', '--proxy-header'})
+
+
 def _curl_path_words(rest: list[str]) -> list[str]:
     words: list[str] = []
-    skip = False
-    for token in rest:
-        if skip:
-            skip = False
+    option: str | None = None
+    for arg in rest:
+        if option is not None:
+            # `-H @file` / `--header @file` read the headers from that file (#99).
+            if option in _CURL_HEADER_OPTIONS and arg.startswith('@'):
+                words.append(arg[1:])
+            option = None
             continue
-        if token in _CURL_NON_PATH_VALUES:
-            skip = True
+        if arg in _CURL_NON_PATH_VALUES or arg == '--proxy-header':
+            option = arg
             continue
-        if token.startswith('--') and token.split('=', 1)[0] in _CURL_NON_PATH_VALUES:
+        name, equals, value = arg.partition('=')
+        if arg.startswith('--') and equals and (name in _CURL_NON_PATH_VALUES or name == '--proxy-header'):
+            if name in _CURL_HEADER_OPTIONS and value.startswith('@'):
+                words.append(value[1:])
             continue
-        words.append(token)
+        if arg.startswith('-H') and len(arg) > 2 and not arg.startswith('--'):
+            if arg[2:].startswith('@'):
+                words.append(arg[3:])
+            continue
+        words.append(arg)
     return words
 
 
-def _consumer_secrets(root: Path, argv: list[str]) -> frozenset[str]:
-    """Secret paths the owner lets this exact script receive (project policy ``secret_consumers``)."""
+_CONSUMER_INTERPRETER = re.compile(r'python(?:3(?:\.\d+)?)?(?:\.exe)?')
+_DIRECTORY_CHANGERS = frozenset({'cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl'})
+
+
+def _same_file(root: Path, word: str, rel: str) -> bool:
+    if not word or word.startswith('-'):
+        return False
+    target = os.path.realpath(os.path.join(str(root), rel))
+    return os.path.isfile(target) and os.path.realpath(os.path.join(str(root), word)) == target
+
+
+def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozenset[str]]:
+    """Secret paths the owner lets an exact script receive (project policy ``secret_consumers``).
+
+    The exception belongs to one top-level simple command: a real Python interpreter (or the script
+    itself) as its first word, the script resolved to the listed file, no wrapper, no nested shell and
+    no directory change anywhere in the command (#100). A redirection or ``tee`` aimed at a handed
+    secret voids the exception: reading it is allowed, writing it never is (#101).
+    """
     consumers = project_policy(root).get('secret_consumers')
-    if not isinstance(consumers, list) or not argv:
-        return frozenset()
-    script = argv[1] if len(argv) > 1 and os.path.basename(argv[0]).startswith('python') else argv[0]
-    script = script.removeprefix('./')
-    allowed: set[str] = set()
-    for item in consumers:
-        if isinstance(item, dict) and item.get('script') == script and isinstance(item.get('secrets'), list):
-            allowed.update(str(secret) for secret in item['secrets'] if isinstance(secret, str) and secret)
-    return frozenset(allowed)
+    if not isinstance(consumers, list):
+        return {}
+    commands = _simple_commands(command)
+    if any(argv is None or argv[0] in _DIRECTORY_CHANGERS for argv in commands):
+        return {}
+    try:
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
+    except ValueError:
+        return {}
+    segments: list[tuple[list[str], list[str]]] = []
+    words: list[str] = []
+    targets: list[str] = []
+    expect_target = False
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if token.operator:
+            if '>' in token.value and token.value != '>&':
+                expect_target = True
+                continue
+            if '<' in token.value or token.value == '>&':
+                continue
+            if words:
+                segments.append((words, targets))
+            words, targets, expect_target = [], [], False
+            continue
+        if expect_target:
+            targets.append(token.value)
+            expect_target = False
+        words.append(token.value)
+    written = {word for argv in commands if argv and argv[0] == 'tee' for word in argv[1:] if not word.startswith('-')}
+    handoffs: dict[tuple[str, ...], frozenset[str]] = {}
+    for raw, redirected in segments:
+        first = _executable_name(raw[0])
+        interpreter = _CONSUMER_INTERPRETER.fullmatch(first) is not None
+        script = raw[1] if interpreter and len(raw) > 1 else raw[0]
+        allowed: set[str] = set()
+        for item in consumers:
+            if (isinstance(item, dict) and isinstance(item.get('script'), str) and isinstance(item.get('secrets'), list)
+                    and _same_file(root, script, item['script'])):
+                allowed.update(secret for secret in item['secrets'] if isinstance(secret, str) and secret)
+        if not allowed:
+            continue
+        sinks = {*redirected, *written}
+        if any(os.path.realpath(sink) == os.path.realpath(secret) or sink == secret for sink in sinks for secret in allowed):
+            continue
+        argv = ['git', first[4:], *raw[1:]] if first.startswith('git-') and len(first) > 4 else [first, *raw[1:]]
+        handoffs[tuple(argv)] = frozenset(allowed)
+    return handoffs
 
 
 def _secret_path_words(argv: list[str]) -> list[str] | None:
@@ -2315,13 +2406,16 @@ def _is_recursive_reader(argv: list[str]) -> bool:
     return False
 
 
-def _argv_secret_reference(root: Path, argv: list[str], patterns: list[str], budget: _Budget) -> str | None:
+def _argv_secret_reference(
+    root: Path, argv: list[str], patterns: list[str], budget: _Budget,
+    handoffs: dict[tuple[str, ...], frozenset[str]] | None = None,
+) -> str | None:
     if not argv:
         return None
     words = _secret_path_words(argv)
     if words is None:
         return None
-    handed = _consumer_secrets(root, argv)
+    handed = (handoffs or {}).get(tuple(argv), frozenset())
     if handed:
         # The owner lets this script read these secrets itself; the agent still never names them elsewhere.
         words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
@@ -2389,11 +2483,12 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     budget = _Budget()
     result: str | None = None
     try:
+        handoffs = _consumer_handoffs(root, command)
         for argv in _simple_commands(command):
             hit = (
                 _raw_secret_reference(root, command, patterns, budget)
                 if argv is None
-                else _argv_secret_reference(root, argv, patterns, budget)
+                else _argv_secret_reference(root, argv, patterns, budget, handoffs)
             )
             if hit is not None:
                 result = hit
