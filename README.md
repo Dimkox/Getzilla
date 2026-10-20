@@ -1,6 +1,6 @@
 # Getzilla
 
-Current source: **2.2.2 source candidate**, including the verifier child-test scope fix. Latest published: [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.3.0 source candidate**, including the verifier child-test scope fix. Latest published: [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
