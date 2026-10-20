@@ -2,9 +2,12 @@
 
 ## Hooks that fail open
 
-Getzilla's hooks never lock the agent because of their own bugs: if the policy cannot be imported
-or the hook crashes, the action is allowed. That is still the behaviour, but it is no longer
-silent. Every time it happens, a `HOOK_DEGRADED` event is appended to
+Getzilla's hooks never lock the agent out of its own repair because of their own bugs: if the
+policy cannot be imported, reads and ordinary edits are allowed. Protected actions are not: while
+the policy is not loaded, the PreToolUse hook still refuses, with the standard library only, a push,
+merge, tag, release, `gh api`, package or image publication, `terraform apply/destroy`, recursive
+`rm`, and any write into the control plane (`.getzilla/`, `.grok/`, the agent folders, `AGENTS.md`).
+A missing control is not taken as permission (#78). None of this is silent. Every time it happens, a `HOOK_DEGRADED` event is appended to
 `.getzilla/runtime/hook-events.jsonl` (time, hook, agent, error). This includes the case where
 the hook's own helper library cannot load; that path writes with the standard library only.
 

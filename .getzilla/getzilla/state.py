@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 import urllib.parse
+import contextvars
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -150,7 +151,30 @@ def active_route_path(root: Path) -> Path:
     return root / '.getzilla/runtime/active-route.json'
 
 
+_SESSION: contextvars.ContextVar[str | None] = contextvars.ContextVar('getzilla_session', default=None)
+_SESSION_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
+_ROUTE_ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
+
+
+def bind_session(session_id: str | None) -> None:
+    """Route reads in this process belong to ``session_id``; hooks bind it from their payload (#80)."""
+    valid = isinstance(session_id, str) and session_id != 'manual' and _SESSION_ID.fullmatch(session_id)
+    _SESSION.set(session_id if valid else None)
+
+
+def _session_pointer(root: Path, session_id: str) -> Path:
+    return runtime_dir(root) / 'sessions' / f'{session_id}.json'
+
+
 def get_active_route(root: Path) -> dict[str, Any] | None:
+    session = _SESSION.get()
+    if session:
+        pointer = load_json(_session_pointer(root, session))
+        route_id = pointer.get('route_id') if isinstance(pointer, dict) else None
+        if isinstance(route_id, str) and _ROUTE_ID.fullmatch(route_id):
+            route = load_json(runtime_dir(root) / 'routes' / f'{route_id}.json')
+            if isinstance(route, dict) and route.get('route_id') == route_id:
+                return route
     data = load_json(active_route_path(root))
     return data if isinstance(data, dict) else None
 
@@ -197,6 +221,9 @@ def set_active_route(root: Path, route: dict[str, Any]) -> None:
         route_dir.mkdir(parents=True, exist_ok=True)
         new_route = not (route_dir / f"{route['route_id']}.json").exists()
         dump_json(route_dir / f"{route['route_id']}.json", route)
+        session = route.get('session_id')
+        if isinstance(session, str) and session != 'manual' and _SESSION_ID.fullmatch(session):
+            dump_json(_session_pointer(root, session), {'route_id': route['route_id'], 'session_id': session})
     if new_route:
         from .route_metrics import record_route
         record_route(root, route)
@@ -209,7 +236,9 @@ def update_route(root: Path, **updates: Any) -> dict[str, Any] | None:
             return None
         route.update(updates)
         route['updated_at'] = now_utc()
-        dump_json(active_route_path(root), route)
+        shared = load_json(active_route_path(root))
+        if not isinstance(shared, dict) or shared.get('route_id') == route.get('route_id'):
+            dump_json(active_route_path(root), route)
         dump_json(runtime_dir(root) / 'routes' / f"{route['route_id']}.json", route)
         return route
 

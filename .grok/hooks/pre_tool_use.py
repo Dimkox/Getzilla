@@ -1,13 +1,84 @@
 #!/usr/bin/env python3
-"""PreToolUse — soft policy gate (fail-open)."""
+"""PreToolUse — policy gate; a policy that fails to load still refuses protected actions (#78)."""
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# Standard library only: used when the Getzilla policy or its helper library did not load (#78).
+_DEGRADED_SHELL_TOOLS = frozenset({'Bash', 'bash', 'run_shell_command', 'shell', 'exec_command', 'PowerShell',
+                                   'powershell', 'Monitor', 'monitor', 'terminal', 'run_in_terminal'})
+_DEGRADED_WRITE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit', 'replace',
+                                   'edit_file', 'apply_patch', 'create_file', 'str_replace_editor'})
+_DEGRADED_PROTECTED_SHELL = re.compile(
+    r'(?:^|[\s;&|(`])(?:'
+    r'git(?:\s+\S+)*?\s+(?:push|merge|tag|reset\s+--hard)\b'
+    r'|gh(?:\s+\S+)*?\s+(?:pr\s+(?:merge|review)|release|workflow\s+run|api)\b'
+    r'|docker(?:\s+\S+)*?\s+push\b|npm(?:\s+\S+)*?\s+publish\b|twine\s+upload\b'
+    r'|terraform\s+(?:apply|destroy)\b|kubectl\s+(?:apply|delete)\b|rm\s+-\S*[rRf]'
+    r')'
+)
+_DEGRADED_CONTROL_PLANE = re.compile(r'(?:^|[\s/"\'=>:])(?:\.getzilla/|\.grok/|\.claude/|\.codex/|\.qwen/|\.gemini/|AGENTS\.md\b)')
+_DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|truncate|touch|rsync)\b|\bsed\s+-i|\bperl\s+-\S*i')
+
+
+def _degraded_denial(tool: str, inputs: Any) -> str | None:
+    """Why a protected action is refused while the policy is not loaded, or None for anything else."""
+    if not isinstance(inputs, dict):
+        return None
+    reason = ('Getzilla policy did not load, so this protected action is refused until the hook is repaired '
+              '(see .getzilla/runtime/hook-events.jsonl). Reads and ordinary edits stay allowed.')
+    if tool in _DEGRADED_SHELL_TOOLS:
+        command = inputs.get('command', inputs.get('cmd'))
+        if isinstance(command, list):
+            command = ' '.join(str(part) for part in command)
+        if not isinstance(command, str):
+            return None
+        if _DEGRADED_PROTECTED_SHELL.search(command):
+            return reason
+        if _DEGRADED_CONTROL_PLANE.search(command) and _DEGRADED_SHELL_WRITE.search(command):
+            return reason
+        return None
+    if tool in _DEGRADED_WRITE_TOOLS:
+        targets = [str(inputs.get(key)) for key in ('file_path', 'path', 'notebook_path', 'filePath') if inputs.get(key)]
+        targets += [str(inputs.get(key)) for key in ('patch', 'input') if isinstance(inputs.get(key), str)]
+        if any(_DEGRADED_CONTROL_PLANE.search(target.replace('\\', '/')) for target in targets):
+            return reason
+    return None
+
+
+def _degraded_output(reason: str | None) -> str:
+    if reason is None:
+        return '{"decision":"allow"}'
+    return json.dumps({
+        'decision': 'deny', 'reason': reason,
+        'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                               'permissionDecisionReason': reason},
+    })
+
+
+def _degraded_payload() -> tuple[str, Any]:
+    try:
+        raw = sys.stdin.buffer.read().decode('utf-8-sig', errors='replace')
+        payload = json.loads(raw) if raw.strip() else {}
+    except (OSError, ValueError):
+        return '', None
+    if not isinstance(payload, dict):
+        return '', None
+    tool = str(payload.get('tool_name') or payload.get('toolName') or '')
+    inputs = payload.get('tool_input', payload.get('toolInput', payload.get('toolArgs')))
+    if isinstance(inputs, str):
+        try:
+            inputs = json.loads(inputs)
+        except ValueError:
+            inputs = None
+    return tool, inputs
+
 
 # Make stack importable even when cwd is project root
 _ROOT_CANDIDATES = [
@@ -23,6 +94,7 @@ try:
     from _lib import (
         record_degraded,
         RootContext,
+        _shell_tokens,
         agent_generation,
         agent_id,
         emit,
@@ -34,7 +106,7 @@ try:
         tool_name,
     )
 except Exception as _lib_error:
-    # If even _lib is missing, never block the agent, but leave a trace that policy did not run.
+    # If even _lib is missing, refuse only protected actions and leave a trace that policy did not run.
     # Standard library only: the Getzilla package is what failed to import.
     import contextlib as _contextlib
     with _contextlib.suppress(Exception):
@@ -50,7 +122,7 @@ except Exception as _lib_error:
                     'kind': 'HOOK_DEGRADED', 'hook': 'pre_tool_use', 'harness': 'unknown',
                     'error': f'{type(_lib_error).__name__}: {_lib_error}'[:300],
                 }) + '\n')
-    print('{"decision":"allow"}')
+    print(_degraded_output(_degraded_denial(*_degraded_payload())))
     raise SystemExit(0)
 
 
@@ -124,14 +196,31 @@ def _denial_fingerprints(
         'reason_sha256': hashlib.sha256(reason.encode('utf-8')).hexdigest(),
         'root_context': roots,
     })
-    objective = _fingerprint({
+    objective_material = {
         'session_id': session,
         'tool_name': tool,
         'reason': reason,
         'action': action,
         'root_context': roots,
-    })
+    }
+    if action == 'ambiguous-sensitive-shell' or not context.sensitive_safe:
+        # One root-resolution reason covers every ambiguous command; the operands tell independent objectives
+        # apart, while respacing or reordering flags stays the same objective (#80).
+        objective_material['target_sha256'] = _command_target(input_data)
+    objective = _fingerprint(objective_material)
     return exact, objective
+
+
+def _command_target(input_data: dict[str, Any]) -> str | None:
+    command = input_data.get('command') if isinstance(input_data, dict) else None
+    if not isinstance(command, str):
+        return None
+    try:
+        words = [token.value for token in _shell_tokens(command) if not token.operator]
+    except ValueError:
+        words = command.split()
+    operands = sorted({word for word in words if not word.startswith('-')})
+    return hashlib.sha256(json.dumps(operands, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
 def _fresh_entries(value: Any, now: float) -> dict[str, dict[str, Any]]:
@@ -368,9 +457,10 @@ def main() -> None:
         try:
             from getzilla.policy import evaluate_pre_tool, sensitive_action
         except Exception as error:
-            # Soft: policy stack not importable → allow everything, but record that policy did not run
+            # Policy stack not importable: record it, refuse protected actions, allow the rest (#78).
             record_degraded('pre_tool_use', error, payload)
-            emit(permission_output(True))
+            denial = _degraded_denial(current_tool, current_input)
+            emit(permission_output(denial is None, denial))
             return
 
         classification_root = context.effective_root or context.session_root or Path.cwd()

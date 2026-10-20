@@ -156,7 +156,12 @@ def read_payload() -> dict[str, Any]:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    with contextlib.suppress(ImportError):
+        from getzilla.state import bind_session
+        bind_session(session_id(data))  # each session reads its own route (#80)
+    return data
 
 
 def emit(data: dict[str, Any]) -> None:
@@ -618,6 +623,45 @@ def _runs_inline_program(command: str, tokens: list[Any], *, depth: int = 0, cwd
     return False
 
 
+_DYNAMIC_SHELL_WORDS = frozenset({'eval', 'source', '.'})
+_PASS_THROUGH_WRAPPERS = frozenset({
+    'sudo', 'doas', 'nohup', 'time', 'command', 'builtin', 'nice', 'ionice', 'timeout', 'stdbuf', 'exec',
+    'xargs', 'env', 'setsid', 'chrt', 'flock', 'watch', 'unbuffer', 'parallel',
+})
+_EXEC_OPTIONS = frozenset({'-exec', '-execdir', '-ok', '-okdir'})
+
+
+def _runs_dynamic_shell(tokens: list[Any]) -> bool:
+    """eval/source/. at a command position (#80).
+
+    For an ordinary program (`rg TODO .`, `find . -name x`) the words are data. A wrapper or
+    `find -exec` can run its arguments as a command, so there every word still counts.
+    """
+    segment: list[str] = []
+    skip_target = False
+    for token in [*tokens, None]:
+        if token is not None and token.operator and ('<' in token.value or '>' in token.value):
+            skip_target = True
+            continue
+        if token is None or token.operator:
+            words = list(segment)
+            while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
+                words = words[1:]
+            if words:
+                if words[0] in _DYNAMIC_SHELL_WORDS:
+                    return True
+                if _executable_name(words[0]) in _PASS_THROUGH_WRAPPERS or _EXEC_OPTIONS & set(words):
+                    if _DYNAMIC_SHELL_WORDS & set(words):
+                        return True
+            segment = []
+            continue
+        if skip_target:
+            skip_target = False
+            continue
+        segment.append(token.value)
+    return False
+
+
 def _command_directory_aliases(command: str, *, depth: int = 0, cwd: str | None = None) -> dict[str, str]:
     aliases: dict[str, str] = {}
     try:
@@ -676,7 +720,7 @@ def _command_directory_aliases(command: str, *, depth: int = 0, cwd: str | None 
     if _has_unsafe_dispatcher_composition(words):
         aliases['command.dispatcher-composition'] = '<ambiguous>'
         return aliases
-    if any(word in {'eval', 'source', '.'} for word in words) or (
+    if _runs_dynamic_shell(tokens) or (
         fsx.WINDOWS and any(word.lower() in _WINDOWS_DYNAMIC_COMMANDS for word in words)
     ):
         aliases['command.dynamic-shell'] = '<ambiguous>'
