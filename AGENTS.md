@@ -179,6 +179,7 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 - One semantic rewrite is allowed: split a compound command, remove unnecessary temporary output, use a structured tool, or follow the exact denial guidance.
 - If the rewritten invocation is denied for the same objective, mark that objective `BLOCKED`, stop dependent subagents, skip its verification and review work, and report the blocker.
 - Request a protected-path grant only when the hook names at least one exact repository-relative protected target. An opaque denial requires explicit targets, not a speculative grant.
+- Put agent working files (bundles, drafts, intermediate output) in `.getzilla/runtime/scratch/`; it needs no grant. Receipts, routes, grants and other runtime state stay protected.
 - Treat the hook's exact-repeat and same-objective fingerprints as authoritative within their active denial window; cosmetic command changes do not reset the objective.
 
 ## Development discipline
