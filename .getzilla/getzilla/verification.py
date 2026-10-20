@@ -2387,6 +2387,24 @@ def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
     return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
 
 
+def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
+    """Optional EU AI Act evidence gate; silent unless the compliance:eu-ai-act component is installed."""
+    from . import eu_ai_act
+    from .project_ingestion import IngestionError
+    if not eu_ai_act.enabled(root):
+        return CheckResult('eu-ai-act', 'skip', 'EU AI Act component not installed'), {'status': 'not_installed'}
+    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
+    try:
+        report = eu_ai_act.evaluate(root, mode, bases, 'HEAD')
+    except (IngestionError, OSError, ValueError) as exc:
+        status = 'fail' if mode in {'pr', 'release'} else 'skip'
+        return CheckResult('eu-ai-act', status, f'EU_AI_ACT_UNAVAILABLE: {_failure_message(exc)}'), {
+            'status': 'error', 'error': _failure_message(exc)}
+    details = [{'severity': 'error' if report.status == 'fail' else 'warning', 'path': '.', 'code': problem.split(':', 1)[0],
+                'message': problem} for problem in report.problems[:20]]
+    return CheckResult('eu-ai-act', report.status, report.summary, details=details), report.to_dict()
+
+
 def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
                        diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
     """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
@@ -2609,6 +2627,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cost_check, cost_metadata = _cost_guard_check(root, route, mode, git_ranges)
     dispatch.add(cost_check)
     report['cost_guard'] = cost_metadata
+    eu_check, eu_metadata = _eu_ai_act_check(root, mode, git_ranges)
+    dispatch.add(eu_check)
+    report['eu_ai_act'] = eu_metadata
     hook_check, hook_metadata = _hook_health_check(root, route, mode, diff_metadata)
     dispatch.add(hook_check)
     report['hook_health'] = hook_metadata

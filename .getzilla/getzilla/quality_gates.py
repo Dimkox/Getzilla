@@ -83,6 +83,9 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "no OpenGrep rules installed"
     if name.startswith("stack:"):
         return summary == "no changed files of this stack"
+    if name == "eu-ai-act":
+        # The optional EU AI Act layer is silent unless the project opted in.
+        return summary == "EU AI Act component not installed"
     if name == "workflow-baseline":
         return summary.startswith(("CI runner: ", "not an installed Getzilla project"))
     if name == "factory-postgres-exit":

@@ -31,6 +31,7 @@
 #   OPENROUTER_API_KEY    your OpenRouter key (otherwise asked for, never echoed)
 #   GETZILLA_SKIP_AGENT=1 do not install or configure the coding agent
 #   GETZILLA_SKIP_GROK=1  do not install the Grok Build CLI (when the agent is grok)
+#   GETZILLA_EU_AI_ACT=1|0     turn the optional EU AI Act checks on or off without asking
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
 # Every run (first install or re-run) installs the mandatory baseline: the vulnerability
@@ -63,6 +64,9 @@ main() {
   agent="$(choose_agent)"
   provider="$(choose_provider "$agent")"
   say "Coding agent: $agent (models: $provider)"
+  local compliance
+  compliance="$(choose_eu_ai_act)"
+  if [ -n "$compliance" ]; then say "EU AI Act checks: on (getzilla components add compliance:eu-ai-act)"; fi
   if [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ]; then
     say "Skipping the coding agent (GETZILLA_SKIP_AGENT=1)."
   else
@@ -86,14 +90,16 @@ main() {
 
   if [ -n "${GETZILLA_NEW_PROJECT:-}" ]; then
     say "Creating a new project at $GETZILLA_NEW_PROJECT ..."
-    (cd "$home" && "$python" scripts/install_into.py --materialize-new "$GETZILLA_NEW_PROJECT" --agents "$agent")
+    (cd "$home" && "$python" scripts/install_into.py --materialize-new "$GETZILLA_NEW_PROJECT" --agents "$agent" \
+      ${compliance:+--compliance "$compliance"})
     say "Connecting the baseline (Superpowers, BMAD, Spec Kit) to the new project..."
     (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_baseline.py apply \
       --project "$GETZILLA_NEW_PROJECT" --agent "$agent") \
       || fail "The baseline was not connected to $GETZILLA_NEW_PROJECT (FAIL lines above). Fix it and run: cd \"$home\" && $python scripts/getzilla_baseline.py apply --project \"$GETZILLA_NEW_PROJECT\" --agent $agent"
   elif [ -n "${GETZILLA_PROJECT:-}" ]; then
     say "Install plan for $GETZILLA_PROJECT (read-only, nothing is written):"
-    (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT")
+    (cd "$home" && "$python" scripts/install_into.py --plan "$GETZILLA_PROJECT" ${compliance:+--compliance "$compliance"})
+    if [ -n "$compliance" ]; then say "To turn on EU AI Act checks there: cd \"$GETZILLA_PROJECT\" && getzilla components add compliance:eu-ai-act"; fi
   fi
 
   if [ "$doctor_status" -eq 0 ]; then
@@ -232,6 +238,43 @@ choose_agent() {
   case "$agent" in
     qwen|codex|claude|gemini|copilot|grok) printf '%s' "$agent" ;;
     *) fail "GETZILLA_AGENT must be qwen, codex, claude, gemini, copilot or grok (got '$agent')." ;;
+  esac
+}
+
+# Offline hints only: the system time zone or locale of an EU member state. Nothing is looked up
+# on the network and the IP address is never used.
+eu_hint() {
+  local zone="${TZ:-}" locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  if [ -z "$zone" ] && [ -L /etc/localtime ]; then
+    zone="$(readlink /etc/localtime 2>/dev/null | sed -n 's#.*zoneinfo/##p')"
+  fi
+  if [ -z "$zone" ] && [ -r /etc/timezone ]; then
+    zone="$(head -n1 /etc/timezone 2>/dev/null)"
+  fi
+  case "$zone" in
+    Europe/Amsterdam|Europe/Athens|Europe/Berlin|Europe/Bratislava|Europe/Brussels|Europe/Bucharest|\
+    Europe/Budapest|Europe/Busingen|Europe/Copenhagen|Europe/Dublin|Europe/Helsinki|Europe/Lisbon|\
+    Europe/Ljubljana|Europe/Luxembourg|Europe/Madrid|Europe/Malta|Europe/Mariehamn|Europe/Nicosia|\
+    Europe/Paris|Europe/Prague|Europe/Riga|Europe/Rome|Europe/Sofia|Europe/Stockholm|Europe/Tallinn|\
+    Europe/Vienna|Europe/Vilnius|Europe/Warsaw|Europe/Zagreb|Atlantic/Canary|Atlantic/Madeira|\
+    Atlantic/Azores|Asia/Nicosia|Asia/Famagusta) return 0 ;;
+  esac
+  case "$locale" in
+    *_AT*|*_BE*|*_BG*|*_HR*|*_CY*|*_CZ*|*_DK*|*_EE*|*_FI*|*_FR*|*_DE*|*_GR*|*_HU*|*_IE*|*_IT*|\
+    *_LV*|*_LT*|*_LU*|*_MT*|*_NL*|*_PL*|*_PT*|*_RO*|*_SK*|*_SI*|*_ES*|*_SE*) return 0 ;;
+  esac
+  return 1
+}
+
+# Prints "eu-ai-act" when the optional checks are turned on, nothing otherwise. Default: off.
+choose_eu_ai_act() {
+  case "${GETZILLA_EU_AI_ACT:-}" in
+    1|yes|true|on) printf 'eu-ai-act'; return 0 ;;
+    0|no|false|off) return 0 ;;
+  esac
+  eu_hint || return 0
+  case "$(ask $'Does your project have users in the EU? Turn on EU AI Act checks (optional, can be added later) [y/N]: ' n)" in
+    y|Y|yes|Yes|YES|д|Д|да|Да) printf 'eu-ai-act' ;;
   esac
 }
 

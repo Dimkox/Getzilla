@@ -191,12 +191,21 @@ AGENT_COMPONENT_PATHS = {
     "cursor": (".cursor/",),
 }
 KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
+# Opt-in compliance layers; never installed unless asked for (the installer asks only on EU hints).
+COMPLIANCE_COMPONENT_PATHS = {
+    "eu-ai-act": (".getzilla/compliance/eu-ai-act/",),
+}
+KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
+COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"
 
 
 def component_of(path: str) -> str:
-    """core, factory or agent:<name> for one payload path."""
+    """core, factory, agent:<name> or compliance:<name> for one payload path."""
     if path.startswith("factory/"):
         return "factory"
+    for name, prefixes in COMPLIANCE_COMPONENT_PATHS.items():
+        if path.startswith(prefixes):
+            return f"compliance:{name}"
     for agent, prefixes in AGENT_COMPONENT_PATHS.items():
         if path.startswith(prefixes):
             return f"agent:{agent}"
@@ -206,11 +215,16 @@ def component_of(path: str) -> str:
 class PayloadSelection:
     """Which components an installation materializes. ``full()`` is the compatibility layout."""
 
-    def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False) -> None:
+    def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
+                 compliance: tuple[str, ...] = ()) -> None:
         unknown = sorted(set(agents) - set(KNOWN_AGENTS))
         if unknown:
             raise UnsafeInstallTarget(f"unknown agent(s): {', '.join(unknown)}")
+        unknown = sorted(set(compliance) - set(KNOWN_COMPLIANCE))
+        if unknown:
+            raise UnsafeInstallTarget(f"unknown compliance layer(s): {', '.join(unknown)}")
         self.agents, self.factory, self.full = tuple(agents), factory, full
+        self.compliance = tuple(compliance)
 
     @classmethod
     def full_layout(cls) -> "PayloadSelection":
@@ -224,10 +238,16 @@ class PayloadSelection:
             return True
         if component == "factory":
             return self.factory
-        return component.split(":", 1)[1] in self.agents
+        kind, name = component.split(":", 1)
+        if kind == "compliance":
+            return name in self.compliance
+        return name in self.agents
 
     def to_dict(self) -> dict[str, object]:
-        return {"agents": list(self.agents), "factory": self.factory, "full": self.full}
+        shape: dict[str, object] = {"agents": list(self.agents), "factory": self.factory, "full": self.full}
+        if self.compliance:
+            shape["compliance"] = list(self.compliance)
+        return shape
 
 
 def detect_agents(target: Path) -> tuple[str, ...]:
@@ -775,7 +795,13 @@ def build_payload(
                     if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD})
     if selection is None or selection.full:
         return payload
-    return tuple(entry for entry in payload if selection.includes(entry.path))
+    chosen = tuple(entry for entry in payload if selection.includes(entry.path))
+    if selection.compliance:
+        # The explicit opt-in record: without it an installed matrix never gates (eu_ai_act.enabled).
+        record = json.dumps({"schema_version": "getzilla-compliance-v1", "enabled": sorted(set(selection.compliance))},
+                            indent=2, sort_keys=True) + "\n"
+        chosen += (InstallEntry(COMPLIANCE_CONFIG, record.encode("utf-8"), 0o644),)
+    return chosen
 
 
 def _build_full_payload(
@@ -1783,6 +1809,10 @@ def main() -> None:
     )
     parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
     parser.add_argument(
+        "--compliance",
+        help="Comma-separated opt-in compliance layers (eu-ai-act). Off by default.",
+    )
+    parser.add_argument(
         "--with-ci",
         action="store_true",
         help="Not supported here; use scripts/getzilla_ci.py --write after the repository has a GitHub remote.",
@@ -1812,8 +1842,9 @@ def main() -> None:
         selection = PayloadSelection.full_layout()
     else:
         agents = tuple(item.strip().lower() for item in (args.agents or "").split(",") if item.strip())
+        compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
         try:
-            selection = PayloadSelection(agents or detect_agents(target))
+            selection = PayloadSelection(agents or detect_agents(target), compliance=compliance)
         except UnsafeInstallTarget as exc:
             parser.error(str(exc))
     if args.materialize_new:
