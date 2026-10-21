@@ -6,8 +6,8 @@ Unexpected default policy epoch changes, invalid replay, unsupported consumer sc
 
 ## Application rollback
 
-1. Stop new argv emission in the affected profile under separately approved deployment authority.
-2. Keep upgraded consumers until all new envelopes no longer require them.
+1. Disable argv opt-in in the affected profile under separately approved deployment authority. Future emissions return to v1.
+2. Keep dual readers for stored v2 envelopes. Stop new v2 emission before any consumer rollback.
 3. Revert producer source if needed. Never rewrite signed envelopes.
 
 ## Data recovery / forward-fix
@@ -16,4 +16,4 @@ No migration or backfill. Preserve every stored envelope. A profile change creat
 
 ## Verification after rollback
 
-Run default identity and legacy replay tests. Confirm no new command argv is emitted and no old envelope gained metadata.
+Run default identity and legacy replay tests. Confirm future envelopes use v1 without argv and no old envelope gained metadata. Confirm stored v2 envelopes still verify with the retained dual reader.

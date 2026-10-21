@@ -427,7 +427,7 @@ class ApiTests(unittest.TestCase):
             ('python3', 'scripts/getzilla_audit_bundle.py', '--ci-check'),
         )
         payload = AttestationPayload(
-            schema_version=1, attestation_id='argv-api', job_id='argv-job',
+            schema_version=2, attestation_id='argv-api', job_id='argv-job',
             repository='Dimkox/Getzilla', pr_number=15, base_sha=sha('a'), head_sha=sha('b'),
             policy_digest=self.policy.digest, status='passed', command_results=(command.attestation_dict(),),
             changed_files=(), approved_scopes=(), started_at=now().isoformat(),

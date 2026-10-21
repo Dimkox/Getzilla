@@ -471,7 +471,9 @@ class JobRunner:
                 ) else 'failed'
                 completed_at = self.now_fn()
                 payload = AttestationPayload(
-                    schema_version=1,
+                    schema_version=2 if any(
+                        command.attest_argv for command in (*self.policy.commands, *self.policy.holdout.commands)
+                    ) else 1,
                     attestation_id=str(uuid.uuid4()),
                     job_id=job.job_id,
                     repository=job.repository,

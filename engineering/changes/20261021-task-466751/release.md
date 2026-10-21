@@ -6,11 +6,11 @@ Source-only delivery through an isolated PR after Core/schema merge. No producti
 
 ## Feature flags / staged rollout
 
-Install Core/schema consumers first. Add the audit command fragment only to an explicitly EU-enabled repository profile. `attest_argv: true` changes that profile's policy epoch. Keep default example profiles unchanged.
+Install Core consumers and the separate v2 schema first. Add the audit command fragment only to an explicitly EU-enabled repository profile. `attest_argv: true` changes that profile's policy epoch and emits v2. Keep default example profiles and v1 emission unchanged.
 
 ## Metrics and alerts
 
-Observe signed argv, command status, exit code and existing output digest. A missing/disabled EU opt-in must fail the audit. Old envelopes stay valid but cannot qualify EU evidence.
+Observe signed version, argv, command status, exit code and existing output digest. A missing/disabled EU opt-in must fail the audit. Old v1 envelopes stay valid but cannot qualify EU evidence, even if raw argv appears in the payload.
 
 ## Go/no-go criteria
 

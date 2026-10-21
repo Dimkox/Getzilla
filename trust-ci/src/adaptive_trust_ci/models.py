@@ -287,8 +287,18 @@ class AttestationPayload:
     _metadata_present: bool = field(default=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise ValueError("unsupported attestation schema_version")
+        if self.schema_version == 2:
+            for result in self.command_results:
+                if not isinstance(result, Mapping):
+                    raise ValueError("v2 command result must be an object")
+                if "argv" in result:
+                    argv = result["argv"]
+                    if not isinstance(argv, list) or not 1 <= len(argv) <= 128 or any(
+                        not isinstance(item, str) or not 1 <= len(item) <= 4096 for item in argv
+                    ):
+                        raise ValueError("v2 command argv must have 1-128 nonempty strings of at most 4096 characters")
         if not self.attestation_id.strip() or not self.job_id.strip() or not self.key_id.strip():
             raise ValueError("attestation identity fields are required")
         object.__setattr__(self, "repository", require_repository(self.repository))
@@ -329,9 +339,14 @@ class AttestationPayload:
             values["command_results"] = tuple(dict(item) for item in values["command_results"])
             values["changed_files"] = tuple(str(item) for item in values["changed_files"])
             values["approved_scopes"] = tuple(str(item) for item in values["approved_scopes"])
-            present = "spec_digest" in data or "criterion_coverage" in data
-            if present and not {"spec_digest", "criterion_coverage"}.issubset(data):
-                raise ValueError("attestation metadata fields must be present together")
+            if values["schema_version"] == 2:
+                if not {"spec_digest", "criterion_coverage"}.issubset(data):
+                    raise ValueError("v2 attestation metadata fields are required")
+                present = True
+            else:
+                present = "spec_digest" in data or "criterion_coverage" in data
+                if present and not {"spec_digest", "criterion_coverage"}.issubset(data):
+                    raise ValueError("attestation metadata fields must be present together")
             values["spec_digest"] = data.get("spec_digest")
             values["criterion_coverage"] = data.get("criterion_coverage", empty_criterion_coverage())
             values["_metadata_present"] = present
@@ -342,7 +357,7 @@ class AttestationPayload:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("_metadata_present", None)
-        if not self._metadata_present:
+        if self.schema_version == 1 and not self._metadata_present:
             data.pop("spec_digest", None)
             data.pop("criterion_coverage", None)
         data["command_results"] = list(self.command_results)

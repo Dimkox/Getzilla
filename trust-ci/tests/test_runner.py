@@ -191,6 +191,7 @@ class RunnerTests(unittest.TestCase):
                     envelope = self.store.get_attestation(self.job.job_id)
                     assert envelope is not None
                     payload = verify_attestation(envelope, self.signer.public_key_pem())
+                    self.assertEqual(payload.schema_version, 2 if opted_in else 1)
                     commands = {item['name']: item for item in payload.command_results}
                     self.assertNotIn('argv', commands['holdout-bundle-integrity'])
                     for spec in (self.policy.holdout.commands[0], self.policy.commands[0]):
@@ -215,6 +216,7 @@ class RunnerTests(unittest.TestCase):
         runner, _, _, _ = self.build_runner(mutate_on=['external-holdout'])
         outcome = runner.process(self.job, 'worker-1')
         self.assertEqual(outcome.status, 'failed')
+        self.assertEqual(outcome.details['attestation']['payload']['schema_version'], 2)
         commands = {item['name']: item for item in outcome.details['attestation']['payload']['command_results']}
         self.assertEqual(commands['external-holdout']['argv'], list(self.policy.holdout.commands[0].argv))
         self.assertNotIn('argv', commands['external-holdout:source-integrity'])
@@ -229,6 +231,7 @@ class RunnerTests(unittest.TestCase):
         outcome = runner.process(self.job, 'worker-1')
         self.assertEqual(outcome.status, 'failed')
         self.assertEqual(executor.calls, [])
+        self.assertEqual(outcome.details['attestation']['payload']['schema_version'], 2)
         commands = outcome.details['attestation']['payload']['command_results']
         self.assertEqual([item['name'] for item in commands], ['holdout-bundle-integrity', 'typed-spec-metadata'])
         self.assertTrue(all('argv' not in item for item in commands))
@@ -243,6 +246,7 @@ class RunnerTests(unittest.TestCase):
         original = self.store.get_attestation(self.job.job_id)
         assert original is not None
         original_data = json.loads(json.dumps(original.to_dict()))
+        self.assertEqual(original_data['payload']['schema_version'], 2)
         self.assertEqual(original_data['payload']['command_results'][2]['argv'], list(self.policy.commands[0].argv))
         self.store.retry(self.job.job_id, 'worker-1', 'GitHub unavailable', now=now())
         reclaimed = self.store.claim('worker-2', self.policy.lease_seconds, now=now())
@@ -255,6 +259,32 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(executor.calls, [])
         self.assertEqual(workspaces, [])
         self.assertEqual(tokens, [])
+
+    def test_disabling_opt_in_returns_new_jobs_to_v1_and_preserves_v2(self) -> None:
+        data = policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)
+        data['commands'][0]['attest_argv'] = True
+        self._use_policy(data)
+        runner, _, _, _ = self.build_runner()
+        first = runner.process(self.job, 'worker-1')
+        original = json.loads(json.dumps(first.details['attestation']))
+        self.assertEqual(original['payload']['schema_version'], 2)
+        data['commands'][0]['attest_argv'] = False
+        self.policy = Policy.from_dict(data)
+        request = JobRequest('Dimkox/Getzilla', 9, sha('a'), sha('b'), 'feat/test', 'main')
+        second, created = self.store.enqueue(request, self.policy.digest, self.policy.max_attempts, now=now())
+        self.assertTrue(created)
+        claimed = self.store.claim('worker-2', self.policy.lease_seconds, now=now())
+        assert claimed is not None
+        self.assertEqual(claimed.job_id, second.job_id)
+        runner, _, _, _ = self.build_runner()
+        outcome = runner.process(claimed, 'worker-2')
+        self.assertEqual(outcome.status, 'passed')
+        self.assertEqual(outcome.details['attestation']['payload']['schema_version'], 1)
+        self.assertTrue(all('argv' not in item for item in outcome.details['attestation']['payload']['command_results']))
+        stored = self.store.get_attestation(first.job_id)
+        assert stored is not None
+        self.assertEqual(stored.to_dict(), original)
+        self.assertEqual(verify_attestation(stored, self.signer.public_key_pem()).schema_version, 2)
 
     def test_spec_metadata_is_deterministic_data_only(self) -> None:
         checkout = Path(self.temp.name) / 'metadata'

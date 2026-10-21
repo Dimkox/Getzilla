@@ -14,7 +14,7 @@ Implement the Trust CI producer half of EU AI Act phase2 from PR120: optional si
 
 ## Outcome
 
-An enabled repository can receive signed evidence of the exact audit command. Default repositories keep their current policy identity and payload shape.
+An enabled repository can receive explicit v2 signed evidence of the exact audit command. Default repositories keep their current policy identity and v1 payload shape.
 
 ## Scope
 
@@ -31,7 +31,7 @@ An enabled repository can receive signed evidence of the exact audit command. De
 
 ## Constraints
 
-- Backward compatibility: omit false flags and absent argv. Replay old envelopes unchanged.
+- Backward compatibility: omit false flags and absent argv. Keep the v1 contract exact and replay old envelopes unchanged. V2 readers ship first.
 - Data/privacy: command arguments become signed durable evidence and must contain no secrets.
 - Performance: no new service or dependency. Tests use at most six workers.
 - Operational: Core/schema must merge first. Production approval remains pending.

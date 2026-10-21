@@ -10,11 +10,12 @@
 - AC-005: Protect the signed job identity from environment overrides on opted-in profiles.
 - AC-006: Ship a separate mandatory audit command fragment without global activation.
 - AC-007: Execute real Core audits after the Core/schema merge.
+- AC-008: Emit explicit v2 for any selected opt-in. Require bounded argv and both metadata keys in v2. Keep v1 identity and raw replay exact.
 
 ## Failure and edge cases
 
 - Reject null, numeric and string flags. Cover failed commands, mutated source, malformed spec metadata and retried check publication.
-- Old envelopes stay valid but do not qualify EU audit evidence without command argv.
+- Old v1 envelopes stay valid but do not qualify EU audit evidence, even with raw command argv.
 
 ## Governance context
 

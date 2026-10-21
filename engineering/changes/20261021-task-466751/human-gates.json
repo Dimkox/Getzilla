@@ -24,6 +24,18 @@
       "resource": null,
       "route_id": "4667515abad1",
       "scope_digest": "5aebcd331ba3aad7dec44a482697f69af4cbea573ae476019ab579a9d38d30ee"
+    },
+    {
+      "action": null,
+      "actor": "owner-via-user-request",
+      "change_id": "20261021-task-466751",
+      "decided_at": "2026-10-21T13:44:44+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner requested phase two source completion with explicit version two contract correction",
+      "resource": null,
+      "route_id": "4667515abad1",
+      "scope_digest": "08d50d93fe90210567e00d25547f3445bbf7ba14eecb02fbceb26763005a8307"
     }
   ],
   "route_id": "4667515abad1",

@@ -70,7 +70,7 @@ class SigningTests(unittest.TestCase):
                     expected['argv'] = list(argv)
                 self.assertEqual(result_data, expected)
                 payload = AttestationPayload(
-                    schema_version=1, attestation_id='argv-attestation', job_id='argv-job',
+                    schema_version=2 if argv is not None else 1, attestation_id='argv-attestation', job_id='argv-job',
                     repository='Dimkox/Getzilla', pr_number=42, base_sha=sha('a'), head_sha=sha('b'),
                     policy_digest=digest('c'), status='passed', command_results=(result_data,),
                     changed_files=(), approved_scopes=(), started_at=now().isoformat(),
@@ -89,6 +89,85 @@ class SigningTests(unittest.TestCase):
                 tampered['payload']['command_results'][0]['argv'] = ['python3', 'different.py']
                 with self.assertRaisesRegex(ApprovalError, 'signature'):
                     verify_attestation(AttestationEnvelope.from_dict(tampered), self.signer.public_key_pem())
+
+    def _v2_attestation_data(self) -> dict:
+        return {
+            'schema_version': 2, 'attestation_id': 'v2-attestation', 'job_id': 'v2-job',
+            'repository': 'Dimkox/Getzilla', 'pr_number': 42,
+            'base_sha': sha('a'), 'head_sha': sha('b'), 'policy_digest': digest('c'),
+            'status': 'passed', 'command_results': [{
+                'name': 'eu-ai-act-audit', 'status': 'pass', 'exit_code': 0,
+                'duration_seconds': 0.1, 'output_sha256': digest('d'),
+                'argv': ['python3', 'scripts/getzilla_audit_bundle.py', '--ci-check'],
+            }], 'changed_files': [], 'approved_scopes': [],
+            'started_at': now().isoformat(), 'completed_at': now().isoformat(),
+            'key_id': self.signer.key_id, 'spec_digest': None,
+            'criterion_coverage': {'spec_count': 0, 'criterion_total': 0, 'criterion_mapped': 0, 'unmapped_ids': []},
+        }
+
+    def test_attestation_versions_are_strict_integers(self) -> None:
+        for version in (True, False, '1', '2', None, 0, 3, 1.0, 2.0):
+            with self.subTest(version=version):
+                data = self._v2_attestation_data()
+                data['schema_version'] = version
+                with self.assertRaisesRegex(ValueError, 'schema_version'):
+                    AttestationPayload.from_dict(data)
+
+    def test_v2_argv_bounds_and_null_spec_digest(self) -> None:
+        for argv in (['python3'], ['x' * 4096] * 128):
+            with self.subTest(count=len(argv), length=len(argv[0])):
+                data = self._v2_attestation_data()
+                data['command_results'][0]['argv'] = argv
+                payload = AttestationPayload.from_dict(data)
+                self.assertEqual(payload.schema_version, 2)
+                self.assertIsNone(payload.spec_digest)
+                self.assertEqual(payload.to_dict(), data)
+        data = self._v2_attestation_data()
+        del data['command_results'][0]['argv']
+        self.assertEqual(AttestationPayload.from_dict(data).to_dict(), data)
+
+    def test_v2_argv_rejects_malformed_or_excessive_arguments(self) -> None:
+        for argv in (None, [], 'python3', [''], [1], [True], ['x' * 4097], ['x'] * 129, {}):
+            with self.subTest(kind=type(argv).__name__, count=len(argv) if isinstance(argv, list) else None):
+                data = self._v2_attestation_data()
+                data['command_results'][0]['argv'] = argv
+                with self.assertRaisesRegex(ValueError, 'argv'):
+                    AttestationPayload.from_dict(data)
+
+    def test_v2_requires_both_metadata_keys(self) -> None:
+        for missing in (('spec_digest',), ('criterion_coverage',), ('spec_digest', 'criterion_coverage')):
+            with self.subTest(missing=missing):
+                data = self._v2_attestation_data()
+                for field in missing:
+                    del data[field]
+                with self.assertRaisesRegex(ValueError, 'metadata.*required'):
+                    AttestationPayload.from_dict(data)
+
+    def test_v2_schema_version_and_arguments_are_signed(self) -> None:
+        envelope = sign_attestation(AttestationPayload.from_dict(self._v2_attestation_data()), self.signer)
+        verified = verify_attestation(envelope, self.signer.public_key_pem())
+        self.assertEqual(verified.schema_version, 2)
+        for tamper in ('schema_version', 'argv'):
+            with self.subTest(tamper=tamper):
+                data = json.loads(json.dumps(envelope.to_dict()))
+                if tamper == 'schema_version':
+                    data['payload']['schema_version'] = 1
+                else:
+                    data['payload']['command_results'][0]['argv'][-1] = '--help'
+                with self.assertRaisesRegex(ApprovalError, 'signature'):
+                    verify_attestation(AttestationEnvelope.from_dict(data), self.signer.public_key_pem())
+
+    def test_legacy_raw_argv_never_upgrades_signed_v1_to_v2(self) -> None:
+        data = self._v2_attestation_data()
+        data['schema_version'] = 1
+        del data['spec_digest']
+        del data['criterion_coverage']
+        original = {'payload': data, 'signature': self.signer.sign(data)}
+        envelope = AttestationEnvelope.from_dict(original)
+        verified = verify_attestation(envelope, self.signer.public_key_pem())
+        self.assertEqual(verified.schema_version, 1)
+        self.assertEqual(envelope.to_dict(), original)
+        self.assertNotIn('spec_digest', verified.to_dict())
 
     def test_payload_tampering_breaks_signature(self) -> None:
         data = self.envelope.to_dict()
