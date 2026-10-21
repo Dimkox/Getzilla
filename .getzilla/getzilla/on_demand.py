@@ -81,16 +81,21 @@ def ensure_components(root: Path, needs: list[str], *, source: Path | None = Non
     installer = _installer(source)
     payload = installer.build_payload(source)
     valid = {'factory', *(f'agent:{name}' for name in installer.KNOWN_AGENTS),
-             *(f'compliance:{name}' for name in getattr(installer, 'KNOWN_COMPLIANCE', ()))}
+             *(f'compliance:{name}' for name in getattr(installer, 'KNOWN_COMPLIANCE', ())),
+             *(f'extra:{name}' for name in getattr(installer, 'KNOWN_EXTRAS', ()))}
     results = []
     manifest = load_manifest(root)
     for need in needs:
         if need not in valid:
             raise ValueError(f'unknown component {need!r}; expected one of {", ".join(sorted(valid))}')
         added = Added(need)
+        agents = {name for name in installer.KNOWN_AGENTS if (root / installer.AGENT_COMPONENT_PATHS[name][0]).exists()}
         for entry in payload:
             if installer.component_of(entry.path) != need:
                 continue
+            owner = installer._agent_of(entry.path) if hasattr(installer, '_agent_of') else None
+            if need.startswith('extra:') and owner is not None and owner not in agents:
+                continue  # an extra adds its skill only for the agents the project uses
             target = root / entry.path
             if target.exists() or target.is_symlink():
                 if target.is_file() and target.read_bytes() != entry.content:

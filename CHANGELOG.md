@@ -10,6 +10,7 @@
   - Art. 50 exemptions need a stated basis and a person;
   - the new Art. 5 prohibition (non-consensual intimate imagery and CSAM) is drafted;
   - the audit bundle adds the `review` release decision.
+- Lean install: Bitrix and SEO-landing skills come only with their domain (`extra:bitrix`, `extra:seo-landing`, `--extras`), cursor rules belong to `agent:cursor`, and a fresh install puts no hook shims in the repository root (332 → 283 entries on a plain Python repository).
 
 ## Observed v2.3.0 publication — 2026-10-21
 

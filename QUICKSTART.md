@@ -113,6 +113,8 @@ python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40
    qwen      # or: codex, claude, gemini, copilot, grok
    ```
    Each agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
+
+   A project gets only what it uses. Domain skills come with their domain: the Bitrix skill when the project has `bitrix/`, `local/modules` or `local/components`, and the SEO-landing skill when it has `side-projects/seo-landings/`. Add one later with `getzilla components add extra:bitrix` or `extra:seo-landing`, or choose at install time with `--extras`. Hook entry scripts stay inside `.grok/hooks/`; only an older installation keeps its copies in the repository root.
    Prompt example: `Добавь обработчик события OnAfterUserAdd в local-модуль`
 
    If hooks did not create a route, create one explicitly:
