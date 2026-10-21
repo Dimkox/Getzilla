@@ -64,6 +64,85 @@ def directory_identity(info: os.stat_result, posix_identity: tuple[int, ...]) ->
     return posix_identity
 
 
+# renameat2 flags; macOS renameatx_np has the same contracts under other numbers.
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+_DARWIN_RENAME_FLAGS = {RENAME_NOREPLACE: 0x4, RENAME_EXCHANGE: 0x2}  # RENAME_EXCL, RENAME_SWAP
+
+
+def libc_renameat2():
+    """``renameat2(olddirfd, old, newdirfd, new, flags) -> int`` from libc, errno kept.
+
+    Linux has renameat2. macOS has renameatx_np with RENAME_EXCL (no replace) and RENAME_SWAP
+    (atomic exchange); the flags are translated. Raises AttributeError where neither exists.
+    """
+    import ctypes
+    import sys
+
+    library = ctypes.CDLL(None, use_errno=True)
+    signature = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    if sys.platform == 'darwin':
+        native = library.renameatx_np
+        native.argtypes, native.restype = signature, ctypes.c_int
+
+        def darwin(olddirfd: int, old: bytes, newdirfd: int, new: bytes, flags: int) -> int:
+            translated = 0
+            for linux_flag, darwin_flag in _DARWIN_RENAME_FLAGS.items():
+                if flags & linux_flag:
+                    translated |= darwin_flag
+            if flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE):
+                ctypes.set_errno(errno.EINVAL)
+                return -1
+            return native(olddirfd, old, newdirfd, new, translated)
+
+        return darwin
+    native = library.renameat2
+    native.argtypes, native.restype = signature, ctypes.c_int
+    return native
+
+
+def system_canonical(path: str | os.PathLike[str], *, max_links: int = 40) -> str:
+    """Absolute ``path`` with only system symlinks resolved; any other symlink is left in place.
+
+    A system symlink is owned by root and sits in a root-owned directory that nobody else can
+    rewrite, like macOS ``/var`` -> ``/private/var`` or a server's ``/home`` -> ``/data/home``.
+    Callers keep refusing every other symlink, so a link a user or an attacker planted is still
+    rejected by their own component checks. Windows paths are returned unchanged.
+    """
+    absolute = os.path.abspath(os.fspath(path))
+    if WINDOWS:
+        return absolute
+    pending = [part for part in absolute.split(os.sep) if part]
+    current = os.sep
+    links = 0
+    while pending:
+        part = pending.pop(0)
+        if part == '.':
+            continue
+        if part == '..':
+            current = os.path.dirname(current) or os.sep
+            continue
+        candidate = os.path.join(current, part)
+        try:
+            info = os.lstat(candidate)
+            parent = os.lstat(current)
+        except OSError:
+            return os.path.join(candidate, *pending)
+        trusted = (stat.S_ISLNK(info.st_mode) and info.st_uid == 0 and parent.st_uid == 0
+                   and (not parent.st_mode & 0o022 or parent.st_mode & stat.S_ISVTX))
+        if not trusted:
+            current = candidate
+            continue
+        links += 1
+        if links > max_links:
+            return os.path.join(candidate, *pending)
+        target = os.readlink(candidate)
+        if os.path.isabs(target):
+            current = os.sep
+        pending = [item for item in target.split(os.sep) if item] + pending
+    return current
+
+
 def is_link(info: os.stat_result) -> bool:
     """True for symlinks and, on Windows, for any reparse point (junctions included)."""
     if stat.S_ISLNK(info.st_mode):

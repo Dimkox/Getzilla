@@ -18,7 +18,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix='getzilla-test-') as tmp:
-        root = Path(tmp) / 'project'
+        root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
             src = PROJECT / rel

@@ -11,6 +11,11 @@ import os
 import pathlib
 import sys
 import warnings
+import tempfile
+
+# macOS hands out TMPDIR through /var -> /private/var. Product code works on canonical paths, so
+# fixtures start from the canonical temporary folder too (a plain Linux /tmp is unchanged).
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
 
 if os.name == 'nt':
     if not sys.flags.utf8_mode:

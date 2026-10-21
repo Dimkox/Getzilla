@@ -171,7 +171,7 @@ def _decision_state(
 ) -> dict[str, Any]:
     route, change, package, artifact, artifact_error = _valid_artifact(root)
     path = package / ARTIFACT_NAME if package else None
-    evidence_path = path.relative_to(root).as_posix() if path else None
+    evidence_path = _repository_relative(root, path) if path else None
     gates, declaration_error = _declared_gates(route)
     current_scope = None
     if package is not None:
@@ -399,7 +399,15 @@ def record_gate_decision(
         raise ValueError("decision artifact reached its 200-entry bound")
     artifact = {"schema_version": 1, "change_id": change["change_id"], "route_id": route["route_id"], "decisions": decisions}
     atomic_write_text(path, json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    return {**entry, "evidence_path": path.relative_to(root).as_posix(), "notice": ARTIFACT_NOTICE}
+    return {**entry, "evidence_path": _repository_relative(root, path), "notice": ARTIFACT_NOTICE}
+
+
+def _repository_relative(root: Path, path: Path) -> str:
+    """Display path of the evidence file; the root may be spelled through a symlink (macOS /var)."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 # Owner decision 2026-10-18: route human gates are flags. Their decisions are recorded and their

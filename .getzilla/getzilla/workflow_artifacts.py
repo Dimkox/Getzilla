@@ -295,8 +295,13 @@ def _relative_path(root: Path, path: Path | str) -> str:
     if candidate.is_absolute():
         try:
             candidate = candidate.relative_to(root)
-        except ValueError as exc:
-            raise WorkflowArtifactError("path escapes repository", code="path") from exc
+        except ValueError:
+            # The root is canonical; an absolute path may still name it through a system symlink
+            # (macOS /var -> /private/var). No other link is followed here.
+            try:
+                candidate = Path(fsx.system_canonical(candidate)).relative_to(root)
+            except ValueError as exc:
+                raise WorkflowArtifactError("path escapes repository", code="path") from exc
     pure = PurePosixPath(candidate.as_posix())
     # Windows does not call '/etc/passwd' absolute (no drive), and 'C:x' names another drive:
     # joined to the root, both leave the repository.
@@ -1568,14 +1573,12 @@ def _rename_exchange(
         fsx.exchange_at(parent_fd, temporary, target)
         return
     try:
-        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+        renameat2 = fsx.libc_renameat2()  # macOS: renameatx_np(RENAME_SWAP)
     except AttributeError as exc:
         raise WorkflowArtifactError(
             "atomic exchange is unavailable; existing-target CAS is unsupported on this platform",
             code="platform",
         ) from exc
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
     if _renameat2_exchange_call(renameat2, parent_fd, temporary, target) != 0:
         error = ctypes.get_errno()
         if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
@@ -1594,11 +1597,9 @@ def _rename_noreplace(
         fsx.rename_noreplace_at(parent_fd, source, parent_fd if target_parent_fd is None else target_parent_fd, target)
         return
     try:
-        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+        renameat2 = fsx.libc_renameat2()  # macOS: renameatx_np(RENAME_EXCL)
     except AttributeError as exc:
         raise WorkflowArtifactError("no-clobber recovery rename is unavailable", code="platform") from exc
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
     destination_fd = parent_fd if target_parent_fd is None else target_parent_fd
     if renameat2(parent_fd, os.fsencode(source), destination_fd, os.fsencode(target), 1) != 0:
         error = ctypes.get_errno()

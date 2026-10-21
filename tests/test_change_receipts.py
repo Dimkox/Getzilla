@@ -617,6 +617,7 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(original_receipt, receipt_path.read_bytes())
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX filenames can contain non-UTF-8 bytes')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_receipt_roundtrips_non_utf8_changed_file_names(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()

@@ -14,6 +14,7 @@ from typing import BinaryIO, NamedTuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import fsx  # noqa: E402
 from getzilla.manifest import (
     READ_CHUNK_BYTES,
     ManifestEntry,
@@ -46,7 +47,8 @@ def _directory_flags() -> int:
 
 def _path_directory_flags() -> int:
     try:
-        return os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        # O_PATH is Linux-only; elsewhere a read-only directory descriptor binds the same inode.
+        return getattr(os, 'O_PATH', os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     except AttributeError as exc:
         raise PackageError('secure output directory creation is unsupported on this platform') from exc
 
@@ -167,7 +169,7 @@ def _ensure_output_parent(output: Path) -> list[Path]:
         canonical_parent = cursor.resolve(strict=True)
     except (AttributeError, OSError) as exc:
         raise PackageError('cannot resolve archive output creation boundary') from exc
-    _validate_ancestor_authority(cursor, effective_uid)
+    _validate_ancestor_authority(Path(fsx.system_canonical(cursor)), effective_uid)
     _validate_ancestor_authority(canonical_parent, effective_uid)
     _validate_child_creation_authority(canonical_parent, effective_uid)
     created: list[Path] = []
@@ -256,7 +258,7 @@ def _open_output_directory(output: Path) -> _OutputDirectory:
         os.close(descriptor)
         raise PackageError('archive output parent must be owned by the effective user and private')
     try:
-        _validate_ancestor_authority(requested_path, effective_uid)
+        _validate_ancestor_authority(Path(fsx.system_canonical(requested_path)), effective_uid)
         _validate_ancestor_authority(canonical_path, effective_uid)
     except BaseException:
         os.close(descriptor)

@@ -407,7 +407,9 @@ def _open_child_directory(
 
 def _open_directory_binding(path: Path) -> _DirectoryBinding:
     nofollow, directory = _require_descriptor_primitives()
-    absolute = Path(os.path.abspath(path))
+    # System symlinks (macOS /var -> /private/var) are resolved first; any other link stays and
+    # is refused component by component below.
+    absolute = Path(fsx.system_canonical(path))
     if not absolute.is_absolute():
         raise UnsafeInstallTarget("directory binding requires an absolute path")
     try:
@@ -1233,20 +1235,11 @@ def _require_descriptor_primitives() -> tuple[int, int]:
 
 
 def _renameat2() -> Any:
-    library = ctypes.CDLL(None, use_errno=True)
     try:
-        function = library.renameat2
+        # Linux renameat2; macOS renameatx_np with the flags translated (fsx.libc_renameat2).
+        return fsx.libc_renameat2()
     except AttributeError as exc:
         raise UnsafeInstallTarget("renameat2(RENAME_NOREPLACE) is unavailable") from exc
-    function.argtypes = (
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    )
-    function.restype = ctypes.c_int
-    return function
 
 
 def _rename_noreplace(parent_fd: fsx.DirHandle, stage_name: str, target_name: str) -> None:
