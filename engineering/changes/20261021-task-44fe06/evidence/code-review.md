@@ -1,50 +1,89 @@
-Recommendation: **FAIL**. Two Medium findings remain. The known Low test gaps stay deferred in issue122.
+# Core code review — wave 3
 
-- **Medium — local receipt fingerprint mismatch.** `scripts/getzilla_audit_bundle.py:66` uses sanitized Git reads for the fingerprint inventory. Those reads disable global Git config. Existing receipt generation in `.getzilla/getzilla/util.py` still uses global excludes. A private fixture changed from eligible to blocked after adding one harmless globally ignored editor file. The existing receipt fingerprint stayed unchanged; the audit fingerprint changed. Repeating the current verifier cannot produce the digest the audit expects. Use the same file inventory policy for receipt creation and consumption. Preserve the Git identity isolation.
-- **Medium — shared security finding.** Security review confirmed that a transient live opt-in can pass the initial check while the captured committed config is disabled. The audit then returns PASS with `compliance.eu_ai_act` null. Require opt-in from captured committed bytes. This report does not claim that I repeated that probe.
+**Recommendation: PASS within the reviewed Core scope.** No new material security, duplicate-write, or test defect was found. The six known Low test gaps remain deferred to issue #122. This review grants no merge authority.
 
-Source: `/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2`; route `44fe064efbab`. Base: `287e64f99b01db44cb6eeeb10f307ccda6f91c1d`. Before and after review, HEAD was `61827791b7f49a5ad340a62f07756888a03964a3`, tree was `96612a25a2dca3ed8e306f622e82ed2c8b3cbecf`, and fingerprint was `53a32ef677284d79a7de11b13b81176fce0e520d485d247c522883f21cb5c733`. Staged, unstaged and untracked inventories were empty.
+## Source and isolation
 
-The complete base-to-HEAD inventory contains 49 files. It covers EU modules/data/templates, audit and compliance wrappers, installer/dispatcher, V2 schema/architecture, five test modules, docs and change evidence. Exact statuses and paths are in `code-review-wave2/source-inventory.tsv` under the private parent below. Its SHA-256 is `f02aef2876ab16832678c4c9936cfcbcfbb9cb68303ca6c302933fd6e25c53de`. First-wave reports are historical failures.
+- Candidate: `/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2`.
+- Route: `44fe064efbab`; `code_reviewer` is selected. Package: `engineering/changes/20261021-task-44fe06`.
+- Comparison base: `287e64f99b01db44cb6eeeb10f307ccda6f91c1d`.
+- Private scratch: `/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3`.
+- The scratch parent and child are trusted, non-sticky, and mode `0700`. The private clone reproduced all 5,525 tracked entries, including bytes and modes, at the exact committed source. Source and clone were clean. All tests and mutations ran in that clone; temporary outputs stayed in private scratch.
+- Base-to-HEAD inventory: 49 paths. The complete inventory is `code-review-wave3/source-inventory.tsv`, SHA256 `f02aef2876ab16832678c4c9936cfcbcfbb9cb68303ca6c302933fd6e25c53de`. It covers EU policy/audit modules, decision data, templates, installer/dispatcher, V2 schema/architecture, tests, documentation, and change evidence. I inspected the actual diff and surrounding code. The latest product repair changes the audit script and its tests.
+- Startup measured 26 usable logical CPUs with a two-CPU reserve. This review used at most eight test workers on CPUs `0-7`.
 
-Private parent: `/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021`. Scratch: `code-review-wave2` beneath that parent. Both directories were trusted, non-sticky, mode0700. The fresh clone matched all 5,525 tracked source entries, including working-tree bytes and modes. No dirty source changes needed copying. All mutants ran only in its `candidate` subdirectory. That clone was clean after restoration.
+| Identity | Before review | After review |
+| --- | --- | --- |
+| HEAD | `cf18a79cf1e97a4100e9999be7ce212e3f258974` | same |
+| Git tree | `c815f538aa54997519674497ec3776dccd199a9d` | same |
+| Tree fingerprint | `a6f96921f402d3b375a369079bc1e2be676ff8db37b07b54b15ef1041b525fdf` | same |
+| Git status | empty | empty |
+
+The restored private clone also has these exact final identities and empty status.
 
 reviewed-tree-modified: no
 
-Snapshot command: `python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2-setup.py`. Observed: 5,525 verified entries; clean HEAD/tree as above. The before/after identity command was `python3 /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/source_identity.py /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2`; both outputs matched.
+Identity command, run before and after review:
 
-The following baseline ran from the scratch `candidate` directory. It checked ordinary receipt grammar, eleven path-state cases, untracked content versus runtime noise, captured HEAD, Git environment/replacement isolation, one date/metadata snapshot and exact signed-command claims.
-
-```bash
-TMPDIR=/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/tmp PYTHONDONTWRITEBYTECODE=1 taskset -c 0-5 python3 -m pytest -q -n 6 -p no:cacheprovider --tb=short /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/test_fingerprint_parity.py tests/test_eu_audit_attestation.py::CiAuditTests::test_head_date_and_optional_metadata_use_one_snapshot tests/test_eu_audit_attestation.py::CiAuditTests::test_git_replacements_and_inherited_git_environment_do_not_change_audit tests/test_eu_audit_attestation.py::CiAuditTests::test_bundle_receipt_fingerprint_keeps_captured_head_and_existing_grammar tests/test_eu_audit_attestation.py::AttestationClaimTests::test_exact_successful_execution_is_required
+```sh
+python3 /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/source_identity.py /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2
 ```
 
-Observed: **9 passed, 22 subtests passed**. The additional normal-use global-ignore probe used only private fixture configuration and a fixture receipt. It read no real user config.
+Final clone identity command:
 
-```bash
-TMPDIR=/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/tmp PYTHONDONTWRITEBYTECODE=1 taskset -c 0-5 python3 -m pytest -q -n 6 -p no:cacheprovider --tb=short /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/test_global_ignore_receipt.py
+```sh
+python3 /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/source_identity.py /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/candidate
 ```
 
-Observed: **1 failed** at fingerprint parity. Output: `before=eligible`, `after=blocked`, `local_fingerprint_unchanged=true`, `audit_fingerprint_matches=false`; reason: no passing verification receipt.
+Both final commands exited `0` and returned the identities above.
 
-Fresh mutation commands ran sequentially because they shared the private snapshot:
+## Findings and claims checked
 
-```bash
-GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/run_mutant.py F1
-GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/run_mutant.py F2
-GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/run_mutant.py F3
-GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave2/run_mutant.py F4
+- The original wave 2 receipt-fingerprint failure now passes. Global and system ignore rules preserve the receipt digest for ignored notes. Untracked source still changes it. The check also passes in a linked worktree.
+- Redirecting Git environment values do not redirect the new untracked query. The query has explicit repository paths, output and time limits, path validation, and owned-process cleanup. Fresh mutations exercised these boundaries below.
+- Fingerprint parity passed for staged, unstaged, deleted, renamed, symlink, unusual-name, untracked, and runtime-noise cases. Captured HEAD remains fixed. Replacement objects and inherited repository redirection do not alter strict audit reads.
+- Static inspection confirms captured committed opt-in and CI refusal of null/skipped EU results. Fresh executable probes for those repairs belong to the parallel test/security reviews; they are not claimed as my own executions.
+- Static inspection found no new duplicate external-write path. Earlier exclusive scaffold writes, Windows refusal, and Node hard timeout remain present. This wave did not repeat their platform/process probes.
+- V1, receipt grammar, and Trust CI producer bytes are unchanged in the comparison below. Core accepts V2 evidence without importing the Trust CI producer. The isolated successor producer remains outside this completion claim.
+
+## Fresh controls
+
+Working directory for the bounded test command: the private `code-review-wave3/candidate` clone.
+
+```sh
+TMPDIR=/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/tmp PYTHONDONTWRITEBYTECODE=1 taskset -c 0-7 python3 -m pytest -q -n 8 -p no:cacheprovider --tb=short /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/test_global_ignore_receipt.py /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/test_fingerprint_parity.py /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/test_linked_worktree_receipt.py tests/test_eu_audit_attestation.py::CiAuditTests::test_receipt_keeps_global_and_system_ignored_notes_but_not_source_changes tests/test_eu_audit_attestation.py::CiAuditTests::test_receipt_global_excludes_cannot_redirect_git_identity tests/test_eu_audit_attestation.py::CiAuditTests::test_global_ignore_cannot_admit_uncommitted_decision_input tests/test_eu_audit_attestation.py::CiAuditTests::test_receipt_untracked_inventory_is_bounded_and_validated tests/test_eu_audit_attestation.py::AttestationClaimTests::test_exact_successful_execution_is_required
 ```
 
-| Claim / mutant | Observed outcome |
-|---|---|
-| F1: use live HEAD instead of captured HEAD | Killed; one fingerprint assertion failed |
-| F2: omit untracked source from the digest | Killed; source change left the digest unchanged |
-| F3: inherit Git location settings in audit reads | Killed; the expected isolated read failed |
-| F4: permit replacements in the shared Git reader | Killed; the reader returned the replacement blob |
+Observed: exit `0`; **12 passed, 29 subtests passed in 5.60s**.
 
-Each mutant test exited1. No fresh mutant survived or was inconclusive. Commands, selected tests and output remain in private `out-F1.txt` through `out-F4.txt`. These outcomes do not erase the deferred first-wave test gaps or the current failing compatibility probe.
+Read-only unchanged-byte control, run in the source candidate:
 
-Fresh V1 control: `git diff --exit-code 287e64f99b01db44cb6eeeb10f307ccda6f91c1d HEAD -- engineering/contracts/schemas/trust-ci-attestation-envelope.v1.json` in the source worktree returned exit0 with no output.
+```sh
+git diff --exit-code 287e64f99b01db44cb6eeeb10f307ccda6f91c1d HEAD -- .getzilla/getzilla/util.py engineering/contracts/schemas/trust-ci-attestation-envelope.v1.json trust-ci/
+```
 
-Unexecuted here: direct five-input/executable-union mutations, Windows refusal and Node timeout controls; parallel reviewers own them. Static inspection covered those repairs, fresh parser use and Core/Trust CI separation, but is not executable proof. Native Windows, real signed V2 integration, real C2PA signing, TypeScript type checking, full PR verification and external checks also remain unexecuted here. No new duplicate external-write path was found by inspection. No receipt or phase2 completion is established.
+Observed: exit `0`, no output.
+
+## Fresh mutation probes
+
+The private harness changes only the private clone and restores original bytes after each run. Runs were sequential because they share one private file. Each child uses the same eight-CPU allocation. These are private harness references, not exploit instructions.
+
+```sh
+GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/run_mutant.py G1
+GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/run_mutant.py G2
+GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/run_mutant.py G3
+GETZILLA_SERIAL=1 python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/code-review-wave3/run_mutant.py G4
+```
+
+| Probe | Fault introduced | Observed result | Outcome |
+| --- | --- | --- | --- |
+| G1 | Suppress global/system ignore configuration | Test exit `1`; 2 failed, 1 passed, 4.78s | killed |
+| G2 | Retain inherited redirecting Git environment | Test exit `1`; 1 failed, 4.22s | killed |
+| G3 | Remove the untracked-output bound | Test exit `1`; 1 failed, 4.05s | killed |
+| G4 | Disable the untracked-query deadline | Test exit `1`; 1 failed, 14.16s | killed |
+
+Exact child commands and concise failure output are retained in private `code-review-wave3/out-G1.txt` through `out-G4.txt`. Four mutants were killed; none survived or remained inconclusive in this bounded set. This is not a blanket mutation-coverage claim.
+
+## Limits
+
+Direct opt-in race and null/skip mutation probes were assigned to the parallel reviewers to avoid duplicate work. Native Windows behavior, real C2PA signing, TypeScript type checking, the joined signed V2 producer flow, the full local PR gate, and external exact-head checks were not executed in this review. Those claims remain unexecuted here. Static observations above have only the stated executable support. Prior wave reports remain historical failures, not current passing evidence. No candidate report, verification receipt, or approval was written by this reviewer.
