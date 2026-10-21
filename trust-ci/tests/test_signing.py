@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import timedelta
 from pathlib import Path
 
@@ -142,6 +145,55 @@ class SigningTests(unittest.TestCase):
                     del data[field]
                 with self.assertRaisesRegex(ValueError, 'metadata.*required'):
                     AttestationPayload.from_dict(data)
+
+    def test_v2_rejects_non_integer_command_exit_codes(self) -> None:
+        for exit_code in (False, True, 0.0, -1.0, '0', None):
+            with self.subTest(exit_code=exit_code):
+                data = self._v2_attestation_data()
+                data['command_results'][0]['exit_code'] = exit_code
+                with self.assertRaisesRegex(ValueError, 'exit_code.*integer'):
+                    AttestationPayload.from_dict(data)
+        data = self._v2_attestation_data()
+        del data['command_results'][0]['exit_code']
+        with self.assertRaisesRegex(ValueError, 'exit_code.*integer'):
+            AttestationPayload.from_dict(data)
+
+    def test_cli_rejects_non_integer_v2_exit_codes_without_rewriting_v1(self) -> None:
+        from adaptive_trust_ci.cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public_key = root / 'test-attestation-public.pem'
+            public_key.write_bytes(self.signer.public_key_pem())
+            attestation = root / 'attestation.json'
+            cases = (
+                (1, False, None), (1, 0.0, None), (2, 0, None),
+                (2, False, 'exit_code.*integer'), (2, 0.0, 'exit_code.*integer'),
+                (2.0, 0, 'schema_version'), ('2', 0, 'schema_version'), (True, 0, 'schema_version'),
+            )
+            for version, exit_code, problem in cases:
+                with self.subTest(version=version, exit_code=exit_code):
+                    data = self._v2_attestation_data()
+                    data['schema_version'] = version
+                    data['command_results'][0]['exit_code'] = exit_code
+                    attestation.write_text(json.dumps({'payload': data, 'signature': self.signer.sign(data)}), encoding='utf-8')
+                    output = io.StringIO()
+                    argv = ['attestation-verify', '--attestation', str(attestation), '--public-key', str(public_key)]
+                    with redirect_stdout(output):
+                        if problem:
+                            with self.assertRaisesRegex(ValueError, problem):
+                                main(argv)
+                        else:
+                            self.assertEqual(main(argv), 0)
+                    if problem:
+                        self.assertEqual(output.getvalue(), '')
+                    else:
+                        verified = json.loads(output.getvalue())
+                        self.assertIs(type(verified['schema_version']), int)
+                        self.assertEqual(verified['schema_version'], version)
+                        actual = verified['command_results'][0]['exit_code']
+                        self.assertIs(type(actual), type(exit_code))
+                        self.assertEqual(actual, exit_code)
 
     def test_v2_schema_version_and_arguments_are_signed(self) -> None:
         envelope = sign_attestation(AttestationPayload.from_dict(self._v2_attestation_data()), self.signer)

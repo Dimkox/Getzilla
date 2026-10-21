@@ -293,6 +293,8 @@ class AttestationPayload:
             for result in self.command_results:
                 if not isinstance(result, Mapping):
                     raise ValueError("v2 command result must be an object")
+                if type(result.get("exit_code")) is not int:
+                    raise ValueError("v2 command exit_code must be an integer")
                 if "argv" in result:
                     argv = result["argv"]
                     if not isinstance(argv, list) or not 1 <= len(argv) <= 128 or any(
