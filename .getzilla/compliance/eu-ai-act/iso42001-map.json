@@ -1,0 +1,15 @@
+{
+  "note": "Project-authored clause-level mapping. Check against the official ISO/IEC 42001:2023 text. No ISO control text is reproduced. Certification gives no presumption of AI Act conformity. Engineering evidence, not legal advice.",
+  "gating": false,
+  "map": {
+    "AIA-5": ["A.5", "A.9"],
+    "AIA-50-1": ["A.8"],
+    "AIA-50-2": ["A.8"],
+    "AIA-50-4": ["A.8"],
+    "AIA-9": ["A.5", "A.6"],
+    "AIA-11": ["A.6", "A.8"],
+    "AIA-12": ["A.6"],
+    "AIA-14": ["A.9"],
+    "AIA-15": ["A.6", "A.7"]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "note": "Fictional examples only. Replace risks, evidence references, dates, owners and acceptance with actual reviewed records. Scores are project rules, not legal thresholds. Engineering evidence, not legal advice.",
+  "risks": [
+    {
+      "risk": "Biased credit decisions",
+      "mitigation": "Compare disaggregated outcomes in evaluation report evals/fairness.json",
+      "owner": "Fictional risk team",
+      "reviewed": "2026-10-21",
+      "likelihood": 3,
+      "severity": 5,
+      "residual": "high",
+      "accepted_by": {"by": "Fictional Jane Doe", "role": "risk owner", "date": "2026-10-21"},
+      "next_review": "2027-01-21"
+    },
+    {
+      "risk": "Customer data appears in generated output",
+      "mitigation": "Run tenant and PII tests and record evidence in evals/privacy.json",
+      "owner": "Fictional privacy team",
+      "reviewed": "2026-10-21",
+      "likelihood": 2,
+      "severity": 4,
+      "residual": "medium"
+    },
+    {
+      "risk": "Quality drifts after model updates",
+      "mitigation": "Pin prompt and model versions and record quality latency and cost evaluations",
+      "owner": "Fictional model team",
+      "reviewed": "2026-10-21",
+      "likelihood": 2,
+      "severity": 2,
+      "residual": "low"
+    }
+  ]
+}

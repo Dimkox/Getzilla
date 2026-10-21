@@ -26,6 +26,14 @@
       "version": "1"
     },
     {
+      "compatibility": "exact",
+      "id": "CONTRACT-ATTESTATION-ENVELOPE-V2",
+      "kind": "signed_payload",
+      "path": "engineering/contracts/schemas/trust-ci-attestation-envelope.v2.json",
+      "role": "producer",
+      "version": "2"
+    },
+    {
       "compatibility": "consumer_accepts_old",
       "id": "CONTRACT-GITHUB-PR-PROJECTION",
       "kind": "json_schema",
@@ -2239,7 +2247,8 @@
       "id": "NODE-TRUST-CI-WORKER",
       "owner": "Trust CI operators",
       "public_contracts": [
-        "CONTRACT-ATTESTATION-ENVELOPE"
+        "CONTRACT-ATTESTATION-ENVELOPE",
+        "CONTRACT-ATTESTATION-ENVELOPE-V2"
       ],
       "repository_paths": [
         "trust-ci/compose.yaml",

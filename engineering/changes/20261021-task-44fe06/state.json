@@ -1,0 +1,135 @@
+{
+  "change_id": "20261021-task-44fe06",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "feat/eu-ai-act-phase2-20261021",
+      "change_id": "20261021-task-44fe06",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-21T13:01:49+00:00",
+      "route_id": "44fe064efbab"
+    },
+    {
+      "branch": "feat/eu-ai-act-phase2-20261021",
+      "change_id": "20261021-task-44fe06",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-21T13:18:19+00:00",
+      "route_id": "44fe064efbab"
+    }
+  ],
+  "created_at": "2026-10-21T13:01:49+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "BLOCKED: validation circuit breaker. Fresh committed controls and final qualifying PR gate have not run.",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "Not run: validation circuit breaker blocks review prerequisites. Coordinator will dispatch independent review after scoped recovery.",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "Not run: validation circuit breaker blocks review prerequisites. Coordinator will dispatch independent review after scoped recovery.",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "Not run: validation circuit breaker blocks review prerequisites. Coordinator will dispatch independent review after scoped recovery.",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "Not run: validation circuit breaker blocks review prerequisites. Coordinator will dispatch independent review after scoped recovery.",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-21T13:01:49+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-21T13:17:39+00:00",
+      "from": "draft",
+      "open_human_gates": [
+        "scope_and_design_approval: pending",
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Source scope and typed acceptance criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-21T13:17:54+00:00",
+      "from": "scoped",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Owner selected source plan with no deployed actions",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-21T13:18:19+00:00",
+      "from": "approved",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Regression tests before Core behavior changes",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T13:44:52+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "UNVERIFIED source checkpoint. Validation objective blocked by hook circuit breaker.",
+      "to": "verifying"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "migration_or_external_write_approval",
+    "production_action_approval"
+  ],
+  "human_gates_digest": "189ed16faf217a895a92815d88941ce7372cc76c3cbe69d5609f7869f4da03c7",
+  "route_id": "44fe064efbab",
+  "schema_version": 1,
+  "status": "verifying",
+  "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
+  "updated_at": "2026-10-21T13:44:52+00:00"
+}

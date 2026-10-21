@@ -10,7 +10,8 @@ always confirmed by a person.
   whether the project has users in the EU. The default answer is no. It never looks up your IP address
   or calls any service to decide.
 - **Any time later.** Run `getzilla components add compliance:eu-ai-act` in the project. To turn it off,
-  delete `.getzilla/compliance/eu-ai-act/`.
+  remove `eu-ai-act` from `.getzilla/config/compliance.json`. A CI audit requires committed opt-in and
+  fails when this layer is disabled. On-demand installation also supplies the adapter templates.
 - **Without asking.** Set `GETZILLA_EU_AI_ACT=1` (or `0`) for the installer.
 
 ## How it works
@@ -39,6 +40,7 @@ always confirmed by a person.
      - `AI_ANNEX_UNDECLARED`: a high-risk system has no annex, so the earlier Annex III dates apply;
      - `AI_EXEMPTION_UNCONFIRMED`: an exemption has no basis or no confirmation, or the obligation has no
        exemption.
+     - `MATRIX_STALE`: matrix source review metadata is missing, invalid, in the future or over 180 days old.
    - **BLOCK**: `AI_PROHIBITED_PRACTICE`, or `OBLIGATION_UNMET` for an obligation that is in force and has no
      evidence.
    - **PASS**: nothing above.
@@ -73,15 +75,102 @@ always confirmed by a person.
 register, every receipt bound to the exact tree, and `release_decision` with its reasons:
 - `eligible`: nothing is outstanding;
 - `review`: only a person's decision is outstanding;
-- `blocked`: anything else is outstanding. The author's machine makes this file, so it is evidence only. The independent decision is
-Trust CI: add the command to its policy, and the signed exact-SHA attestation covers the bundle.
+- `blocked`: anything else is outstanding. A passing local verification receipt is required even when
+  signed CI execution evidence is supplied. The author's machine produces the bundle. A CI signature
+  can prove audit execution on the named source; it does not sign the regenerated bundle bytes.
+
+## Matrix review
+
+The matrix keeps `reviewed` and `sources`. Day 180 passes; day 181 gives `MATRIX_STALE` REVIEW.
+The check also applies to an empty registry. Old matrices still parse, but missing review metadata
+now needs review. The shipped `review_method` records an automated source check, not a human legal
+review. Arrange a human review and record its actual reviewer, scope and date in the project's
+evidence before treating it as human approval. Do not replace a review with a date edit. The 180-day
+interval is a project rule. Engineering evidence, not legal advice.
+
+The dates follow [Article 113](https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-113) and
+[Regulation (EU) 2026/1744](https://eur-lex.europa.eu/legal-content/EN/ALL/?uri=CELEX%3A32026R1744),
+in force from 27 July 2026. Annex III applies from 2 December 2027 and Annex I from 2 August 2028.
+[Article 50](https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-50) generally applies from
+2 August 2026; the stated transition for older synthetic systems ends on 2 December 2026.
+Check against the official text and later amendments.
+
+## Risk record
+
+The original `risk`, `mitigation`, `owner` and `reviewed` fields remain valid. Optional `likelihood`
+and `severity` must be integers 1–5; booleans are invalid. Optional `residual` is `low`, `medium` or
+`high`. High residual risk requires `accepted_by: {by, role, date}`. This declaration does not
+authenticate a person. Optional `next_review` must be a valid date that has not passed when the
+obligation applies. Invalid applicable evidence gives `OBLIGATION_UNMET`. The example under
+`.getzilla/templates/eu-ai-act/risk-register.example.json` is fictional. Replace all evidence and
+confirmations. Scores and review intervals are project rules, not statutory thresholds. See
+[Article 9](https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-9).
+Engineering evidence, not legal advice. Check against the official text.
+
+## Transparency adapters
+
+Run `getzilla compliance scaffold --system support-assistant --lang python`, or choose `typescript`
+for Node. The first system glob must have a literal directory prefix and match the generated
+filename. File-only paths, ambiguous prefixes, traversal, links and overwrites fail. The command
+prints registry hints and leaves the registry unchanged. Python uses `mark_generated_content` and
+`label_published_content`; TypeScript uses `markGeneratedContent` and `labelPublishedContent`.
+Use `AI_DISCLOSURE` at the point of interaction.
+
+Both adapters return original content and caller-approved public provenance labels. They do not
+read model names or secrets from the environment. Returning this metadata alone does not embed
+marking. If configured, `c2patool` has 30 seconds to mark a private copy and return separate marked
+bytes. Missing tooling, errors and timeouts leave the input unchanged and set `c2pa_error`.
+Configure a trusted C2PA signing identity separately. Test the actual publication path and verify
+the output credentials before claiming embedded marking. Engineering evidence, not legal advice.
+Check Article 50 against the official text.
+
+## Independent verification
+
+An EU-enabled CI profile can run `python3 scripts/getzilla_audit_bundle.py --ci-check`. Supply
+`--base <exact SHA>` or the runner-owned `TRUST_CI_BASE_SHA`. No shell placeholder is expanded.
+This mode requires committed opt-in, matrix and any registry/source inputs. It evaluates release
+obligations, emits stdout only, and returns nonzero for REVIEW or BLOCK. It creates no receipt,
+audit file or release-ready claim. Normal bundle generation keeps its local verification receipt
+requirement. Engineering evidence, not legal advice.
+
+To add execution evidence to a normal bundle, supply `--attestation <envelope.json> --public-key
+<public.pem> --attestation-verifier </trusted/install/bin/adaptive-trust-ci>` and a base. Use
+`--repository owner/name` when the project has no GitHub origin. The public key and executable are
+operator trust inputs. The executable must be outside the audited project; it runs offline with
+fixed argv, a safe working directory, a minimal environment, a 30-second timeout and a 1 MiB output
+limit. A valid signature must identify the same repository, base and commit. The job must have
+passed and contain a passed audit command with integer exit code 0. The accepted form is
+`[python3, scripts/getzilla_audit_bundle.py, --ci-check]` (also `python` or `python3.12`), optionally
+followed by `--base` and the exact base SHA. Help, wrappers, extra root arguments and substrings
+cannot qualify. Successful verification sets `authority: trust-ci-attested`; the signature covers
+CI execution, not newly generated bundle bytes. Neither result grants merge or production authority.
+
+The new v2 signed envelope adds optional `argv` and requires payload `schema_version: 2`.
+V2 requires both `spec_digest` (nullable) and `criterion_coverage`, matching the current producer's metadata.
+The v1 schema remains byte-identical. Legacy envelopes remain cryptographically valid but cannot
+qualify EU execution, even if an unchecked dictionary adds argv. Old closed-schema validators and
+verifiers reject v2; upgrade consumers before enabling the separate Trust CI producer and opt-in policy successor.
+Never place secrets in signed argv. No deployed policy changes are included in this source change.
+Keep full registries and bundles private until their contents are approved for sharing.
+
+## ISO/IEC 42001
+
+`compliance.iso42001` contains a project-authored clause-level map with `gating: false`. Missing or
+malformed map files produce `null` and never change a decision. No paid standard text is copied.
+The map is an aid, not certification or a presumption of AI Act conformity. Engineering evidence,
+not legal advice. Check clauses A.2–A.10 against the official ISO/IEC 42001:2023 text.
 
 ## Limits
 
 - A marking can be stripped: a paraphrase, a screenshot or a re-encode removes most metadata and
-  watermarks, and text is the weakest case. The check proves that the code calls the marking, not that
-  the mark survives.
+  watermarks, and text is the weakest case. The current symbol check searches code and test text.
+  It does not prove that the function ran, that marking was embedded, or that the mark survives.
 - Classification is a draft for a lawyer, not a legal conclusion. Edge cases need a legal reading.
 - ISO/IEC 42001 certification does not give a presumption of conformity with the AI Act.
+- `AIA-15` refers to generic verification. It does not establish model accuracy, robustness, tenant
+  filtering, PII handling or deletion coverage. Record model/prompt versions, evaluation identities,
+  quality, latency, cost and lifecycle evidence separately. The fictional risk example is not proof.
+- The bundle supports [Article 11](https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-11)
+  evidence. It is not complete Annex IV documentation or a legal conformity assessment.
 - The dates follow the AI Omnibus (Regulation (EU) 2026/1744, in force since 27 July 2026). Check them
   against the Official Journal and any later amendment before relying on them.
