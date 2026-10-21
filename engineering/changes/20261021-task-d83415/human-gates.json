@@ -24,6 +24,18 @@
       "resource": null,
       "route_id": "d834158878e0",
       "scope_digest": "69e6cc8ac943ed342bd81e89dc6f741922d629e95913054a1a0245f477e880b2"
+    },
+    {
+      "action": null,
+      "actor": "owner",
+      "change_id": "20261021-task-d83415",
+      "decided_at": "2026-10-21T15:15:53+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "The owner requested full Getzilla verification and repeatedly instructed completion and repairs. Refresh the existing bounded audit/correction scope after declaring its red-risk approval requirement and evidence-backed gate repairs. No production write or signed security approval.",
+      "resource": null,
+      "route_id": "d834158878e0",
+      "scope_digest": "ee987907e5dd6270a525b8e3ccd531c2d3addd75016bf5ef2e7792c5dd368ad6"
     }
   ],
   "route_id": "d834158878e0",

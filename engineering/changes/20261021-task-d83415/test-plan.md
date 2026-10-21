@@ -1,3 +1,5 @@
 # Test plan
 
 Write failing regressions before behavior edits. Cover exact public address and immutable EOF cases; added secrets; private/AWS keys; nonaddress and credential assignments; malformed/duplicate/stale policy; ignored/untracked policy; missing/changed evidence; traversal/symlinks; index/worktree/HEAD mismatch; mixed/unknown Git diagnostics; fingerprint invalidation; packaging. Use real Git fixtures. Run bounded controls, four independent reviews on one committed tree, persist unchanged reports, freeze, then one full PR verifier and receipts. Liqvera receives a separate fresh five-review full audit.
+
+Gate-repair controls: exact 64/16 queue boundaries and over-budget failures; budget-removal mutants; real competing-installation degraded-hook tests; exact offline inventory derivation; all pinned-PDF worker tests executed. Preserve baseline import-effect falsifier and every failed native gate. Five unchanged supported-Python PostgreSQL race observations passed; do not weaken or repair that test without a new reproducible defect.
