@@ -56,13 +56,16 @@ class Repo:
     def registry(self, *systems: dict) -> None:
         self.write(eu_ai_act.REGISTRY, json.dumps({'schema_version': 'ai-systems-v1', 'systems': list(systems)}))
 
+    def commit_sha(self) -> str:
+        return git(self.root, 'rev-parse', 'HEAD')
+
     def commit(self, message: str) -> str:
         git(self.root, 'add', '-A')
         git(self.root, 'commit', '-q', '-m', message)
         return git(self.root, 'rev-parse', 'HEAD')
 
-    def evaluate(self, mode: str = 'pr'):
-        return eu_ai_act.evaluate(self.root, mode, [self.base], 'HEAD', today=TODAY)
+    def evaluate(self, mode: str = 'pr', today: date = TODAY):
+        return eu_ai_act.evaluate(self.root, mode, [self.base], 'HEAD', today=today)
 
 
 def codes(report) -> list[str]:
@@ -111,7 +114,7 @@ class GateTests(unittest.TestCase):
         repo = Repo(self)
         repo.write('src/support/bot.py', ASSISTANT)
         system = {'id': 'support', 'purpose': 'Assistant that generates answers', 'paths': ['src/support/*.py'],
-                  'class': 'limited', 'generates_content': True,
+                  'class': 'limited', 'generates_content': True, 'role': 'provider',
                   'disclosure_symbol': 'AI_DISCLOSURE', 'marking_symbol': 'mark_generated_content'}
         repo.registry(system)
         repo.commit('registered, unconfirmed, untested')
@@ -125,20 +128,24 @@ class GateTests(unittest.TestCase):
         report = repo.evaluate()
         self.assertEqual(report.status, 'pass', report.problems)
         rows = {row['obligation']: row['status'] for row in report.matrix}
-        self.assertEqual(rows, {'AIA-5': 'met', 'AIA-50-1': 'met', 'AIA-50-2': 'met', 'AIA-9': 'not_applicable',
+        self.assertEqual(report.decision, 'pass')
+        self.assertEqual(rows, {'AIA-5': 'met', 'AIA-50-1': 'met', 'AIA-50-2': 'met', 'AIA-50-4': 'not_applicable',
+                                'AIA-9': 'not_applicable',
                                 'AIA-11': 'not_applicable', 'AIA-12': 'not_applicable', 'AIA-14': 'not_applicable',
                                 'AIA-15': 'not_applicable'})
 
     def test_a_class_below_the_draft_needs_a_reason_and_prohibited_never_ships(self) -> None:
         repo = Repo(self)
         repo.registry({'id': 'scoring', 'purpose': 'Credit scoring of borrowers', 'paths': ['src/scoring/*'],
-                       'class': 'minimal', 'confirmation': CONFIRMED},
+                       'class': 'minimal', 'role': 'provider', 'confirmation': CONFIRMED},
                       {'id': 'citizens', 'purpose': 'Social scoring of citizens', 'paths': ['src/social/*'],
-                       'class': 'prohibited', 'confirmation': CONFIRMED})
+                       'class': 'prohibited', 'role': 'provider', 'confirmation': CONFIRMED})
         repo.commit('registry')
         report = repo.evaluate()
         self.assertIn('AI_CLASS_BELOW_DRAFT', codes(report))
         self.assertIn('AI_PROHIBITED_PRACTICE', codes(report))
+        self.assertEqual(report.decision, 'block')
+        self.assertTrue(report.summary.startswith('BLOCK: '))
 
     def test_high_risk_needs_a_current_risk_register_logs_and_oversight(self) -> None:
         repo = Repo(self)
@@ -147,13 +154,22 @@ class GateTests(unittest.TestCase):
         repo.write('tests/test_scoring.py', 'from src.scoring.model import record_decision_event, require_human_review, AI_DISCLOSURE\n')
         system = {'id': 'scoring', 'purpose': 'Credit scoring of borrowers', 'paths': ['src/scoring/*'],
                   'class': 'high-risk', 'generates_content': False, 'confirmation': CONFIRMED,
+                  'role': 'provider', 'annex': 'III',
                   'disclosure_symbol': 'AI_DISCLOSURE', 'logging_symbol': 'record_decision_event',
                   'oversight_symbol': 'require_human_review', 'risk_register': 'compliance/risks.json'}
         repo.registry(system)
         stale = {'risks': [{'risk': 'bias', 'mitigation': 'fairness eval', 'owner': 'risk team', 'reviewed': '2024-01-01'}]}
         repo.write('compliance/risks.json', json.dumps(stale))
         repo.commit('stale register')
-        self.assertTrue(any('AIA-9' in problem for problem in repo.evaluate().problems))
+        before = repo.evaluate()
+        self.assertEqual(before.status, 'pass', before.problems)
+        self.assertTrue(any('AIA-9' in item and '2027-12-02' in item for item in before.upcoming))
+        self.assertTrue(any('AIA-9' in problem for problem in repo.evaluate(today=date(2027, 12, 2)).problems))
+        repo.registry({**system, 'annex': 'I'})
+        repo.commit('annex I')
+        self.assertEqual(repo.evaluate(today=date(2027, 12, 2)).status, 'pass')
+        self.assertEqual(repo.evaluate(today=date(2028, 8, 2)).decision, 'block')
+        repo.registry(system)
         stale['risks'][0]['reviewed'] = '2026-10-01'
         repo.write('compliance/risks.json', json.dumps(stale))
         repo.commit('reviewed register')
@@ -162,6 +178,99 @@ class GateTests(unittest.TestCase):
         rows = {row['obligation']: row['status'] for row in report.matrix}
         self.assertEqual((rows['AIA-9'], rows['AIA-11'], rows['AIA-12'], rows['AIA-14'], rows['AIA-15'], rows['AIA-50-2']),
                          ('met', 'at_release', 'met', 'met', 'covered_by_verify', 'not_applicable'))
+
+
+class DecisionTests(unittest.TestCase):
+    SUPPORT = {'id': 'support', 'purpose': 'Assistant that generates answers', 'paths': ['src/support/*.py'],
+               'class': 'limited', 'generates_content': True, 'disclosure_symbol': 'AI_DISCLOSURE',
+               'confirmation': CONFIRMED}
+
+    def test_undecided_cases_are_review_not_pass_and_not_block(self) -> None:
+        repo = Repo(self)
+        repo.write('src/support/bot.py', ASSISTANT)
+        repo.write('tests/test_support.py', ASSISTANT_TEST)
+        repo.registry({**self.SUPPORT, 'marking_symbol': 'mark_generated_content'})
+        repo.commit('no role')
+        report = repo.evaluate()
+        self.assertEqual(codes(report), ['AI_ROLE_UNDECLARED'])
+        self.assertEqual((report.status, report.decision), ('fail', 'review'))
+        self.assertTrue(report.summary.startswith('REVIEW: '))
+        fast = repo.evaluate('fast')
+        self.assertEqual((fast.status, fast.decision), ('pass', 'review'))
+        self.assertEqual(eu_ai_act.decision_of(['AI_SYSTEM_UNREGISTERED: x', 'OBLIGATION_UNMET: y']), 'block')
+
+    def test_roles_select_obligations(self) -> None:
+        repo = Repo(self)
+        repo.write('src/support/bot.py', ASSISTANT)
+        repo.write('tests/test_support.py', ASSISTANT_TEST)
+        repo.registry({**self.SUPPORT, 'role': 'deployer', 'publishes_content': True,
+                       'publication_disclosure_symbol': 'PUBLISHED_LABEL'})
+        repo.commit('deployer that publishes')
+        report = repo.evaluate()
+        rows = {row['obligation']: row['status'] for row in report.matrix}
+        self.assertEqual((rows['AIA-50-1'], rows['AIA-50-2'], rows['AIA-50-4']), ('not_applicable', 'not_applicable', 'unmet'))
+        self.assertEqual(report.decision, 'block')
+        repo.write('src/support/publish.py', 'PUBLISHED_LABEL = "Generated by AI"\n')
+        repo.write('tests/test_publish.py', 'from src.support.publish import PUBLISHED_LABEL\n')
+        repo.commit('labelled')
+        self.assertEqual(repo.evaluate().status, 'pass')
+
+    def test_art_50_2_waits_for_systems_placed_before_august_2026(self) -> None:
+        repo = Repo(self)
+        repo.write('src/support/bot.py', ASSISTANT)
+        repo.write('tests/test_support.py', ASSISTANT_TEST.replace('mark_generated_content', 'AI_DISCLOSURE'))
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'marking_symbol': 'attach_content_credentials',
+                       'placed_on_market': '2026-05-01'})
+        repo.commit('legacy system, no marking yet')
+        report = repo.evaluate()
+        self.assertEqual(report.status, 'pass', report.problems)
+        self.assertTrue(any('AIA-50-2' in item and '2026-12-02' in item for item in report.upcoming))
+        self.assertEqual(repo.evaluate(today=date(2026, 12, 2)).decision, 'block')
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'marking_symbol': 'attach_content_credentials',
+                       'placed_on_market': '2026-09-01'})
+        repo.commit('new system')
+        self.assertEqual(repo.evaluate().decision, 'block')
+
+    def test_an_art_50_exemption_needs_a_basis_and_a_person(self) -> None:
+        repo = Repo(self)
+        repo.write('src/support/bot.py', ASSISTANT)
+        repo.write('tests/test_support.py', ASSISTANT_TEST.replace('mark_generated_content', 'AI_DISCLOSURE'))
+        exemption = {'obligation': 'AIA-50-2', 'basis': 'Art. 50(2): assistive function for standard editing'}
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'exemptions': [exemption]})
+        repo.commit('unconfirmed exemption')
+        report = repo.evaluate()
+        self.assertIn('AI_EXEMPTION_UNCONFIRMED', codes(report))
+        self.assertEqual(report.decision, 'block')  # the obligation is still checked and has no evidence
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'exemptions': [{**exemption, 'confirmation': CONFIRMED}]})
+        repo.commit('confirmed exemption')
+        report = repo.evaluate()
+        self.assertEqual(report.status, 'pass', report.problems)
+        self.assertEqual({row['obligation']: row['status'] for row in report.matrix}['AIA-50-2'], 'exempt')
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'marking_symbol': 'mark_generated_content',
+                       'exemptions': [{'obligation': 'AIA-5', 'basis': 'not a prohibited practice', 'confirmation': CONFIRMED}]})
+        repo.commit('art 5 is not exemptible')
+        self.assertIn('AI_EXEMPTION_UNCONFIRMED', codes(repo.evaluate()))
+
+    def test_high_risk_needs_an_annex(self) -> None:
+        repo = Repo(self)
+        repo.registry({'id': 'scoring', 'purpose': 'Credit scoring of borrowers', 'paths': ['src/scoring/*'],
+                       'class': 'high-risk', 'role': 'provider', 'generates_content': False, 'confirmation': CONFIRMED})
+        repo.commit('no annex')
+        report = repo.evaluate()
+        self.assertIn('AI_ANNEX_UNDECLARED', codes(report))
+        self.assertTrue(report.upcoming)
+        self.assertTrue(all('2027-12-02' in item for item in report.upcoming), report.upcoming)
+
+    def test_the_new_art_5_prohibition_is_drafted(self) -> None:
+        self.assertEqual(eu_ai_act.draft_class('Nudify app that undresses people in photos').risk_class, 'prohibited')
+        self.assertEqual(eu_ai_act.draft_class('Генератор: интимные изображения без согласия').risk_class, 'prohibited')
+
+    def test_the_example_registry_is_clean_except_for_its_fictional_evidence(self) -> None:
+        repo = Repo(self)
+        repo.write(eu_ai_act.REGISTRY, (ROOT / '.getzilla/templates/ai-systems.example.json').read_text(encoding='utf-8'))
+        repo.commit('example')
+        allowed = {'OBLIGATION_UNMET'}
+        self.assertLessEqual(set(codes(repo.evaluate())), allowed)
 
 
 class AuditBundleTests(unittest.TestCase):
@@ -177,7 +286,7 @@ class AuditBundleTests(unittest.TestCase):
         repo.write('tests/test_support.py', ASSISTANT_TEST)
         repo.registry({'id': 'support', 'purpose': 'Assistant that generates answers', 'paths': ['src/support/*.py'],
                        'class': 'limited', 'generates_content': True, 'disclosure_symbol': 'AI_DISCLOSURE',
-                       'marking_symbol': 'mark_generated_content', 'confirmation': CONFIRMED})
+                       'role': 'provider', 'marking_symbol': 'mark_generated_content', 'confirmation': CONFIRMED})
         repo.write('.gitignore', '.getzilla/runtime/\n')
         repo.commit('release candidate')
         module = self._bundle_module()
@@ -193,6 +302,16 @@ class AuditBundleTests(unittest.TestCase):
         name = next(out.glob('audit-*.json'))
         bundle = json.loads(name.read_text(encoding='utf-8'))
         self.assertEqual(bundle['release_decision'], 'eligible')
+        repo.registry({'id': 'support', 'purpose': 'Assistant that generates answers', 'paths': ['src/support/*.py'],
+                       'class': 'limited', 'generates_content': True, 'disclosure_symbol': 'AI_DISCLOSURE',
+                       'marking_symbol': 'mark_generated_content', 'confirmation': CONFIRMED})
+        repo.commit('role dropped')
+        (receipts / 'verification.json').write_text(json.dumps({
+            'kind': 'verification', 'status': 'pass', 'tree_fingerprint': tree_fingerprint(repo.root)}), encoding='utf-8')
+        self.assertEqual(module.main(['--root', str(repo.root), '--base', repo.base, '--out', str(out)]), 1)
+        review = json.loads(next(out.glob(f'audit-{repo.commit_sha()[:12]}.json')).read_text(encoding='utf-8'))
+        self.assertEqual(review['release_decision'], 'review')
+        self.assertEqual(review['compliance']['eu_ai_act']['decision'], 'review')
         self.assertEqual(bundle['compliance']['eu_ai_act']['status'], 'pass')
         self.assertEqual([item['kind'] for item in bundle['receipts']], ['verification'])
         import hashlib
