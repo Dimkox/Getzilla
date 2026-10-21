@@ -18,13 +18,13 @@ Ruling: ISO mapping is a project-authored non-gating aid. Static symbol checks d
 
 Delivery requires selected independent reviews, frozen source, one final PR verifier, exact-head external checks and resolved threads. Deployed policy changes remain outside scope.
 
-Checkpoint limitation: a later validation batch matched an active opaque-mutation denial fingerprint and hit the circuit breaker. The writer stopped validation and dependent review. The earlier recovery approval concerned plan writes only; it did not authorize this new retry. The new validation override below permits a bounded retry. Current source remains UNVERIFIED until actual fresh checks run. Hooks and denial ledgers remain unchanged.
+Checkpoint limitation: a later validation batch matched an active opaque-mutation denial fingerprint and hit the circuit breaker. The writer stopped validation and dependent review. The earlier recovery approval concerned plan writes only; it did not authorize this new retry. The new validation override below permitted separate direct checks. All six fresh controls passed on fdc02defb766fea9372e939b90180ea37342e2f6 and closed this blocker. Final qualification remains UNVERIFIED pending smoke, independent reviews and gates. Hooks and denial ledgers remain unchanged.
 
 ## Scoped validation recovery
 
 The owner answered: "Разрешаю возобновить проверки" to the coordinator's scoped recovery request. This overrides the tool-denial circuit-breaker retry stop only for the blocked focused-test, architecture, spec, governance and lint validation objective. Run each read-only validation command directly through a separate tool call. Do not repeat the denied getzilla_par batches. Reason: the hook classified validation batching as an opaque control-plane mutation; the earlier direct split had run successfully.
 
-The controller restored the substantive route fc8d14b31598 and refreshed the exact Core path grants as d451de679ddfb733. Candidate route44fe064efbab is unchanged. This permission changes no hook, denial ledger, merge check or human security boundary. Commit the implementation checkpoint first. Then run fresh focused controls, commit honest reviewing state, and run the clean committed-HEAD quality-gates smoke. Independent reviews, the final PR gate and exact-head external checks remain required. Status: UNVERIFIED until actual results are recorded.
+The controller restored the substantive route fc8d14b31598 and refreshed the exact Core path grants as d451de679ddfb733. Candidate route44fe064efbab is unchanged. This permission changes no hook, denial ledger, merge check or human security boundary. The implementation checkpoint preceded the fresh controls. Commit honest reviewing state next, then run the clean committed-HEAD quality-gates smoke. Independent reviews, the final PR gate and exact-head external checks remain required. Actual bounded results are in evidence/implementation-report.md; they do not create receipts.
 
 ## Explicit recovery override
 

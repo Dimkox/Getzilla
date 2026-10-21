@@ -20,27 +20,27 @@ Approved source scope: finish the six outcomes from merged PR120. This revision 
 
 ## Signed-result successor contract
 
-Keep the v1 schema byte-identical. Add trust-ci-attestation-envelope.v2.json with a distinct v2 $id, payload schema_version2, bounded optional argv and nullable spec_digest. Add CONTRACT-ATTESTATION-ENVELOPE-V2 as an exact version2 producer contract and expose it from NODE-TRUST-CI-WORKER. Architecture fitness rejected the initial optional-v1 proposal as same_version_semantic_change; that proposal is superseded. Upgrade verifiers and closed-schema consumers before producer rollout. Old signatures remain valid but v1 cannot qualify EU execution, even with raw argv. Never backfill historical envelopes.
+Keep the v1 schema byte-identical. Add trust-ci-attestation-envelope.v2.json with a distinct v2 $id, payload schema_version2, bounded optional argv and nullable spec_digest. Require both spec_digest and criterion_coverage in v2. Add CONTRACT-ATTESTATION-ENVELOPE-V2 as an exact version2 producer contract and expose it from NODE-TRUST-CI-WORKER. Architecture fitness rejected the initial optional-v1 proposal as same_version_semantic_change; that proposal is superseded. Upgrade verifiers and closed-schema consumers before producer rollout. Old signatures remain valid but v1 cannot qualify EU execution, even with raw argv. Never backfill historical envelopes.
 
 The separate Trust CI writer adds strict CommandSpec.attest_argv defaultFalse, omitted when false, and CommandResult.argv defaultNone. Emit v2 only for opted-in execution; normal v1 jobs keep their original grammar. Runner stamps policy-owned args only when opted in. Preserve legacy policy digests and exact stored-envelope replay. Guard TRUST_CI_* environment overrides for opted-in commands. Example command: [python3, scripts/getzilla_audit_bundle.py, --ci-check], requiredtrue, timeout_seconds300, attest_argvtrue. Run real signed envelope and enabled/disabled audit tests after Core is available. Deployment remains outside scope.
 
 ## Verification and progress
 
-Current checkpoint: UNVERIFIED. The validation command batch hit the hook's circuit breaker.
-The writer stopped that objective. Do not run dependent reviews or reuse earlier observations as
-qualification. The coordinator must obtain a scoped recovery decision before fresh validation.
+Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
+writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
+checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not final qualification.
 
 - [x] Complete five independent analyses and typed package before product changes.
 - [x] Observe failing regression tests before behavior changes:41 failures including subtests,29 passed.
 - [x] Initial focused implementation tests:49 passed and97 subtests passed. This is a bounded observation, not final verification.
 - [x] Implement the Core source and docs. Earlier bounded observations passed 119 tests and 111 subtests with one skip; they precede the final v2 metadata correction.
-- [ ] Run fresh focused behavior, installation, architecture and lint checks after scoped recovery.
+- [x] Run fresh focused behavior and installation checks after scoped recovery:151 passed,1 skipped,156 subtests passed. Architecture, spec, governance, Ruff and Bandit passed.
 - [ ] Commit implementation with package state reviewing, then bounded committed-HEAD controls.
 - [ ] Collect all four independent reviews, save reports, commit/freeze and run one final PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.
 
-The final PR gate belongs to the coordinator. Do not run a full verifier per implementation commit. Measured capacity26 and affinity0–25 are shared: Core tests20, successor tests6. Real signed v2 integration and overall phase completion depend on the successor. Engineering evidence, not legal advice.
+The final PR gate belongs to the coordinator. Do not run a full verifier per implementation commit. Measured capacity26 and affinity0–25 are shared. The recovered controls used15 test workers and five light processes. Coordinate remaining capacity with the successor before the committed smoke. Real signed v2 integration and overall phase completion depend on the successor. Engineering evidence, not legal advice.
 
 ## Sources and limits
 
