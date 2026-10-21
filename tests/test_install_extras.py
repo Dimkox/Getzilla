@@ -81,5 +81,18 @@ class InstallExtrasTests(unittest.TestCase):
             self.assertIn('extra:bitrix', on_demand.load_manifest(project)['components'])
 
 
+    def test_doctor_accepts_a_fresh_install_without_domain_skills(self) -> None:
+        from getzilla.doctor import run_doctor
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            for entry in MODULE.build_payload(ROOT, selection=MODULE.PayloadSelection(('qwen',))):
+                target = project / entry.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(entry.content)
+            items = {item.name: item for item in run_doctor(project)}
+        self.assertEqual(items['skill:bitrix-development'].status, 'info')
+        self.assertIn('extra:bitrix', items["skill:bitrix-development"].message)
+        self.assertFalse([name for name, item in items.items() if name.startswith('skill:') and item.status == 'fail'])
+
 if __name__ == '__main__':
     unittest.main()
