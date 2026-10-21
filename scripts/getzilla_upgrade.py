@@ -156,10 +156,8 @@ def planned_changes(installer, home: Path, project: Path) -> list[tuple[str, byt
             continue
         content = entry.content
         if entry.path == 'AGENTS.md':
-            existing = _git_out(project, 'cat-file', 'blob', 'HEAD:AGENTS.md', data=b'').encode() \
+            existing = git(project, 'cat-file', 'blob', 'HEAD:AGENTS.md', data=b'').stdout \
                 if 'AGENTS.md' in tree else None
-            if existing is not None:
-                existing = git(project, 'cat-file', 'blob', 'HEAD:AGENTS.md', data=b'').stdout
             content = merge_agents(installer, existing, content)
         mode = '100755' if entry.mode & 0o111 else '100644'
         if tree.get(entry.path) == (mode, blob_id(content, object_format)):
