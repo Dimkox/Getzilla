@@ -4,4 +4,6 @@ Revert this source commit through a reviewed PR if regressions block a consumer.
 
 Optional risk fields remain parseable after revert. Preserve the prior matrix and registry in Git. Remove only a generated adapter that the operator has not modified. C2PA never replaces source content.
 
+Do not re-enable automatic Windows scaffold writes by removing the refusal. Native directory-handle creation needs a later scoped design and Windows validation. Manual template copying remains available. A repair rollback must retain committed decision-input checks and forceful Node timeout termination, or disable those new entry points until a forward fix.
+
 Disable successor argv emission before reverting an upgraded closed-schema consumer. Never downgrade an old envelope to a trusted EU execution claim. No deployed runtime or production data is changed here.

@@ -22,6 +22,11 @@ class ScaffoldTests(unittest.TestCase):
                 repo.registry({'id': 'bot', 'paths': ['src/bot/**']})
                 before = (repo.root / '.getzilla/config/ai-systems.json').read_bytes()
                 mod = self.module()
+                if mod.fsx.WINDOWS:
+                    with self.assertRaisesRegex(mod.ScaffoldError, 'descriptor-relative'):
+                        mod.scaffold(repo.root, 'bot', lang)
+                    self.assertFalse((repo.root / 'src').exists())
+                    continue
                 paths = mod.scaffold(repo.root, 'bot', lang)
                 self.assertEqual(paths, [repo.root / 'src/bot' / name])
                 content = paths[0].read_bytes()
@@ -49,6 +54,42 @@ class ScaffoldTests(unittest.TestCase):
         repo.registry({'id': 'bot', 'paths': ['src/bot/*.py']}, {'id': 'bot', 'paths': ['other/*']})
         with self.assertRaises(mod.ScaffoldError):
             mod.scaffold(repo.root, 'bot', 'python')
+
+    def test_windows_refuses_before_any_creation_or_parent_swap(self):
+        repo = Repo(self)
+        mod = self.module()
+        repo.registry({'id': 'bot', 'paths': ['src/bot/**']})
+        with mock.patch.object(mod.fsx, 'WINDOWS', True), \
+                mock.patch.object(mod.fsx, 'mkdir_at', wraps=mod.fsx.mkdir_at) as mkdir, \
+                mock.patch.object(mod.fsx, 'open_at', wraps=mod.fsx.open_at) as create:
+            with self.assertRaisesRegex(mod.ScaffoldError, 'descriptor-relative'):
+                mod.scaffold(repo.root, 'bot', 'python')
+            mkdir.assert_not_called()
+            create.assert_not_called()
+        self.assertFalse((repo.root / 'src').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX emulation of the reviewed Windows parent swap')
+    def test_windows_parent_swap_probe_cannot_reach_mutation(self):
+        repo = Repo(self)
+        outside = Repo(self)
+        mod = self.module()
+        repo.registry({'id': 'bot', 'paths': ['src/bot/**']})
+        original = mod.fsx.open_dir_at
+
+        def swap_after_open(parent, name, **kwargs):
+            result = original(parent, name, **kwargs)
+            if name == 'src':
+                (repo.root / 'src').rename(repo.root / 'src-original')
+                (repo.root / 'src').symlink_to(outside.root, target_is_directory=True)
+            return result
+
+        with mock.patch.object(mod.fsx, 'WINDOWS', True), \
+                mock.patch.object(mod.fsx, 'open_dir_at', side_effect=swap_after_open) as swap:
+            with self.assertRaisesRegex(mod.ScaffoldError, 'descriptor-relative'):
+                mod.scaffold(repo.root, 'bot', 'python')
+            swap.assert_not_called()
+        self.assertFalse((outside.root / 'bot').exists())
+        self.assertFalse((repo.root / 'src').exists())
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs Windows privilege')
     def test_parent_and_target_links_are_refused(self):
@@ -89,5 +130,10 @@ class ScaffoldTests(unittest.TestCase):
         proc = subprocess.run([sys.executable, str(ROOT / 'scripts/getzilla_cli.py'), 'compliance',
                                'scaffold', '--root', str(repo.root), '--system', 'bot', '--lang', 'typescript'],
                               capture_output=True, text=True, check=False, timeout=30)
+        if os.name == 'nt':
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn('descriptor-relative', proc.stdout + proc.stderr)
+            self.assertFalse((repo.root / 'src').exists())
+            return
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(json.loads(proc.stdout)['registry_hints']['marking_symbol'], 'markGeneratedContent')

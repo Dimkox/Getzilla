@@ -48,6 +48,8 @@ def _template_bytes(relative: str) -> bytes:
 
 def scaffold(root: Path, system_id: str, lang: str) -> list[Path]:
     """The first glob must have a literal directory and own the final filename."""
+    if fsx.WINDOWS or not all(call in os.supports_dir_fd for call in (os.open, os.mkdir)):
+        raise ScaffoldError('scaffold requires descriptor-relative safe creation; copy templates manually on Windows')
     registry_hints(lang)
     root = Path(os.path.abspath(root))
     try:

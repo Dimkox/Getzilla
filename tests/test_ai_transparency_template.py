@@ -1,9 +1,13 @@
 """Exercise adapter behavior in Python and Node without a real C2PA service."""
 import importlib.util
 import json
+import os
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -98,6 +102,43 @@ for (outcome of ['success', 'failure', 'timeout']) {
             proc = subprocess.run([shutil.which('node'), str(runner), str(source)], cwd=tmp,
                                   capture_output=True, text=True, timeout=10, check=False)
             self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for the Node TypeScript adapter')
+    @unittest.skipIf(os.name == 'nt', 'POSIX fixture ignores SIGTERM')
+    def test_node_real_stubborn_child_is_killed_at_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            shutil.copyfile(TYPESCRIPT, directory / 'adapter.mjs')
+            tool = directory / 'c2patool'
+            tool.write_text('#!' + sys.executable + '\nimport signal, time\n'
+                            'signal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(120)\n', encoding='utf-8')
+            tool.chmod(0o700)
+            source = directory / 'input.png'
+            source.write_bytes(b'original')
+            runner = directory / 'run.mjs'
+            runner.write_text("import {markGeneratedContent} from './adapter.mjs';\n"
+                              "console.log(JSON.stringify(markGeneratedContent('original', {generator:'fixture', "
+                              "model:'fixture', media_type:'image/png', path:process.argv[2]})));\n", encoding='utf-8')
+            started = time.monotonic()
+            process = subprocess.Popen([shutil.which('node'), str(runner), str(source)], cwd=directory,
+                                       env={**os.environ, 'PATH': str(directory) + os.pathsep + os.defpath},
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                       start_new_session=True)
+            try:
+                # The tool deadline is 30 s. Allow Node startup and loaded CI scheduling outside it.
+                stdout, stderr = process.communicate(timeout=45)
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=3)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertLess(time.monotonic() - started, 44)
+            result = json.loads(stdout)
+            self.assertEqual(result['c2pa_error'], 'c2patool timeout')
+            self.assertIsNone(result['c2pa'])
+            self.assertEqual(source.read_bytes(), b'original')
 
     @unittest.skipUnless(shutil.which('node'), 'Node is required for the Node TypeScript adapter')
     def test_node_adapter_behavior(self):

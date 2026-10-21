@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,8 +20,8 @@ class CiAuditTests(unittest.TestCase):
     def test_ci_cli_does_not_create_python_bytecode_even_when_disabled(self):
         repo = Repo(self, installed=False)
         repo.write('scripts/getzilla_audit_bundle.py', (ROOT / 'scripts/getzilla_audit_bundle.py').read_text(encoding='utf-8'))
-        repo.write('.getzilla/getzilla/__init__.py', '')
-        repo.write('.getzilla/getzilla/eu_ai_act.py', 'def enabled(root):\n    return False\n')
+        shutil.copytree(ROOT / '.getzilla/getzilla', repo.root / '.getzilla/getzilla',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         repo.commit('isolated CLI import fixture')
         env = {key: value for key, value in os.environ.items() if key != 'PYTHONDONTWRITEBYTECODE'}
         proc = subprocess.run([sys.executable, str(repo.root / 'scripts/getzilla_audit_bundle.py'),
@@ -102,6 +103,129 @@ class CiAuditTests(unittest.TestCase):
         result = mod.build(repo.root, 'prior')
         self.assertIsNone(result['compliance']['iso42001'])
         self.assertEqual(len(result['reasons']), 1)
+
+    def test_all_decision_inputs_are_committed_and_present(self):
+        paths = ('.getzilla/config/compliance.json', '.getzilla/compliance/eu-ai-act/obligations.json',
+                 '.getzilla/config/ai-systems.json', '.getzilla/config/diff-risk-rules.json',
+                 '.getzilla/config/cost-providers.json', '.getzilla/getzilla/loaded.py')
+        for relative in paths:
+            with self.subTest(relative=relative):
+                repo = self.repo()
+                if relative.endswith('.py'):
+                    repo.write(relative, 'VALUE = True\n')
+                    repo.commit('module fixture')
+                git(repo.root, 'update-index', '--skip-worktree', relative)
+                path = repo.root / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b'\n')
+                self.assertEqual(git(repo.root, 'status', '--porcelain'), '')
+                with self.assertRaisesRegex(RuntimeError, 'committed'):
+                    self.module().ci_check(repo.root, repo.base)
+                path.unlink()
+                with self.assertRaisesRegex(RuntimeError, 'committed|opt-in'):
+                    self.module().ci_check(repo.root, repo.base)
+
+    def test_ignored_rules_and_providers_are_rejected(self):
+        for name in ('diff-risk-rules.json', 'cost-providers.json'):
+            with self.subTest(name=name):
+                repo = self.repo()
+                relative = '.getzilla/config/' + name
+                git(repo.root, 'rm', '--cached', relative)
+                repo.write('.gitignore', relative + '\n')
+                repo.commit('ignored decision input')
+                with self.assertRaisesRegex(RuntimeError, 'committed'):
+                    self.module().ci_check(repo.root, repo.base)
+
+    def test_audit_uses_explicit_rules_and_fresh_providers(self):
+        from getzilla import cost_guard
+        repo = self.repo()
+        rules_path = repo.root / '.getzilla/config/diff-risk-rules.json'
+        rules = json.loads(rules_path.read_text())
+        rules['tests'] = ['docs/**']
+        rules_path.write_text(json.dumps(rules), encoding='utf-8')
+        repo.registry({'id': 'bot', 'purpose': 'assistant', 'class': 'limited', 'role': 'provider',
+                       'paths': ['src/**'], 'disclosure_symbol': 'AI_DISCLOSURE', 'generates_content': False,
+                       'confirmation': {'by': 'Fixture', 'role': 'owner', 'date': '2026-10-21'}})
+        repo.write('src/bot.py', 'AI_DISCLOSURE = "fixture"\n')
+        repo.write('docs/design.md', 'The application uses AI_DISCLOSURE.\n')
+        repo.commit('explicit audited rules')
+        result = self.module().ci_check(repo.root, repo.base)
+        self.assertEqual(result['decision'], 'pass', result['reasons'])
+        provider_path = repo.root / '.getzilla/config/cost-providers.json'
+        real = provider_path.read_text(encoding='utf-8')
+        empty = json.loads(real)
+        empty['python_modules'] = []
+        empty['hosts'] = []
+        provider_path.write_text(json.dumps(empty), encoding='utf-8')
+        cost_guard.load_providers(provider_path)
+        self.addCleanup(cost_guard.load_providers.cache_clear)
+        provider_path.write_text(real, encoding='utf-8')
+        repo.registry()
+        repo.write('src/bot.py', 'import openai\nopenai.chat.completions.create(model="fixture", messages=[])\n')
+        repo.commit('fresh provider input')
+        result = self.module().ci_check(repo.root, repo.base)
+        self.assertEqual(result['decision'], 'review')
+        self.assertIn('AI_SYSTEM_UNREGISTERED', ' '.join(result['reasons']))
+
+    def test_head_date_and_optional_metadata_use_one_snapshot(self):
+        from getzilla import eu_ai_act
+        repo = self.repo()
+        repo.write('VERSION', 'fixture-version\n')
+        repo.write(eu_ai_act.ISO_MAP, '{"map":{"AIA-1":["A.2"]}}')
+        head = repo.commit('snapshot metadata')
+        tree = git(repo.root, 'rev-parse', head + '^{tree}')
+        mod = self.module()
+        evaluate = eu_ai_act.evaluate
+        observed = []
+
+        def move_head(root, mode, bases, evaluated_head, **kwargs):
+            observed.append((evaluated_head, kwargs.get('today')))
+            git(repo.root, 'update-ref', 'HEAD', repo.base)
+            return evaluate(root, mode, bases, evaluated_head, **kwargs)
+
+        with mock.patch.object(eu_ai_act, 'evaluate', side_effect=move_head):
+            result = mod.build(repo.root, repo.base)
+        self.assertEqual(result['commit'], head)
+        self.assertEqual(result['tree'], tree)
+        self.assertEqual(result['version'], 'fixture-version')
+        self.assertEqual(result['compliance']['iso42001']['map'], {'AIA-1': ['A.2']})
+        self.assertEqual(observed, [(head, datetime.now(timezone.utc).date())])
+
+    def test_git_replacements_and_inherited_git_environment_do_not_change_audit(self):
+        from getzilla.util import tree_fingerprint
+        repo = self.repo()
+        repo.registry({'id': 'bad', 'class': 'prohibited', 'purpose': 'social scoring', 'role': 'provider'})
+        head = repo.commit('prohibited system')
+        expected_fingerprint = tree_fingerprint(repo.root)
+        git(repo.root, 'replace', head, repo.base)
+        with mock.patch.dict(os.environ, {'GIT_DIR': str(repo.root / 'absent.git')}):
+            result = self.module().ci_check(repo.root, repo.base)
+            bundle = self.module().build(repo.root, repo.base)
+        self.assertEqual(result['commit'], head)
+        self.assertEqual(result['decision'], 'block')
+        self.assertEqual(bundle['tree_fingerprint'], expected_fingerprint)
+
+    def test_bundle_receipt_fingerprint_keeps_captured_head_and_existing_grammar(self):
+        from getzilla.util import tree_fingerprint
+        repo = self.repo()
+        repo.write('untracked-note.md', 'fixture note\n')
+        head = repo.commit_sha()
+        expected = tree_fingerprint(repo.root)
+        repo.write('.getzilla/runtime/receipts/fixture/verification.json', json.dumps({
+            'kind': 'verification', 'status': 'pass', 'tree_fingerprint': expected}))
+        mod = self.module()
+        resolve_base = mod._base
+
+        def move_head(root, base, **kwargs):
+            resolved = resolve_base(root, base, **kwargs)
+            git(root, 'update-ref', 'HEAD', repo.base)
+            return resolved
+
+        with mock.patch.object(mod, '_base', side_effect=move_head):
+            bundle = mod.build(repo.root, repo.base)
+        self.assertEqual(bundle['commit'], head)
+        self.assertEqual(bundle['tree_fingerprint'], expected)
+        self.assertEqual(bundle['release_decision'], 'eligible', bundle['reasons'])
 
 
 class AttestationClaimTests(unittest.TestCase):

@@ -81,8 +81,15 @@ def enabled(root: Path) -> bool:
     if not (root / OBLIGATIONS).is_file():
         return False
     try:
-        config = json.loads((root / COMPLIANCE_CONFIG).read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+        return config_enabled((root / COMPLIANCE_CONFIG).read_bytes())
+    except OSError:
+        return False
+
+
+def config_enabled(content: bytes | None) -> bool:
+    try:
+        config = json.loads(content) if content is not None else None
+    except ValueError:
         return False
     return (isinstance(config, dict) and isinstance(config.get('enabled'), list)
             and 'eu-ai-act' in config['enabled'])
@@ -94,7 +101,11 @@ def opt_in_record(layers: Iterable[str]) -> bytes:
 
 
 def load_matrix(root: Path) -> dict[str, Any]:
-    data = json.loads((root / OBLIGATIONS).read_text(encoding='utf-8'))
+    return parse_matrix((root / OBLIGATIONS).read_bytes())
+
+
+def parse_matrix(content: bytes) -> dict[str, Any]:
+    data = json.loads(content)
     if not isinstance(data, dict) or data.get('schema_version') != 'eu-ai-act-obligations-v1':
         raise ValueError(f'{OBLIGATIONS}: schema_version must be eu-ai-act-obligations-v1')
     obligations = data.get('obligations')
@@ -136,7 +147,14 @@ def matrix_review_problem(data: dict[str, Any], today: date) -> str | None:
 def load_iso_map(root: Path) -> dict[str, list[str]] | None:
     """An informational aid only. Invalid or absent mapping is ignored."""
     try:
-        data = json.loads((root / ISO_MAP).read_text(encoding='utf-8'))
+        return parse_iso_map((root / ISO_MAP).read_bytes())
+    except OSError:
+        return None
+
+
+def parse_iso_map(content: bytes | None) -> dict[str, list[str]] | None:
+    try:
+        data = json.loads(content) if content is not None else None
         mapping = data.get('map') if isinstance(data, dict) else None
         if not isinstance(mapping, dict) or not mapping:
             return None
@@ -146,7 +164,7 @@ def load_iso_map(root: Path) -> dict[str, list[str]] | None:
             if any(not isinstance(clause, str) or not re.fullmatch(r'A\.(?:[2-9]|10)', clause) for clause in clauses):
                 return None
         return mapping
-    except (OSError, ValueError):
+    except ValueError:
         return None
 
 
@@ -154,7 +172,13 @@ def load_registry(root: Path) -> list[dict[str, Any]]:
     path = root / REGISTRY
     if not path.is_file():
         return []
-    data = json.loads(path.read_text(encoding='utf-8'))
+    return parse_registry(path.read_bytes())
+
+
+def parse_registry(content: bytes | None) -> list[dict[str, Any]]:
+    if content is None:
+        return []
+    data = json.loads(content)
     if not isinstance(data, dict) or data.get('schema_version') != 'ai-systems-v1' or not isinstance(data.get('systems'), list):
         raise ValueError(f'{REGISTRY}: expected {{"schema_version": "ai-systems-v1", "systems": [...]}}')
     return [system for system in data['systems'] if isinstance(system, dict)]
@@ -302,18 +326,25 @@ def _risk_register_problem(root: Path, head: str, path: Any, today: date, *, che
     return None
 
 
-def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *, today: date | None = None) -> Report:
-    if not enabled(root):
+def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *, today: date | None = None,
+             audit_inputs: dict[str, bytes | None] | None = None) -> Report:
+    """Evaluate live project config, or explicit captured inputs supplied by the audit caller."""
+    opted_in = enabled(root) if audit_inputs is None else (
+        audit_inputs.get(OBLIGATIONS) is not None and config_enabled(audit_inputs.get(COMPLIANCE_CONFIG)))
+    if not opted_in:
         return Report('skip', 'EU AI Act component not installed')
     from . import cost_guard
-    from .diff_risk import load_rules, matches
+    from .diff_risk import load_rules, matches, parse_rules
     strict = mode in {'pr', 'release'}
     today = today or datetime.now(timezone.utc).date()
-    matrix_data = load_matrix(root)
+    matrix_data = load_matrix(root) if audit_inputs is None else parse_matrix(audit_inputs[OBLIGATIONS])
     obligations = matrix_data['obligations']
-    systems = load_registry(root)
+    systems = load_registry(root) if audit_inputs is None else parse_registry(audit_inputs[REGISTRY])
     files = _git_files(root, head)
-    test_globs = load_rules()['tests']
+    test_globs = (load_rules() if audit_inputs is None
+                  else parse_rules(audit_inputs['.getzilla/config/diff-risk-rules.json']))['tests']
+    providers = (None if audit_inputs is None
+                 else cost_guard.parse_providers(audit_inputs['.getzilla/config/cost-providers.json']))
     tests = [path for path in files if matches(path, test_globs)]
     problems: list[str] = []
     freshness = matrix_review_problem(matrix_data, today)
@@ -321,7 +352,8 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
         problems.append(f'MATRIX_STALE: {freshness}; review the matrix against its official sources')
     upcoming: list[str] = []
     matrix: list[dict[str, str]] = []
-    ai_paths = sorted({finding.path for base in bases for finding in cost_guard.diff_cost_findings(root, base, head)})
+    ai_paths = sorted({finding.path for base in bases
+                       for finding in cost_guard.diff_cost_findings(root, base, head, providers)})
     for path in ai_paths:
         if not matches(path, test_globs) and not any(_owned(path, system) for system in systems):
             problems.append(f'AI_SYSTEM_UNREGISTERED: {path} calls an AI provider but no system in {REGISTRY} owns it')

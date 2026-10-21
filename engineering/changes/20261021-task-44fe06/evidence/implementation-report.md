@@ -1,14 +1,50 @@
-# Core implementation and bounded controls
+# Core implementation and repair evidence
 
 Date: 2026-10-21. Branch: feat/eu-ai-act-phase2-20261021. Route:44fe064efbab.
-Comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
+Current comparison base: e42398ddaa41e662e921d7af68ab87b1e28e3554.
+Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
-The Core source is implemented. Fresh bounded controls passed on checkpoint
+## Repair after the first review wave
+
+Current repair qualification is UNVERIFIED until fresh controls and independent reviews finish.
+All four complete first-wave reports remain unchanged as historical evidence. Their source was
+5e8b8734739c7f59f6c3af56b82dedc02fb1dcc5, tree 71beaeabf6e15d70a800333dced87e69f3ee33c5.
+The coordinator saved them in 4abde003d25997c2d6cd86af20e046f005367a67. Code/security review found
+three Medium defects. Five Low test gaps are deferred together to
+https://github.com/Dimkox/Getzilla/issues/122 and were not repaired in this batch.
+
+Rebase onto actual fetched origin/main e42398ddaa41e662e921d7af68ab87b1e28e3554 completed without
+conflicts. The rebased report HEAD is 5613f7fa2544b3e7ed2e6fc687aca515f19fc2a4,
+tree 378942329a8111ddbc10bd8b53b2bbc340ee7c36. The official update_route API changed the comparison
+base and recorded its history. It retained route44fe064efbab and the original creation fingerprint.
+Canonical main, Trust CI source, V1 schema and deployed systems were not changed by this writer.
+
+Repairs:
+
+- Bind compliance.json, obligations.json, ai-systems.json, diff-risk-rules.json and cost-providers.json to committed bytes. Only the registry can be absent in both HEAD and disk for an enabled audit. Compare committed and present executable inputs to catch hidden deletion.
+- Pass immutable committed data explicitly through evaluation. Reuse existing parsers, bypass cached provider path loads, and preserve ordinary --root. Capture one UTC date and resolve head/base once. Read optional ISO/VERSION from that commit.
+- Reuse sanitized Git reads with replacement objects disabled. A local audit fingerprint helper retains the existing receipt grammar and compares paths against the captured commit. The global util is unchanged.
+- Refuse scaffold before any creation without descriptor-relative safe creation, including Windows. Help, docs and acceptance state the manual-template option. No Win32 subsystem was added.
+- Use SIGKILL for the Node child timeout. Real-process regression cleanup kills and reaps the fixture group on an outer timeout.
+
+Observed repair controls before the final fingerprint correction:
+
+- Red pytest run with 26 workers over audit/scaffold/template modules: 11 failed, 22 passed, 27 subtests passed in 38.13s. Failures reproduced ignored rules/providers, hidden deletion, foreign defaults, moving HEAD, inherited Git state, Windows mutation and a Node child still running after 35 seconds. Cleanup killed and reaped the fixture group.
+- An intermediate run reported 2 failed, 51 passed, 70 subtests passed in 49.01s. The audit fixture omitted generates_content:false. A later assertion expected BLOCK where the existing policy gives REVIEW for an unregistered provider. Both fixture assumptions were corrected without changing production decisions.
+- That intermediate Node run exceeded its 35-second outer guard. An exact-template standalone probe completed in 30.12 seconds with c2patool timeout and unchanged input. The next targeted Node test and fresh four-module run passed. The final test gives Node startup and CI scheduling a 45-second outer guard; the actual tool deadline remains 30 seconds. The cause of the one intermediate outer timeout was not established.
+- Fresh four-module run: taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_eu_audit_attestation.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_eu_ai_act.py: 53 passed, 70 subtests passed in 36.20s.
+- Adjacent helper/install run: taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_project_ingestion_routing.py tests/test_cost_guard_diff.py tests/test_diff_risk.py tests/test_cost_guard_prompt.py tests/test_cost_contract.py tests/test_cost_schedule.py tests/test_getzilla_cli.py tests/test_install_on_demand.py tests/test_manifest_package.py tests/test_structure.py: 152 passed, 1 skipped, 129 subtests passed in 86.21s.
+- Architecture fitness against e42398d, typed spec gate, governance, Ruff and Bandit passed before the final fingerprint correction. First-wave reports and V1 bytes stayed unchanged; git diff --check passed.
+- Two named build tests for inherited Git/replace state and moving HEAD failed in 3.04s, then passed in 1.33s after the local fingerprint correction. They preserve the existing receipt grammar, including an untracked note. Fresh post-repair controls remain required.
+
+## Historical first-source controls
+
+The initial Core source was implemented. Bounded controls passed on checkpoint
 fdc02defb766fea9372e939b90180ea37342e2f6, tree f96e020ca5e3018bb593748cf5a36c6e4331c158.
 That checkpoint changed42 files with2464 insertions and282 deletions against the base.
-The source candidate now proceeds to committed-HEAD smoke and independent review. These controls
-are observations, not receipts or merge authority. Final qualification remains UNVERIFIED.
+The initial source then received committed-HEAD smoke and the first independent review wave.
+These controls are historical observations, not receipts or merge authority for the repair.
 
 The earlier validation batch hit the hook circuit breaker. The writer stopped validation and
 dependent review. The owner then answered "Разрешаю возобновить проверки" to the scoped recovery
@@ -25,7 +61,7 @@ ledger was changed or retried. Required receipts remain not_run.
 - Dispatcher and installer include the new compliance wrapper, the previously omitted audit wrapper, and optional EU templates.
 - Matrix, fictional examples, ISO map, tests, README, CHANGELOG, plan and package record behavior and limits. No VERSION or trust-ci source change.
 
-## Fresh controls after scoped recovery
+## Historical controls after scoped recovery
 
 All commands below ran in this worktree at the exact checkpoint above. Tracked state was clean
 after the commands. Subsequent edits only record these observations and the reviewing lifecycle.

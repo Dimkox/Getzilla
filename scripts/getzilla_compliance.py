@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Scaffold optional compliance adapters for a registered AI system."""
+"""Scaffold optional compliance adapters on platforms with descriptor-relative safe creation.
+
+Windows: copy the installed Python or TypeScript template manually. Automatic scaffolding refuses
+before writing because the path-based Windows helpers cannot prevent parent replacement races.
+"""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +21,7 @@ from getzilla.util import find_root  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    command = commands.add_parser('scaffold')
+    command = commands.add_parser('scaffold', description=__doc__)
     command.add_argument('--root', type=Path)
     command.add_argument('--system', required=True)
     command.add_argument('--lang', choices=('python', 'typescript'), required=True)

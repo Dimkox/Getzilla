@@ -24,6 +24,18 @@
       "resource": null,
       "route_id": "44fe064efbab",
       "scope_digest": "aa446680e2c89226062d4a787f6f98c23c1924f45c6c3f3b22635ea3d50a30a3"
+    },
+    {
+      "action": null,
+      "actor": "owner-via-user-request",
+      "change_id": "20261021-task-44fe06",
+      "decided_at": "2026-10-21T14:32:19+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Existing owner source authority covers the three confirmed Medium repairs and fail-closed Windows scaffold. No production or human security approval.",
+      "resource": null,
+      "route_id": "44fe064efbab",
+      "scope_digest": "46b3039850a16fcba8668f6a7d5327236707acca591b30cf71931fad7ebc61f6"
     }
   ],
   "route_id": "44fe064efbab",
