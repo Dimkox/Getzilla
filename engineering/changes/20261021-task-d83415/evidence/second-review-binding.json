@@ -1,0 +1,18 @@
+{
+  "reviewed_commit": "98ff57375f95cc93e5f3cc785a8105f23743d0a3",
+  "reviewed_tree": "52ffc8f3b4e8acec6c0f618cf062d388e84b6782",
+  "result": "request_changes",
+  "blockers": [
+    "Mixed Unicode and ASCII whitespace can erase member punctuation.",
+    "Unicode line terminators inside line comments hide subsequent member access."
+  ],
+  "reports": {
+    "code": "4c32f08e7b522c2cd23592b15d60030a40d7f6067533ccef94d291f26fa1cc0d",
+    "test": "30bd47c58f17f43e58ae0aae2b613958d6a18595391eb9c9bb12dc0bc55b5229",
+    "security": "784da1f2286d172563d033c5c05bb3d4a12db20ddc19f69d8f45b6e0ad86e398",
+    "release": "da52f16e06d049a6f54f6587fa8f7af18d402466eeb178e8b199ed6da24dcc35",
+    "superseded_initial_security_pass": "d6f2af1a465dd3fb040ddad52cd8ec2b693d931d430d8f4d922dd475ef085ee0"
+  },
+  "initial_security_pass": "Retained unchanged; explicitly superseded by the full second security report.",
+  "final_gate": "NOT_RUN"
+}

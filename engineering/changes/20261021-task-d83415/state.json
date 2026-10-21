@@ -129,6 +129,12 @@
       "from": "verifying",
       "reason": "Freeze repaired candidate for fresh independent review; retain previous failing reports and no final receipt.",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T13:58:17+00:00",
+      "from": "reviewing",
+      "reason": "Second independent wave reproduced mixed Unicode whitespace and comment line-terminator bypasses; preserve complete failed reports before the same isolated writer repairs them.",
+      "to": "implementing"
     }
   ],
   "human_gates": [
@@ -137,7 +143,7 @@
   "human_gates_digest": "30d5ada87775024a66426f74c51e25ffd76df9e6e9608cd92ed98c7b86151962",
   "route_id": "d834158878e0",
   "schema_version": 1,
-  "status": "reviewing",
+  "status": "implementing",
   "title": "Fix verification false positives for public token addresses and immutable historical Markdown: add narrow hash-bound reviewed dispositions, fail closed on stale or unsafe entries, preserve raw findings and genuine secret detection, and verify the Liqvera audit without modifying historical evidence.",
-  "updated_at": "2026-10-21T13:47:18+00:00"
+  "updated_at": "2026-10-21T13:58:17+00:00"
 }
