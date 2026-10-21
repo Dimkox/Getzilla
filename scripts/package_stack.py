@@ -183,13 +183,19 @@ def _ensure_output_parent(output: Path) -> list[Path]:
             binding_descriptor: int | None = None
             child_descriptor: int | None = None
             try:
-                binding_descriptor = os.open(
-                    name,
-                    _path_directory_flags(),
-                    dir_fd=parent_descriptor,
-                )
-                binding = os.fstat(binding_descriptor)
                 named = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+                if hasattr(os, 'O_PATH'):
+                    binding_descriptor = os.open(
+                        name,
+                        _path_directory_flags(),
+                        dir_fd=parent_descriptor,
+                    )
+                    binding = os.fstat(binding_descriptor)
+                else:
+                    # No O_PATH (macOS): a restrictive umask leaves the new directory
+                    # unreadable until its chmod, so bind the no-follow lstat identity;
+                    # the descriptor opened after the chmod is checked against it.
+                    binding = named
                 if (
                     not stat.S_ISDIR(binding.st_mode)
                     or binding.st_uid != effective_uid

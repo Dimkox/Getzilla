@@ -1299,6 +1299,7 @@ module.main()
                     self.assertFalse((publish / 'project.zip.sha256').exists())
                     self.assertEqual(list(publish.iterdir()), [])
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'counts descriptors in /proc/self/fd; Linux-only')
     def test_open_output_directory_rejects_foreign_leaf_owner_and_closes_fd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             publish = Path(tmp) / 'publish'
