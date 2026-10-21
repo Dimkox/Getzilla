@@ -36,7 +36,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'governance': ('getzilla_governance.py', 'validate governance evidence'),
     'history': ('getzilla_history.py', 'offline historical evidence accounting'),
     'vulns': ('getzilla_vulns.py', 'check pinned dependencies against known vulnerabilities'),
-    'update': ('getzilla_update.py', 'update vulnerability data and third-party tools'),
+    'update': ('getzilla_upgrade.py', 'update Getzilla, this project (on a new branch) and third-party tools'),
     'ci': ('getzilla_ci.py', 'select the CI and merge gate for this repository'),
     'trust-ci': ('getzilla_trust_ci.py', 'set up and check the self-hosted Trust CI host (init, status)'),
     'deploy': ('getzilla_deploy.py', 'prepare human-owned publish commands'),
@@ -111,7 +111,8 @@ def main(argv: list[str]) -> int:
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
-    script = script_path(COMMANDS[command][0])
+    # `update` changes the project from the Getzilla installation, never from the project's own copy.
+    script = HOME / 'scripts' / COMMANDS[command][0] if command == 'update' else script_path(COMMANDS[command][0])
     return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode
 
 

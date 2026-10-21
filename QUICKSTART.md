@@ -51,6 +51,8 @@ With the installer done, continue at step 3. The manual steps below are the same
    python3 scripts/install_into.py --plan /path/to/your/repo
    ```
 
+   To apply the update, run `getzilla update` inside the repository. It needs a clean work tree, writes the planned files on a new branch `getzilla-update-<version>`, commits them there and never pushes; keep the project's own text in `AGENTS.md` outside the managed block. Review that branch like any other change.
+
    Existing repositories are read-only installer inputs. The plan is a deterministic managed-file manifest plus dependency advice; it performs no writes and executes no dependency command. The historical positional command and `--dry-run` are planning aliases. `--force` is rejected; update an existing consumer by applying the plan through a normal reviewed source-change commit.
 
    To create a complete installation, choose an absent path:
