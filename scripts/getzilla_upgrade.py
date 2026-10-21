@@ -130,7 +130,8 @@ def head_tree(project: Path) -> dict[str, tuple[str, str]]:
 
 
 def blob_id(content: bytes, object_format: str) -> str:
-    digest = hashlib.sha256() if object_format == 'sha256' else hashlib.sha1()  # noqa: S324 - Git object id
+    # A Git object id, not a security digest.
+    digest = hashlib.sha256() if object_format == 'sha256' else hashlib.sha1(usedforsecurity=False)
     digest.update(b'blob %d\0' % len(content) + content)
     return digest.hexdigest()
 
