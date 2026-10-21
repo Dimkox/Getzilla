@@ -74,6 +74,35 @@ git diff --check
 
 Observed: `All checks passed!`, exit 0; diff check returned no output, exit 0. No code changed after these observations before the corrected source commit.
 
+## V2 exit-code boundary correction at ce231e3
+
+Source commit: `ce231e3d877d0dbd620c1ffa7daee0af0effd3be`. Source tree: `09a449ff62bbb1d8bda366d323b7b4880be8b560`. The trusted comparison base remains `e158ddc7263a55f5308944c5a426eb1e9f1a4327`. The worktree was clean after this source commit. These focused observations do not qualify the branch for merge.
+
+Inspection found that the model and verification CLI preserve raw command-result types. They do not convert a signed boolean or float exit code to integer zero. However, the v2 reader accepted those invalid exit codes. The v2 branch now requires an actual integer for each command result's `exit_code`. V1 parsing and exact signed-envelope replay remain unchanged. No CLI, API or storage implementation changed.
+
+Regression tests preceded the repair. The RED command was:
+
+```sh
+taskset -c 22-25 python3 -m pytest -q -n 4 -p no:cacheprovider -o 'pythonpath=/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/src /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/tests' --tb=line trust-ci/tests/test_signing.py -k 'non_integer'
+```
+
+Observed: `9 failed, 1 passed, 3 subtests passed in 1.15s`, exit 1. The failures showed that invalid v2 exit-code types passed verification. The regression covers booleans, floats, strings, null and a missing field. A signed-envelope CLI test also checks invalid versions, rejection without JSON output, valid integer v2 output, and exact preservation of legacy v1 boolean and float values.
+
+The final focused command was:
+
+```sh
+taskset -c 22-25 python3 -m pytest -q -n 4 -p no:cacheprovider -o 'pythonpath=/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/src /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/tests' --tb=short trust-ci/tests/test_policy.py trust-ci/tests/test_signing.py trust-ci/tests/test_runner.py trust-ci/tests/test_api.py
+```
+
+Observed: `123 passed, 119 subtests passed in 1.80s`, exit 0. The tests used ephemeral test attestation signing material. No human approval key or deployed key was used.
+
+```sh
+python3 -m ruff check --no-cache trust-ci/src/adaptive_trust_ci/models.py trust-ci/tests/test_signing.py
+git diff --check
+```
+
+Observed: `All checks passed!`, exit 0; diff check returned no output, exit 0. Product bytes did not change after these checks. All test and lint processes ended, and the four-worker allocation was released to the coordinator. Joined Core integration, independent reviews and final gates remain pending. Status remains **UNVERIFIED**.
+
 ## Behavior covered
 
 - Omitted/false flags keep the fixture digest `198a4655a16ba7fb36cfe4729e110127860b97286a12aa43f41e91ecf7a7750d` and its legacy check name.
