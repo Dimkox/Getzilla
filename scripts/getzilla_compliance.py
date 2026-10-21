@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import eu_ai_act  # noqa: E402
 from getzilla.compliance_scaffold import ScaffoldError, registry_hints, scaffold  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 
@@ -26,8 +27,13 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument('--system', required=True)
     command.add_argument('--lang', choices=('python', 'typescript'), required=True)
     args = parser.parse_args(argv)
+    root = args.root or find_root()
+    if not eu_ai_act.enabled(root):
+        print(json.dumps({'ok': False, 'error': 'EU AI Act component not installed; '
+                          'run getzilla components add compliance:eu-ai-act'}))
+        return 1
     try:
-        paths = scaffold(args.root or find_root(), args.system, args.lang)
+        paths = scaffold(root, args.system, args.lang)
     except (ScaffoldError, OSError) as exc:
         print(json.dumps({'ok': False, 'error': str(exc)}))
         return 1

@@ -435,7 +435,8 @@ class OptInTests(unittest.TestCase):
         self.assertNotIn(eu_ai_act.COMPLIANCE_CONFIG, {entry.path for entry in lean})
         self.assertIn(eu_ai_act.OBLIGATIONS, {entry.path for entry in chosen})
         for path in ('scripts/getzilla_compliance.py', 'scripts/getzilla_audit_bundle.py'):
-            self.assertIn(path, {entry.path for entry in lean})
+            self.assertNotIn(path, {entry.path for entry in lean})
+            self.assertIn(path, {entry.path for entry in chosen})
         template = '.getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py'
         self.assertNotIn(template, {entry.path for entry in lean})
         self.assertIn(template, {entry.path for entry in chosen})

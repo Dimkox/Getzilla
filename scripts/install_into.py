@@ -208,7 +208,8 @@ EXTRA_MARKERS = {
 }
 # Opt-in compliance layers; never installed unless asked for (the installer asks only on EU hints).
 COMPLIANCE_COMPONENT_PATHS = {
-    "eu-ai-act": (".getzilla/compliance/eu-ai-act/", ".getzilla/templates/eu-ai-act/"),
+    "eu-ai-act": (".getzilla/compliance/eu-ai-act/", ".getzilla/templates/eu-ai-act/",
+                  "scripts/getzilla_audit_bundle.py", "scripts/getzilla_compliance.py"),
 }
 KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
 COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"

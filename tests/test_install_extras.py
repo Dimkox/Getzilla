@@ -94,5 +94,12 @@ class InstallExtrasTests(unittest.TestCase):
         self.assertIn('extra:bitrix', items["skill:bitrix-development"].message)
         self.assertFalse([name for name, item in items.items() if name.startswith('skill:') and item.status == 'fail'])
 
+    def test_eu_audit_and_compliance_scripts_ship_only_with_the_eu_component(self) -> None:
+        scripts = {'scripts/getzilla_audit_bundle.py', 'scripts/getzilla_compliance.py'}
+        for path in scripts:
+            self.assertEqual(MODULE.component_of(path), 'compliance:eu-ai-act')
+        self.assertFalse(paths(MODULE.PayloadSelection(('qwen',))) & scripts)
+        self.assertEqual(paths(MODULE.PayloadSelection(('qwen',), compliance=('eu-ai-act',))) & scripts, scripts)
+
 if __name__ == '__main__':
     unittest.main()
