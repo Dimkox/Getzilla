@@ -171,7 +171,7 @@ def source_surface_facts(html_text: str) -> LandingSourceSurfaceFacts:
 
 
 def approved_source_scripts(html_text: str) -> tuple[str, str]:
-    scripts = re.findall(r"<script(?:\s[^>]*)?>.*?</script>", html_text, re.DOTALL | re.IGNORECASE)
+    scripts = re.findall(r"<script(?:\s[^>]*)?>.*?</script\b[^>]*>", html_text, re.DOTALL | re.IGNORECASE)
     jsonld = [item for item in scripts if item.startswith('<script type="application/ld+json">')]
     if (
         len(scripts) != 2 or len(jsonld) != 1
