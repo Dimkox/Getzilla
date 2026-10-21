@@ -188,9 +188,22 @@ AGENT_COMPONENT_PATHS = {
     "gemini": (".gemini/",),
     "grok": (".grok/skills/",),
     "copilot": (".github/hooks/", ".github/agents/"),
-    "cursor": (".cursor/",),
+    "cursor": (".cursor/", ".grok/cursor-rules/"),
 }
 KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
+# Domain skills a project gets only when it has that domain (or asks): a plain Python repository
+# never receives Bitrix or SEO-landing material. Matched anywhere in a skills path, so every
+# agent's copy belongs to the extra as well as to that agent.
+EXTRA_COMPONENT_PATHS = {
+    "bitrix": ("/skills/bitrix-development/",),
+    "seo-landing": ("/skills/seo-landing/",),
+}
+KNOWN_EXTRAS = tuple(EXTRA_COMPONENT_PATHS)
+# Target paths that mark a domain; detect_extras turns them into extras.
+EXTRA_MARKERS = {
+    "bitrix": ("bitrix", "local/modules", "local/components"),
+    "seo-landing": ("side-projects/seo-landings",),
+}
 # Opt-in compliance layers; never installed unless asked for (the installer asks only on EU hints).
 COMPLIANCE_COMPONENT_PATHS = {
     "eu-ai-act": (".getzilla/compliance/eu-ai-act/",),
@@ -199,10 +212,20 @@ KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
 COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"
 
 
+def _agent_of(path: str) -> str | None:
+    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
+        if path.startswith(prefixes):
+            return agent
+    return None
+
+
 def component_of(path: str) -> str:
-    """core, factory, agent:<name> or compliance:<name> for one payload path."""
+    """core, factory, agent:<name>, compliance:<name> or extra:<name> for one payload path."""
     if path.startswith("factory/"):
         return "factory"
+    for name, markers in EXTRA_COMPONENT_PATHS.items():
+        if any(marker in "/" + path for marker in markers):
+            return f"extra:{name}"
     for name, prefixes in COMPLIANCE_COMPONENT_PATHS.items():
         if path.startswith(prefixes):
             return f"compliance:{name}"
@@ -216,15 +239,22 @@ class PayloadSelection:
     """Which components an installation materializes. ``full()`` is the compatibility layout."""
 
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
-                 compliance: tuple[str, ...] = ()) -> None:
+                 compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
+                 root_shims: bool = False) -> None:
         unknown = sorted(set(agents) - set(KNOWN_AGENTS))
         if unknown:
             raise UnsafeInstallTarget(f"unknown agent(s): {', '.join(unknown)}")
         unknown = sorted(set(compliance) - set(KNOWN_COMPLIANCE))
         if unknown:
             raise UnsafeInstallTarget(f"unknown compliance layer(s): {', '.join(unknown)}")
+        unknown = sorted(set(extras) - set(KNOWN_EXTRAS))
+        if unknown:
+            raise UnsafeInstallTarget(f"unknown extra(s): {', '.join(unknown)}")
         self.agents, self.factory, self.full = tuple(agents), factory, full
         self.compliance = tuple(compliance)
+        self.extras = tuple(extras)
+        # Root hook shims serve hook configs from before .grok/hooks; only upgrades keep them.
+        self.root_shims = root_shims
 
     @classmethod
     def full_layout(cls) -> "PayloadSelection":
@@ -233,7 +263,12 @@ class PayloadSelection:
     def includes(self, path: str) -> bool:
         if self.full:
             return True
+        if path in ROOT_HOOK_SHIMS:
+            return self.root_shims
         component = component_of(path)
+        if component.startswith("extra:"):
+            agent = _agent_of(path)
+            return component.split(":", 1)[1] in self.extras and (agent is None or agent in self.agents)
         if component == "core":
             return True
         if component == "factory":
@@ -247,7 +282,19 @@ class PayloadSelection:
         shape: dict[str, object] = {"agents": list(self.agents), "factory": self.factory, "full": self.full}
         if self.compliance:
             shape["compliance"] = list(self.compliance)
+        if self.extras:
+            shape["extras"] = list(self.extras)
         return shape
+
+
+def detect_extras(target: Path) -> tuple[str, ...]:
+    """Domain extras the target already shows (Bitrix folders, an SEO landing tree)."""
+    return tuple(name for name, markers in EXTRA_MARKERS.items()
+                 if any((target / marker).exists() for marker in markers))
+
+
+def has_root_shims(target: Path) -> bool:
+    return any((target / name).is_file() for name in ROOT_HOOK_SHIMS)
 
 
 def detect_agents(target: Path) -> tuple[str, ...]:
@@ -1806,6 +1853,10 @@ def main() -> None:
         help="Comma-separated opt-in compliance layers (eu-ai-act). Off by default.",
     )
     parser.add_argument(
+        "--extras",
+        help="Comma-separated domain skills (bitrix, seo-landing). Default: the domains the target already has.",
+    )
+    parser.add_argument(
         "--with-ci",
         action="store_true",
         help="Not supported here; use scripts/getzilla_ci.py --write after the repository has a GitHub remote.",
@@ -1837,7 +1888,10 @@ def main() -> None:
         agents = tuple(item.strip().lower() for item in (args.agents or "").split(",") if item.strip())
         compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
         try:
-            selection = PayloadSelection(agents or detect_agents(target), compliance=compliance)
+            extras = tuple(item.strip().lower() for item in (args.extras or "").split(",") if item.strip())
+            selection = PayloadSelection(agents or detect_agents(target), compliance=compliance,
+                                         extras=extras or detect_extras(target),
+                                         root_shims=has_root_shims(target))
         except UnsafeInstallTarget as exc:
             parser.error(str(exc))
     if args.materialize_new:

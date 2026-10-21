@@ -2,7 +2,7 @@
 """Components a project gets when it needs them, from the same local Getzilla version.
 
   getzilla components status [--project DIR]
-  getzilla components add agent:<name>|factory|compliance:eu-ai-act [--project DIR]
+  getzilla components add agent:<name>|factory|compliance:eu-ai-act|extra:bitrix|extra:seo-landing [--project DIR]
 
 Existing files are never overwritten; additions are recorded in .getzilla/managed-components.json.
 """
