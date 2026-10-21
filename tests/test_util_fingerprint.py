@@ -81,6 +81,7 @@ class FingerprintTests(unittest.TestCase):
                 self.assertEqual(before, util.tree_fingerprint(self.root))
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX filenames can contain non-UTF-8 bytes')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_non_utf8_scratch_and_clean_tracked_names_allow_fingerprints(self) -> None:
         before = util.tree_fingerprint(self.root)
         scratch = self.write(os.fsdecode(b'.qwen/tmp/probe-\xff'))
@@ -93,6 +94,7 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(64, len(util.tree_fingerprint(self.root)))
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX filenames can contain non-UTF-8 bytes')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_non_utf8_included_names_bind_exact_path_and_content(self) -> None:
         for raw in (b'source-\xff.py', b'source-\xfe.py', b'source-\r.py'):
             with self.subTest(raw=raw):

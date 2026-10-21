@@ -1054,6 +1054,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(outside.read_bytes(), b"outside unchanged\n")
 
     @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
+    @unittest.skipUnless(os.path.isdir('/proc/self/fd'), 'fault injection resolves descriptors through /proc/self/fd')
     def test_source_reads_are_nofollow_and_bounded_at_the_descriptor(self) -> None:
         cases = ("managed", "agents", "agents helper", "factory readme", "bitrix", "toolchain")
         for family in cases:
@@ -1171,6 +1172,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertLessEqual(path_bytes_read, 33)
 
     @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
+    @unittest.skipUnless(os.path.isdir('/proc/self/fd'), 'fault injection resolves descriptors through /proc/self/fd')
     def test_known_owned_constructor_failures_remove_every_created_entry(self) -> None:
         for boundary in ("stage fstat", "directory fstat", "file fstat"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
@@ -1219,6 +1221,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(_stage_names(parent), [])
 
     @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
+    @unittest.skipUnless(os.path.isdir('/proc/self/fd'), 'fault injection resolves descriptors through /proc/self/fd')
     def test_constructor_gap_swaps_preserve_unproven_replacements(self) -> None:
         for boundary in ("stage", "nested directory", "file"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:

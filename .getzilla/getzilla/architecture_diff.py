@@ -108,6 +108,10 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # macOS refuses killpg on a group whose leader already exited (a zombie).
+        if process.poll() is None:
+            process.kill()
     process.wait()
 
 

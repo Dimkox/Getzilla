@@ -239,7 +239,12 @@ def suggestions(root: Path, missing: str, cwd: Path, files: list[str] | None = N
     try:
         relative = PurePosixPath(Path(os.path.normpath(full)).relative_to(os.path.normpath(root)).as_posix())
     except ValueError:
-        return []
+        # The session cwd and the resolved root may spell the same folder differently
+        # (macOS /var -> /private/var); hints only read, so the real paths are compared.
+        try:
+            relative = PurePosixPath(Path(os.path.realpath(full)).relative_to(os.path.realpath(root)).as_posix())
+        except ValueError:
+            return []
     files = list(dict.fromkeys([*files, *_nearby(root, relative)]))
     name = relative.name
     parent = str(relative.parent)

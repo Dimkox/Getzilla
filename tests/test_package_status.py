@@ -430,6 +430,7 @@ class PackageStatusTests(unittest.TestCase):
         return _parse_canonical_json(path.read_bytes(), path)
 
     @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem names are a POSIX fixture')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_raw_byte_start_persists_distinct_names_and_reloads_through_cli(self):
         with project_copy(git=True) as root:
             self.install_cli(root)
@@ -475,6 +476,7 @@ class PackageStatusTests(unittest.TestCase):
                 _parse_canonical_json(b'{"name":"raw-\\udcff.py"}', Path('strict-spec.json'))
 
     @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem names are a POSIX fixture')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_raw_byte_first_implementation_persists_and_resume_keeps_initial_identity(self):
         with project_copy(git=True) as root:
             self.install_cli(root)
@@ -511,6 +513,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertTrue(observed['evidence_gaps'])
 
     @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem names are a POSIX fixture')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
     def test_raw_byte_representation_limit_persists_an_unknown_observation(self):
         with project_copy(git=True) as root:
             self.install_cli(root)
