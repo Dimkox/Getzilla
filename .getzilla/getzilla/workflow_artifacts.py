@@ -67,6 +67,7 @@ RUNTIME_ROUTE_KEYS = {
     "complexity",
     "created_at",
     "delivery_expected",
+    "delivery_lane",
     "domains",
     "human_gates",
     "intent",

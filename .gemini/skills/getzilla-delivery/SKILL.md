@@ -18,6 +18,26 @@ Read `.getzilla/runtime/active-route.json`. It contains:
 
 Do not substitute your own generic workflow when a route exists.
 
+## Light lane
+
+When the route says `delivery_lane: light` (low risk, micro or standard, no sensitive task
+domain, nothing paid or in production), the steps below replace sections 1-7. Evidence and an
+independent review stay; the ceremony does not.
+
+1. Run `python scripts/getzilla_status.py` and load the route's `workflow_skills`. No change
+   package: the brief, the acceptance criteria and the test plan live in the task thread.
+2. Dispatch the single analysis agent the route lists, if any.
+3. The write agent adds a failing test, makes the smallest change and runs the focused tests.
+4. Commit, then dispatch the one route reviewer. It reviews the committed diff and its tests
+   together and saves `code-review.md` under `engineering/reviews/`. Mutation probes in a
+   scratch copy are optional: use them only when a test is weak or a claim is untested.
+5. Run `python3 scripts/getzilla_verify.py --mode fast` on the committed candidate and open the
+   PR. CI runs the full suite and is the merge gate.
+
+The lane is a starting point, not a downgrade. Switch to the full controller when the diff
+touches `.getzilla/**`, hooks, Trust CI, release or packaging, a migration, secrets or a paid
+call, or when verification escalates the route's risk.
+
 ## 1. Establish the run
 
 1. Run `python scripts/getzilla_status.py`.
