@@ -76,11 +76,58 @@ def location(text: str, offset: int) -> tuple[int, int]:
     return text.count('\n', 0, offset) + 1, offset - text.rfind('\n', 0, offset)
 
 
+def _standalone_context(text: str, end: int) -> bool:
+    # Admit only explicit ASCII separators. Unicode and escaped identifier
+    # continuations are outside this deliberately narrow prefix grammar.
+    whitespace = ' \t\r\n\f\v'
+    if end and text[end - 1] not in whitespace + '{[(,;':
+        return False
+    index = 0
+    previous = ''
+    while index < end:
+        char = text[index]
+        if char in whitespace:
+            index += 1
+            continue
+        if text.startswith('//', index):
+            stops = [pos for mark in '\r\n' if (pos := text.find(mark, index + 2, end)) >= 0]
+            if not stops:
+                return False
+            index = min(stops) + 1
+            continue
+        if text.startswith('/*', index):
+            close = text.find('*/', index + 2, end)
+            if close < 0:
+                return False
+            index = close + 2
+            continue
+        if char in '\'"':
+            quote = char
+            index += 1
+            while index < end:
+                char = text[index]
+                index += 1
+                if char == '\\':
+                    index += 1
+                elif char == quote:
+                    break
+                elif char in '\r\n':
+                    return False
+            else:
+                return False
+            previous = quote
+            continue
+        # Regex/division, templates and code escapes need language-specific
+        # parsing; they cannot establish a safe context for a disposition.
+        if char in '/`\\':
+            return False
+        previous = char
+        index += 1
+    return previous not in {'.', ':', '?', '>'}
+
+
 def public_token(text: str, match: re.Match) -> bool:
-    # The broad scanner can match the suffix of a credential's variable name.
-    return bool(_PUBLIC_TOKEN.fullmatch(match.group()) and (
-        match.start() == 0 or not re.match(r'[\w$.-]', text[match.start() - 1])
-    ))
+    return bool(_PUBLIC_TOKEN.fullmatch(match.group()) and _standalone_context(text, match.start()))
 
 
 def eof_blank_line(data: bytes) -> int | None:
