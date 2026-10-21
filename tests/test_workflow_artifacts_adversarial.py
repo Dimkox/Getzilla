@@ -580,6 +580,7 @@ class SerializedCasTests(unittest.TestCase):
             old_digest = hashlib.sha256(old).hexdigest()
             barrier = threading.Barrier(2)
             outcomes: list[str] = []
+            details: list[str] = []
 
             def writer(payload: bytes) -> None:
                 barrier.wait()
@@ -588,13 +589,15 @@ class SerializedCasTests(unittest.TestCase):
                     outcomes.append("pass")
                 except ARTIFACTS.WorkflowArtifactError as exc:
                     outcomes.append(exc.code)
+                    # The OS error behind an "io" outcome names the platform cause (seen once on macOS).
+                    details.append(f"{exc.code}: {exc}; cause={exc.__cause__!r}")
 
             threads = [threading.Thread(target=writer, args=(payload,)) for payload in payloads]
             for thread in threads:
                 thread.start()
             for thread in threads:
                 thread.join(5)
-            self.assertEqual(sorted(outcomes), ["cas", "pass"])
+            self.assertEqual(sorted(outcomes), ["cas", "pass"], details)
             self.assertIn(target.read_bytes(), set(payloads))
 
     def test_interposed_special_and_oversize_values_are_restored(self) -> None:
