@@ -19,8 +19,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from . import STACK_DIR
 
-TOOLCHAIN = Path(__file__).resolve().parents[1] / 'config' / 'toolchain.json'
+TOOLCHAIN = STACK_DIR / 'config' / 'toolchain.json'
 BASELINE_DIR = 'baseline'
 SKILL_SOURCE = '.agents/skills'
 AGENT_SKILL_DIRS = {'claude': '.claude/skills', 'qwen': '.qwen/skills', 'gemini': '.gemini/skills',

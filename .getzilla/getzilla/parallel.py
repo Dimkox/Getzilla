@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from . import STACK_DIR
 
 CONFIG = '.getzilla/config/parallel.json'
 SNAPSHOT = '.getzilla/runtime/startup-capacity.json'
@@ -46,7 +47,7 @@ _FIND_EXEC = re.compile(r'\bfind\s+(.+?)\s+-exec\s+(\S+)(.*?)\{\}\s*\\?;')
 
 
 def config(root: Path) -> dict[str, Any]:
-    for path in (root / CONFIG, Path(__file__).resolve().parents[1] / 'config' / 'parallel.json'):
+    for path in (root / CONFIG, STACK_DIR / 'config' / 'parallel.json'):
         try:
             return json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
