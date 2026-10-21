@@ -48,8 +48,9 @@ eight tests. Triage separated inherited fixture imports from coverage timing; pu
 found the undeclared jsonschema test dependency. The bounded repair changes tests and their pinned
 requirements only. Keep the covered deny assertion and deterministic deadline/entry-budget controls.
 The approved timing contract is8s process CPU, observed wall time and15s child timeout, with
-untraced fixture imports. Exact-base execution and fresh pinned-dependency installation are BLOCKED;
-static source parity or a host package is not a substitute for either test result.
+untraced fixture imports. Exact-base execution remains BLOCKED. Fresh pinned installation was also
+blocked at that freeze; the coordinator later obtained scoped owner recovery and ran23 tests/30 subtests
+with jsonschema4.26.0. Static source parity or a host package does not substitute for unexecuted checks.
 All complete reviews remain historical, and the repaired source needs fresh controls and reviews.
 
 Test-repair checkpoint47d02c4c was merged with authorized remote55e7cb05 using a no-ff merge,
@@ -57,6 +58,14 @@ preserving both histories at2a7738c3. Its parent includes actual mainf9f02dd5. T
 API refreshed the comparison base from287e64 to f9f02dd5 and retained earlier bases and the creation
 fingerprint. The remote change makes EU scripts optional and guards scaffold opt-in. Fresh installed
 lean/chosen CLI checks cover that integration; all prior reports remain historical.
+
+Sourceccfe4a404 passed its named smoke and four wave4 reviews. Frozen75b6f334 then passed Core
+tests and coverage but failed the Factory PostgreSQL exit gate. The existing offline wheel inventory
+was stale after certifi security pin commit58b493c, and uv selected a3.11 build without pidfd support.
+The bounded repair regenerates only the derived JSON from the unchanged lock. Existing builder and
+process-adapter controls passed20 tests on system Python3.12. The next final gate must use
+UV_PYTHON=/usr/bin/python3.12, UV_NO_MANAGED_PYTHON=1, UV_PYTHON_DOWNLOADS=never and UV_LOCKED=1.
+All four complete reports remain historical; fresh reviews and gates are required after this repair.
 
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
 writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
@@ -78,8 +87,11 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Collect four wave3 PASS reviews and freeze d7f91344. Its final local PR gate and public Linux checks failed; those failures remain evidence.
 - [x] Add the red poisoned-import regression and implement the bounded test/tool-requirements repair.
 - [x] Complete fresh focused controls after test repair and authorized remote integration:170 tests/175 subtests,1 skip; architecture/spec/governance/Ruff/Bandit passed. Prepare source state reviewing on actual basef9f02dd5.
-- [ ] Commit source state reviewing and run the named no-record smoke before fresh reviews.
-- [ ] Optional fresh local pinned-version installation remains BLOCKED/NOT_RUN. It does not block route-required reviews or gates; normal required exact-head CI must install declared4.26.0.
+- [x] Historical sourceccfe4a404 passed its0.152s no-record smoke and all four wave4 reviews. Freeze75b6f334 failed factory-postgres-exit.
+- [x] Owner-authorized scratch recovery installed declared jsonschema4.26.0;23 tests/30 subtests passed onccfe4a404.
+- [x] Observe existing inventory regression fail and regenerate only the derived wheel inventory. Preserve the certifi lock/security pin;20 builder/process controls pass on system Python3.12.
+- [x] Complete inventory-repair bounded controls:20 tests, architecture/spec/governance and diff checks passed; prepare state reviewing.
+- [ ] Commit inventory repair and run the named no-record smoke before fresh reviews.
 - [ ] Collect four fresh independent reviews, save reports, commit/freeze and run the next qualifying PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.

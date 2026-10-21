@@ -23,11 +23,15 @@
 - [x] Complete bounded hook/policy, requirement-binding, covered diagnostic and architecture/static/spec controls for the test repair. These are observations, not qualifying receipts.
 - [x] Commit test-repair checkpoint47d02c4c and preserve foreign remote55e7cb05 through no-ff merge2a7738c3. Official comparison base is nowf9f02dd5. Fresh affected tests passed170 tests/175 subtests with1 skip; installed lean/chosen CLI behavior is covered.
 - [x] Complete fresh bounded controls and prepare source state reviewing:170 tests/175 subtests,1 skip; architecture/spec/governance/Ruff/Bandit passed. Historical wave3 reports and product hooks/runner/coverage stay unchanged.
-- [ ] Optional fresh local pinned-dependency installation is BLOCKED/NOT_RUN; it is not a route prerequisite. Required exact-head CI must still install declared4.26.0.
-- [ ] Commit the repair and run the named committed-HEAD smoke.
-- [ ] Coordinator collects four fresh independent reviews, freezes reports and reruns final local and exact-head external gates.
+- [x] Commit ccfe4a404 and run the named smoke:0.152s, stable source and no receipt.
+- [x] Coordinator collected four wave4 PASS reports and froze75b6f334. Final local gate failed factory-postgres-exit; its source/scope and failure remain evidence.
+- [x] After owner-authorized recovery, the coordinator installed pinned jsonschema4.26.0 in scratch and ran23 tests/30 subtests onccfe4a404. Exact-base extraction remains BLOCKED.
+- [x] Reproduce existing inventory regression failure and regenerate only derived wheel inventory from the unchanged security-pinned lock. On system Python3.12,20 offline-builder/process-adapter tests passed.
+- [x] Complete bounded controls:20 tests, architecture/spec/governance and diff checks passed. Prepare source state reviewing; only derived JSON and workflow/prose changed.
+- [ ] Commit and run the named clean-HEAD no-record smoke before the review handoff.
+- [ ] Coordinator collects four fresh independent reviews, freezes reports and reruns final local and exact-head external gates with the recorded system Python3.12/UV environment.
 
 Trust CI producer and example policy are a separate successor. No extra write agent shares this candidate.
 
-Final qualification is UNVERIFIED. Prior controls and all three report waves are historical after repair.
-No fresh independent review or qualifying gate has run for the final-gate repair.
+Final qualification is UNVERIFIED. Prior controls and all four report waves are historical after inventory repair.
+No fresh independent review or qualifying gate has run for this inventory repair.

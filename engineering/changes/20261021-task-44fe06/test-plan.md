@@ -13,4 +13,6 @@ Add failing tests before behavior edits. Use the coordinated allocation of up to
 
 After implementation commit, run bounded committed-HEAD controls. Coordinator obtains code/test/security/release reviews, persists reports, freezes the candidate, then runs one final PR gate and external checks. No final result is claimed before those steps.
 
-The fresh scratch install is optional and remains BLOCKED/NOT_RUN. Required local checks use host jsonschema4.10.3. Required automatic exact-head GitHub CI installs declared4.26.0. Keep these evidence claims separate; do not retry the blocked objective or claim a local pinned-version PASS.
+The optional scratch install was blocked at the earlier source freeze. After explicit owner recovery at16:47 UTC, the coordinator installed the declared requirements in that scratch venv and ran23 audit tests/30 subtests with jsonschema4.26.0 onccfe4a404. Keep this pinned-version observation separate from older host4.10.3 results. Exact-base extraction remains BLOCKED.
+
+Factory inventory repair: first run the existing exact-inventory regression and observe WHEEL_INVENTORY_DRIFT. Regenerate only the inventory from the unchanged lock. Run the offline release builder and real Linux process adapter modules on system Python3.12; all20 controls must pass, including failed-update HEALTH_FAILED recovery. Use UV_PYTHON=/usr/bin/python3.12, UV_NO_MANAGED_PYTHON=1, UV_PYTHON_DOWNLOADS=never and UV_LOCKED=1. The writer does not repeat the full PostgreSQL suite or final gate before fresh reviews.
