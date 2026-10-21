@@ -1,7 +1,7 @@
 # Core implementation and repair evidence
 
 Date: 2026-10-21. Branch: feat/eu-ai-act-phase2-20261021. Route:44fe064efbab.
-Current comparison base: e42398ddaa41e662e921d7af68ab87b1e28e3554.
+Current comparison base: a103b373031f477efad0e7bd9ffab24a96e6c63f.
 Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
@@ -19,6 +19,13 @@ conflicts. The rebased report HEAD is 5613f7fa2544b3e7ed2e6fc687aca515f19fc2a4,
 tree 378942329a8111ddbc10bd8b53b2bbc340ee7c36. The official update_route API changed the comparison
 base and recorded its history. It retained route44fe064efbab and the original creation fingerprint.
 Canonical main, Trust CI source, V1 schema and deployed systems were not changed by this writer.
+
+Repair checkpoint aa009d58e87785a0b09ec7222d2a0c49fd780961 then rebased onto actual fetched
+origin/main a103b373031f477efad0e7bd9ffab24a96e6c63f after PR123 and PR124. The resulting HEAD is
+ab523c9d943da7acdbed2f6a1bed8d7909a6723e, tree 1f88fcbcb43b28bd469e812c2675afccd26cca6c.
+Text conflicts kept both groups of CHANGELOG/mistakes entries. The installer diff against this base
+only adds the audit/compliance wrappers and optional EU templates. The official update_route API
+appended the second base transition. The history retains e158, e423 and a103 identities.
 
 Repairs:
 
