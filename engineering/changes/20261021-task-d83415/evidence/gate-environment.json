@@ -1,0 +1,178 @@
+{
+  "purpose": "Isolated exact-version environment for the single final qualifying gate; bounded reviewer controls remain separately recorded observations.",
+  "interpreter": "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+  "environment_packages": [
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5"
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0"
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1"
+    },
+    {
+      "name": "bandit",
+      "version": "1.9.4"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.10.19"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1"
+    },
+    {
+      "name": "click",
+      "version": "8.5.0"
+    },
+    {
+      "name": "coverage",
+      "version": "7.15.4"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.2"
+    },
+    {
+      "name": "execnet",
+      "version": "2.1.2"
+    },
+    {
+      "name": "fastapi",
+      "version": "0.142.4"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1"
+    },
+    {
+      "name": "idna",
+      "version": "3.20"
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.1"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2"
+    },
+    {
+      "name": "opentelemetry-api",
+      "version": "1.45.1"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pip",
+      "version": "26.2.2"
+    },
+    {
+      "name": "pluggy",
+      "version": "1.7.0"
+    },
+    {
+      "name": "psycopg",
+      "version": "3.3.4"
+    },
+    {
+      "name": "psycopg-binary",
+      "version": "3.3.4"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.11"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.14.1"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.50.1"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0"
+    },
+    {
+      "name": "pypdf",
+      "version": "6.19.0"
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1"
+    },
+    {
+      "name": "pytest-cov",
+      "version": "7.1.0"
+    },
+    {
+      "name": "pytest-xdist",
+      "version": "3.8.0"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0"
+    },
+    {
+      "name": "ruff",
+      "version": "0.16.3"
+    },
+    {
+      "name": "starlette",
+      "version": "1.9.0"
+    },
+    {
+      "name": "stevedore",
+      "version": "5.9.1"
+    },
+    {
+      "name": "tomli",
+      "version": "2.4.1"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4"
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.48.0"
+    }
+  ],
+  "pip_check": "exit 0; No broken requirements found.",
+  "direct_requirements_sha256": "a52d4cc9b530215c2e1f33115b5345d68809e20a9f0a6eba5272fa64b8a7b774",
+  "environment_packages_sha256": "44be339ccfdbdeccfaa27c64366db713a4f1597c74a26c6c796a17c812ff53e8",
+  "ca_source": "Liqvera corrected pip 26.2.2 vendored certifi file; both SSL_CERT_FILE and SSL_CERT_DIR explicitly constrained by the launcher.",
+  "original_base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+  "observed_origin_main": "e42398ddaa41e662e921d7af68ab87b1e28e3554",
+  "merge_base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+  "source_merge": "No unrelated upstream source merged; original exact comparison remains the true PR merge base."
+}
