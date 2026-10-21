@@ -1,0 +1,113 @@
+{
+  "change_id": "20261021-task-d83415",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/audit-dispositions-20261021",
+      "change_id": "20261021-task-d83415",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-21T13:03:45+00:00",
+      "route_id": "d834158878e0"
+    },
+    {
+      "branch": "fix/audit-dispositions-20261021",
+      "change_id": "20261021-task-d83415",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-21T13:08:48+00:00",
+      "route_id": "d834158878e0"
+    }
+  ],
+  "created_at": "2026-10-21T13:03:45+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-21T13:03:45+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-21T13:08:47+00:00",
+      "from": "draft",
+      "open_human_gates": [
+        "scope_and_design_approval: pending"
+      ],
+      "reason": "Approved three-point design, four analyses and exact invariants recorded.",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-21T13:08:48+00:00",
+      "from": "scoped",
+      "reason": "Existing owner approval recorded for the bounded design.",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-21T13:08:48+00:00",
+      "from": "approved",
+      "reason": "Single route-selected general implementer owns source and tests.",
+      "to": "implementing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval"
+  ],
+  "human_gates_digest": "30d5ada87775024a66426f74c51e25ffd76df9e6e9608cd92ed98c7b86151962",
+  "route_id": "d834158878e0",
+  "schema_version": 1,
+  "status": "implementing",
+  "title": "Fix verification false positives for public token addresses and immutable historical Markdown: add narrow hash-bound reviewed dispositions, fail closed on stale or unsafe entries, preserve raw findings and genuine secret detection, and verify the Liqvera audit without modifying historical evidence.",
+  "updated_at": "2026-10-21T13:08:48+00:00"
+}

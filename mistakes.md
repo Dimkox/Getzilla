@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-21 — Private scratch still had group-writable ancestors
+
+Checking only the scratch directory's 0700 mode missed two task-owned 0775 ancestors, so packaging controls correctly rejected their rename authority. Check the complete ancestor chain before running archive tests; removing group-write from those two directories preserved the security check and allowed the same bounded cases to run. The failed and corrected observations remain in the change evidence.
+
 ## 2026-10-08 — Pushed review fixes to a branch whose PR had already merged
 
 Root cause: I pushed the round-2 #59 fixes to `fix/hook-policy-followup` without first checking the PR state; the owner had merged #59 at its round-1 head half an hour earlier, so the push landed on a closed PR and `main` kept the reviewed HIGH findings. Before pushing to an existing PR branch, check `gh pr view <n> --json state,headRefOid` and that the head still matches what was reviewed; if the PR is merged, open a follow-up PR instead.

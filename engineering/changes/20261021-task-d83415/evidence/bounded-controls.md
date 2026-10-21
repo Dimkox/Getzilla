@@ -1,0 +1,9 @@
+# Bounded implementation controls
+
+The route-selected single implementation owner completed the strict disposition helper, verification integration, regressions, packaging assertion and reference documentation. No full repository gate or receipt has run.
+
+The test-first run failed on the missing semantics; its complete raw log and the separate packaging RED log are retained outside the candidate with SHA-256 bindings. Initial focused GREEN: 22 passed and 50 subtests. The selected neighboring run passed all 43 nonpackaging cases (22 new disposition, 10 relevant verification-doctor and 11 quality-gate cases); its packaging cases failed because task-owned ancestors were group-writable. After changing only those two ancestor modes from 0775 to 0755, the unchanged packaging suite passed 58 cases and 12 subtests. One non-POSIX-host refusal case intentionally skipped on POSIX. The earlier broad scanner-heavy control was interrupted after 53 passes/60 subtests and is explicitly incomplete.
+
+All controls used at most eight assigned CPUs. Existing unknown asyncio-option warnings came from parent pytest configuration. Ruff on changed Python, Bandit on the new helper, changed-file secret scan, Git whitespace and final-newline checks passed. The coordinator will bind a committed-HEAD named observation before independent reviews. The final qualifying full gate remains required after all four reports are saved and frozen.
+
+A bounded Liqvera integration observation used all tracked source paths and both the original f1d3bff route range and current-main 3cfc69b range. It retained two raw generic-secret matches and one raw EOF diagnostic, classified exactly those three, and left zero unresolved findings. This uncommitted-tool observation is not a final receipt or successor-audit completion.

@@ -1,0 +1,132 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Only an explicitly reviewed exact token assignment with a public 20-byte EVM address can disposition a generic-secret occurrence; other matches remain failures.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        },
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Only supported historical Markdown whitespace findings are dispositioned against exact bytes for worktree, index and committed ranges; Git errors and selection errors remain failures.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        },
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Strict bounded target-owned configuration rejects malformed, stale, duplicate, unsafe or unsupported entries and binds reason plus review evidence; absent configuration preserves behavior.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        },
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Every raw finding and command result stays visible with original and effective severity, disposition identity and config hash; no secret literal is emitted.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        },
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "The helper ships through existing packaging, no consumer policy is installed by default, and full frozen-candidate verification plus independent review qualify the change.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        },
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261021-task-d83415",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "Changing historical evidence or silently erasing raw findings to obtain PASS.",
+      "evidence": [
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "statement": "Private-key and AWS detections cannot be dispositioned; no whole-file secret suppression or range shortcut.",
+      "evidence": [
+        {
+          "test": "tests/test_verification_dispositions.py"
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Fix verification false positives for public token addresses and immutable historical Markdown: add narrow hash-bound reviewed dispositions, fail closed on stale or unsafe entries, preserve raw findings and genuine secret detection, and verify the Liqvera audit without modifying historical evidence.",
+    "success_metric": "No unresolved findings for the exact reviewed cases; genuine and stale cases fail; fresh complete Liqvera verifier exits zero with zero evidence gaps.",
+    "target": "Auditable exact-file/per-occurrence dispositions; unchanged default detection."
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "strategy": "forward_fix",
+    "maximum_steps": 1
+  },
+  "schema_version": 2
+}

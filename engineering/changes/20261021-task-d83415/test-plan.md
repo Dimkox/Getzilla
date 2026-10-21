@@ -1,0 +1,3 @@
+# Test plan
+
+Write failing regressions before behavior edits. Cover exact public address and immutable EOF cases; added secrets; private/AWS keys; nonaddress and credential assignments; malformed/duplicate/stale policy; ignored/untracked policy; missing/changed evidence; traversal/symlinks; index/worktree/HEAD mismatch; mixed/unknown Git diagnostics; fingerprint invalidation; packaging. Use real Git fixtures. Run bounded controls, four independent reviews on one committed tree, persist unchanged reports, freeze, then one full PR verifier and receipts. Liqvera receives a separate fresh five-review full audit.

@@ -277,6 +277,11 @@ class ManifestTests(unittest.TestCase):
         }
         self.assertEqual(required - rels, set())
 
+    def test_disposition_helper_ships_without_target_review_policy(self) -> None:
+        rels = {path.relative_to(ROOT).as_posix() for path in included_files(ROOT)}
+        self.assertIn('.getzilla/getzilla/verification_dispositions.py', rels)
+        self.assertNotIn('engineering/verification-dispositions.json', rels)
+
 
 class PackageHostTests(unittest.TestCase):
     @unittest.skipIf(os.name == 'posix', 'the refusal is for hosts without POSIX ownership and umask')
