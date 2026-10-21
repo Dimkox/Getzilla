@@ -81,6 +81,31 @@ class ProjectSyncTests(unittest.TestCase):
             upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
+    def test_a_failure_before_the_branch_leaves_the_project_unchanged(self) -> None:
+        real = upgrade._git_out
+
+        def failing(cwd, *args, **kwargs):
+            if args[0] == 'commit-tree':
+                raise upgrade.UpdateError('simulated commit failure')
+            return real(cwd, *args, **kwargs)
+
+        with mock.patch.object(upgrade, '_git_out', side_effect=failing):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'simulated'):
+                upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX symlinks')
+    def test_a_committed_link_is_never_written_through(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            (self.project / 'scripts').symlink_to(outside)
+            self.commit('link scripts')
+            with self.assertRaises(upgrade.UpdateError):
+                upgrade.sync_project(ROOT, self.project)
+            self.assertEqual(os.listdir(outside), [])
+        self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+
     def test_a_subfolder_is_not_a_repository_root(self) -> None:
         (self.project / 'sub/.getzilla').mkdir(parents=True)
         with self.assertRaisesRegex(upgrade.UpdateError, 'not the root'):
@@ -111,8 +136,52 @@ class HelperTests(unittest.TestCase):
                 mock.patch.object(upgrade, 'update_self') as update_self:
             self.assertEqual(upgrade.main(['--only', 'osv']), 0)
             self.assertEqual(upgrade.main(['--status']), 0)
-        self.assertEqual([call.args[1] for call in tools.call_args_list], [['--only', 'osv'], ['--status']])
+            self.assertEqual(upgrade.main(['--stat']), 0)
+            self.assertEqual(upgrade.main(['--no-self', '--quiet']), 0)
+            self.assertEqual(upgrade.main(['tools', '--only', 'agents']), 0)
+        self.assertEqual([call.args[1] for call in tools.call_args_list],
+                         [['--only', 'osv'], ['--status'], ['--stat'], ['--quiet'], ['--only', 'agents']])
         update_self.assert_not_called()
+
+
+class SelfUpdateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, GIT_ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        self.origin, self.home, self.work = base / 'origin.git', base / 'home', base / 'work'
+        subprocess.run(['git', 'init', '-q', '--bare', '--initial-branch=main', str(self.origin)], check=True)
+        subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.work)], check=True,
+                       capture_output=True)
+        self.push('one')
+        subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.home)], check=True)
+
+    def push(self, text: str) -> None:
+        (self.work / 'VERSION').write_text(text + '\n', encoding='utf-8')
+        git(self.work, 'add', '-A')
+        git(self.work, 'commit', '-q', '-m', text)
+        git(self.work, 'push', '-q', 'origin', 'HEAD:main')
+
+    def test_branch_fast_forwards_and_detached_follows_the_ref(self) -> None:
+        self.push('two')
+        self.assertIn('updated', upgrade.update_self(self.home, None))
+        self.assertEqual((self.home / 'VERSION').read_text(encoding='utf-8'), 'two\n')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'detached'):
+            upgrade.update_self(self.home, 'main')
+        git(self.home, 'checkout', '-q', '--detach')
+        self.push('three')
+        self.assertIn('updated', upgrade.update_self(self.home, None))
+        self.assertEqual((self.home / 'VERSION').read_text(encoding='utf-8'), 'three\n')
+        self.assertEqual(git(self.home, 'rev-parse', '--is-shallow-repository'), 'false')
+
+    def test_local_changes_skip_the_update(self) -> None:
+        self.push('two')
+        (self.home / 'VERSION').write_text('mine\n', encoding='utf-8')
+        self.assertIn('local changes', upgrade.update_self(self.home, None))
+        self.assertEqual((self.home / 'VERSION').read_text(encoding='utf-8'), 'mine\n')
 
 
 if __name__ == '__main__':
