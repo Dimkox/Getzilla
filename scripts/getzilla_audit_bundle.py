@@ -53,6 +53,7 @@ def build(root: Path, base: str | None) -> dict[str, object]:
                              'status': data.get('status'), 'created_at': data.get('created_at'),
                              'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
     reasons: list[str] = []
+    review: list[str] = []
     compliance: dict[str, object] = {'eu_ai_act': None}
     if eu_ai_act.enabled(root):
         report = eu_ai_act.evaluate(root, 'release', [base] if base else [], 'HEAD')
@@ -64,7 +65,7 @@ def build(root: Path, base: str | None) -> dict[str, object]:
             'registry': json.loads(registry.read_text(encoding='utf-8')) if registry.is_file() else None,
         }
         if report.status != 'pass':
-            reasons.extend(report.problems or [report.summary])
+            (review if report.decision == 'review' else reasons).extend(report.problems or [report.summary])
     if not any(item['kind'] == 'verification' and item['status'] == 'pass' for item in receipts):
         reasons.append('no passing verification receipt for this tree; run scripts/getzilla_verify.py --mode release')
     return {
@@ -76,8 +77,8 @@ def build(root: Path, base: str | None) -> dict[str, object]:
         'comparison_base': base,
         'compliance': compliance,
         'receipts': receipts,
-        'release_decision': 'blocked' if reasons else 'eligible',
-        'reasons': reasons,
+        'release_decision': 'blocked' if reasons else 'review' if review else 'eligible',
+        'reasons': reasons + review,
         'authority': 'evidence only; the independent decision is Trust CI running this command on the exact commit',
     }
 

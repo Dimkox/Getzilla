@@ -5,6 +5,9 @@ register of AI systems in ``.getzilla/config/ai-systems.json``, a control-plane 
 cannot write without an exact grant. A risk class is a draft until a named person confirms it:
 the classifier proposes, a human decides. Evidence comes from the repository at the checked
 commit (symbols in the code and in tests, a risk register), never from the agent's own claim.
+The decision is PASS, REVIEW (a person has to decide: an unregistered system, an unconfirmed class,
+role, annex or exemption) or BLOCK (a prohibited practice, or an obligation in force without evidence).
+An obligation that is not yet in force shows its gap as upcoming and does not block.
 Engineering evidence only, not legal advice.
 """
 from __future__ import annotations
@@ -23,6 +26,11 @@ REGISTRY = '.getzilla/config/ai-systems.json'
 COMPLIANCE_CONFIG = '.getzilla/config/compliance.json'
 CLASSES = ('prohibited', 'high-risk', 'limited', 'minimal')
 RANK = {name: index for index, name in enumerate(reversed(CLASSES))}  # minimal 0 ... prohibited 3
+ROLES = ('provider', 'deployer')
+ANNEXES = ('III', 'I')
+# A person decides these; everything else that is a problem blocks.
+REVIEW_CODES = frozenset({'AI_SYSTEM_UNREGISTERED', 'AI_CLASS_UNCONFIRMED', 'AI_CLASS_BELOW_DRAFT',
+                          'AI_ROLE_UNDECLARED', 'AI_ANNEX_UNDECLARED', 'AI_EXEMPTION_UNCONFIRMED'})
 RISK_REVIEW_DAYS = 365
 
 # Draft classification from the declared purpose. Words in English and Russian; a match proposes,
@@ -31,6 +39,8 @@ _DRAFT_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     ('prohibited', 'social scoring', re.compile(r'social\s+scor|социальн\w*\s+рейтинг', re.I)),
     ('prohibited', 'subliminal or manipulative technique', re.compile(r'sublimina|manipulat\w*\s+(?:behaviou?r|vulnerab)|манипуляц', re.I)),
     ('prohibited', 'untargeted facial image scraping', re.compile(r'(?:scrap\w*|untargeted)\W+(?:\w+\W+){0,3}facial|facial\W+(?:\w+\W+){0,3}scrap', re.I)),
+    ('prohibited', 'non-consensual intimate imagery or child sexual abuse material (Art. 5, from 2026-12-02)',
+     re.compile(r'non-?consensual\s+(?:intimate|sexual|explicit|nude)|nudif|undress\w*\s+(?:app|photo|image|people)|deep\s*nude|child\s+sexual\s+abuse|\bcsam\b|интимн\w*\s+изображ\w*\s+без\s+согласия|раздева\w*\s+(?:фото|людей)', re.I)),
     ('prohibited', 'emotion recognition at work or school', re.compile(r'emotion\w*\s+recogn\w*.{0,40}(?:workplace|employee|school|student)|распознаван\w*\s+эмоци', re.I)),
     ('high-risk', 'creditworthiness or credit scoring (Annex III 5(b))', re.compile(r'credit\s*(?:worth|scor)|creditworth|loan\s+(?:approv|decision|applicant)|borrower|кредитн\w*\s+(?:скоринг|рейтинг|оценк)|заёмщик|заемщик', re.I)),
     ('high-risk', 'recruitment, selection or worker management (Annex III 4)', re.compile(r'recruit|hiring|candidate\s+(?:screen|rank)|cv\s+screen|résumé|resume\s+screen|employee\s+(?:evaluat|monitor)|подбор\s+персонала|найм|кандидат\w*\s+на\s+вакан', re.I)),
@@ -103,10 +113,54 @@ class Report:
     problems: list[str] = field(default_factory=list)
     matrix: list[dict[str, str]] = field(default_factory=list)
     systems: list[dict[str, Any]] = field(default_factory=list)
+    decision: str = 'pass'
+    upcoming: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {'status': self.status, 'summary': self.summary, 'problems': self.problems,
-                'matrix': self.matrix, 'systems': self.systems}
+        return {'status': self.status, 'decision': self.decision, 'summary': self.summary,
+                'problems': self.problems, 'upcoming': self.upcoming, 'matrix': self.matrix, 'systems': self.systems}
+
+
+def decision_of(problems: Iterable[str]) -> str:
+    codes = {problem.split(':', 1)[0] for problem in problems}
+    if not codes:
+        return 'pass'
+    return 'review' if codes <= REVIEW_CODES else 'block'
+
+
+def system_roles(system: dict[str, Any]) -> tuple[str, ...]:
+    """Declared roles; an undeclared role is treated as both, so no obligation is skipped by omission."""
+    role = system.get('role')
+    roles = (role,) if isinstance(role, str) else tuple(role) if isinstance(role, list) else ()
+    return tuple(item for item in roles if item in ROLES)
+
+
+def applies_from(obligation: dict[str, Any], system: dict[str, Any]) -> date | None:
+    """Date the obligation applies to this system; None when the matrix gives none."""
+    value = obligation.get('applies_from')
+    if isinstance(value, dict):
+        annex = system.get('annex') if system.get('annex') in ANNEXES else 'III'  # earliest when undeclared
+        value = value.get(f'annex-{annex.lower()}')
+    try:
+        start = date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    legacy = obligation.get('legacy')
+    if start and isinstance(legacy, dict):
+        try:
+            placed = date.fromisoformat(str(system.get('placed_on_market')))
+            if placed < date.fromisoformat(str(legacy.get('placed_before'))):
+                return date.fromisoformat(str(legacy.get('applies_from')))
+        except ValueError:
+            pass
+    return start
+
+
+def _exemption(system: dict[str, Any], obligation: dict[str, Any]) -> dict[str, Any] | None:
+    for item in system.get('exemptions') or []:
+        if isinstance(item, dict) and item.get('obligation') == obligation.get('id'):
+            return item
+    return None
 
 
 def _git_files(root: Path, head: str) -> list[str]:
@@ -188,6 +242,7 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
     test_globs = load_rules()['tests']
     tests = [path for path in files if matches(path, test_globs)]
     problems: list[str] = []
+    upcoming: list[str] = []
     matrix: list[dict[str, str]] = []
     ai_paths = sorted({finding.path for base in bases for finding in cost_guard.diff_cost_findings(root, base, head)})
     for path in ai_paths:
@@ -198,7 +253,9 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
         name = str(system.get('id') or '?')
         draft = draft_class(str(system.get('purpose') or ''))
         risk_class = system.get('class')
-        summaries.append({'id': name, 'class': risk_class, 'draft_class': draft.risk_class, 'draft_reasons': list(draft.reasons)})
+        roles = system_roles(system)
+        summaries.append({'id': name, 'class': risk_class, 'draft_class': draft.risk_class,
+                          'draft_reasons': list(draft.reasons), 'roles': list(roles), 'annex': system.get('annex')})
         if risk_class not in CLASSES:
             problems.append(f'AI_CLASS_UNCONFIRMED: {name} has no class; draft is {draft.risk_class}'
                             + (f' ({"; ".join(draft.reasons)})' if draft.reasons else ''))
@@ -209,15 +266,38 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
         if RANK[risk_class] < RANK[draft.risk_class] and not str(system.get('downgrade_reason') or '').strip():
             problems.append(f'AI_CLASS_BELOW_DRAFT: {name} is {risk_class} but the draft is {draft.risk_class}; '
                             'record downgrade_reason with the legal basis')
+        if not roles:
+            problems.append(f'AI_ROLE_UNDECLARED: {name} declares no role (provider, deployer); '
+                            'obligations of both roles are checked until a person declares it')
+            roles = ROLES
+        if risk_class == 'high-risk' and system.get('annex') not in ANNEXES:
+            problems.append(f'AI_ANNEX_UNDECLARED: {name} is high-risk without annex (III or I); '
+                            'the earlier Annex III dates apply until a person declares it')
         if risk_class == 'prohibited':
             problems.append(f'AI_PROHIBITED_PRACTICE: {name} is classified prohibited (Art. 5) and cannot ship')
         code = [path for path in files if _owned(path, system) and not matches(path, test_globs)]
         for obligation in obligations:
             row = {'obligation': str(obligation.get('id')), 'article': str(obligation.get('article')), 'system': name}
-            if risk_class not in (obligation.get('applies_to') or []) or (
-                    obligation.get('when') == 'generates_content' and system.get('generates_content') is False):
+            when = obligation.get('when')
+            if risk_class not in (obligation.get('applies_to') or []):
                 matrix.append({**row, 'status': 'not_applicable', 'evidence': f'class {risk_class}'})
                 continue
+            if when and not system.get(when, when == 'generates_content'):
+                matrix.append({**row, 'status': 'not_applicable', 'evidence': f'{when} is false'})
+                continue
+            if not set(roles) & set(obligation.get('roles') or ROLES):
+                matrix.append({**row, 'status': 'not_applicable', 'evidence': f'role {", ".join(roles)}'})
+                continue
+            exemption = _exemption(system, obligation)
+            if exemption is not None:
+                basis = str(exemption.get('basis') or '').strip()
+                problem = (None if obligation.get('exemptible') else 'this obligation has no exemption') or \
+                    ('basis is missing' if len(basis) < 8 else None) or _confirmation_problem(exemption)
+                if problem is None:
+                    matrix.append({**row, 'status': 'exempt', 'evidence': f'{basis} (confirmed by {exemption["confirmation"]["by"]})'})
+                    continue
+                problems.append(f'AI_EXEMPTION_UNCONFIRMED: {name} {row["obligation"]}: {problem}; '
+                                'the obligation is checked until a person confirms an exemption with its basis')
             check = obligation.get('check')
             gap: str | None
             evidence: str
@@ -241,16 +321,24 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
                 continue
             else:
                 gap, evidence = f'unknown check {check!r}', ''
-            if gap:
+            start = applies_from(obligation, system)
+            if gap and start is not None and today < start:
+                upcoming.append(f'OBLIGATION_UPCOMING: {name} {row["obligation"]} ({row["article"]}) applies from {start}: {gap}')
+                matrix.append({**row, 'status': 'upcoming', 'evidence': gap, 'applies_from': start.isoformat()})
+            elif gap:
                 problems.append(f'OBLIGATION_UNMET: {name} {row["obligation"]} ({row["article"]}): {gap}')
                 matrix.append({**row, 'status': 'unmet', 'evidence': gap})
             else:
                 matrix.append({**row, 'status': 'met', 'evidence': evidence})
     if not systems and not ai_paths:
         return Report('pass', 'EU AI Act: no AI system registered and no AI provider call in the change', [], matrix, summaries)
+    decision = decision_of(problems)
     if problems:
         status = 'fail' if strict else 'pass'
-        prefix = '' if strict else 'will fail pr/release: '
-        return Report(status, prefix + problems[0], problems, matrix, summaries)
+        prefix = f'{decision.upper()}: ' if strict else f'will fail pr/release ({decision}): '
+        return Report(status, prefix + problems[0], problems, matrix, summaries, decision, upcoming)
     met = sum(1 for row in matrix if row['status'] == 'met')
-    return Report('pass', f'EU AI Act: {len(systems)} system(s), {met} obligation(s) met with evidence', [], matrix, summaries)
+    summary = f'EU AI Act: {len(systems)} system(s), {met} obligation(s) met with evidence'
+    if upcoming:
+        summary += f'; {len(upcoming)} not yet in force without evidence'
+    return Report('pass', summary, [], matrix, summaries, 'pass', upcoming)

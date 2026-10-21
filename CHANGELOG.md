@@ -3,6 +3,13 @@
 ## 2.3.1 — 2026-10-21 (source candidate)
 
 - Record the v2.3.0 publication; README and QUICKSTART install from the v2.3.0 tag with its installer digests.
+- EU AI Act gate:
+  - it decides PASS, REVIEW or BLOCK, and undecided cases are REVIEW, never a fictitious pass;
+  - the obligations are split by provider and deployer role, and Art. 50(4) is added for deployers;
+  - AI Omnibus dates apply: Annex III high-risk from 2027-12-02, Annex I from 2028-08-02, and Art. 50(2) from 2026-12-02 for systems already on the market;
+  - Art. 50 exemptions need a stated basis and a person;
+  - the new Art. 5 prohibition (non-consensual intimate imagery and CSAM) is drafted;
+  - the audit bundle adds the `review` release decision.
 
 ## Observed v2.3.0 publication — 2026-10-21
 
