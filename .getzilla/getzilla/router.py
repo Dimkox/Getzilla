@@ -189,6 +189,7 @@ class Route:
     status: str = 'routed'
     rationale: list[str] = field(default_factory=list)
     matched_keywords: dict[str, list[str]] = field(default_factory=dict)
+    delivery_lane: str = 'full'
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -407,6 +408,10 @@ def _risk(text: str, intent: str, domains: list[str]) -> tuple[str, list[str]]:
     return 'low', rationale
 
 
+# Explicit task focus on these keeps the full controller even at low risk.
+LIGHT_LANE_EXCLUDED_DOMAINS = frozenset({'security', 'ai', 'integration', 'data', 'infra', 'api', 'event'})
+
+
 def _complexity(intent: str, risk: str, domains: list[str], text: str) -> str:
     if risk == 'high' or intent in {'architecture', 'incident', 'release'} or len(domains) >= 4:
         return 'high-risk'
@@ -524,6 +529,25 @@ def build_route(
     if intent == 'release' or risk == 'high':
         review.extend(_string_list(review_floors.get('release')))
 
+    # Low-risk micro and standard work takes the light lane: one analysis agent, one reviewer
+    # who also reads the tests, no durable change package. High risk, sensitive task domains,
+    # paid or production work keep the full controller; verification still escalates on the diff.
+    production = operational_intent or any(_has_term(prompt, word) for word in ('production', 'прод', 'deploy', 'деплой'))
+    light = (
+        risk == 'low' and complexity in {'micro', 'standard'} and write_agent is not None
+        and intent not in {'release', 'architecture', 'incident'} and cost_signal is None and not production
+        and not set(task_domains) & LIGHT_LANE_EXCLUDED_DOMAINS
+    )
+    if light:
+        # Drop only the generic floors; domain specialists (Bitrix, PHP, frontend) stay.
+        generic_analysis = set(_string_list(floors.get('feature_like'))) | set(_string_list(floors.get('standard'))) | {'architect'}
+        analysis = [agent for agent in analysis if agent not in generic_analysis
+                    or agent in _string_list(floors.get('always'))]
+        generic_review = set(_string_list(review_floors.get('delivery'))) | set(_string_list(review_floors.get('docs')))
+        review = list(_string_list(review_floors.get('light')) or ['code_reviewer']) + [
+            agent for agent in review if agent not in generic_review]
+    delivery_lane = 'light' if light else 'full'
+
     workflow_skills = ['getzilla-delivery']
     intent_skill = {
         'bugfix': 'bugfix-workflow',
@@ -585,7 +609,7 @@ def build_route(
         human_gates.append('scope_and_design_approval')
     if any(d in domains for d in ('integration', 'data')) and risk == 'high':
         human_gates.append('migration_or_external_write_approval')
-    if operational_intent or any(_has_term(prompt, word) for word in ('production', 'прод', 'deploy', 'деплой')):
+    if production:
         human_gates.append('production_action_approval')
 
     delivery_expected = intent != 'research'
@@ -637,6 +661,7 @@ def build_route(
         human_gates=human_gates,
         delivery_expected=delivery_expected,
         rationale=rationale,
+        delivery_lane=delivery_lane,
     )
 
 
@@ -703,7 +728,8 @@ def route_context(route: Route | dict[str, object]) -> str:
     return (
         'ADAPTIVE GROK ROUTE\n'
         f"Route ID: {data.get('route_id')}\n"
-        f"Intent: {data.get('intent')} | Risk: {data.get('risk')} | Complexity: {data.get('complexity')}\n"
+        f"Intent: {data.get('intent')} | Risk: {data.get('risk')} | Complexity: {data.get('complexity')} "
+        f"| Lane: {data.get('delivery_lane', 'full')}\n"
         f"Domains: {', '.join(data.get('domains', []))} (task focus: {', '.join(data.get('task_domains', [])) or 'repository default'})\n"
         f"Required skills: {skills}\n"
         f"Parallel read-only analysis agents: {analysis}\n"

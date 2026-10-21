@@ -427,9 +427,9 @@ class RouterTests(unittest.TestCase):
                     self.assertEqual(route.write_agent, 'general_implementer')
                     self.assertEqual(route.workflow_skills,
                                      ['getzilla-delivery', 'bugfix-workflow'])
-                    self.assertEqual(route.review_agents, ['code_reviewer', 'test_reviewer'])
-                    self.assertEqual(route.required_evidence,
-                                     ['verification', 'code_review', 'test_review'])
+                    self.assertEqual(route.delivery_lane, 'light')
+                    self.assertEqual(route.review_agents, ['code_reviewer'])
+                    self.assertEqual(route.required_evidence, ['verification', 'code_review'])
                     self.assertEqual(route.human_gates, [])
                     self.assertEqual(route.matched_keywords, {})
                     self.assertFalse(is_development_prompt(f'{word} observations', repo))
@@ -479,7 +479,11 @@ class RouterTests(unittest.TestCase):
                         self.assertEqual(route.write_agent, owner)
                         self.assertIn(profile, route.quality_profiles)
                         self.assertIn('code_review', route.required_evidence)
-                        self.assertIn('test_review', route.required_evidence)
+                        # The light lane folds the test review into the one code review.
+                        if route.delivery_lane == 'full':
+                            self.assertIn('test_review', route.required_evidence)
+                        else:
+                            self.assertNotIn(domain, ('data', 'integration', 'ai', 'api'))
                         if evidence:
                             self.assertIn(evidence, route.required_evidence)
 
@@ -673,7 +677,10 @@ class RouterTests(unittest.TestCase):
 
     def test_generic_feature_uses_widened_analysis_floor(self) -> None:
         with project_copy() as root:
-            route = build_route(root, 'Добавить функцию', 's-floor')
+            light = build_route(root, 'Добавить функцию', 's-light')
+            self.assertEqual((light.delivery_lane, light.analysis_agents), ('light', ['repo_explorer']))
+            route = build_route(root, 'Рефакторинг модуля заказов', 's-floor')
+            self.assertEqual(route.delivery_lane, 'full')
             self.assertEqual(
                 route.analysis_agents,
                 ['repo_explorer', 'task_analyst', 'architect', 'docs_researcher'],
@@ -704,21 +711,21 @@ class RouterTests(unittest.TestCase):
             )
             self.assertEqual(route.analysis_agents, ['repo_explorer', 'task_analyst'])
         with project_copy() as root:
-            route = build_route(root, 'Добавить функцию', 's-cap-default')
+            route = build_route(root, 'Рефакторинг модуля заказов', 's-cap-default')
             self.assertEqual(len(route.analysis_agents), 4)
             self.assertNotEqual(len(route.analysis_agents), 10)
 
     def test_missing_or_invalid_routing_json_uses_defaults(self) -> None:
         with project_copy() as root:
             (root / '.getzilla/config/routing.json').unlink()
-            route = build_route(root, 'Добавить функцию', 's-missing')
+            route = build_route(root, 'Рефакторинг модуля заказов', 's-missing')
             self.assertEqual(
                 route.analysis_agents,
                 ['repo_explorer', 'task_analyst', 'architect', 'docs_researcher'],
             )
         with project_copy() as root:
             (root / '.getzilla/config/routing.json').write_text('{', encoding='utf-8')
-            route = build_route(root, 'Добавить функцию', 's-invalid')
+            route = build_route(root, 'Рефакторинг модуля заказов', 's-invalid')
             self.assertEqual(
                 route.analysis_agents,
                 ['repo_explorer', 'task_analyst', 'architect', 'docs_researcher'],

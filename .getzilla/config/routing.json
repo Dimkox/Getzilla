@@ -83,6 +83,9 @@
     ],
     "trivial": [
       "code_reviewer"
+    ],
+    "light": [
+      "code_reviewer"
     ]
   },
   "review_domain_agents": {

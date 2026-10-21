@@ -63,7 +63,9 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
         if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id) or package != 'engineering/changes/' + change_id:
             raise ValueError('selected active change must be a valid package record')
         prefixes.add(package + '/evidence/')
-    elif route.get('complexity') != 'micro' or route.get('risk') != 'low' or route.get('change_id'):
+    elif route.get('change_id') or not (
+            route.get('delivery_lane') == 'light'
+            or (route.get('complexity') == 'micro' and route.get('risk') == 'low')):
         raise ValueError('a durable selected route requires its active change package')
     allowed_reports = {prefix + name for prefix in prefixes for name in REVIEW_REPORT_NAMES}
 
