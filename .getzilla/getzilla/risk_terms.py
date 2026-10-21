@@ -15,9 +15,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
+from . import STACK_DIR
 
 SCHEMA = 'risk-terms-v1'
-DEFAULT_DIR = Path(__file__).resolve().parents[1] / 'config' / 'risk-terms'
+DEFAULT_DIR = STACK_DIR / 'config' / 'risk-terms'
 CATEGORIES = ('high', 'medium', 'signal')  # signal terms raise nothing alone; cost_guard combines them
 TOKEN = re.compile(r'^[^\s*]+\*?$')
 UNCOVERED_SHARE = 0.3

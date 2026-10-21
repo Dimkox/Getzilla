@@ -16,6 +16,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
+from . import STACK_DIR
 
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 
@@ -78,7 +79,7 @@ RUNNERS: dict[str, Runner] = {}
 
 def load_registry(root: Path | None = None) -> dict[str, Stack]:
     candidates = [root / REGISTRY] if root else []
-    candidates.append(Path(__file__).resolve().parents[1] / 'config' / 'stacks.json')
+    candidates.append(STACK_DIR / 'config' / 'stacks.json')
     for path in candidates:
         if path.is_file():
             data = json.loads(path.read_text(encoding='utf-8'))

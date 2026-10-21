@@ -9,11 +9,12 @@ import subprocess
 import unicodedata
 from pathlib import Path
 from typing import Any
+from . import STACK_DIR
 
 from . import fsx
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "change-spec.schema.json"
-LEGACY_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "change-spec-v1.schema.json"
+SCHEMA_PATH = STACK_DIR.parent / "schemas" / "change-spec.schema.json"
+LEGACY_SCHEMA_PATH = STACK_DIR.parent / "schemas" / "change-spec-v1.schema.json"
 UNKNOWN_TOKEN = "UNKNOWN"  # nosec B105
 MAX_SPEC_BYTES = 1_000_000
 MAX_STRING_LENGTH = 65_536

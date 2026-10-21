@@ -20,6 +20,21 @@ class DoctorItem:
     message: str
 
 
+def _engine_archive_item(archive: Path) -> DoctorItem:
+    """The archive carries bytecode for the Python that installed it; another Python reads the sources."""
+    import importlib.util
+    import zipfile
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            header = bundle.read('getzilla/policy.pyc')[:4]
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        return DoctorItem('fail', 'engine-archive', f'unreadable: {exc}')
+    if header != importlib.util.MAGIC_NUMBER:
+        return DoctorItem('warn', 'engine-archive', 'bytecode is for another Python, so hooks compile the engine '
+                          'on every call; reinstall Getzilla into this project with the current Python')
+    return DoctorItem('pass', 'engine-archive', 'engine archive with bytecode for this Python')
+
+
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
 
@@ -47,6 +62,10 @@ def run_doctor(root: Path) -> list[DoctorItem]:
             items.append(DoctorItem('pass', f'json:{rel}', 'valid JSON'))
         except Exception as exc:
             items.append(DoctorItem('fail', f'json:{rel}', str(exc)))
+
+    archive = root / '.getzilla/getzilla.zip'
+    if archive.is_file():
+        items.append(_engine_archive_item(archive))
 
     managed = load_json(root / '.getzilla/config/managed.json', {}) or {}
     managed_agents = managed.get('agents', [])
