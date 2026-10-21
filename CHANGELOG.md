@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1 — 2026-10-21 (source candidate)
+
+- Record the v2.3.0 publication; README and QUICKSTART install from the v2.3.0 tag with its installer digests.
+
+## Observed v2.3.0 publication — 2026-10-21
+
+Getzilla v2.3.0 was published on 2026-10-21T11:01:37Z from merge `2bb417431f1e4b9494e4af71ebf27adb1d04d898` (tree `81076df2cd7db8713f7178ead66ebaa2728f861e`). Annotated tag object: `815aeabc5d215d65e72651692a6457920de9fa71`. ZIP SHA-256 `782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11`, sidecar SHA-256 `e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db`.
+
 ## 2.3.0 — 2026-10-20 (source candidate)
 
 2.2.2 was never published; its changes ship in 2.3.0 together with:

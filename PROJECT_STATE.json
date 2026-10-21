@@ -4,12 +4,12 @@
   "default_branch": "main",
   "observed_at": "2026-10-11T02:13:17+00:00",
   "observed_main_sha": "540c12f93e798c2f483455a5086ab0018ac3216e",
-  "product_version": "2.3.0",
-  "latest_published_release": "v2.2.1",
+  "product_version": "2.3.1",
+  "latest_published_release": "v2.3.0",
   "source_installers": {
     "record_scope": "Installer bytes of the source candidate; README and QUICKSTART run the published installers in published_release until a release publishes these.",
     "status": "source_candidate",
-    "version": "2.3.0",
+    "version": "2.3.1",
     "installers": {
       "scripts/install.sh": {
         "sha256": "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807"
@@ -28,10 +28,10 @@
     "branch": "fix/codex-cmd-hooks-20261011",
     "pull_request": 79,
     "change_package": "engineering/changes/20261012-task-43786c",
-    "target_version": "2.3.0",
+    "target_version": "2.3.1",
     "source_base": "540c12f93e798c2f483455a5086ab0018ac3216e",
     "status": "source_candidate_pending_independent_review_and_exact_head_gates",
-    "next_action": "Prepare the 2.3.0 source candidate (2.2.2 was never published). Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority. Release 2.3.0: tag the exact merge commit, build getzilla-2.3.0.zip with scripts/package_stack.py, publish the GitHub Release, then record the publication.",
+    "next_action": "Prepare the 2.3.1 source candidate (2.3.0 is published). Bind independent review to the exact reviewed commit, save active evidence Markdown reports, commit/freeze, run one final PR verifier and require public Actions linux/windows on the exact head. PR #79 now contains the command-policy, denial-ledger, nested hook-routing and build-backend audit repairs with this 2.2.2 source candidate. None is delivered until this PR passes fresh exact-head gates and merges. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.2.1 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
     "release_candidate_origin": {
       "route_id": "65799e00561a",
       "branch": "release/2.2.2-20261011",
@@ -138,6 +138,50 @@
     "M9"
   ],
   "published_release": {
+    "repository": "Dimkox/Getzilla",
+    "tag": "v2.3.0",
+    "published_at": "2026-10-21T11:01:37Z",
+    "tag_object": "815aeabc5d215d65e72651692a6457920de9fa71",
+    "tag_kind": "annotated",
+    "merge_commit": "2bb417431f1e4b9494e4af71ebf27adb1d04d898",
+    "tree": "81076df2cd7db8713f7178ead66ebaa2728f861e",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0",
+    "assets": [
+      {
+        "name": "getzilla-2.3.0.zip",
+        "size": 21371145,
+        "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip"
+      },
+      {
+        "name": "getzilla-2.3.0.zip.sha256",
+        "size": 85,
+        "sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+      }
+    ],
+    "artifact": {
+      "path": "packages/getzilla-2.3.0.zip",
+      "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
+      "sidecar_path": "packages/getzilla-2.3.0.zip.sha256",
+      "sidecar_sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
+      "binding": "immutable_release_tag",
+      "storage": "github_release_asset",
+      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip",
+      "sidecar_url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+    },
+    "operational_activation": false,
+    "qualification_status": "publication_only_not_production_acceptance",
+    "installers": {
+      "scripts/install.sh": {
+        "sha256": "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807"
+      },
+      "scripts/install.ps1": {
+        "sha256": "4d89d8c77617ff3b262bbf8866f05e1a14d9fb45c6ba2c3c39e298af9a499b76"
+      }
+    }
+  },
+  "historical_getzilla_v2_2_1_published_release": {
     "repository": "Dimkox/Getzilla",
     "tag": "v2.2.1",
     "published_at": "2026-10-09T03:47:35Z",
