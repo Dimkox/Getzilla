@@ -1,0 +1,42 @@
+{
+  "acceptance_criteria": [
+    {"id": "AC-001", "statement": "Missing, malformed, future or older-than-180-day matrix review metadata yields REVIEW, including empty registries; opt-out stays skipped.", "evidence": [{"test": "tests/test_eu_ai_act.py"}]},
+    {"id": "AC-002", "statement": "Optional risk scores, residual acceptance and review deadlines validate without breaking legacy risk records.", "evidence": [{"test": "tests/test_eu_ai_act.py"}]},
+    {"id": "AC-003", "statement": "Scaffold writes one owned adapter exclusively and rejects unsafe paths. Python and Node adapters preserve content on C2PA failure.", "evidence": [{"test": "tests/test_compliance_scaffold.py"}, {"test": "tests/test_ai_transparency_template.py"}]},
+    {"id": "AC-004", "statement": "Read-only CI requires committed opt-in and base. Attested authority requires verified exact-identity passed audit execution with signed argv.", "evidence": [{"test": "tests/test_eu_audit_attestation.py"}, {"receipt": "security_review"}]},
+    {"id": "AC-005", "statement": "ISO clause mapping is informational and cannot change a decision.", "evidence": [{"test": "tests/test_eu_ai_act.py"}]},
+    {"id": "AC-006", "statement": "Installer supplies CLI wrappers and optional adapter templates. Documentation states evidence limits and producer rollout order.", "evidence": [{"test": "tests/test_eu_ai_act.py"}, {"test": "tests/test_getzilla_cli.py"}, {"receipt": "release_review"}]}
+  ],
+  "approvals": {
+    "required_scopes": ["scope_and_design_approval"]
+  },
+  "change_id": "20261021-task-44fe06",
+  "contracts": {
+    "events": [],
+    "json_schema": ["engineering/contracts/schemas/trust-ci-attestation-envelope.v2.json"],
+    "openapi": []
+  },
+  "forbidden_outcomes": [{"id": "FORBID-001", "statement": "No production mutation, external write, private-key handling, fabricated human review or Trust CI source change.", "evidence": [{"receipt": "security_review"}]}],
+  "invariants": [{"id": "INV-001", "statement": "Normal audit bundles still require passing local verification receipts; CI evidence never grants merge or release authority.", "evidence": [{"test": "tests/test_eu_audit_attestation.py"}]}],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Complete the EU AI Act phase-2 plan from merged PR120. Fix missing security evidence, signed audit dossier validation and Trust CI API integration; add matrix freshness, risk records, safe transparency scaffolding, and an informational ISO42001 map. Preserve opt-in offline behavior. Source changes only, no production writes or deployed policy changes.",
+    "success_metric": "All six Core outcomes have passing bounded regression tests and independent review before the final PR gate.",
+    "target": "Core and signed-result contract candidate; Trust CI producer and example policy follow in a separate PR."
+  },
+  "observability": [{"id": "SIG-001", "metric": "Audit JSON reports decision, reasons, authority and exact commit/base identity.", "proves": ["OBJ-001"]}],
+  "risk": {
+    "domains": [
+      "ai",
+      "api",
+      "integration",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

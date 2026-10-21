@@ -1,5 +1,14 @@
 {
   "schema_version": "eu-ai-act-obligations-v1",
+  "reviewed": "2026-10-21",
+  "review_method": "Automated check of official source dates. This is not a human legal review or approval. A project owner must arrange and record its own human review.",
+  "sources": [
+    "https://eur-lex.europa.eu/legal-content/EN/ALL/?uri=CELEX%3A32026R1744",
+    "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-113",
+    "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-9",
+    "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-11",
+    "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-50"
+  ],
   "regulation": "Regulation (EU) 2024/1689 (AI Act), as amended by Regulation (EU) 2026/1744 (AI Omnibus)",
   "note": "Engineering evidence only, not legal advice. Before applies_from a missing piece of evidence is reported as upcoming and does not block. Dates follow the AI Omnibus in force since 2026-07-27; check them against the Official Journal before relying on them.",
   "obligations": [

@@ -1,0 +1,110 @@
+{
+  "cgroup": {
+    "cgroup_version": 2,
+    "effective_cpuset": "0-27",
+    "levels": [
+      {
+        "cpu.max": "max 100000",
+        "path": "/sys/fs/cgroup/user.slice/user-1000.slice/session-2050.scope"
+      },
+      {
+        "cpu.max": "max 100000",
+        "path": "/sys/fs/cgroup/user.slice/user-1000.slice"
+      },
+      {
+        "cpu.max": "max 100000",
+        "cpuset.cpus.effective": "0-27",
+        "path": "/sys/fs/cgroup/user.slice"
+      },
+      {
+        "cpuset.cpus.effective": "0-27",
+        "path": "/sys/fs/cgroup"
+      }
+    ],
+    "membership": "/user.slice/user-1000.slice/session-2050.scope"
+  },
+  "change_id": "20261021-task-44fe06",
+  "chosen_capacity": 26,
+  "commands": [
+    {
+      "argv": [
+        "lscpu"
+      ],
+      "code": 0,
+      "stderr": "",
+      "stdout": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  28\nOn-line CPU(s) list:                     0-27\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz\nCPU family:                              6\nModel:                                   79\nThread(s) per core:                      2\nCore(s) per socket:                      14\nSocket(s):                               1\nStepping:                                1\nCPU(s) scaling MHz:                      41%\nCPU max MHz:                             3300.0000\nCPU min MHz:                             1200.0000\nBogoMIPS:                                4800.02\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 cdp_l3 pti intel_ppin ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 hle avx2 smep bmi2 erms invpcid rtm cqm rdt_a rdseed adx smap intel_pt xsaveopt cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local dtherm ida arat pln pts vnmi md_clear flush_l1d ibpb_exit_to_user\nVirtualization:                          VT-x\nL1d cache:                               448 KiB (14 instances)\nL1i cache:                               448 KiB (14 instances)\nL2 cache:                                3.5 MiB (14 instances)\nL3 cache:                                35 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-27\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             KVM: Mitigation: VMX disabled\nVulnerability L1tf:                      Mitigation; PTE Inversion; VMX conditional cache flushes, SMT vulnerable\nVulnerability Mds:                       Mitigation; Clear CPU buffers; SMT vulnerable\nVulnerability Meltdown:                  Mitigation; PTI\nVulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Mitigation; Clear CPU buffers; SMT vulnerable\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n"
+    },
+    {
+      "argv": [
+        "lscpu",
+        "-p=CPU,CORE,SOCKET,ONLINE"
+      ],
+      "code": 0,
+      "stderr": "",
+      "stdout": "# The following is the parsable format, which can be fed to other\n# programs. Each different item in every column has an unique ID\n# starting usually from zero.\n# CPU,Core,Socket,Online\n0,0,0,Y\n1,1,0,Y\n2,2,0,Y\n3,3,0,Y\n4,4,0,Y\n5,5,0,Y\n6,6,0,Y\n7,7,0,Y\n8,8,0,Y\n9,9,0,Y\n10,10,0,Y\n11,11,0,Y\n12,12,0,Y\n13,13,0,Y\n14,0,0,Y\n15,1,0,Y\n16,2,0,Y\n17,3,0,Y\n18,4,0,Y\n19,5,0,Y\n20,6,0,Y\n21,7,0,Y\n22,8,0,Y\n23,9,0,Y\n24,10,0,Y\n25,11,0,Y\n26,12,0,Y\n27,13,0,Y\n"
+    },
+    {
+      "argv": [
+        "nproc",
+        "--all"
+      ],
+      "code": 0,
+      "stderr": "",
+      "stdout": "28\n"
+    },
+    {
+      "argv": [
+        "nproc"
+      ],
+      "code": 0,
+      "stderr": "",
+      "stdout": "22\n"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-pc",
+        "3845906"
+      ],
+      "code": 0,
+      "stderr": "",
+      "stdout": "pid 3845906's current affinity list: 0,1,8-27\n"
+    }
+  ],
+  "effective_cpuset": "0-27",
+  "evidence_kind": "local observation; not a verification receipt",
+  "finite_quota": null,
+  "kind": "startup-cpu-step-zero",
+  "observed_at": "2026-10-21T13:02:24+00:00",
+  "pid": 3845906,
+  "probe": {
+    "allowed": "0-25",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-25",
+      "cat",
+      "/proc/self/status"
+    ],
+    "code": 0,
+    "requested": "0-25",
+    "stderr": ""
+  },
+  "process": {
+    "affinity": "0,1,8-27",
+    "nproc": 22
+  },
+  "reasons": [
+    "verified allowed online CPUs=26",
+    "owner reserve 2 -> ceiling 26"
+  ],
+  "reserve": 2,
+  "schema_version": 1,
+  "topology": {
+    "online_cpus": "0-27",
+    "online_logical_cpus": 28,
+    "physical_cores": 14
+  },
+  "uncertainties": [],
+  "verified_cpus": "0-25"
+}

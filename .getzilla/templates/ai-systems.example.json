@@ -1,5 +1,6 @@
 {
   "schema_version": "ai-systems-v1",
+  "note": "Fictional examples only. Replace all classifications and confirmations with actual human decisions. The example risk register is not evidence for a real system.",
   "systems": [
     {
       "id": "support-assistant",
@@ -34,7 +35,7 @@
       "disclosure_symbol": "AI_DISCLOSURE",
       "logging_symbol": "record_decision_event",
       "oversight_symbol": "require_human_review",
-      "risk_register": "compliance/credit-scoring-risks.json",
+      "risk_register": ".getzilla/templates/eu-ai-act/risk-register.example.json",
       "confirmation": {
         "by": "Jane Doe",
         "role": "legal counsel",

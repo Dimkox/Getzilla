@@ -4,6 +4,18 @@
 
 Checking only the scratch directory's 0700 mode missed two task-owned 0775 ancestors, so packaging controls correctly rejected their rename authority. Check the complete ancestor chain before running archive tests; removing group-write from those two directories preserved the security check and allowed the same bounded cases to run. The failed and corrected observations remain in the change evidence.
 
+## 2026-10-21 — A later batch reused a live denial objective
+
+A validation batch was denied as an opaque mutation. Its allowed split rewrite passed, but a later getzilla_par batch still matched the hook's active objective fingerprint. Stop the objective until scoped recovery; a successful split does not prove the fingerprint has expired.
+
+## 2026-10-21 — An optional signed field still changes a closed contract
+
+The phase2 plan assumed that optional argv was compatible with the closed v1 signed schema. Architecture fitness correctly rejected that same-version semantic change. Keep the old signed grammar intact and version the new grammar before producer rollout.
+
+## 2026-10-21 — Read-only command imports wrote Python caches
+
+The first CI audit implementation avoided explicit file writes but left Python import caching enabled. A subprocess regression test observed __pycache__ creation even on a disabled audit. Suppress bytecode writes before CI imports and restore the prior setting afterward.
+
 ## 2026-10-08 — Pushed review fixes to a branch whose PR had already merged
 
 Root cause: I pushed the round-2 #59 fixes to `fix/hook-policy-followup` without first checking the PR state; the owner had merged #59 at its round-1 head half an hour earlier, so the push landed on a closed PR and `main` kept the reviewed HIGH findings. Before pushing to an existing PR branch, check `gh pr view <n> --json state,headRefOid` and that the head still matches what was reviewed; if the PR is merged, open a follow-up PR instead.

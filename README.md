@@ -15,6 +15,14 @@ Current source: **2.3.1 source candidate**, including the verifier child-test sc
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
+The optional [EU AI Act layer](docs/eu-ai-act.md) includes matrix freshness checks, risk records,
+Python and Node transparency adapters, and audit evidence. Run `getzilla compliance scaffold`
+to create an adapter for a registered system. Read-only CI checks and a trusted installed verifier
+can record signed audit execution. Normal audit bundles still need local verification receipts.
+The ISO/IEC 42001 map is informational. These are engineering evidence tools, not legal advice.
+Trust CI signed-argv emission and policy wiring ship in a separate successor; legacy attestations
+without argv cannot establish EU execution evidence.
+
 The local command guard checks Codex `exec_command.cmd` before policy and workdir checks. It rejects malformed native input and conflicting `cmd`/`command` fields. Legacy `command` string/list inputs remain supported. Generated hooks use the nearest installed project, so nested worktrees keep their own route and denial state. Task scratch stays under the canonical project root `.getzilla/runtime`.
 
 ## The short version
