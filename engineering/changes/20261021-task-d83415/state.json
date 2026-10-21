@@ -117,6 +117,18 @@
       "from": "reviewing",
       "reason": "Independent reviewers reproduced a standalone-token boundary defect; preserve all original failing reports and repair with the same sole writer in an isolated sibling.",
       "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T13:47:18+00:00",
+      "from": "implementing",
+      "reason": "Context repair and corrected scanner-occurrence regressions pass bounded and committed-HEAD controls.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T13:47:18+00:00",
+      "from": "verifying",
+      "reason": "Freeze repaired candidate for fresh independent review; retain previous failing reports and no final receipt.",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -125,7 +137,7 @@
   "human_gates_digest": "30d5ada87775024a66426f74c51e25ffd76df9e6e9608cd92ed98c7b86151962",
   "route_id": "d834158878e0",
   "schema_version": 1,
-  "status": "implementing",
+  "status": "reviewing",
   "title": "Fix verification false positives for public token addresses and immutable historical Markdown: add narrow hash-bound reviewed dispositions, fail closed on stale or unsafe entries, preserve raw findings and genuine secret detection, and verify the Liqvera audit without modifying historical evidence.",
-  "updated_at": "2026-10-21T13:41:09+00:00"
+  "updated_at": "2026-10-21T13:47:18+00:00"
 }
