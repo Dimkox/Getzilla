@@ -212,6 +212,11 @@ def sync_project(home: Path, project: Path) -> str:
     branch = BRANCH_PREFIX + version
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
         raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
+    # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
+    ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
+                       *(path for path, _, _ in changes))
+    if ignored:
+        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
     commit = commit_changes(project, changes, f'chore: update Getzilla to {version}')
     _git_out(project, 'branch', branch, commit)
     switched = git(project, 'switch', '--quiet', branch)

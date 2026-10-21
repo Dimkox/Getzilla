@@ -106,6 +106,15 @@ class ProjectSyncTests(unittest.TestCase):
             self.assertEqual(os.listdir(outside), [])
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
+    def test_an_ignored_local_file_on_a_managed_path_is_never_overwritten(self) -> None:
+        (self.project / '.gitignore').write_text('bandit.yaml\n', encoding='utf-8')
+        self.commit('ignore bandit.yaml')
+        (self.project / 'bandit.yaml').write_text('mine\n', encoding='utf-8')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'bandit.yaml'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / 'bandit.yaml').read_text(encoding='utf-8'), 'mine\n')
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+
     def test_a_subfolder_is_not_a_repository_root(self) -> None:
         (self.project / 'sub/.getzilla').mkdir(parents=True)
         with self.assertRaisesRegex(upgrade.UpdateError, 'not the root'):
