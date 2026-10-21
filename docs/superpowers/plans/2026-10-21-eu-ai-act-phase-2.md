@@ -30,7 +30,8 @@ The first review wave found three Medium defects. The repair batch binds all dec
 refuses unsafe Windows scaffolding before mutation, and forcefully terminates the Node child at
 timeout. Templates remain available for manual Windows use. Five Low test gaps are deferred to
 issue122. The branch rebased onto actual main e42398ddaa41e662e921d7af68ab87b1e28e3554 after PR121
-and PR114. Earlier controls/reviews remain historical. Fresh controls and all four reviews are
+and PR114, then a103b373031f477efad0e7bd9ffab24a96e6c63f after PR123/PR124. Both groups of prose
+changes and lean-install behavior remain intact. Earlier controls/reviews remain historical. Fresh controls and all four reviews are
 required for the repaired source; no earlier PASS is carried forward.
 
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the

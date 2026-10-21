@@ -8,6 +8,7 @@
 - [x] Historical named smoke passed on source 5e8b873 with no receipt.
 - [x] Coordinator collected all four first-wave reports in 4abde00; code/security review found three Medium defects.
 - [x] Rebase onto actual main e42398d and implement one repair batch after red regressions.
+- [x] Preserve the repair checkpoint and rebase onto actual main a103b373 after PR123/PR124. Retain both groups of prose changes and lean-install behavior.
 - [ ] Run fresh bounded controls on the repair checkpoint.
 - [ ] Prepare repaired source state reviewing, then run the named committed-HEAD smoke.
 - [ ] Coordinator collects four fresh independent reviews.
