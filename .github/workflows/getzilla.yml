@@ -227,7 +227,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]"
+          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
       - name: Core tests on macOS
         if: success() || failure()
         run: |
@@ -262,9 +262,18 @@ jobs:
                       print('DIAG git', args[1:], kwargs.get('limit'), type(exc).__name__, getattr(exc, 'code', None), exc, file=sys.stderr)
                       raise
               governance.run_git_bounded = git_traced
+              from getzilla import workflow_artifacts
+              acquire = workflow_artifacts._acquire_cas_lock
+              def lock_traced(*args, **kwargs):
+                  try:
+                      return acquire(*args, **kwargs)
+                  except Exception as exc:
+                      print('DIAG cas-lock', type(exc).__name__, exc, repr(exc.__cause__), file=sys.stderr)
+                      raise
+              workflow_artifacts._acquire_cas_lock = lock_traced
           _hook()
           PY
-          PYTHONPATH="$RUNNER_TEMP/diag" python -m unittest discover -s tests -k FocusedPython -k VerifyDocsState -k test_python_pr_does_not_trust -k test_git_output_is_capped 2>&1 | grep -E 'DIAG|^(FAIL|ERROR):' | sort | uniq -c | head -80 || true
+          PYTHONPATH="$RUNNER_TEMP/diag" python -m unittest discover -s tests -k FocusedPython -k VerifyDocsState -k test_python_pr_does_not_trust -k test_git_output_is_capped -k test_concurrent_cooperating_writers 2>&1 | grep -E 'DIAG|^(FAIL|ERROR):' | sort | uniq -c | head -80 || true
       - name: Annotate macOS failures
         if: failure()
         shell: python

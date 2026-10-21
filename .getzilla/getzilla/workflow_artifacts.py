@@ -1633,6 +1633,8 @@ def _acquire_cas_lock(root: Path, change_id: str, relative_target: str) -> tuple
         before = os.fstat(lock_fd)
         if not stat.S_ISREG(before.st_mode):
             raise WorkflowArtifactError("CAS lock is not a regular file", code="cas")
+        if not fsx.WINDOWS:
+            os.set_blocking(lock_fd, True)
         # Windows msvcrt.locking retries for about ten seconds, then fails closed as an io error.
         fsx.lock_file(lock_fd)
         current = fsx.lstat_at(directory_fd, lock_name)
