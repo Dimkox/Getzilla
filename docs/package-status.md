@@ -1,6 +1,6 @@
 # Local package status and checkpoints
 
-Current source identity is `2.3.0`, an unpublished release candidate with the verifier child-test scope fix and unchanged bounded owner-local M8 policy. Latest published is immutable [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), with ZIP/checksum assets. A 2.3.0 ZIP/checksum must come from the exact merged tested source through GitHub Release publication and is not checked into source Git.
+Current source identity is `2.3.1`, an unpublished release candidate with the verifier child-test scope fix and unchanged bounded owner-local M8 policy. Latest published is immutable [v2.2.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), with ZIP/checksum assets. A 2.3.1 ZIP/checksum must come from the exact merged tested source through GitHub Release publication and is not checked into source Git.
 
 `python3 scripts/getzilla_status.py` observes the current worktree. It preserves `route`, `change`, `agents`, and `evidence_gaps`, and adds:
 
