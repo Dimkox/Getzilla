@@ -56,10 +56,14 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
 
 def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     script = root / '.grok/hooks' / name
+    # Use the fixture even when the parent runner exposes the intact source package.
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
     # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
     proc = subprocess.run(
         [sys.executable, str(script)],
         cwd=root,
+        env=env,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         capture_output=True,
         check=False,

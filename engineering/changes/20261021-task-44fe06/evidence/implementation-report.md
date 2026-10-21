@@ -5,7 +5,93 @@ Current comparison base: 287e64f99b01db44cb6eeeb10f307ccda6f91c1d.
 Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
-## Repair after the second review wave
+## Repair after the first qualifying gate
+
+Qualification remains UNVERIFIED. Four wave3 reviews passed before the coordinator froze
+d7f91344feda5031cc67130b4d772ad4e6f464f3, tree3e5e2bd4951340f35646495afbe66bee71ace594,
+fingerprintb80425f7c514c1c65a602f46688ea7c7be3dda242fe040859569f9bfd8ac80d4.
+The complete reports remain unchanged. Their claims are historical after this test-only repair.
+
+The final local gate on that frozen source failed:8 failed,2307 passed,17 skipped,4013 subtests.
+Coverage reached81.76%, but the failed test run did not qualify. The selector used full-pr-suite,
+reason out-of-scope-or-invalid-paths, changed-path digest
+090abc993fb25c2520daa1706a3cacc39baa2f9eb56c43c22ddf54fcf32f66d4 and no scope skips.
+The preserved failed receipt SHA256 is
+f4353665d12506a07ab4b9a4f6b38222007e712a939cf43ba60326e9a8076086.
+No passing final verification or review receipt was created. Delivery PR:
+https://github.com/Dimkox/Getzilla/pull/127. Frozen d7f91344 was transported as UNVERIFIED using
+source grant9bd794918ce8811a and canonical shared-Git grant91c3a034061519f3. The successful exact
+SHA refspec left canonical main unchanged. The PR target was f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02;
+the recorded comparison base remains287e64. No rebase is required for that unrelated target change.
+
+Current-head triage separated two existing test-environment defects:
+
+- Six affected methods without coverage or runner PYTHONPATH passed:6 tests,30 subtests in7.07s.
+- Coverage alone reproduced only the huge-argv time assertion:8.8017s exceeded8s, while the deny verdict was correct. Result:1 failed,5 passed,30 subtests in24.85s. The unchanged74% coverage threshold also rejected this diagnostic subset at9.17%.
+- The runner's source/tests/.getzilla PYTHONPATH, without coverage, reproduced all five hook-method failures:7 failures and28 passing subtests in8.65s. Healthy source imports hid the fixture's deliberately broken policy or fsx. Expected degraded events were absent, a broken self-test passed and a high-risk synthetic payload was allowed.
+- The new poisoned-PYTHONPATH regression failed before repair:0 degraded events instead of2, exit1 in3.71s. No destructive payload was executed.
+
+The explorer proved that the implicated tests, hooks, policy, enforcement and runner were
+byte-identical to base287e64. Exact-base execution is BLOCKED after an authoritative extraction
+denial. No baseline test ran; static parity does not prove a baseline runtime failure. The private
+triage report and exact commands are in canonical scratch
+eu-act-reviews-20261021/core-fullgate-triage-d7f9134.md. The baseline report is in eu-baseline-kOAMw6/analysis.md.
+
+Public Linux CI independently ran2331 tests with21 skips and one error: the new V2 schema test
+could not import jsonschema. The local host's undeclared Debian4.10.3 installation hid that omission.
+The Linux log is preserved in canonical scratch eu-act-reviews-20261021/core-linux-d7f9134-failure.txt.
+Serial unittest had no hook failures. These results do not replace fresh exact-head CI.
+
+The coordinator approved this bounded repair:
+
+- Bind run_hook subprocess PYTHONPATH to the fixture root and fixture/.getzilla. Preserve the remaining environment, including coverage variables. Scope the direct enforcement API self-test the same way.
+- Keep the original huge-argv policy call and deny assertion under coverage. Deterministic controls prove the3s deadline and20000-entry limit using an ordinary non-secret read: an exhausted budget gives the marker and denies; an unspent budget allows. A second ordinary Python child imports the same fixture policy, clears its scan cache and evaluates the same payload. The coordinator explicitly refined the test contract to CPU process_time<8s, wall time as an observation and a15s child timeout. Assert no trace/profile/monitoring and exact fixture module origins. No skip, retry, tracer stop, product-budget change or coverage exclusion.
+- Declare test-only jsonschema==4.26.0 for real Draft2020-12 V2/legacy contract validation. No existing repository pin existed. The [official release](https://pypi.org/project/jsonschema/4.26.0/) supports Python>=3.10. Do not change global Python or runtime dependencies.
+
+Repair observations so far:
+
+- Runner-PYTHONPATH plus coverage diagnostic passed all7 affected methods and30 subtests in47.73s. Exit1 came only from the unchanged74% aggregate threshold: this subset covered9.03%. This is a test observation, not a passing coverage gate.
+- A concurrent six-module run returned2 failed,96 passed,389 subtests in50.65s. The first failure was a removed time import still needed by the glob test; the import is restored. The ordinary timed child also measured9.7127s under concurrent20+6-worker load. One authorized isolated probe then measured wall4.2242174698s and process CPU4.223540568s, with no trace/profile/monitoring, cold cache and matching fixture source. This exposed the initial recommendation's failure to separate work from scheduling delay. The approved CPU-bound contract above replaces the wall assertion; it does not promise wall<8s under arbitrary load.
+- Before changing the timing assertion, the two deterministic deadline/entry controls passed with4 subtests in3.68s. Both allow and deny controls use an ordinary source path, so a secret suffix cannot hide a broken budget.
+- After the approved timing refinement, the six-module hook/policy run with the runner's source/tests/.getzilla PYTHONPATH passed100 tests and393 subtests in17.55s. Command: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=<candidate>:<candidate>/tests:<candidate>/.getzilla taskset -c 0-23 python3 -m pytest -q -n 24 -p no:cacheprovider --tb=short tests/test_hook_degraded.py tests/test_enforcement_report.py tests/test_degraded_fail_closed.py tests/test_policy_hardening.py tests/test_hooks.py tests/test_hook_encoding.py`. The architect used the remaining two CPUs; no second heavy suite competed with the timing child.
+- Changed-test Ruff and git diff --check passed after restoring the import.
+- Typed spec validation passed with all8 criteria mapped, and governance passed without findings. Architecture initially failed on tests/test_hook_degraded.py: FIT-BOUNDED-WORKER-JOBS, queue_provenance_unresolved. The touched module exposes the existing chain verification→receipts→review_source→state→agent_lifecycle→policy→_policy_legacy→cost_guard→risk_terms:9 modules exceed the unchanged depth limit8. The architect confirmed this with a bounded private probe. Move the new regression, with all its assertions, to the lighter test_degraded_fail_closed.py and restore test_hook_degraded.py exactly to d7f91344. No architecture rule or analyzer changed.
+- After relocation, the two affected modules passed9 tests and30 subtests in5.70s with the runner PYTHONPATH and24 workers. Architecture fitness passed with only new_contract risk and no findings. Changed-test Ruff passed. A read-only diff confirmed the restored test module, hooks, policy, runner, coverage configuration, schemas and all four wave3 reports matchd7f91344.
+- Requirement-binding controls passed114 tests and190 subtests, with4 skips, in25.49s: `taskset -c 0-23 python3 -m pytest -q -n 24 -p no:cacheprovider --tb=short tests/test_ci_gate.py tests/test_install_scripts.py tests/test_project_state.py tests/test_python_test_runner.py`. Skips are not passes.
+- Final covered diagnostic ran alone with26 workers after relocation and the approved CPU/budget assertions:9 tests and34 subtests passed in20.56s. Its exit1 came only from aggregate coverage9.85% below the unchanged74% threshold. This subset is not a passing coverage gate. The original policy verdict remained covered; the child proved fixture origins and no trace/profile/monitoring.
+- A fresh venv exists at canonical scratch eu-act-reviews-20261021/schema-venv. Its dependency installation never ran: a direct venv pip command was denied as opaque control-plane mutation, and the one explicit python3 -m pip --python rewrite hit the same-objective circuit breaker. No exact protected target was named. This exact optional objective stays BLOCKED/NOT_RUN. Do not retry, request a speculative grant, change global Python or claim the4.26.0 test passed.
+
+Blocked install commands, in order:
+
+1. `/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/schema-venv/bin/python -m pip install --disable-pip-version-check -r /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2/.getzilla/config/python-test-requirements.txt`
+2. `python3 -m pip --python /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/schema-venv/bin/python install --disable-pip-version-check -r /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2/.getzilla/config/python-test-requirements.txt`
+
+The first denial required explicit protected targets for an opaque mutation; it named none.
+The second denial explicitly prohibited further retry for the same objective. Static pip-guard
+diagnosis by the explorer also stopped after its own circuit-breaker denial. The fresh interpreter
+has no installed test requirements and is not ready for the full gate. Host4.10.3 observations
+remain separate from the pending pinned4.26.0 execution.
+
+Final process ruling: the fresh scratch install was an optional diagnostic, not a route or skill
+prerequisite. Stopping every review and qualifying gate because of it was too broad. Keep this
+objective blocked without an alternative installation. Required local controls and the unchanged
+final gate use the existing host jsonschema4.10.3 and do not prove installation of4.26.0. The normal
+required exact-head GitHub CI job installs declared pins; it is a separate gate, not a dispatch or
+replacement of the denied local action. If a required gate itself requires the blocked operation,
+stop that dependent gate. No circuit-breaker override or fake PASS is created by this ruling.
+
+The coordinator then found foreign remote head55e7cb05a9be4648012086664d2b1e001cc81300 on PR127.
+The writer made no commit or push before that finding and stopped source work for inspection.
+Its parent05d3e6c merges actual mainf9f02dd53ba9f6e69d51ae5322df0c96e3d41b02 into d7f91344;
+55e7cb05 changes the compliance CLI, installer and EU/install tests. Preserve this authorized work.
+The coordinator approved a test-repair checkpoint followed by a no-ff merge of that exact remote
+head, with no reset/rebase/force. Refresh the comparison base through the official API only after
+the merge, retain its history, and run affected CLI/install controls before source state reviewing.
+All current observations above become historical across that integration. No final PASS is claimed.
+The coordinator owns the next report freeze, final local gate and required public linux/windows
+checks. Six Low gaps remain deferred at https://github.com/Dimkox/Getzilla/issues/122.
+
+## Historical repair after the second review wave
 
 Current qualification is UNVERIFIED. All four wave2 reports returned FAIL and remain unchanged
 from report commit b23baf3af48864a87b858116fe7684d2f2d14e79, tree3a7ec725b7dc34987990553ba4bd0157d5e13cd4.

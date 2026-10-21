@@ -1,5 +1,21 @@
 # Mistakes
 
+## 2026-10-21 — Test fixtures inherited the runner's source imports
+
+The runner's PYTHONPATH placed the healthy source package before deliberately broken fixture modules. Plain focused tests passed, but the covered full runner hid degraded behavior. Bind child imports to the fixture while preserving the rest of its environment; the poisoned-path regression must record degradation and retain refusal.
+
+## 2026-10-21 — Instrumentation and host packages hid test requirements
+
+The huge-argv test timed instrumented policy execution against an ordinary-runtime limit. The first repair recommendation still used wall time in a child and failed at9.7127s under load; one isolated probe took4.224s in both wall and CPU time. The approved test contract now keeps the covered verdict, deterministic deadline/entry controls, an8s CPU-work bound and15s child timeout; it makes no wall<8s promise under arbitrary load.
+
+The new schema test used an undeclared host jsonschema package. Pin the test dependency and prove it in a fresh environment; a successful host import does not establish declared CI dependencies.
+
+The timing repair removed the shared time import although another test still used it. The first six-module control caught the NameError; retain that import and validate the whole affected module.
+
+The new poison regression was placed in a module that already imports verification. Touching it exposed a9-module local dependency chain against the queue analyzer's unchanged limit8; move the regression intact to the existing lighter degraded-hook module, rather than change architecture limits.
+
+The optional fresh-environment install hit the circuit breaker, and the initial response stopped all reviews and qualification. That dependency was invented: route-required local gates can use the existing host while normal exact-head CI checks the declared pin. Keep the exact optional install blocked and disclose the host/pinned-version evidence difference.
+
 ## 2026-10-21 — Live authorization and shared sanitization used different evidence
 
 The early opt-in read authorized a different snapshot from the evaluator's captured config. Reusing strict Git sanitization for receipt inventory also removed global excludes that the existing verifier honors. Bind authorization to captured bytes and preserve ignore compatibility only in the pinned untracked inventory reader.

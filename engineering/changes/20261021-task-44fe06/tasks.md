@@ -16,11 +16,18 @@
 - [x] Coordinator saved four wave2 FAIL reports inb23baf3. Two Medium findings remain; six Low gaps stay in issue122.
 - [x] Add failing wave2 regressions and implement captured opt-in plus bounded receipt-ignore compatibility. Focused48tests and67subtests passed.
 - [x] Complete wave2 architecture/spec/governance controls and prepare state reviewing. Ruff/Bandit also passed; V1/util/reports stay unchanged.
-- [ ] Run the named committed-HEAD smoke and send the exact repaired source identity to the coordinator.
-- [ ] Coordinator collects four fresh independent reviews after the second repair.
-- [ ] Coordinator freezes reports and runs final local PR gate and external exact-head checks.
+- [x] Historical second-repair source cf18a79c passed the named smoke and all four wave3 reviews.
+- [x] Coordinator froze reports in d7f91344 and ran the qualifying local gate. It failed8 tests; public Linux also failed the missing schema-test dependency.
+- [x] Reproduce fixture PYTHONPATH contamination and coverage timing separately. Add and observe the new poisoned-import regression failing.
+- [x] Repair only test environment isolation, the timing measurement boundary and the declared jsonschema4.26.0 test dependency.
+- [x] Complete bounded hook/policy, requirement-binding, covered diagnostic and architecture/static/spec controls for the test repair. These are observations, not qualifying receipts.
+- [ ] Commit this checkpoint, preserve foreign remote55e7cb05 through a no-ff merge, update the actual comparison base and run affected CLI/install controls.
+- [ ] Complete fresh bounded controls and source state reviewing.
+- [ ] Optional fresh local pinned-dependency installation is BLOCKED/NOT_RUN; it is not a route prerequisite. Required exact-head CI must still install declared4.26.0.
+- [ ] Commit the repair and run the named committed-HEAD smoke.
+- [ ] Coordinator collects four fresh independent reviews, freezes reports and reruns final local and exact-head external gates.
 
 Trust CI producer and example policy are a separate successor. No extra write agent shares this candidate.
 
-Final qualification is UNVERIFIED. Prior controls and both report waves are historical after repair.
-No fresh independent review, final local gate, push or external exact-head check ran for this repair.
+Final qualification is UNVERIFIED. Prior controls and all three report waves are historical after repair.
+No fresh independent review or qualifying gate has run for the final-gate repair.

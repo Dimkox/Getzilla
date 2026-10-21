@@ -4,10 +4,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla'), str(ROOT / 'scripts')]
@@ -51,10 +53,13 @@ class EnforcementReportTests(unittest.TestCase):
         with project_copy() as root:
             (root / '.claude').mkdir(exist_ok=True)
             (root / '.claude' / 'settings.json').write_text('{"hooks": "pre_tool_use.py stop_gate.py"}', encoding='utf-8')
-            report = inspect_enforcement(root)
-            self.assertEqual(report.self_test['status'], 'pass', report.self_test)
-            (root / '.getzilla/getzilla/policy.py').write_text('raise ImportError("broken")\n', encoding='utf-8')
-            broken = inspect_enforcement(root)
+            # This product API spawns hooks directly, so bind both calls to the fixture.
+            fixture_path = os.pathsep.join((str(root), str(root / '.getzilla')))
+            with mock.patch.dict(os.environ, {'PYTHONPATH': fixture_path}):
+                report = inspect_enforcement(root)
+                self.assertEqual(report.self_test['status'], 'pass', report.self_test)
+                (root / '.getzilla/getzilla/policy.py').write_text('raise ImportError("broken")\n', encoding='utf-8')
+                broken = inspect_enforcement(root)
             self.assertEqual(broken.self_test['status'], 'fail')
             self.assertEqual(broken.level, 'none')
 

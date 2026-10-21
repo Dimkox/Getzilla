@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-21 — Separate fixture identity, coverage and timing evidence
+
+Bind hook subprocess imports to the copied fixture while preserving every other environment variable. Keep the policy verdict covered, test deadline and entry exhaustion deterministically, and measure ordinary CPU work in an untraced child with a finite timeout. The poisoned-import and100-test hook/policy controls passed without changing product hooks, runner or coverage settings.
+
 ## 2026-10-21 — Keep audit authority and receipt compatibility in separate reads
 
 Use captured committed bytes for both opt-in authority and evaluation. Honor normal Git excludes only in the untracked receipt inventory, with pinned Git identity and bounded output. Real-read swap and private-config tests cover both boundaries without changing the receipt format.

@@ -37,35 +37,35 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Wave2 repair focused48tests and67subtests, Ruff/Bandit, architecture, spec and governance passed. Earlier source controls are historical. Fresh committed-HEAD smoke and final qualifying PR gate remain pending. Observations create no receipt.",
+        "reason": "Frozen d7f91344 failed its final local gate and public Linux tests. Bounded test-repair controls passed as observations; no coverage gate PASS is claimed. Optional pinned installation stays BLOCKED/NOT_RUN and is not a route prerequisite. Preserve remote55e7cb05 through merge before fresh integration controls and final gates.",
         "receipt_kind": "verification",
         "status": "not_run"
       },
       {
         "id": "code_review",
         "kind": "receipt",
-        "reason": "Both report waves are historical after the two Medium repairs. The complete wave2 FAIL report remains unchanged. Fresh independent review and receipt remain pending.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "code_review",
         "status": "not_run"
       },
       {
         "id": "test_review",
         "kind": "receipt",
-        "reason": "Both report waves are historical after the two Medium repairs. The complete wave2 FAIL report remains unchanged. Fresh independent review and receipt remain pending.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "test_review",
         "status": "not_run"
       },
       {
         "id": "security_review",
         "kind": "receipt",
-        "reason": "Both report waves are historical after the two Medium repairs. The complete wave2 FAIL report remains unchanged. Fresh independent review and receipt remain pending.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "security_review",
         "status": "not_run"
       },
       {
         "id": "release_review",
         "kind": "receipt",
-        "reason": "Both report waves are historical after the two Medium repairs. The complete wave2 FAIL report remains unchanged. Fresh independent review and receipt remain pending.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "release_review",
         "status": "not_run"
       }
@@ -190,6 +190,16 @@
       ],
       "reason": "Two wave2 Medium repairs passed focused tests, static checks, architecture, spec and governance. Fresh committed-HEAD smoke and four independent reviews remain pending.",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T15:59:30+00:00",
+      "from": "reviewing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Repair final gate fixture isolation and timing plus declared schema test dependency after reproduced failures",
+      "to": "implementing"
     }
   ],
   "human_gates": [
@@ -200,7 +210,7 @@
   "human_gates_digest": "189ed16faf217a895a92815d88941ce7372cc76c3cbe69d5609f7869f4da03c7",
   "route_id": "44fe064efbab",
   "schema_version": 1,
-  "status": "reviewing",
+  "status": "implementing",
   "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
-  "updated_at": "2026-10-21T15:19:44+00:00"
+  "updated_at": "2026-10-21T15:59:30+00:00"
 }

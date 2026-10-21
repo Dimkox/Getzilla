@@ -1,5 +1,7 @@
 # Rollback
 
+The final-gate repair changes only test fixtures, a timing assertion harness and a pinned test dependency. Revert that batch through a reviewed PR if needed. It changes no deployed hook, runner, coverage setting or production state. Keep the failing gate evidence and do not reuse historical PASS reviews after a rollback.
+
 Revert this source commit through a reviewed PR if regressions block a consumer. Re-run focused tests and the normal PR gate. No migration or data recovery is needed.
 
 Optional risk fields remain parseable after revert. Preserve the prior matrix and registry in Git. Remove only a generated adapter that the operator has not modified. C2PA never replaces source content.

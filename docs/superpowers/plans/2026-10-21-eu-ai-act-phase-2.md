@@ -43,6 +43,15 @@ Only the bounded untracked receipt inventory honors normal global/system Git exc
 identity and source capture remain unchanged. Six Low gaps now share issue122, including first-use
 provider-cache coverage. That Low gap remains outside the current repair.
 
+The third review wave passed all four reviews before freeze d7f91344. Its final local gate failed
+eight tests. Triage separated inherited fixture imports from coverage timing; public Linux then
+found the undeclared jsonschema test dependency. The bounded repair changes tests and their pinned
+requirements only. Keep the covered deny assertion and deterministic deadline/entry-budget controls.
+The approved timing contract is8s process CPU, observed wall time and15s child timeout, with
+untraced fixture imports. Exact-base execution and fresh pinned-dependency installation are BLOCKED;
+static source parity or a host package is not a substitute for either test result.
+All complete reviews remain historical, and the repaired source needs fresh controls and reviews.
+
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
 writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
 checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not final qualification.
@@ -59,8 +68,12 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Historical clean-HEAD smoke passed on61827791 in0.101s; no receipt. The second review wave returned four FAIL reports.
 - [x] Add red regressions for the two wave2 Medium findings and implement the bounded repair. Focused48tests and67subtests passed.
 - [x] Wave2 static/spec/architecture/governance controls passed. Prepare source state reviewing.
-- [ ] Commit repaired source and run a fresh clean committed-HEAD smoke.
-- [ ] Collect four fresh independent reviews, save reports, commit/freeze and run one final PR verifier.
+- [x] Historical second-repair source cf18a79c passed its clean committed-HEAD smoke.
+- [x] Collect four wave3 PASS reviews and freeze d7f91344. Its final local PR gate and public Linux checks failed; those failures remain evidence.
+- [x] Add the red poisoned-import regression and implement the bounded test/tool-requirements repair.
+- [ ] Complete fresh focused controls, commit source state reviewing and run the named smoke.
+- [ ] Optional fresh local pinned-version installation remains BLOCKED/NOT_RUN. It does not block route-required reviews or gates; normal required exact-head CI must install declared4.26.0.
+- [ ] Collect four fresh independent reviews, save reports, commit/freeze and run the next qualifying PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.
 
