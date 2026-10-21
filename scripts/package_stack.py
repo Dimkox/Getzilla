@@ -729,6 +729,26 @@ def _head_blob_digests(
     return digests
 
 
+def _crlf_checkout_paths(root: Path, paths: list[str]) -> frozenset[str]:
+    """Paths .gitattributes checks out with ``eol=crlf``: an LF blob, a CRLF working copy."""
+    if not paths:
+        return frozenset()
+    proc = subprocess.run(  # nosec B603 B607 - fixed git argv, paths on stdin
+        ['git', '-C', str(root), 'check-attr', '-z', '--stdin', 'eol'],
+        input=b''.join(path.encode('utf-8') + b'\0' for path in paths), capture_output=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise PackageError('cannot read .gitattributes for release packaging')
+    fields = proc.stdout.split(b'\0')
+    return frozenset(fields[index].decode('utf-8') for index in range(0, len(fields) - 2, 3)
+                     if fields[index + 1] == b'eol' and fields[index + 2] == b'crlf')
+
+
+def _normalized_matches(path: Path, size: int, digest: str) -> bool:
+    data = path.read_bytes().replace(b'\r\n', b'\n')
+    return len(data) == size and hashlib.sha256(data).hexdigest() == digest
+
+
 def _release_snapshot_from_tracked_head(root: Path) -> ReleaseSnapshot:
     canonical_root = _release_repository_root(root)
     head = _capture_release_head(canonical_root)
@@ -737,10 +757,16 @@ def _release_snapshot_from_tracked_head(root: Path) -> ReleaseSnapshot:
     entries = snapshot_files(canonical_root, files=[file.path for file in files])
     head_digests = _head_blob_digests(canonical_root, files)
     tracked_by_path = {file.relative_path: file for file in files}
+    differing = [entry.relative_path for entry in entries
+                 if (entry.identity.size, entry.digest) != head_digests[entry.relative_path]]
+    # A batch file that .gitattributes checks out as CRLF ships as CRLF for cmd.exe; it is the
+    # same source when its LF normalization equals the blob. Anything else that differs is refused.
+    crlf = _crlf_checkout_paths(canonical_root, differing)
     for entry in entries:
         tracked = tracked_by_path[entry.relative_path]
         size, digest = head_digests[entry.relative_path]
-        if entry.identity.size != size or entry.digest != digest:
+        if entry.relative_path in differing and not (
+                entry.relative_path in crlf and _normalized_matches(canonical_root / entry.relative_path, size, digest)):
             raise PackageError(f'release source differs from tracked HEAD: {entry.relative_path}')
         if bool(entry.identity.mode & 0o111) != bool(tracked.mode & 0o111):
             raise PackageError(f'release source mode differs from tracked HEAD: {entry.relative_path}')
