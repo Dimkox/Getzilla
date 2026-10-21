@@ -456,7 +456,9 @@ def build_route(
     operational_intent = _has_operational_intent(prompt)
     intent = _best_intent(prompt, operational_intent=operational_intent)
     domains, task_domains, matched_keywords = _domains(prompt, repo)
-    risk, rationale = _risk(prompt, intent, domains)
+    # Risk and size come from what the task is about; a repository that also contains API, data or
+    # security code does not make every prompt in it medium. The diff escalates the route later.
+    risk, rationale = _risk(prompt, intent, task_domains)
     try:
         cost_signal = prompt_cost_signals(prompt)
     except (OSError, ValueError):
@@ -465,7 +467,7 @@ def build_route(
         if risk == 'low':
             risk = 'medium'
         rationale.append(cost_signal.rationale)
-    complexity = _complexity(intent, risk, domains, prompt)
+    complexity = _complexity(intent, risk, task_domains, prompt)
 
     cfg = load_routing_config(root)
     floors = cfg.get('analysis_floors') if isinstance(cfg.get('analysis_floors'), dict) else {}

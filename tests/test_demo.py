@@ -122,12 +122,12 @@ class DemoServiceTests(unittest.TestCase):
         for field in ("intent", "risk", "domains", "write_agent"):
             self.assertEqual(alternate[field], direct[field])
         self.assertEqual(alternate["intent"], "review")
-        self.assertEqual(alternate["risk"], "medium")
+        self.assertEqual(alternate["risk"], "low")
         self.assertEqual(alternate["domains"], ["api"])
         self.assertIsNone(alternate["write_agent"])
         self.assertEqual(
             scenario["alternate_action_label"],
-            "Use contrasting review route · medium risk · no write owner",
+            "Use contrasting review route · low risk · no write owner",
         )
         if alternate["risk"] != "low":
             self.assertNotIn("low risk", scenario["alternate_action_label"].lower())
