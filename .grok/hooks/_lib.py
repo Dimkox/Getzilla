@@ -15,8 +15,8 @@ from typing import Any, Callable
 HOOK_DIR = Path(__file__).resolve().parent
 REPO_CANDIDATE = HOOK_DIR.parents[1]
 STACK = REPO_CANDIDATE / '.getzilla'
-if str(STACK) not in sys.path:
-    sys.path.insert(0, str(STACK))
+# This hook's installation must precede inherited stacks even if already listed.
+sys.path[:] = [str(STACK), *(path for path in sys.path if path != str(STACK))]
 
 from getzilla import fsx
 from getzilla._policy_legacy import (
