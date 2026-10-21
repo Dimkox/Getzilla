@@ -11,6 +11,7 @@ import io
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 import unittest
 from unittest import mock
 
@@ -24,6 +25,8 @@ CURRENT_EPOCH_SHA = "fde60e040167c10975b00d11f578c4da6763069a"
 # would over-count a `pip install --user pypdf` and turn the parser-present
 # tests red when the child still cannot import it.
 _CHILD_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+_DEPENDENCIES = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]["dependencies"]
+_PINNED_PYPDF = next(item.removeprefix("pypdf==") for item in _DEPENDENCIES if item.startswith("pypdf=="))
 
 
 def _pypdf_pinned() -> bool:
@@ -31,7 +34,7 @@ def _pypdf_pinned() -> bool:
         (
             str(Path(sys.executable).absolute()), "-B", "-I", "-c",
             "import importlib.metadata as m; import pypdf; "
-            "raise SystemExit(0 if m.version('pypdf')=='6.18.1' else 1)",
+            f"raise SystemExit(0 if m.version('pypdf')=={_PINNED_PYPDF!r} else 1)",
         ),
         cwd="/", env=_CHILD_ENV, capture_output=True, timeout=30,
     )
@@ -76,6 +79,9 @@ def _blank_pdf(*, page_count: int = 1) -> bytes:
 
 
 class PdfWorkerInputGuards(unittest.TestCase):
+    def test_pdf_parser_metadata_matches_the_declared_dependency(self):
+        self.assertEqual(landing_media.PDF_PYPDF_VERSION, _PINNED_PYPDF)
+
     def test_empty_payload_is_rejected_before_any_spawn(self):
         with self.assertRaises(LandingMediaError) as ctx:
             extract_pdf_text(b"")
@@ -88,7 +94,7 @@ class PdfWorkerInputGuards(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "pdf_decoder_drift")
 
 
-@unittest.skipIf(_pypdf_pinned(), "pinned pypdf 6.18.1 present; unavailable branch cannot run")
+@unittest.skipIf(_pypdf_pinned(), f"pinned pypdf {_PINNED_PYPDF} present; unavailable branch cannot run")
 class PdfWorkerWithoutParser(unittest.TestCase):
     def test_worker_executes_and_reports_parser_unavailable(self):
         with self.assertRaises(LandingMediaError) as ctx:
@@ -96,7 +102,7 @@ class PdfWorkerWithoutParser(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "pdf_parser_unavailable")
 
 
-@unittest.skipUnless(_pypdf_pinned(), "requires pypdf 6.18.1 installed for the child interpreter")
+@unittest.skipUnless(_pypdf_pinned(), f"requires pypdf {_PINNED_PYPDF} installed for the child interpreter")
 class PdfWorkerWithPinnedParser(unittest.TestCase):
     def test_textual_pdf_returns_normalized_text(self):
         self.assertEqual(extract_pdf_text(_single_page_pdf("PDFWORKER OK")).strip(), "PDFWORKER OK")

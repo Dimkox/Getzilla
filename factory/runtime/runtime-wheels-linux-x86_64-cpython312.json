@@ -1,12 +1,12 @@
 {
-  "lock_sha256": "546b59e943616b6e114cd34fdf0a2d24d0ffde05598e11af447530c69d320900",
+  "lock_sha256": "38152455cec25094f51b2c1f1c5e3cf69b4ea04257f05278b1bf1ac824fd5515",
   "profile": "ubuntu-24.04-x86_64-cpython312",
   "schema_version": "factory-runtime-wheels/v1",
   "wheels": [
     {"filename":"annotated_doc-0.0.5-py3-none-any.whl","name":"annotated-doc","sha256":"117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101","version":"0.0.5"},
     {"filename":"annotated_types-0.8.0-py3-none-any.whl","name":"annotated-types","sha256":"f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0","version":"0.8.0"},
     {"filename":"anyio-4.14.2-py3-none-any.whl","name":"anyio","sha256":"9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494","version":"4.14.2"},
-    {"filename":"certifi-2026.7.22-py3-none-any.whl","name":"certifi","sha256":"62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775","version":"2026.7.22"},
+    {"filename":"certifi-2026.10.19-py3-none-any.whl","name":"certifi","sha256":"42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b","version":"2026.10.19"},
     {"filename":"click-8.5.0-py3-none-any.whl","name":"click","sha256":"255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360","version":"8.5.0"},
     {"filename":"fastapi-0.142.4-py3-none-any.whl","name":"fastapi","sha256":"8a651aa071a9f92c8217cca1d0b044bf9c326f336578be0a728a1a1f22ec52d2","version":"0.142.4"},
     {"filename":"h11-0.16.0-py3-none-any.whl","name":"h11","sha256":"63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86","version":"0.16.0"},
