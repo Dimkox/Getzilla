@@ -9,7 +9,8 @@
 - [x] Coordinator collected all four first-wave reports in 4abde00; code/security review found three Medium defects.
 - [x] Rebase onto actual main e42398d and implement one repair batch after red regressions.
 - [x] Preserve the repair checkpoint and rebase onto actual main a103b373 after PR123/PR124. Retain both groups of prose changes and lean-install behavior.
-- [x] Run fresh bounded controls on checkpoint585edde8 at basea103:212 passed,1 skipped,199 subtests; architecture/spec/governance/Ruff/Bandit passed.
+- [x] Historical bounded controls on checkpoint585edde8 at basea103:212 passed,1 skipped,199 subtests; architecture/spec/governance/Ruff/Bandit passed.
+- [x] Rebase onto actual main287e64 after PR125 without conflicts. Confirm EU product/test bytes match585edde8; retain its bounded observations without repeating unchanged tests.
 - [x] Prepare repaired source state reviewing and record actual controls.
 - [ ] Run the named committed-HEAD smoke and send the exact source identity to the coordinator.
 - [ ] Coordinator collects four fresh independent reviews.

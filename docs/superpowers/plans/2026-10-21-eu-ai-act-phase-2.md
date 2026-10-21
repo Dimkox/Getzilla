@@ -30,7 +30,10 @@ The first review wave found three Medium defects. The repair batch binds all dec
 refuses unsafe Windows scaffolding before mutation, and forcefully terminates the Node child at
 timeout. Templates remain available for manual Windows use. Five Low test gaps are deferred to
 issue122. The branch rebased onto actual main e42398ddaa41e662e921d7af68ab87b1e28e3554 after PR121
-and PR114, then a103b373031f477efad0e7bd9ffab24a96e6c63f after PR123/PR124. Both groups of prose
+and PR114, then a103b373031f477efad0e7bd9ffab24a96e6c63f after PR123/PR124, and finally
+287e64f99b01db44cb6eeeb10f307ccda6f91c1d after PR125. PR125 has no EU product overlap; byte parity
+with the tested585edde8 checkpoint was confirmed. Its bounded tests remain historical observations.
+Repeat the committed-HEAD smoke before reviews; the final qualifying gate is unchanged. Both groups of prose
 changes and lean-install behavior remain intact. Earlier controls/reviews remain historical. Fresh controls and all four reviews are
 required for the repaired source; no earlier PASS is carried forward.
 
@@ -46,7 +49,7 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Historical source commit 5e8b873 recorded state reviewing; its bounded committed-HEAD smoke passed without a receipt.
 - [x] Historical first wave collected all four reviews. Reports were committed as 4abde00; code/security review found the three Medium repairs above.
 - [x] Rebase onto actual main and implement the three confirmed repairs after failing regressions.
-- [x] Fresh repair controls passed on checkpoint585edde8:212 tests and199 subtests,1 skipped; architecture/spec/governance/Ruff/Bandit passed. Record state reviewing.
+- [x] Historical repair controls passed on checkpoint585edde8:212 tests and199 subtests,1 skipped; architecture/spec/governance/Ruff/Bandit passed. Record state reviewing.
 - [ ] Run the named clean committed-HEAD smoke and send the exact source identity to the coordinator.
 - [ ] Collect four fresh independent reviews, save reports, commit/freeze and run one final PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.

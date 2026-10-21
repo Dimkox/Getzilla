@@ -1,7 +1,7 @@
 # Core implementation and repair evidence
 
 Date: 2026-10-21. Branch: feat/eu-ai-act-phase2-20261021. Route:44fe064efbab.
-Current comparison base: a103b373031f477efad0e7bd9ffab24a96e6c63f.
+Current comparison base: 287e64f99b01db44cb6eeeb10f307ccda6f91c1d.
 Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
@@ -27,6 +27,17 @@ Text conflicts kept both groups of CHANGELOG/mistakes entries. The installer dif
 only adds the audit/compliance wrappers and optional EU templates. The official update_route API
 appended the second base transition. The history retains e158, e423 and a103 identities.
 
+After those controls, the coordinator reported merged PR125 at actual origin/main
+287e64f99b01db44cb6eeeb10f307ccda6f91c1d. Source bf86edbc57092d083a235ca96329eaf6aa505785 rebased
+without conflicts to 607d85c67b205ccc7f983d717908d8202b806506, tree ce9bd35c6ba9397a0e2f4fc89eef9510e75a0cd4.
+The official update_route API appended the a103-to-287e64 history. The only new main paths are
+router.py, docs/INVESTOR_DEMO.md, tests/test_demo.py and tests/test_risk_task_focus.py. A read-only
+git diff --exit-code from585edde8 over all EU production files, data, templates, contracts and the
+15 focused test modules returned exit0 with no output. Those product bytes are unchanged.
+The212-test observations below are historical on585edde8, not a new-base verification receipt.
+Per the bounded rerun ruling, only the clean committed-HEAD smoke is repeated before fresh reviews.
+The unchanged final qualifying PR gate remains required on the new base.
+
 Repairs:
 
 - Bind compliance.json, obligations.json, ai-systems.json, diff-risk-rules.json and cost-providers.json to committed bytes. Only the registry can be absent in both HEAD and disk for an enabled audit. Compare committed and present executable inputs to catch hidden deletion.
@@ -45,7 +56,7 @@ Observed repair controls before the final fingerprint correction:
 - Architecture fitness against e42398d, typed spec gate, governance, Ruff and Bandit passed before the final fingerprint correction. First-wave reports and V1 bytes stayed unchanged; git diff --check passed.
 - Two named build tests for inherited Git/replace state and moving HEAD failed in 3.04s, then passed in 1.33s after the local fingerprint correction. They preserve the existing receipt grammar, including an untracked note. Fresh post-repair controls remain required.
 
-## Fresh repair controls on the current base
+## Historical repair controls before the non-overlapping PR125 rebase
 
 All controls below ran on clean checkpoint 585edde8be99ad2145a389dd86164daf2e2fc1c7,
 tree 011d43f5d873e105719b96ca36dcb1c68d34b8e3, against base a103b373031f477efad0e7bd9ffab24a96e6c63f.
@@ -68,6 +79,12 @@ reports match their original report commit 4abde003d25997c2d6cd86af20e046f005367
 The Windows refusal tests emulate the platform and reject creation before the swap callback can run.
 Native Windows was not available. The Node test used a real POSIX child that ignored SIGTERM;
 the adapter stopped it and preserved the original media. No receipt or review PASS was created.
+
+The named smoke also passed on bf86edbc57092d083a235ca96329eaf6aa505785,
+tree bcf2f780b2f90df0c16f55ef6c9e32afec4052d9: GETZILLA_TEST_WORKERS=22 taskset -c 0-21 python3
+scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180.
+Observed exit0, python-named-smoke0.158s and source-stability PASS; receipt not_recorded.
+That smoke is historical after the PR125 rebase. The next committed source requires its own smoke.
 
 ## Historical first-source controls
 

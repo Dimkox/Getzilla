@@ -37,7 +37,7 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Fresh bounded repair controls passed on checkpoint 585edde8 at base a103. Named clean-HEAD smoke and final qualifying PR gate remain pending. First-wave controls are historical; observations create no receipt.",
+        "reason": "Historical bounded repair controls passed on checkpoint 585edde8 at base a103. The non-overlapping PR125 rebase to 287e64 preserved EU product/test bytes. Fresh named clean-HEAD smoke and final qualifying PR gate remain pending; observations create no receipt.",
         "receipt_kind": "verification",
         "status": "not_run"
       },
