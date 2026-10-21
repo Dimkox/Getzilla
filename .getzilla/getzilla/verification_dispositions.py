@@ -77,8 +77,10 @@ def location(text: str, offset: int) -> tuple[int, int]:
 
 
 def _standalone_context(text: str, end: int) -> bool:
-    # Admit only explicit ASCII separators. Unicode and escaped identifier
-    # continuations are outside this deliberately narrow prefix grammar.
+    # The entire prefix must be ASCII, including strings and comments: Unicode
+    # line terminators must never conceal code behind an apparent comment.
+    if not text[:end].isascii():
+        return False
     whitespace = ' \t\r\n\f\v'
     if end and text[end - 1] not in whitespace + '{[(,;':
         return False
@@ -117,9 +119,11 @@ def _standalone_context(text: str, end: int) -> bool:
                 return False
             previous = quote
             continue
-        # Regex/division, templates and code escapes need language-specific
-        # parsing; they cannot establish a safe context for a disposition.
-        if char in '/`\\':
+        # Only ordinary ASCII code characters are supported. Legacy HTML
+        # comments, regex/division, templates, escapes and unknown constructs
+        # cannot establish a safe context without language-specific parsing.
+        if (text.startswith(('<!--', '-->'), index)
+                or not (char.isalnum() or char in '_$()[]{}.,:;=+-*!&|%?^~<>')):
             return False
         previous = char
         index += 1

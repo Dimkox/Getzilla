@@ -78,6 +78,15 @@ class DispositionTests(unittest.TestCase):
     def summary(self, result) -> dict:
         return next(item for item in result.details if item['code'] == 'disposition-summary')
 
+    def reviewed_scan(self, text: str):
+        match = next(verification_dispositions.SECRET_PATTERNS['generic-secret'].finditer(text))
+        line = text.count('\n', 0, match.start()) + 1
+        column = match.start() - text.rfind('\n', 0, match.start())
+        entry = self.entry(text=text, line=line, column=column)
+        entry['match_sha256'] = digest(match.group().encode())
+        self.policy([entry])
+        return _secret_scan(self.root, ['protocol.ts'])
+
     def range_check(self):
         return _git_diff_check(self.root, 'pr', GitRangeSelection(bases=[
             GitRangeBase('route', 'fixture', self.base, self.base),
@@ -201,6 +210,67 @@ class DispositionTests(unittest.TestCase):
                 result = _secret_scan(self.root, ['protocol.ts'])
                 self.assertEqual(result.status, 'pass')
                 self.assertEqual(self.summary(result)['disposed'], 1)
+
+    def test_non_ascii_prefix_cannot_erase_member_context(self) -> None:
+        assignment = ' = '.join(('token', repr(ADDRESS)))
+        separators = (0x85, 0xA0, 0x1680, *range(0x2000, 0x200E), 0x2028,
+                      0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)
+        for codepoint in separators:
+            for suffix in (' ', ' /* reviewed */ ', '\t '):
+                with self.subTest(separator=hex(codepoint), suffix=suffix):
+                    source = 'const client = {}; client.' + chr(codepoint) + suffix + assignment + ';\n'
+                    result = self.reviewed_scan(source)
+                    self.assertEqual(result.status, 'fail')
+                    self.assertEqual(self.summary(result)['disposed'], 0)
+                    finding = next(item for item in result.details if item['code'] == 'generic-secret')
+                    self.assertEqual(finding['effective_severity'], 'error')
+                    self.assertNotIn(ADDRESS, json.dumps(result.to_dict()))
+
+    def test_non_ascii_comment_and_string_prefixes_are_conservatively_refused(self) -> None:
+        assignment = ' = '.join(('token', repr(ADDRESS)))
+        prefixes = (
+            '// reviewed\u2028client.\n ', '// reviewed\u2029client.\n ',
+            '// reviewed\u2028client. /* reviewed */ ',
+            '// reviewed\u2029client. /* reviewed */ ',
+            '/* reviewed \u2028 */ const ', '// reviewed \u00e9\nconst ',
+            'const note = "\u00e9"; const ', 'const note = "\\\u2028"; const ',
+            'const note = "\\\u2029"; const ',
+            'const caf\u00e9 = 1; const ',
+        )
+        for index, prefix in enumerate(prefixes):
+            with self.subTest(case=index):
+                result = self.reviewed_scan('const client = {}; ' + prefix + assignment + ';\n')
+                self.assertEqual(result.status, 'fail')
+                self.assertEqual(self.summary(result)['disposed'], 0)
+                self.assert_invalid()
+
+    def test_ascii_whitespace_preserves_declarations_and_member_rejection(self) -> None:
+        assignment = ' = '.join(('token', repr(ADDRESS)))
+        for separator in (' ', '\t', '\r', '\n', '\f', '\v'):
+            for suffix in ('', ' ', ' /* reviewed */ '):
+                with self.subTest(separator=repr(separator), suffix=suffix):
+                    spacing = separator + suffix
+                    declared = self.reviewed_scan('const' + spacing + assignment + ';\n')
+                    self.assertEqual(declared.status, 'pass')
+                    self.assertEqual(self.summary(declared)['disposed'], 1)
+                    member = self.reviewed_scan('const client = {}; client.' + spacing + assignment + ';\n')
+                    self.assertEqual(member.status, 'fail')
+                    self.assertEqual(self.summary(member)['disposed'], 0)
+
+    def test_unsupported_ascii_constructs_cannot_manufacture_standalone_context(self) -> None:
+        assignment = ' = '.join(('token', repr(ADDRESS)))
+        prefixes = (
+            '<!-- reviewed ', '--> reviewed ',
+            'const client = {}; client.\n--> reviewed,\n ',
+            '#! unsupported\nconst ', '@decorator\nconst ',
+            'const marker = 1;\x1b const ', 'const marker = 1;\x7f const ',
+            'const client = {}; client.\\\n ',
+        )
+        for index, prefix in enumerate(prefixes):
+            with self.subTest(case=index):
+                result = self.reviewed_scan(prefix + assignment + ';\n')
+                self.assertEqual(result.status, 'fail')
+                self.assertEqual(self.summary(result)['disposed'], 0)
 
     def test_closed_schema_rejects_invalid_and_duplicate_entries_outside_selection(self) -> None:
         original = self.entry()
