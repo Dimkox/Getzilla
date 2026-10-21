@@ -65,4 +65,6 @@ Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix
 
 ## Task workspace
 
+Put agent working files (bundles, drafts, intermediate output) in `.getzilla/runtime/scratch/`; it needs no grant. A shell command that runs inline interpreter code (`python3 -c`, `php -r`, `node -e`, a heredoc into `python3`) is denied, because the hook cannot see which paths it touches. Write the program to `.getzilla/runtime/scratch/<name>.py` and run it as a file.
+
 Use one canonical project root for the task. Put task-owned worktrees, private scratch, reports, archives and temporary outputs only under that root's `.getzilla/runtime`. Do not use home-level defaults or sibling project directories. Keep reviewer private scratch outside the reviewed candidate as a sibling beneath that runtime root. Use a trusted non-sticky parent and mode `0700`. Do not treat a nested worktree as a new canonical project root. Durable specs and final evidence remain in the tracked change package. This rule is workflow discipline, not OS isolation.
