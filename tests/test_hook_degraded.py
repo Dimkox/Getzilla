@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
@@ -26,6 +28,30 @@ def write_event(root: Path, ts: str, hook: str = 'pre_tool_use') -> None:
 
 
 class HookDegradedTests(unittest.TestCase):
+    def test_own_stack_precedes_foreign_pythonpath_when_local_imports_break(self) -> None:
+        for module in ('policy', 'fsx'):
+            with self.subTest(module=module), project_copy() as root:
+                marker = f'local {module} import failed'
+                (root / f'.getzilla/getzilla/{module}.py').write_text(
+                    f'raise ImportError({marker!r})\n', encoding='utf-8')
+                competing_path = os.pathsep.join((str(ROOT / '.getzilla'), str(root / '.getzilla')))
+                with patch.dict(os.environ, {'PYTHONPATH': competing_path}):
+                    cases = (
+                        ('Read', {'file_path': 'AGENTS.md'}, 'allow'),
+                        ('Bash', {'command': 'rm -rf build'}, 'deny'),
+                    )
+                    for index, (tool, tool_input, expected) in enumerate(cases, start=1):
+                        with self.subTest(module=module, tool=tool):
+                            code, data, error = run_hook(root, 'pre_tool_use.py', {
+                                'cwd': str(root), 'tool_name': tool, 'tool_input': tool_input,
+                            })
+                            self.assertEqual(code, 0, error)
+                            actual = data.get('decision') or data.get('hookSpecificOutput', {}).get('permissionDecision')
+                            self.assertEqual(actual, expected, data)
+                            events = degraded_events(root)
+                            self.assertEqual(len(events), index)
+                            self.assertTrue(all(marker in event['error'] for event in events))
+
     def test_policy_import_failure_allows_and_records(self) -> None:
         with project_copy() as root:
             (root / '.getzilla/getzilla/policy.py').write_text('raise ImportError("broken on purpose")\n', encoding='utf-8')
