@@ -49,6 +49,7 @@ class KillProcessTreeTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 fsx.kill_process_tree(12345)
 
+    @unittest.skipUnless(hasattr(os, 'waitid'), 'os.waitid is missing (macOS before Python 3.13)')
     def test_an_exited_but_unreaped_child_is_killed_without_error(self) -> None:
         import subprocess
         process = subprocess.Popen([sys.executable, '-c', 'pass'], **fsx.process_group_kwargs())
