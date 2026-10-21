@@ -195,7 +195,7 @@ KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
 # never receives Bitrix or SEO-landing material. Matched anywhere in a skills path, so every
 # agent's copy belongs to the extra as well as to that agent.
 EXTRA_COMPONENT_PATHS = {
-    "bitrix": ("/skills/bitrix-development/",),
+    "bitrix": ("/skills/bitrix-development/", "/agents/bitrix_"),
     "seo-landing": ("/skills/seo-landing/",),
 }
 KNOWN_EXTRAS = tuple(EXTRA_COMPONENT_PATHS)
@@ -319,11 +319,14 @@ def footprint(payload: "tuple[InstallEntry, ...]", selection: "PayloadSelection 
     components: dict[str, dict[str, object]] = {}
     for entry in payload:
         name = component_of(entry.path)
-        item = components.setdefault(name, {"files": 0, "bytes": 0, "included": True})
+        item = components.setdefault(name, {"files": 0, "bytes": 0, "included": selection is None,
+                                            "included_files": 0, "included_bytes": 0})
         item["files"] = int(item["files"]) + 1
         item["bytes"] = int(item["bytes"]) + len(entry.content)
-        if selection is not None:
-            item["included"] = selection.includes(entry.path)
+        if selection is None or selection.includes(entry.path):
+            item["included"] = True
+            item["included_files"] = int(item["included_files"]) + 1
+            item["included_bytes"] = int(item["included_bytes"]) + len(entry.content)
     return dict(sorted(components.items()))
 
 
