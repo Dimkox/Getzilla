@@ -36,7 +36,7 @@ Point to the local/read-only badge and the provenance statement. Explain: “Mos
 
 ### 0:30–1:20 — Intent becomes a deterministic route
 
-Use the bundled secure API dashboard prompt. In Route & ownership, show intent, risk, domains, workflow skills, and the selected write owner. Then select the contrasting documentation-review route. Its button label is derived from the computed alternate route and currently reads “Use contrasting review route · medium risk · no write owner”; the resulting panel truthfully shows `review` intent, `medium` risk from this API-contract repository, the `api` domain, and no write owner. This demonstrates real deterministic reclassification rather than a canned animation or a fabricated low-risk claim.
+Use the bundled secure API dashboard prompt. In Route & ownership, show intent, risk, domains, workflow skills, and the selected write owner. Then select the contrasting documentation-review route. Its button label is derived from the computed alternate route and currently reads “Use contrasting review route · low risk · no write owner”; the resulting panel truthfully shows `review` intent, `low` risk (the API contract in this repository is background, not the task), the `api` domain, and no write owner. This demonstrates real deterministic reclassification rather than a canned animation.
 
 ### 1:20–2:05 — Typed intent is inspectable
 
