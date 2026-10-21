@@ -56,8 +56,10 @@ FITNESS_CATEGORIES = (
 RISK_ORDER = {"green": 0, "yellow": 1, "red": 2}
 MAX_ANALYZED_PYTHON_FILES = 2_000
 MAX_ANALYZED_AST_NODES = 200_000
-MAX_QUEUE_ADAPTER_MODULES = 32
-MAX_QUEUE_ADAPTER_DEPTH = 8
+# Native verifier closure measured at 50 modules / depth 13 on 4cf2abf.
+# Keep eager provenance resolution finite; all interpreter/work bounds remain.
+MAX_QUEUE_ADAPTER_MODULES = 64
+MAX_QUEUE_ADAPTER_DEPTH = 16
 MAX_QUEUE_SOURCE_ROOTS = 64
 MAX_QUEUE_DEPENDENCY_WORK = 4_096
 MAX_MIGRATION_WORK = 4_096

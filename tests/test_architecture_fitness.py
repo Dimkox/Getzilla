@@ -2206,15 +2206,15 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 )
 
     def test_queue_adapter_cycle_at_depth_limit_does_not_enter_a_new_module(self) -> None:
-        self.assertEqual(FIT.MAX_QUEUE_ADAPTER_DEPTH, 8)
+        self.assertEqual(FIT.MAX_QUEUE_ADAPTER_DEPTH, 16)
         resolving = {f'adapters.m{index}' for index in range(FIT.MAX_QUEUE_ADAPTER_DEPTH)}
-        ninth = f'adapters.m{FIT.MAX_QUEUE_ADAPTER_DEPTH}'
-        cache = FIT._QueueResolutionCache(tuple(sorted(resolving | {ninth})), (), {})
+        overflow = f'adapters.m{FIT.MAX_QUEUE_ADAPTER_DEPTH}'
+        cache = FIT._QueueResolutionCache(tuple(sorted(resolving | {overflow})), (), {})
         cycle = FIT._local_queue_resolution(ROOT, None, 'adapters.m0', 'head', cache, set(resolving), set(resolving), ())
         self.assertEqual(cycle.state, 'unsupported')
         self.assertEqual(cycle.reason, 'cyclic_local_queue_adapter')
         with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'queue adapter depth limit') as raised:
-            FIT._local_queue_resolution(ROOT, None, ninth, 'head', cache, set(resolving), set(resolving), ())
+            FIT._local_queue_resolution(ROOT, None, overflow, 'head', cache, set(resolving), set(resolving), ())
         self.assertEqual(raised.exception.code, 'limit')
 
     def test_queue_adapter_resolution_bounds_fail_closed_only_for_possible_operations(self) -> None:
@@ -2232,7 +2232,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
             "severity": "error",
         }]
 
-        for label, modules in (("depth nine", 9),):
+        for label, modules in (("depth over budget", FIT.MAX_QUEUE_ADAPTER_DEPTH + 1),):
             with self.subTest(label=label):
                 repo = GitArchitectureRepo(self)
                 repo.model(system, rules)
@@ -2320,6 +2320,54 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(self._results(report)["background_job"].status, "not_applicable")
         self.assertEqual(report.status, "pass")
         self.assertNotIn("new_queue", report.triggers)
+
+    def _queue_capacity_report(self, module_count: int, depth: int, *, queued: bool = False):
+        system = _system()
+        system['nodes'][0]['type'] = 'worker'
+        system['nodes'][0]['repository_paths'] = ['adapters', 'src']
+        rules = _rules()
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        for index in range(module_count - depth):
+            repo.write_text(f'adapters/leaf{index}.py', 'value = 1\n')
+        for index in range(depth):
+            source = (f'from adapters.chain{index + 1} import app\n' if index + 1 < depth
+                      else 'import celery\napp = celery.Celery("jobs")\n' if queued
+                      else 'class Form:\n    def delay(self, item):\n        return item\napp = Form()\n')
+            if index == 0:
+                # Imports execute even if this export does not use their bindings.
+                source += ''.join(f'from adapters.leaf{leaf} import value as unused{leaf}\n'
+                                  for leaf in range(module_count - depth))
+            repo.write_text(f'adapters/chain{index}.py', source)
+        imported = 'from adapters.chain0 import app\n'
+        repo.write_text('src/jobs.py', imported)
+        base = repo.commit('base')
+        repo.write_text('src/jobs.py', imported + 'app.delay(job)\n')
+        head = repo.commit('changed operation')
+        return self._evaluate(repo, base, head, pre_risk='yellow')
+
+    def test_queue_capacity_covers_measured_repository_closure(self) -> None:
+        for queued in (False, True):
+            with self.subTest(queued=queued):
+                report = self._queue_capacity_report(50, 13, queued=queued)
+                self.assertEqual(self._results(report)['background_job'].status,
+                                 'unsupported' if queued else 'not_applicable')
+                self.assertEqual('new_queue' in report.triggers, queued)
+                self.assertGreaterEqual(FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk])
+
+    def test_queue_capacity_exact_boundaries_remain_fail_closed(self) -> None:
+        for modules, depth, exhausted in ((64, 16, False), (65, 16, True), (17, 17, True)):
+            with self.subTest(modules=modules, depth=depth):
+                report = self._queue_capacity_report(modules, depth)
+                self.assertEqual(self._results(report)['background_job'].status,
+                                 'unsupported' if exhausted else 'not_applicable')
+                self.assertEqual('new_queue' in report.triggers, exhausted)
+                self.assertGreaterEqual(FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk])
 
     def test_local_queue_adapter_dependency_chains_do_not_silently_truncate(self) -> None:
         system = _system()
