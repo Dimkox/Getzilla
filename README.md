@@ -1,6 +1,17 @@
+<p align="center">
+  <a href="https://getzilla.app"><img src="docs/assets/brand/getzilla-banner.webp" alt="Getzilla: AI speed. Engineering discipline." width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://getzilla.app"><b>getzilla.app</b></a> ·
+  <a href="https://github.com/Dimkox/Getzilla/releases/latest">Latest release</a> ·
+  <a href="QUICKSTART.md">Quick start</a> ·
+  <a href="docs/SECURITY.md">Security model</a>
+</p>
+
 # Getzilla
 
-Current source: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1), source `05f85f12b72b3a897c45c24e172fac8317120b7c`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.2.1/getzilla-2.2.1.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
