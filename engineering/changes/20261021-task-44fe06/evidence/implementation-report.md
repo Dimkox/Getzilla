@@ -7,7 +7,7 @@ Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
 ## Repair after the first review wave
 
-Current repair qualification is UNVERIFIED until fresh controls and independent reviews finish.
+Bounded repair controls passed. Qualification remains UNVERIFIED until fresh independent reviews and final gates finish.
 All four complete first-wave reports remain unchanged as historical evidence. Their source was
 5e8b8734739c7f59f6c3af56b82dedc02fb1dcc5, tree 71beaeabf6e15d70a800333dced87e69f3ee33c5.
 The coordinator saved them in 4abde003d25997c2d6cd86af20e046f005367a67. Code/security review found
@@ -44,6 +44,30 @@ Observed repair controls before the final fingerprint correction:
 - Adjacent helper/install run: taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_project_ingestion_routing.py tests/test_cost_guard_diff.py tests/test_diff_risk.py tests/test_cost_guard_prompt.py tests/test_cost_contract.py tests/test_cost_schedule.py tests/test_getzilla_cli.py tests/test_install_on_demand.py tests/test_manifest_package.py tests/test_structure.py: 152 passed, 1 skipped, 129 subtests passed in 86.21s.
 - Architecture fitness against e42398d, typed spec gate, governance, Ruff and Bandit passed before the final fingerprint correction. First-wave reports and V1 bytes stayed unchanged; git diff --check passed.
 - Two named build tests for inherited Git/replace state and moving HEAD failed in 3.04s, then passed in 1.33s after the local fingerprint correction. They preserve the existing receipt grammar, including an untracked note. Fresh post-repair controls remain required.
+
+## Fresh repair controls on the current base
+
+All controls below ran on clean checkpoint 585edde8be99ad2145a389dd86164daf2e2fc1c7,
+tree 011d43f5d873e105719b96ca36dcb1c68d34b8e3, against base a103b373031f477efad0e7bd9ffab24a96e6c63f.
+This includes the final fingerprint correction, the 45-second outer Node test guard and the rebase.
+Status remained clean. The checkpoint diff was 49 files, 3177 insertions and 307 deletions.
+Later tracked edits only record these observations and the reviewing lifecycle.
+
+| Command | Actual result |
+| --- | --- |
+| taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_eu_audit_attestation.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_eu_ai_act.py tests/test_project_ingestion_routing.py tests/test_cost_guard_diff.py tests/test_diff_risk.py tests/test_cost_guard_prompt.py tests/test_cost_contract.py tests/test_cost_schedule.py tests/test_getzilla_cli.py tests/test_install_on_demand.py tests/test_manifest_package.py tests/test_structure.py tests/test_install_extras.py | exit0; 212 passed, 1 skipped, 199 subtests passed in 33.90s |
+| python3 scripts/getzilla_architecture.py fitness --base a103b373031f477efad0e7bd9ffab24a96e6c63f --worktree --json | exit0; fitness_status pass; scopes architecture and contract; risk yellow from new_contract |
+| python3 scripts/getzilla_spec.py validate --change-id 20261021-task-44fe06 --gate | exit0; ok true; no errors; all 8 criteria mapped |
+| python3 scripts/getzilla_governance.py validate | exit0; overall_status pass; no findings |
+| ruff check .getzilla/getzilla/eu_ai_act.py .getzilla/getzilla/compliance_scaffold.py .getzilla/getzilla/diff_risk.py .getzilla/getzilla/cost_guard.py .getzilla/getzilla/project_ingestion.py .getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py scripts/getzilla_audit_bundle.py scripts/getzilla_compliance.py scripts/getzilla_cli.py scripts/install_into.py tests/test_eu_ai_act.py tests/test_eu_audit_attestation.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_getzilla_cli.py | exit0; All checks passed |
+| bandit -q -c bandit.yaml .getzilla/getzilla/eu_ai_act.py .getzilla/getzilla/compliance_scaffold.py .getzilla/getzilla/diff_risk.py .getzilla/getzilla/cost_guard.py .getzilla/getzilla/project_ingestion.py .getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py scripts/getzilla_audit_bundle.py scripts/getzilla_compliance.py | exit0; no findings |
+| git diff --check a103b373031f477efad0e7bd9ffab24a96e6c63f HEAD | exit0; no output |
+
+Read-only git diff --exit-code confirmed that v1 matches the current base and all four first-wave
+reports match their original report commit 4abde003d25997c2d6cd86af20e046f005367a67.
+The Windows refusal tests emulate the platform and reject creation before the swap callback can run.
+Native Windows was not available. The Node test used a real POSIX child that ignored SIGTERM;
+the adapter stopped it and preserved the original media. No receipt or review PASS was created.
 
 ## Historical first-source controls
 
@@ -118,8 +142,8 @@ above ran after checkpoint commit. Their observed results close this bounded val
 
 ## Pending work and limits
 
-Commit the source with package state reviewing, then run the named clean committed-HEAD quality-gates
-smoke. Report its exact identity and result to the coordinator without a later source edit. Collect
+The source is prepared in package state reviewing. Run the named clean committed-HEAD quality-gates
+smoke next. Report its exact identity and result to the coordinator without a later source edit. Collect
 the four independent reviews. The coordinator persists reports and runs one final PR gate and required
 exact-head public linux/windows checks. No full verifier, review receipt, push or external check ran here.
 

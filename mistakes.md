@@ -8,6 +8,10 @@ Checking only the scratch directory's 0700 mode missed two task-owned 0775 ances
 
 The audit bound only its obvious EU files and disk-present modules; ignored rules/providers and hidden deletions could change decisions under one HEAD. The scaffold treated Windows path handles as POSIX descriptors, and the Node timeout relied on an ignorable signal. Inventory every decision input, pass immutable parsed data, refuse writes without the needed primitive, and test a real stubborn child instead of only mocking timeout results.
 
+## 2026-10-21 — Audit fingerprint reused live Git identity
+
+The shared fingerprint helper reread HEAD and inherited Git environment after the audit captured its identity. A branch move or inherited Git state could therefore give the bundle a different fingerprint. Keep the audit helper local, compare changes against the captured commit, sanitize each Git call and test receipt-grammar parity.
+
 ## 2026-10-21 — A later batch reused a live denial objective
 
 A validation batch was denied as an opaque mutation. Its allowed split rewrite passed, but a later getzilla_par batch still matched the hook's active objective fingerprint. Stop the objective until scoped recovery; a successful split does not prove the fingerprint has expired.

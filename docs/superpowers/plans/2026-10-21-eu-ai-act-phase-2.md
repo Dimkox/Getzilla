@@ -46,7 +46,8 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Historical source commit 5e8b873 recorded state reviewing; its bounded committed-HEAD smoke passed without a receipt.
 - [x] Historical first wave collected all four reviews. Reports were committed as 4abde00; code/security review found the three Medium repairs above.
 - [x] Rebase onto actual main and implement the three confirmed repairs after failing regressions.
-- [ ] Run fresh repair controls, commit state reviewing, then run the named committed-HEAD smoke.
+- [x] Fresh repair controls passed on checkpoint585edde8:212 tests and199 subtests,1 skipped; architecture/spec/governance/Ruff/Bandit passed. Record state reviewing.
+- [ ] Run the named clean committed-HEAD smoke and send the exact source identity to the coordinator.
 - [ ] Collect four fresh independent reviews, save reports, commit/freeze and run one final PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.
