@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import verification
+from getzilla import verification_dispositions
 from getzilla.util import tree_fingerprint
 from getzilla.verification import GitRangeBase, GitRangeSelection, _git_diff_check, _secret_scan
 
@@ -143,10 +144,63 @@ class DispositionTests(unittest.TestCase):
         assignments += [': '.join(('token', repr(value))) for value in ('opaque' * 6, '0x' + '12' * 32)]
         for assignment in assignments:
             with self.subTest(assignment=assignment.split(':')[0]):
-                entry = self.entry(text=assignment + '\n')
-                entry['match_sha256'] = digest(assignment.encode())
+                match = next(verification_dispositions.SECRET_PATTERNS['generic-secret'].finditer(assignment))
+                entry = self.entry(text=assignment + '\n', column=match.start() + 1)
+                entry['match_sha256'] = digest(match.group().encode())
                 self.policy([entry])
                 self.assert_invalid()
+
+    def test_real_scanner_suffix_never_disposes_unicode_or_escaped_credentials(self) -> None:
+        prefixes = {
+            'ascii': 'auth_', 'property': 'obj.', 'dollar': '$',
+            'joiner': 'auth\u200d', 'nonjoiner': 'auth\u200c',
+            'combining': 'auth\u0301', 'escaped-codepoint': r'auth\u{5f}',
+            'escaped-fixed': r'auth\u005f', 'backslash': '\\',
+            'non-ascii-space': '\u00a0', 'control': '\u0085',
+            'spaced-member': 'client. ', 'multiline-member': 'client.\n ',
+            'comment-member': 'client./* member */',
+            'spaced-comment-member': 'client. /* member */ ',
+            'line-comment-member': 'client.// member ; {\n ',
+            'optional-member': 'client?. ', 'namespace-member': 'client:: ',
+            'inside-comment': '// ', 'inside-string': 'const text = "note ',
+            'ambiguous-regex': 'const pattern = /{ ',
+            'inside-template': 'const text = `note ',
+            'template-expression': 'const text = `${client. ',
+            'completed-template': 'const text = `note`; const ',
+        }
+        for label, prefix in prefixes.items():
+            with self.subTest(boundary=label):
+                text = prefix + ASSIGNMENT + '\n'
+                match = next(verification_dispositions.SECRET_PATTERNS['generic-secret'].finditer(text))
+                self.assertEqual(match.group(), ASSIGNMENT)
+                line = text.count('\n', 0, match.start()) + 1
+                column = match.start() - text.rfind('\n', 0, match.start())
+                entry = self.entry(text=text, line=line, column=column)
+                entry['match_sha256'] = digest(match.group().encode())
+                self.policy([entry])
+                result = _secret_scan(self.root, ['protocol.ts'])
+                self.assertEqual(result.status, 'fail')
+                finding = next(item for item in result.details if item['code'] == 'generic-secret')
+                self.assertEqual((finding['severity'], finding['effective_severity']), ('error', 'error'))
+                self.assertNotIn('disposition', finding)
+                self.assertNotIn(ADDRESS, json.dumps(result.to_dict()))
+                self.assert_invalid()
+
+    def test_reviewed_public_tokens_keep_explicit_ascii_boundaries(self) -> None:
+        for prefix in ('', ' ', '\t', '\r\n  ', '{', '[', '(', ',', ';', 'const ',
+                       'const other = 1, ', '// reviewed\nconst ', '/* reviewed */ const ',
+                       'const other = "literal"; const '):
+            with self.subTest(boundary=repr(prefix)):
+                text = prefix + ASSIGNMENT + '\n'
+                match = next(verification_dispositions.SECRET_PATTERNS['generic-secret'].finditer(text))
+                line = text.count('\n', 0, match.start()) + 1
+                column = match.start() - text.rfind('\n', 0, match.start())
+                entry = self.entry(text=text, line=line, column=column)
+                entry['match_sha256'] = digest(match.group().encode())
+                self.policy([entry])
+                result = _secret_scan(self.root, ['protocol.ts'])
+                self.assertEqual(result.status, 'pass')
+                self.assertEqual(self.summary(result)['disposed'], 1)
 
     def test_closed_schema_rejects_invalid_and_duplicate_entries_outside_selection(self) -> None:
         original = self.entry()

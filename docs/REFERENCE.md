@@ -547,6 +547,8 @@ Version 1 has exactly two top-level fields: `schema_version` (integer `1`) and `
 
 Public-address shape alone grants no disposition. The entry must identify the exact occurrence, file bytes, and separate review evidence. Credential variable names such as `auth_token`, `password`, `secret`, and `api_key` do not qualify. Private-key and AWS rules never qualify. Every match is retained, so another credential or another occurrence still fails. An immutable Markdown entry covers only its exact EOF diagnostic. Trailing whitespace, other files, unknown output, Git errors, and range-selection errors remain blocking.
 
+Standalone-token admission uses a limited source-prefix grammar. The name must start the source or follow ASCII whitespace or one of `{`, `[`, `(`, `,`, `;`. Completed single/double-quoted strings and line/block comments are recognized while inspecting preceding context. Member-access punctuation across whitespace or comments, Unicode or escaped identifier continuations, and occurrences inside strings or comments are ineligible. Regex/division syntax, templates and code escapes before the occurrence are conservatively refused because their interpretation requires language-specific parsing. Ordinary standalone declarations and comma-separated object fields remain eligible; unsupported context keeps the raw finding blocking.
+
 This is an inert shape example. Replace every placeholder with reviewed source information; do not copy it as active policy:
 
 ```json
