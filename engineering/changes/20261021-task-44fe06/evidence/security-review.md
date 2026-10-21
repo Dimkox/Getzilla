@@ -1,31 +1,31 @@
-FAIL. Repair these three Medium findings.
+FAIL. One Medium finding remains. The three wave 1 findings are repaired.
 
-- **Unchecked audit inputs — `scripts/getzilla_audit_bundle.py:55`.** `_committed_inputs()` omits `diff-risk-rules.json`. Changing this ignored file changed the real CI audit from BLOCK to PASS. HEAD and Git status stayed unchanged. `cost-providers.json` is another unchecked decision input by inspection. Bind all decision inputs to committed bytes. Add negative tests.
-- **Windows scaffold path race — `.getzilla/getzilla/compliance_scaffold.py:74`.** Windows filesystem helpers retain paths, not directory descriptors. The scaffold omits the required identity checks. Swapping a parent after opening it caused an outside-project write and returned success. The probe emulated Windows helpers on Linux; native Windows remains untested.
-- **Node timeout does not force termination — `.getzilla/templates/eu-ai-act/transparency/typescript/aiTransparency.ts:37`.** `spawnSync()` uses its default termination signal. A fixture tool that ignored that signal kept the adapter blocked beyond 33 seconds. Enforce bounded termination and test the real subprocess path. Current timeout tests mock this behavior.
+- **Medium — live opt-in check can disagree with captured source.** `scripts/getzilla_audit_bundle.py:106` checks the live configuration before capturing committed inputs. A concurrent file change can satisfy that check while the captured configuration remains disabled. `_compliance()` then skips EU evaluation at line 290, and `ci_check()` returns PASS at line 315. The private probe returned `decision=pass` with `compliance.eu_ai_act=null` for a committed opt-out. HEAD and final Git status stayed unchanged. Require enabled opt-in from the captured committed bytes. Add a regression that rejects this capture race and any skipped CI audit result. This finding requires concurrent local file mutation; it does not establish an attack against an immutable deployed runner.
 
-The private scratch parent and reviewer directory had mode `0700`. The snapshot matched the complete clean candidate.
+Reviewed the full comparison diff and surrounding audit, filesystem, evaluator, adapter, contract and test code. No duplicate external writes were found. Verifier arguments and environment remain restricted. V1 remains separate from V2 authority. Known Low test gaps remain deferred to issue 122.
 
-Probe commands used this prefix:
+Fresh private probes used `/home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/security-wave2/probe_security.py`. Its SHA-256 is `d35490d0a30879cc1654cdd47e2c6d678328466c6a02ed4d9fcd676be3b22d23`. The trusted parent and reviewer directory had mode `0700`. The snapshot reproduced the complete clean candidate.
 
-`taskset -c <CPUs> python3 -B /home/pall/projects/getzilla/.getzilla/runtime/scratch/eu-act-reviews-20261021/security/probe_security.py <mode>`
+Each command used `taskset -c <CPU> python3 -B <private-helper> <mode>`:
 
-| CPUs / mode | Observed result |
+| CPU / mode | Claim and observed result |
 |---|---|
-| `12-13 rules` | Original rules: exit 1, BLOCK. Changed ignored rules: exit 0, PASS. Same HEAD; empty Git status. |
-| `14 windows` | Scaffold returned success; outside-project file created. Windows helper emulation only. |
-| `15 node` | Outer timeout fired after 33.04 seconds. Input remained intact. The guard killed the process group and reaped the runner. A later process check found no fixture processes. |
+| `12 inputs` | Valid installed fixture first returned exit 0 / PASS. Changes and deletions hidden by skip-worktree were rejected with exit 2 for all five data inputs and one committed executable. Ignored rules and provider maps were also rejected. Restored fixture returned exit 0 / PASS with clean status. |
+| `13 optin` | Enabled control returned exit 0. Committed-disabled control returned exit 2. Deterministic file swaps around real reads returned PASS with null EU compliance and clean final status. No evaluator result was mocked. Finding reproduced. |
+| `14 platform` | Windows and missing descriptor API simulations refused before any mkdir/open creation call. Native POSIX creation passed. Repeated creation failed without changing bytes. |
+| `15 node` | The unmodified Node adapter stopped a real stubborn child after 30.09 seconds. It returned exit 0 with `c2patool timeout`, no marked bytes and unchanged source. Cleanup completed. A later process check found no fixture processes. |
 
-The initial rules fixture lacked a dependency. The corrected fixture produced the result above. No source mutants were added. Code and test reviewers own the required mutation probes.
+No source mutants were added. Code and test reviewers own the required mutation probes. Captured rules/provider use, fixed HEAD/base/date, sanitized Git and fingerprint construction were inspected. Their separate mutation results are not claimed here. No full gate ran. Real signed-V2 integration, native Windows execution and real C2PA signing remain unexecuted. The verifier executable and public key remain operator trust inputs. This review gives no production or merge authority.
 
-Static inspection found no duplicate external mutations. Exclusive scaffold creation prevents ordinary retry overwrites. Verifier execution uses fixed arguments, a restricted environment, output limits and process cleanup. Real signed-v2 integration, native Windows behavior and real C2PA signing remain unexecuted. The executable and public key remain operator trust inputs.
+Route: `44fe064efbab`. Candidate: `/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-phase2`.
 
 Candidate and scratch snapshot identities matched before and after:
 
-- Base: `e158ddc7263a55f5308944c5a426eb1e9f1a4327`
-- HEAD: `5e8b8734739c7f59f6c3af56b82dedc02fb1dcc5`
-- Tree: `71beaeabf6e15d70a800333dced87e69f3ee33c5`
-- Fingerprint: `d1a0a5184b8f6fd1852d0265b5f95004261e71bce72d7a9aa7da761a31ec214f`
-- Git status: clean before and after.
+- Comparison base: `287e64f99b01db44cb6eeeb10f307ccda6f91c1d`.
+- HEAD: `61827791b7f49a5ad340a62f07756888a03964a3`.
+- Tree: `96612a25a2dca3ed8e306f622e82ed2c8b3cbecf`.
+- Fingerprint: `53a32ef677284d79a7de11b13b81176fce0e520d485d247c522883f21cb5c733`.
+- Staged, unstaged and untracked inventories: empty before and after.
+- Comparison inventory: 49 paths, added or modified only. Exact inventory: private `security-wave2/inventory.tsv`, SHA-256 `f02aef2876ab16832678c4c9936cfcbcfbb9cb68303ca6c302933fd6e25c53de`.
 
 reviewed-tree-modified: no
