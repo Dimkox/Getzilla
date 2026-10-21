@@ -233,47 +233,6 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
-      - name: Diagnose macOS refusals
-        if: failure()
-        run: |
-          mkdir -p "$RUNNER_TEMP/diag"
-          cat > "$RUNNER_TEMP/diag/sitecustomize.py" <<'PY'
-          import sys
-          def _hook():
-              try:
-                  import os
-                  sys.path.insert(0, os.path.join(os.environ['GITHUB_WORKSPACE'], '.getzilla'))
-                  from getzilla import verification, architecture_diff, governance
-              except Exception as exc:
-                  print('DIAG import failed', exc, file=sys.stderr); return
-              add = verification._CheckDispatch.add
-              def traced(self, check):
-                  before = self.blocked_by
-                  result = add(self, check)
-                  if before is None and self.blocked_by:
-                      print('DIAG refused', check.name, check.status, check.summary, str(check.details)[:1500], check.stdout[-800:], check.stderr[-800:], file=sys.stderr)
-                  return result
-              verification._CheckDispatch.add = traced
-              run = governance.run_git_bounded
-              def git_traced(*args, **kwargs):
-                  try:
-                      return run(*args, **kwargs)
-                  except Exception as exc:
-                      print('DIAG git', args[1:], kwargs.get('limit'), type(exc).__name__, getattr(exc, 'code', None), exc, file=sys.stderr)
-                      raise
-              governance.run_git_bounded = git_traced
-              from getzilla import workflow_artifacts
-              acquire = workflow_artifacts._acquire_cas_lock
-              def lock_traced(*args, **kwargs):
-                  try:
-                      return acquire(*args, **kwargs)
-                  except Exception as exc:
-                      print('DIAG cas-lock', type(exc).__name__, exc, repr(exc.__cause__), file=sys.stderr)
-                      raise
-              workflow_artifacts._acquire_cas_lock = lock_traced
-          _hook()
-          PY
-          PYTHONPATH="$RUNNER_TEMP/diag" python -m unittest discover -s tests -k FocusedPython -k VerifyDocsState -k test_python_pr_does_not_trust -k test_git_output_is_capped -k test_concurrent_cooperating_writers 2>&1 | grep -E 'DIAG|^(FAIL|ERROR):' | sort | uniq -c | head -80 || true
       - name: Annotate macOS failures
         if: failure()
         shell: python
