@@ -77,7 +77,7 @@ class InstallExtrasTests(unittest.TestCase):
             added = on_demand.ensure_components(project, ['extra:bitrix'], source=ROOT)
             files = added[0].files
             self.assertTrue(files)
-            self.assertTrue(all('/skills/bitrix-development/' in path for path in files))
+            self.assertTrue(all('/skills/bitrix-development/' in path or '/agents/bitrix_' in path for path in files))
             self.assertFalse([path for path in files if path.startswith('.claude/')])
             self.assertIn('extra:bitrix', on_demand.load_manifest(project)['components'])
 
@@ -93,7 +93,26 @@ class InstallExtrasTests(unittest.TestCase):
             items = {item.name: item for item in run_doctor(project)}
         self.assertEqual(items['skill:bitrix-development'].status, 'info')
         self.assertIn('extra:bitrix', items["skill:bitrix-development"].message)
-        self.assertFalse([name for name, item in items.items() if name.startswith('skill:') and item.status == 'fail'])
+        self.assertFalse([name for name, item in items.items()
+                          if name.startswith(('skill:', 'agent:')) and item.status == 'fail'])
+        self.assertEqual(items['agent:bitrix_implementer'].status, 'info')
+
+    def test_bitrix_agents_follow_the_bitrix_extra(self) -> None:
+        plain = paths(MODULE.PayloadSelection(('qwen',)))
+        self.assertFalse([p for p in plain if '/agents/bitrix_' in p])
+        bitrix = paths(MODULE.PayloadSelection(('qwen',), extras=('bitrix',)))
+        self.assertIn('.grok/agents/bitrix_implementer.toml', bitrix)
+        self.assertIn('.qwen/agents/bitrix_implementer.md', bitrix)
+        self.assertFalse([p for p in bitrix if p.startswith('.claude/agents/bitrix_')])
+
+    def test_footprint_reports_what_is_installed(self) -> None:
+        payload = MODULE.build_payload(ROOT)
+        report = MODULE.footprint(payload, MODULE.PayloadSelection(('qwen',)))
+        core = report['core']
+        self.assertTrue(core['included'])
+        self.assertLess(core['included_files'], core['files'])  # root shims and extras are left out
+        self.assertFalse(report['extra:bitrix']['included'])
+        self.assertEqual(report['extra:bitrix']['included_files'], 0)
 
     def test_fresh_install_ships_the_engine_as_one_deterministic_archive(self) -> None:
         selection = MODULE.PayloadSelection(('qwen',), engine_archive=True)

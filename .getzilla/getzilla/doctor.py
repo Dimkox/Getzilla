@@ -71,11 +71,15 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     managed_agents = managed.get('agents', [])
     managed_skills = managed.get('skills', [])
     extra_skills = managed.get('extra_skills') if isinstance(managed.get('extra_skills'), dict) else {}
+    extra_agents = managed.get('extra_agents') if isinstance(managed.get('extra_agents'), dict) else {}
 
     for name in managed_agents:
         path = root / '.grok/agents' / f'{name}.toml'
         if not path.is_file():
-            items.append(DoctorItem('fail', f'agent:{name}', 'managed agent is missing'))
+            if name in extra_agents:
+                items.append(DoctorItem('info', f'agent:{name}', f'not installed; add it with getzilla components add {extra_agents[name]}'))
+            else:
+                items.append(DoctorItem('fail', f'agent:{name}', 'managed agent is missing'))
             continue
         try:
             data = tomllib.loads(path.read_text(encoding='utf-8'))

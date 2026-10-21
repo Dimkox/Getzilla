@@ -71,5 +71,10 @@
   "extra_skills": {
     "bitrix-development": "extra:bitrix",
     "seo-landing": "extra:seo-landing"
+  },
+  "extra_agents": {
+    "bitrix_architect": "extra:bitrix",
+    "bitrix_implementer": "extra:bitrix",
+    "bitrix_reviewer": "extra:bitrix"
   }
 }
