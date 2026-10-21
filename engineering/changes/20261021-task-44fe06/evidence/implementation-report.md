@@ -5,10 +5,44 @@ Current comparison base: 287e64f99b01db44cb6eeeb10f307ccda6f91c1d.
 Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
+## Repair after the second review wave
+
+Current qualification is UNVERIFIED. All four wave2 reports returned FAIL and remain unchanged
+from report commit b23baf3af48864a87b858116fe7684d2f2d14e79, tree3a7ec725b7dc34987990553ba4bd0157d5e13cd4.
+They reviewed source61827791b7f49a5ad340a62f07756888a03964a3, tree96612a25a2dca3ed8e306f622e82ed2c8b3cbecf,
+fingerprint53a32ef677284d79a7de11b13b81176fce0e520d485d247c522883f21cb5c733, on current base287e64.
+The earlier complete first-wave reports remain in Git at4abde00. The prior 61827791 smoke passed
+in0.101s with stable source and no receipt; that observation is historical after this repair.
+
+Repair scope is only the two confirmed Medium findings. Six Low test gaps, including the new
+first-use provider-cache gap, stay deferred together at https://github.com/Dimkox/Getzilla/issues/122.
+The existing scoped validation recovery still requires separate direct commands. No getzilla_par
+retry, hook change, receipt creation, production action or external check is part of this batch.
+
+- Derive required opt-in and required input presence from captured committed config. No live enabled() read authorizes the audit. CI rejects null or skipped EU reports before producing a decision.
+- Preserve receipt ignore behavior only for untracked ls-files. Its bounded runner keeps normal global/system config, restores only the three GIT_CONFIG_GLOBAL/SYSTEM/NOSYSTEM overrides, and removes Git location/index/object/inline-config overrides. Strictly resolved git-dir and work-tree pin its identity. Replacement objects, fsmonitor, untracked cache and protocol access stay disabled.
+- Keep strict Git reads for HEAD/base, capture, blobs and tracked changes. Keep util.tree_fingerprint and receipt format unchanged. Limit the compatibility inventory to16MiB and30seconds, validate NUL-delimited relative paths, and terminate/reap the owned process on failure.
+
+Observed controls before the source commit:
+
+- Red: taskset -c 0-25 python3 -m pytest -q -n 12 -p no:cacheprovider --tb=short tests/test_eu_audit_attestation.py -k 'opt_in_swap or null_or_skipped or global_and_system or global_excludes_cannot or global_ignore_cannot' returned7failed,2passed in2.41s. The real-read swap reproduced the CI opt-in race. Null/skip and global/system ignore assertions also failed. One failure was fixture setup: applying the ignore before initial commit prevented tracking the required rule file. The fixture now commits before applying that ignore.
+- Additional red/control: the two named global-ignore input and bounded-inventory tests returned1failed,1passed in1.46s. The input control passed after the fixture correction; the bounded runner API was not yet present.
+- Fresh focused run: taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_eu_audit_attestation.py tests/test_eu_ai_act.py returned48passed,67subtests passed in9.53s. It covers real swap reads, private global/system excludes, fixture receipt eligibility, unignored changes, location/index/object/config redirection, ignored decision inputs, process timeout/output limits and malformed path output.
+- ruff check scripts/getzilla_audit_bundle.py tests/test_eu_audit_attestation.py returned exit0, All checks passed.
+- bandit -q -c bandit.yaml scripts/getzilla_audit_bundle.py returned exit0 with no findings.
+- python3 scripts/getzilla_architecture.py fitness --base 287e64f99b01db44cb6eeeb10f307ccda6f91c1d --worktree --json returned exit0, fitness_status pass, required scopes architecture/contract and risk yellow from new_contract.
+- python3 scripts/getzilla_spec.py validate --change-id 20261021-task-44fe06 --gate returned exit0, ok true, no errors and all8criteria mapped. The observed working-tree fingerprint was21964a3d06367f2db93c50d85dd75803566857fa2603916d2786231c2ec46d81.
+- python3 scripts/getzilla_governance.py validate returned exit0, overall_status pass and no findings. git diff --check returned exit0 with no output.
+- Read-only git diff --exit-code confirmed all four wave2 reports and util.py matchb23baf3. V1, trust-ci and architecture/rules.yaml matchbase287e64. The controls ran on this working repair based onb23baf3; later changes only record observations and lifecycle state.
+
+Bounded controls passed. The source is prepared in state reviewing. Commit it, then run the fresh
+committed-HEAD smoke and collect four independent reviews. No full PR gate has run. All older
+sections below are historical. These observations create no verification or review receipt.
+
 ## Repair after the first review wave
 
 Bounded repair controls passed. Qualification remains UNVERIFIED until fresh independent reviews and final gates finish.
-All four complete first-wave reports remain unchanged as historical evidence. Their source was
+All four complete first-wave reports remain in Git as historical evidence. Their source was
 5e8b8734739c7f59f6c3af56b82dedc02fb1dcc5, tree 71beaeabf6e15d70a800333dced87e69f3ee33c5.
 The coordinator saved them in 4abde003d25997c2d6cd86af20e046f005367a67. Code/security review found
 three Medium defects. Five Low test gaps are deferred together to

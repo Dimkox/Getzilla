@@ -37,6 +37,12 @@ Repeat the committed-HEAD smoke before reviews; the final qualifying gate is unc
 changes and lean-install behavior remain intact. Earlier controls/reviews remain historical. Fresh controls and all four reviews are
 required for the repaired source; no earlier PASS is carried forward.
 
+The second review wave found two further Medium defects and saved all four FAIL reports inb23baf3.
+Its repair binds opt-in authorization to captured config and rejects null/skipped CI evaluation.
+Only the bounded untracked receipt inventory honors normal global/system Git excludes; strict
+identity and source capture remain unchanged. Six Low gaps now share issue122, including first-use
+provider-cache coverage. That Low gap remains outside the current repair.
+
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
 writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
 checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not final qualification.
@@ -50,7 +56,10 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Historical first wave collected all four reviews. Reports were committed as 4abde00; code/security review found the three Medium repairs above.
 - [x] Rebase onto actual main and implement the three confirmed repairs after failing regressions.
 - [x] Historical repair controls passed on checkpoint585edde8:212 tests and199 subtests,1 skipped; architecture/spec/governance/Ruff/Bandit passed. Record state reviewing.
-- [ ] Run the named clean committed-HEAD smoke and send the exact source identity to the coordinator.
+- [x] Historical clean-HEAD smoke passed on61827791 in0.101s; no receipt. The second review wave returned four FAIL reports.
+- [x] Add red regressions for the two wave2 Medium findings and implement the bounded repair. Focused48tests and67subtests passed.
+- [x] Wave2 static/spec/architecture/governance controls passed. Prepare source state reviewing.
+- [ ] Commit repaired source and run a fresh clean committed-HEAD smoke.
 - [ ] Collect four fresh independent reviews, save reports, commit/freeze and run one final PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.

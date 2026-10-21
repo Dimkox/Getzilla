@@ -145,6 +145,11 @@ obligations, emits stdout only, and returns nonzero for REVIEW or BLOCK. It crea
 audit file or release-ready claim. Normal bundle generation keeps its local verification receipt
 requirement. Engineering evidence, not legal advice.
 
+CI opt-in comes from the captured committed config. A null or skipped EU report cannot pass CI.
+Normal bundles retain the verifier's global/system ignore behavior for untracked files. That
+bounded inventory pins the audited Git directory and work tree; ignores cannot admit uncommitted
+decision inputs. The receipt format stays unchanged.
+
 To add execution evidence to a normal bundle, supply `--attestation <envelope.json> --public-key
 <public.pem> --attestation-verifier </trusted/install/bin/adaptive-trust-ci>` and a base. Use
 `--repository owner/name` when the project has no GitHub origin. The public key and executable are

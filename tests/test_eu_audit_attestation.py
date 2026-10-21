@@ -80,6 +80,49 @@ class CiAuditTests(unittest.TestCase):
         result = self.module().ci_check(repo.root, repo.base)
         self.assertEqual(result['decision'], 'block')
 
+    def test_ci_rejects_opt_in_swap_between_inventory_and_capture(self):
+        from getzilla import eu_ai_act
+        repo = self.repo()
+        mod = self.module()
+        path = repo.root / eu_ai_act.COMPLIANCE_CONFIG
+        enabled = path.read_bytes()
+        disabled = json.dumps({'enabled': []}).encode()
+        path.write_bytes(disabled)
+        head = repo.commit('committed opt-out')
+        with self.assertRaisesRegex(RuntimeError, 'opt-in'):
+            mod.ci_check(repo.root, repo.base)
+        changes, read_bytes = mod._tracked_changes, Path.read_bytes
+
+        def start_swap(root, captured_head):
+            result = changes(root, captured_head)
+            path.write_bytes(enabled)
+            return result
+
+        def restore_after_read(current):
+            content = read_bytes(current)
+            if current == path:
+                path.write_bytes(disabled)
+            return content
+
+        # Real file reads and the real evaluator: the old early read saw transient opt-in,
+        # then committed capture saw restored opt-out and CI returned PASS with null EU data.
+        with mock.patch.object(mod, '_tracked_changes', side_effect=start_swap), \
+                mock.patch.object(Path, 'read_bytes', restore_after_read):
+            with self.assertRaisesRegex(RuntimeError, 'opt-in|committed'):
+                mod.ci_check(repo.root, repo.base)
+        self.assertEqual(path.read_bytes(), disabled)
+        self.assertEqual(repo.commit_sha(), head)
+        self.assertEqual(git(repo.root, 'status', '--porcelain'), '')
+
+    def test_ci_rejects_null_or_skipped_evaluation(self):
+        repo = self.repo()
+        mod = self.module()
+        for report in (None, {'status': 'skip', 'decision': 'pass'}):
+            with self.subTest(report=report), mock.patch.object(
+                    mod, '_compliance', return_value=({'eu_ai_act': report}, [], [])):
+                with self.assertRaisesRegex(RuntimeError, 'evaluat'):
+                    mod.ci_check(repo.root, repo.base)
+
     def test_ignored_registry_and_executable_inputs_cannot_change_signed_source(self):
         for relative in ('.getzilla/config/ai-systems.json', '.getzilla/getzilla/extra.py'):
             with self.subTest(relative=relative):
@@ -226,6 +269,96 @@ class CiAuditTests(unittest.TestCase):
         self.assertEqual(bundle['commit'], head)
         self.assertEqual(bundle['tree_fingerprint'], expected)
         self.assertEqual(bundle['release_decision'], 'eligible', bundle['reasons'])
+
+    @contextlib.contextmanager
+    def git_excludes(self, pattern, source='global'):
+        with tempfile.TemporaryDirectory() as temporary:
+            private = Path(temporary)
+            ignore = private / 'fixture.ignore'
+            ignore.write_text(pattern + '\n', encoding='utf-8')
+            config, empty = private / 'fixture.gitconfig', private / 'empty.gitconfig'
+            empty.write_text('', encoding='utf-8')
+            git(private, 'config', '--file', str(config), 'core.excludesFile', str(ignore))
+            env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+            env.update({'GIT_CONFIG_GLOBAL': str(config if source == 'global' else empty),
+                        'GIT_CONFIG_SYSTEM': str(config if source == 'system' else empty),
+                        'GIT_CONFIG_NOSYSTEM': '0'})
+            with mock.patch.dict(os.environ, env, clear=True):
+                yield private
+
+    def test_receipt_keeps_global_and_system_ignored_notes_but_not_source_changes(self):
+        from getzilla.util import tree_fingerprint
+        for source in ('global', 'system'):
+            with self.subTest(source=source), self.git_excludes('editor-note.fixture', source):
+                repo = self.repo()
+                mod = self.module()
+                expected = tree_fingerprint(repo.root)
+                repo.write('.getzilla/runtime/receipts/fixture/verification.json', json.dumps({
+                    'kind': 'verification', 'status': 'pass', 'tree_fingerprint': expected}))
+                self.assertEqual(mod.build(repo.root, repo.base)['release_decision'], 'eligible')
+                repo.write('editor-note.fixture', 'private ignored editor state\n')
+                self.assertEqual(tree_fingerprint(repo.root), expected)
+                bundle = mod.build(repo.root, repo.base)
+                self.assertEqual(bundle['tree_fingerprint'], expected)
+                self.assertEqual(bundle['release_decision'], 'eligible', bundle['reasons'])
+                repo.write('untracked-source.py', 'VALUE = 1\n')
+                changed = tree_fingerprint(repo.root)
+                self.assertNotEqual(changed, expected)
+                bundle = mod.build(repo.root, repo.base)
+                self.assertEqual(bundle['tree_fingerprint'], changed)
+                self.assertEqual(bundle['release_decision'], 'blocked')
+
+    def test_receipt_global_excludes_cannot_redirect_git_identity(self):
+        from getzilla.util import tree_fingerprint
+        with self.git_excludes('editor-note.fixture') as private:
+            repo, foreign = self.repo(), self.repo()
+            repo.write('editor-note.fixture', 'ignored\n')
+            repo.write('actual-source.py', 'VALUE = 1\n')
+            expected, head = tree_fingerprint(repo.root), repo.commit_sha()
+            hijack = private / 'hijack.ignore'
+            hijack.write_text('actual-source.py\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, {
+                    'GIT_DIR': str(foreign.root / '.git'), 'GIT_WORK_TREE': str(foreign.root),
+                    'GIT_INDEX_FILE': str(foreign.root / '.git/index'),
+                    'GIT_OBJECT_DIRECTORY': str(foreign.root / '.git/objects'),
+                    'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.excludesFile',
+                    'GIT_CONFIG_VALUE_0': str(hijack),
+                    'GIT_CONFIG_PARAMETERS': "'core.excludesFile=" + str(hijack) + "'"}):
+                result = self.module().build(repo.root, repo.base)
+            self.assertEqual(result['commit'], head)
+            self.assertEqual(result['tree_fingerprint'], expected)
+
+    def test_global_ignore_cannot_admit_uncommitted_decision_input(self):
+        relative = '.getzilla/config/diff-risk-rules.json'
+        repo = self.repo()
+        with self.git_excludes(relative):
+            git(repo.root, 'rm', '--cached', relative)
+            repo.commit('globally ignored decision input')
+            self.assertEqual(git(repo.root, 'status', '--porcelain'), '')
+            with self.assertRaisesRegex(RuntimeError, 'committed'):
+                self.module().ci_check(repo.root, repo.base)
+
+    def test_receipt_untracked_inventory_is_bounded_and_validated(self):
+        from getzilla import fsx
+        repo = self.repo()
+        mod = self.module()
+        repo.write('untracked-note.fixture', 'fixture\n')
+        with mock.patch.object(mod, 'GIT_PATH_OUTPUT_LIMIT', 4):
+            with self.assertRaisesRegex(RuntimeError, 'output.*limit'):
+                mod._audit_fingerprint(repo.root, repo.commit_sha())
+        spawn = fsx.owned_popen
+
+        def child(body):
+            return mock.patch.object(fsx, 'owned_popen', side_effect=lambda argv, **kwargs:
+                                     spawn([sys.executable, '-c', body], **kwargs))
+
+        with child('import time; time.sleep(10)'), mock.patch.object(mod, 'GIT_INVENTORY_TIMEOUT', 0.1):
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                mod._audit_fingerprint(repo.root, repo.commit_sha())
+        for raw in (b'no-terminator', b'../outside\0', b'/absolute\0', b'\0', b'a//b\0'):
+            with self.subTest(raw=raw), child('import sys; sys.stdout.buffer.write(' + repr(raw) + ')'):
+                with self.assertRaisesRegex(RuntimeError, 'path inventory'):
+                    mod._audit_fingerprint(repo.root, repo.commit_sha())
 
 
 class AttestationClaimTests(unittest.TestCase):

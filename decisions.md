@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-21 — Keep audit authority and receipt compatibility in separate reads
+
+Use captured committed bytes for both opt-in authority and evaluation. Honor normal Git excludes only in the untracked receipt inventory, with pinned Git identity and bounded output. Real-read swap and private-config tests cover both boundaries without changing the receipt format.
+
 ## 2026-10-21 — Bind audit inputs and refuse unsafe platform writes
 
 Pass captured committed rule/provider bytes into the evaluator instead of using module-relative defaults or path caches. This preserves --root while keeping one commit, base and UTC date throughout the audit. Refuse automatic scaffolding where descriptor-relative creation is unavailable; manual template use remains possible without claiming race-safe Windows writes.

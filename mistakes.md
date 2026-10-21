@@ -1,5 +1,11 @@
 # Mistakes
 
+## 2026-10-21 — Live authorization and shared sanitization used different evidence
+
+The early opt-in read authorized a different snapshot from the evaluator's captured config. Reusing strict Git sanitization for receipt inventory also removed global excludes that the existing verifier honors. Bind authorization to captured bytes and preserve ignore compatibility only in the pinned untracked inventory reader.
+
+The first global-ignore regression installed the ignore before the fixture's initial commit, so the required rule file was never tracked. Commit the fixture before applying the exclusion under test.
+
 ## 2026-10-21 — Private scratch still had group-writable ancestors
 
 Checking only the scratch directory's 0700 mode missed two task-owned 0775 ancestors, so packaging controls correctly rejected their rename authority. Check the complete ancestor chain before running archive tests; removing group-write from those two directories preserved the security check and allowed the same bounded cases to run. The failed and corrected observations remain in the change evidence.

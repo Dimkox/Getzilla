@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 VERIFIER_TIMEOUT = 30
 VERIFIER_OUTPUT_LIMIT = 1024 * 1024
+GIT_INVENTORY_TIMEOUT = 30
+GIT_PATH_OUTPUT_LIMIT = 16 * 1024 * 1024
 AUDIT_SCRIPT = 'scripts/getzilla_audit_bundle.py'
 
 
@@ -52,10 +54,77 @@ def _committed_blob(root: Path, head: str, relative: str) -> bytes | None:
 
 
 def _git_paths(root: Path, *args: str) -> set[str]:
-    raw = _git_bytes(root, *args)
-    if raw and not raw.endswith(b'\0'):
+    return _path_inventory(_git_bytes(root, *args))
+
+
+def _path_inventory(raw: bytes) -> set[str]:
+    if not raw:
+        return set()
+    if not raw.endswith(b'\0'):
         raise RuntimeError('malformed Git path inventory')
-    return {os.fsdecode(path) for path in raw.split(b'\0') if path}
+    paths = {os.fsdecode(path) for path in raw[:-1].split(b'\0')}
+    if any(Path(path).is_absolute() or any(part in {'', '.', '..'} for part in path.split('/'))
+           for path in paths):
+        raise RuntimeError('malformed Git path inventory')
+    return paths
+
+
+def _receipt_untracked_paths(root: Path) -> set[str]:
+    """Honor receipt ignore policy only for untracked paths, without Git redirection."""
+    from getzilla import fsx
+
+    git_dir = _git(root, 'rev-parse', '--absolute-git-dir')
+    config_keys = {'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'}
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith('GIT_') or key in config_keys}
+    env.update({'GIT_TERMINAL_PROMPT': '0', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_LAZY_FETCH': '1',
+                'GIT_NO_REPLACE_OBJECTS': '1', 'LC_ALL': 'C'})
+    argv = ['git', '--no-replace-objects', '--no-optional-locks', '--git-dir=' + git_dir,
+            '--work-tree=' + str(root.resolve()), '-c', 'core.fsmonitor=false',
+            '-c', 'core.untrackedCache=false', '-c', 'protocol.allow=never',
+            'ls-files', '--others', '--exclude-standard', '-z']
+    deadline = time.monotonic() + GIT_INVENTORY_TIMEOUT
+    process = fsx.owned_popen(argv, cwd=root, env=env, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    expired = threading.Event()
+
+    def stop() -> None:
+        try:
+            job = fsx.owned_job(process)
+            if job:
+                job.terminate(1)
+            else:
+                fsx.kill_process_tree(process.pid)
+        except ProcessLookupError:
+            pass
+
+    def timeout() -> None:
+        expired.set()
+        stop()
+
+    timer = threading.Timer(max(0, deadline - time.monotonic()), timeout)
+    timer.daemon = True
+    timer.start()
+    try:
+        output = process.stdout.read(GIT_PATH_OUTPUT_LIMIT + 1)
+        if len(output) > GIT_PATH_OUTPUT_LIMIT:
+            raise RuntimeError('Git inventory output exceeds limit')
+        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        if expired.is_set():
+            raise RuntimeError('Git inventory timeout')
+        if process.returncode != 0:
+            raise RuntimeError('Git path inventory failed')
+        return _path_inventory(output)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError('Git inventory timeout') from exc
+    finally:
+        timer.cancel()
+        stop()
+        process.wait(timeout=2)
+        process.stdout.close()
+        job = fsx.owned_job(process)
+        if job:
+            job.close()
 
 
 def _tracked_changes(root: Path, head: str) -> set[str]:
@@ -69,7 +138,7 @@ def _audit_fingerprint(root: Path, head: str) -> str:
 
     paths = _tracked_changes(root, head)
     indexed = _git_paths(root, 'ls-files', '--cached', '-z')
-    for relative in _git_paths(root, 'ls-files', '--others', '--exclude-standard', '-z'):
+    for relative in _receipt_untracked_paths(root):
         if relative in paths or relative in indexed or not (
                 _fingerprint_noise(relative) or relative.startswith('.qwen/tmp/')):
             paths.add(relative)
@@ -103,11 +172,8 @@ def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> tuple[str,
     head = _git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
     if _tracked_changes(root, head):
         raise RuntimeError('the audit needs a clean committed tree')
-    if require_opt_in and not eu_ai_act.enabled(root):
-        raise RuntimeError('CI audit requires enabled EU opt-in')
     data_paths = {eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.OBLIGATIONS, eu_ai_act.REGISTRY,
                   '.getzilla/config/diff-risk-rules.json', '.getzilla/config/cost-providers.json'}
-    required = data_paths - {eu_ai_act.REGISTRY} if require_opt_in or eu_ai_act.enabled(root) else set()
     paths = data_paths | {AUDIT_SCRIPT}
     # Check the union of committed and present executable inputs. Looking only at disk misses
     # deletions hidden from status by skip-worktree or assume-unchanged bits.
@@ -128,7 +194,7 @@ def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> tuple[str,
         path = root / relative
         entry = _git(root, 'ls-tree', head, '--', relative)
         present = os.path.lexists(path)
-        if not present and not entry and relative not in required:
+        if not present and not entry:
             if relative in data_paths:
                 inputs[relative] = None
             continue
@@ -142,6 +208,13 @@ def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> tuple[str,
             raise RuntimeError(f'{relative} differs from committed audit input')
         if relative in data_paths:
             inputs[relative] = blob
+    opted_in = eu_ai_act.config_enabled(inputs[eu_ai_act.COMPLIANCE_CONFIG])
+    if require_opt_in and not opted_in:
+        raise RuntimeError('CI audit requires enabled committed EU opt-in')
+    if opted_in:
+        for relative in sorted(data_paths - {eu_ai_act.REGISTRY}):
+            if inputs[relative] is None:
+                raise RuntimeError(f'{relative} must be present as a committed regular file before audit')
     return head, inputs
 
 
@@ -310,6 +383,9 @@ def ci_check(root: Path, base: str | None, *, repository: str | None = None) -> 
         head, inputs = _committed_inputs(root, require_opt_in=True)
         base = _base(root, base, required=True)
         compliance, reasons, review = _compliance(root, base, head, today, inputs)
+        report = compliance.get('eu_ai_act')
+        if not isinstance(report, dict) or report.get('status') not in {'pass', 'fail'}:
+            raise RuntimeError('CI audit requires an evaluated EU compliance report')
         return {'schema_version': 'getzilla-eu-audit-check-v1', 'commit': head, 'comparison_base': base,
                 'repository': _repository(root, repository), 'authority': 'evidence-only',
                 'decision': 'block' if reasons else 'review' if review else 'pass',
