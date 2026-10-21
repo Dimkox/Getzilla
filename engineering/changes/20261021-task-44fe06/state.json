@@ -37,7 +37,7 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Frozen75b6f334 passed Core tests and coverage but failed factory-postgres-exit. Existing inventory regression reproduced drift; only derived inventory changed and20 builder/process controls passed on system Python3.12. Pinned jsonschema4.26.0 observation now passed after owner recovery. Fresh named smoke, four reviews and final gates remain pending. No qualifying PASS is claimed.",
+        "reason": "Frozen75b6f334 failed factory-postgres-exit. Derived inventory repair passed20 tests plus architecture/spec/governance and was committed clean asdc3d66bc. Required named smoke is BLOCKED before execution by the authoritative same-objective circuit breaker. No retry or dependent review is allowed without scoped recovery. No qualifying PASS is claimed.",
         "receipt_kind": "verification",
         "status": "not_run"
       },

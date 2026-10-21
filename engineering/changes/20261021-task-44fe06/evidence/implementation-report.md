@@ -7,6 +7,19 @@ Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
 ## Derived Factory inventory repair after wave 4
 
+The repaired source was committed as dc3d66bceac4568442344e1b6ebba00fed63046a,
+treebe7183201235ceb0e19b1f1c83a557498279b362,
+fingerprintb6d76b96adaded734c48d649d3d11db73c2085d7a9451cac2a0c50a5741f2770, with clean status.
+Required named smoke is BLOCKED before execution. Command:
+`UV_PYTHON=/usr/bin/python3.12 UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never UV_LOCKED=1 GETZILLA_TEST_WORKERS=16 taskset -c 0-15 python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180`.
+The hook returned: "Circuit breaker: the rewritten invocation was denied for the same objective.
+Do not retry this objective again or create a speculative grant. Stop dependent subagents, mark
+this objective BLOCKED, and report the blocker." It cited the earlier opaque-control-plane-mutation
+denial. The earlier architecture rewrite had passed, but that does not clear the authoritative
+fingerprint. No smoke process or receipt was created. The writer stopped smoke and dependent reviews,
+sent the full command and refusal to the coordinator, and did not retry or request a speculative grant.
+The bounded test/architecture/spec/governance observations below remain actual results, not smoke PASS.
+
 Qualification remains UNVERIFIED. Four wave4 PASS reports reviewed ccfe4a404c33003ede0cf0ef42c0faf91f9ce67d.
 The coordinator preserved them in frozen75b6f3346f9445358a032cb5c16fc769ba37434e,
 tree4c270aff09e2a1c7611598d22b0e5bc8093809a7,

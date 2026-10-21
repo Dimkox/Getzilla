@@ -28,7 +28,8 @@
 - [x] After owner-authorized recovery, the coordinator installed pinned jsonschema4.26.0 in scratch and ran23 tests/30 subtests onccfe4a404. Exact-base extraction remains BLOCKED.
 - [x] Reproduce existing inventory regression failure and regenerate only derived wheel inventory from the unchanged security-pinned lock. On system Python3.12,20 offline-builder/process-adapter tests passed.
 - [x] Complete bounded controls:20 tests, architecture/spec/governance and diff checks passed. Prepare source state reviewing; only derived JSON and workflow/prose changed.
-- [ ] Commit and run the named clean-HEAD no-record smoke before the review handoff.
+- [x] Commit source dc3d66bc in reviewing state with clean status.
+- [ ] Required named no-record smoke is BLOCKED before execution by the same-objective circuit breaker. Do not retry or begin dependent reviews without scoped recovery.
 - [ ] Coordinator collects four fresh independent reviews, freezes reports and reruns final local and exact-head external gates with the recorded system Python3.12/UV environment.
 
 Trust CI producer and example policy are a separate successor. No extra write agent shares this candidate.
