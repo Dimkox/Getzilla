@@ -1,9 +1,37 @@
 # Core implementation and repair evidence
 
 Date: 2026-10-21. Branch: feat/eu-ai-act-phase2-20261021. Route:44fe064efbab.
-Current comparison base: 287e64f99b01db44cb6eeeb10f307ccda6f91c1d.
+Current comparison base: f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02.
 Original comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
+
+## Integration after the final-gate repair
+
+Test-repair checkpoint47d02c4c74b832c581bee86245e466f39b6c019b preserves the approved fixture,
+timing and test-dependency fixes below. It changes14 files with297 insertions and24 deletions.
+Authorized remote55e7cb05a9be4648012086664d2b1e001cc81300 merged without conflicts using --no-ff,
+producing2a7738c3a9177ad992ca4d8fa248b90a03ef9d99. No history was reset or rebased. The foreign
+commit makes audit/scaffold wrappers optional EU files and refuses scaffold before opt-in. Its
+parent includes actual mainf9f02dd53ba9f6e69d51ae5322df0c96e3d41b02. Official update_route changed
+the comparison base from287e64f99b01db44cb6eeeb10f307ccda6f91c1d to that actual merge-base and
+appended history without changing route44fe064efbab or its creation fingerprint.
+
+Fresh bounded observations on this integration:
+
+- Six EU/scaffold/install/CLI modules passed114 tests and98 subtests, with1 skip, in14.27s before adding the installed-dispatch characterization.
+- The characterization uses real lean/chosen payloads and the source-backed installed dispatcher. Lean fallback returns the installation command and changes no file. Enabled POSIX dispatch writes only the exact adapter; registry bytes stay unchanged. Windows expects refusal before mutation. Its first run had1 failure because the new fixture guessed the registry schema id; correcting it to the existing ai-systems-v1 contract fixed that setup error. No product repair was needed.
+- Final affected run: `PYTHONDONTWRITEBYTECODE=1 taskset -c 0-19 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_compliance_scaffold.py tests/test_eu_ai_act.py tests/test_install_extras.py tests/test_install_on_demand.py tests/test_getzilla_cli.py tests/test_manifest_package.py tests/test_eu_audit_attestation.py tests/test_structure.py` returned exit0,170 passed,1 skipped and175 subtests in44.91s. This includes the real contract schema test on host jsonschema4.10.3; it does not prove the4.26.0 pin installed.
+- `PYTHONDONTWRITEBYTECODE=1 taskset -c 20,21 python3 scripts/getzilla_architecture.py fitness --base f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02 --worktree --json` returned exit0, fitness_status pass, required architecture/contract scopes and only new_contract risk. The package spec wording was then clarified to state the same optional-install behavior; no product file changed after this run.
+- Ruff passed for the repaired tests and merged CLI/installer files. A multi-file read-only rg command received an opaque hook denial; the one allowed split into separate reads succeeded. No denied invocation was repeated and no new grant was inferred.
+- Final package controls: `python3 scripts/getzilla_spec.py validate --change-id 20261021-task-44fe06 --gate` returned exit0 with8/8 criteria mapped and no errors. `python3 scripts/getzilla_governance.py validate` returned exit0 and no findings. `bandit -q -c bandit.yaml scripts/getzilla_compliance.py scripts/install_into.py` returned exit0 with no findings; it emitted comment-parser warnings. `git diff --check` passed.
+- A read-only `git diff --exit-code d7f91344... --` over the original hook module, hooks, policy, runner, coverage config, V1 schema and all four wave3 reports returned exit0 with no output. No product hook/runner limit or coverage exclusion changed. The merge retained the foreign main doctor/managed-file changes; they are already in comparison basef9.
+- Before the final evidence/lifecycle update, `git diff --stat f9f02dd5...` reported55 files,3989 insertions and318 deletions. The repaired tests and foreign CLI/installer changes are in the review inventory. All six Low gaps remain deferred in issue122.
+
+All prior controls and four wave3 PASS reports remain historical. The optional fresh pinned install
+and exact-base runtime probe remain BLOCKED/NOT_RUN. Bounded controls are complete and source state
+is prepared for reviewing. Commit next, then run the named no-record smoke, four fresh reviews,
+a frozen report tree and final local/external
+gates. PR127 remains the delivery PR. No new full gate, receipt or push ran in this write batch.
 
 ## Repair after the first qualifying gate
 
@@ -21,8 +49,9 @@ f4353665d12506a07ab4b9a4f6b38222007e712a939cf43ba60326e9a8076086.
 No passing final verification or review receipt was created. Delivery PR:
 https://github.com/Dimkox/Getzilla/pull/127. Frozen d7f91344 was transported as UNVERIFIED using
 source grant9bd794918ce8811a and canonical shared-Git grant91c3a034061519f3. The successful exact
-SHA refspec left canonical main unchanged. The PR target was f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02;
-the recorded comparison base remains287e64. No rebase is required for that unrelated target change.
+SHA refspec left canonical main unchanged. At that historical freeze, the PR target was
+f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02 and the recorded comparison base was287e64.
+The later authorized merge and official base refresh are recorded above.
 
 Current-head triage separated two existing test-environment defects:
 

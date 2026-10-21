@@ -16,7 +16,7 @@ Approved source scope: finish the six outcomes from merged PR120. This revision 
 3. Adapters: use scripts/getzilla_cli.py and new managed scripts/getzilla_compliance.py. Scaffold validates the final generated filename against the first declared glob, rejects unsafe/ambiguous paths and writes exclusively through fsx. Emit Python snake_case or TypeScript camelCase hints. Leave registry unchanged. Test Python and Node behavior. C2PA runs at most30seconds on copied input and distinct output; errors preserve original content. Metadata alone is not embedded marking.
 4. Audit evidence: normal bundles retain local receipt rules. New --ci-check requires committed EU opt-in and base, evaluates release obligations and emits stdout evidence only. Base comes from --base or authoritative TRUST_CI_BASE_SHA. No local receipt or release-ready claim. Core calls a trusted installed absolute attestation-verify executable outside the project, using fixed argv, safe cwd/environment and time/output bounds. Signed passed payload must match head/base/repository and contain a passed actual audit invocation with integer exit0. Reject echo/help/wrappers/substrings and legacy results without argv. Signature scope is execution, not regenerated bundle bytes.
 5. ISO map: project-authored clause mapping under compliance.iso42001 with gating:false. Missing or malformed mapping is null and cannot affect decisions.
-6. Installation and docs: both audit and compliance wrappers are managed. EU templates belong to the optional component prefix so on-demand installation supplies them. Document evidence limits and current2.3.1 source behavior in README and CHANGELOG. Static symbol matches and generic AIA-15 verification are not model evaluation evidence.
+6. Installation and docs: both audit and compliance wrappers are managed optional EU component files, omitted from lean installs. EU templates belong to the same optional component so on-demand installation supplies them. The installed CLI gives an installation hint without writing an adapter before opt-in. Document evidence limits and current2.3.1 source behavior in README and CHANGELOG. Static symbol matches and generic AIA-15 verification are not model evaluation evidence.
 
 ## Signed-result successor contract
 
@@ -52,6 +52,12 @@ untraced fixture imports. Exact-base execution and fresh pinned-dependency insta
 static source parity or a host package is not a substitute for either test result.
 All complete reviews remain historical, and the repaired source needs fresh controls and reviews.
 
+Test-repair checkpoint47d02c4c was merged with authorized remote55e7cb05 using a no-ff merge,
+preserving both histories at2a7738c3. Its parent includes actual mainf9f02dd5. The official route
+API refreshed the comparison base from287e64 to f9f02dd5 and retained earlier bases and the creation
+fingerprint. The remote change makes EU scripts optional and guards scaffold opt-in. Fresh installed
+lean/chosen CLI checks cover that integration; all prior reports remain historical.
+
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
 writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
 checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not final qualification.
@@ -71,7 +77,8 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Historical second-repair source cf18a79c passed its clean committed-HEAD smoke.
 - [x] Collect four wave3 PASS reviews and freeze d7f91344. Its final local PR gate and public Linux checks failed; those failures remain evidence.
 - [x] Add the red poisoned-import regression and implement the bounded test/tool-requirements repair.
-- [ ] Complete fresh focused controls, commit source state reviewing and run the named smoke.
+- [x] Complete fresh focused controls after test repair and authorized remote integration:170 tests/175 subtests,1 skip; architecture/spec/governance/Ruff/Bandit passed. Prepare source state reviewing on actual basef9f02dd5.
+- [ ] Commit source state reviewing and run the named no-record smoke before fresh reviews.
 - [ ] Optional fresh local pinned-version installation remains BLOCKED/NOT_RUN. It does not block route-required reviews or gates; normal required exact-head CI must install declared4.26.0.
 - [ ] Collect four fresh independent reviews, save reports, commit/freeze and run the next qualifying PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.

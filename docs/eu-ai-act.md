@@ -11,7 +11,9 @@ always confirmed by a person.
   or calls any service to decide.
 - **Any time later.** Run `getzilla components add compliance:eu-ai-act` in the project. To turn it off,
   remove `eu-ai-act` from `.getzilla/config/compliance.json`. A CI audit requires committed opt-in and
-  fails when this layer is disabled. On-demand installation also supplies the adapter templates.
+  fails when this layer is disabled. On-demand installation supplies the audit and scaffold scripts
+  and the adapter templates. Lean project installs omit those files. Before opt-in, the installed
+  `getzilla compliance scaffold` command gives the component-install command and writes no adapter.
 - **Without asking.** Set `GETZILLA_EU_AI_ACT=1` (or `0`) for the installer.
 
 ## How it works

@@ -18,7 +18,7 @@
     "ai_architect",
     "integration_architect"
   ],
-  "base_commit": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+  "base_commit": "f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02",
   "comparison_base_history": [
     {
       "previous_base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
@@ -36,6 +36,12 @@
       "previous_base": "a103b373031f477efad0e7bd9ffab24a96e6c63f",
       "base_commit": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
       "reason": "Official update_route refresh after rebase onto actual fetched origin/main after PR125; no EU product overlap.",
+      "creation_base_fingerprint": "37510300d29a6043ce2f884e053f7b4f9f0a0c53eb124051d9c05ba338685540"
+    },
+    {
+      "previous_base": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+      "base_commit": "f9f02dd53ba9f6e69d51ae5322df0c96e3d41b02",
+      "reason": "Official update_route refresh after merging authorized remote EU branch 55e7cb05 with its main merge. Actual PR merge-base is f9f02dd5; local and remote history is preserved.",
       "creation_base_fingerprint": "37510300d29a6043ce2f884e053f7b4f9f0a0c53eb124051d9c05ba338685540"
     }
   ],

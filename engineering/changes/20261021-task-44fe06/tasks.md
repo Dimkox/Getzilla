@@ -21,8 +21,8 @@
 - [x] Reproduce fixture PYTHONPATH contamination and coverage timing separately. Add and observe the new poisoned-import regression failing.
 - [x] Repair only test environment isolation, the timing measurement boundary and the declared jsonschema4.26.0 test dependency.
 - [x] Complete bounded hook/policy, requirement-binding, covered diagnostic and architecture/static/spec controls for the test repair. These are observations, not qualifying receipts.
-- [ ] Commit this checkpoint, preserve foreign remote55e7cb05 through a no-ff merge, update the actual comparison base and run affected CLI/install controls.
-- [ ] Complete fresh bounded controls and source state reviewing.
+- [x] Commit test-repair checkpoint47d02c4c and preserve foreign remote55e7cb05 through no-ff merge2a7738c3. Official comparison base is nowf9f02dd5. Fresh affected tests passed170 tests/175 subtests with1 skip; installed lean/chosen CLI behavior is covered.
+- [x] Complete fresh bounded controls and prepare source state reviewing:170 tests/175 subtests,1 skip; architecture/spec/governance/Ruff/Bandit passed. Historical wave3 reports and product hooks/runner/coverage stay unchanged.
 - [ ] Optional fresh local pinned-dependency installation is BLOCKED/NOT_RUN; it is not a route prerequisite. Required exact-head CI must still install declared4.26.0.
 - [ ] Commit the repair and run the named committed-HEAD smoke.
 - [ ] Coordinator collects four fresh independent reviews, freezes reports and reruns final local and exact-head external gates.

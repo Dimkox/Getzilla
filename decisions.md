@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-21 — Preserve concurrent branch history and test the installed command
+
+Merge the authorized remote head after committing local repairs, then refresh the route to the actual PR merge-base through its API. Real lean/chosen payload tests exercised dispatcher fallback, opt-in refusal and exact adapter writes. This preserved both contributors' work and tested the installation boundary that source-only CLI tests omit.
+
 ## 2026-10-21 — Separate fixture identity, coverage and timing evidence
 
 Bind hook subprocess imports to the copied fixture while preserving every other environment variable. Keep the policy verdict covered, test deadline and entry exhaustion deterministically, and measure ordinary CPU work in an untraced child with a finite timeout. The poisoned-import and100-test hook/policy controls passed without changing product hooks, runner or coverage settings.

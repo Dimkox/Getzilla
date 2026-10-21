@@ -8,6 +8,7 @@ Typed criteria AC-001 through AC-006 in change-spec.yaml govern this candidate.
 - Python and Node adapters return caller-supplied public provenance. C2PA output is distinct; missing tools, failure and timeout preserve input. Returned metadata alone is not embedded marking.
 - CI check needs committed opt-in and exact base, emits stdout evidence only, and uses no receipt. Normal bundles keep receipt requirements. Signed execution requires exact head/base/repository, passed status and successful actual audit argv with integer exit0.
 - ISO mapping is optional and never affects gating. Document static symbol and generic verification limits.
+- Lean project installs omit EU audit/scaffold scripts and adapter templates. The EU component supplies them. The installed scaffold CLI refuses before opt-in with the component-install command and leaves project files and registry unchanged.
 
 Security evidence comes from code/test/security/release reviews of the committed candidate. No external mutations, new services or telemetry are added. Repeated scaffold calls fail before overwrite. Existing architecture and governance rules remain authoritative.
 

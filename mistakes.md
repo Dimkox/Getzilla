@@ -1,5 +1,9 @@
 # Mistakes
 
+## 2026-10-21 — Reuse the actual registry contract in installed fixtures
+
+The new installed CLI fixture guessed the registry schema id and failed validation before testing enabled scaffolding. Use the existing ai-systems-v1 contract; keep lean refusal and exact file/registry preservation assertions.
+
 ## 2026-10-21 — Test fixtures inherited the runner's source imports
 
 The runner's PYTHONPATH placed the healthy source package before deliberately broken fixture modules. Plain focused tests passed, but the covered full runner hid degraded behavior. Bind child imports to the fixture while preserving the rest of its environment; the poisoned-path regression must record degradation and retain refusal.

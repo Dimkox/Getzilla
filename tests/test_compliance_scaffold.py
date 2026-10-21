@@ -1,9 +1,12 @@
 """Scaffolding is a bounded exclusive write, not a registry mutation."""
+import importlib.util
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests.test_eu_ai_act import ROOT, Repo
@@ -137,3 +140,52 @@ class ScaffoldTests(unittest.TestCase):
             return
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(json.loads(proc.stdout)['registry_hints']['marking_symbol'], 'markGeneratedContent')
+
+    def test_installed_dispatcher_requires_component_and_preserves_registry(self):
+        spec = importlib.util.spec_from_file_location('install_scaffold_fixture', ROOT / 'scripts/install_into.py')
+        installer = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = installer
+        spec.loader.exec_module(installer)
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                selection = installer.PayloadSelection(('qwen',), compliance=('eu-ai-act',) if enabled else ())
+                for entry in installer.build_payload(ROOT, selection=selection):
+                    path = project / entry.path
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(entry.content)
+                registry = project / '.getzilla/config/ai-systems.json'
+                registry.write_text(json.dumps({'schema_version': 'ai-systems-v1',
+                                                'systems': [{'id': 'bot', 'paths': ['src/bot/**']}]}),
+                                    encoding='utf-8')
+                before = {path.relative_to(project).as_posix(): path.read_bytes()
+                          for path in project.rglob('*') if path.is_file()}
+                self.assertEqual((project / 'scripts/getzilla_compliance.py').exists(), enabled)
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts/getzilla_cli.py'), 'compliance', 'scaffold',
+                     '--system', 'bot', '--lang', 'python'], cwd=project,
+                    env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'},
+                    capture_output=True, text=True, check=False, timeout=30)
+                payload = json.loads(result.stdout)
+                self.assertEqual(registry.read_bytes(), before['.getzilla/config/ai-systems.json'])
+                after = {path.relative_to(project).as_posix(): path.read_bytes()
+                         for path in project.rglob('*') if path.is_file()}
+                if not enabled:
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertFalse(payload['ok'])
+                    self.assertIn('getzilla components add compliance:eu-ai-act', payload['error'])
+                    self.assertFalse((project / 'src').exists())
+                    self.assertEqual(after, before)
+                elif os.name == 'nt':
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn('descriptor-relative', payload['error'])
+                    self.assertEqual(after, before)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    self.assertTrue(payload['ok'])
+                    self.assertEqual(payload['registry_hints']['marking_symbol'], 'mark_generated_content')
+                    adapter = project / 'src/bot/ai_transparency.py'
+                    template = project / '.getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py'
+                    self.assertEqual(adapter.read_bytes(), template.read_bytes())
+                    self.assertEqual(after.pop('src/bot/ai_transparency.py'), template.read_bytes())
+                    self.assertEqual(after, before)

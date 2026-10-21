@@ -18,6 +18,8 @@ Getzilla lets an AI write code for your project and checks that code before it i
 The optional [EU AI Act layer](docs/eu-ai-act.md) includes matrix freshness checks, risk records,
 Python and Node transparency adapters, and audit evidence. Run `getzilla compliance scaffold`
 to create an adapter for a registered system on platforms with descriptor-relative file creation.
+Install the layer first with `getzilla components add compliance:eu-ai-act`. Lean project installs
+omit its audit and scaffold scripts; the CLI gives the installation command before any adapter write.
 On Windows, copy the installed template manually; the scaffold command refuses before writing.
 Read-only CI checks and a trusted installed verifier
 can record signed audit execution. Normal audit bundles still need local verification receipts.

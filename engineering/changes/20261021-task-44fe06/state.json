@@ -37,7 +37,7 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Frozen d7f91344 failed its final local gate and public Linux tests. Bounded test-repair controls passed as observations; no coverage gate PASS is claimed. Optional pinned installation stays BLOCKED/NOT_RUN and is not a route prerequisite. Preserve remote55e7cb05 through merge before fresh integration controls and final gates.",
+        "reason": "Frozen d7f91344 failed its final local gate and public Linux tests. Test repair and remote55e7cb05 are preserved through merge2a7738c3 on actual basef9. Fresh affected controls passed170 tests and175 subtests with1 skip; static/spec/architecture checks passed. Optional pinned installation stays BLOCKED/NOT_RUN. Named smoke, fresh reviews and final gates remain pending. No coverage gate PASS is claimed.",
         "receipt_kind": "verification",
         "status": "not_run"
       },
@@ -200,6 +200,26 @@
       ],
       "reason": "Repair final gate fixture isolation and timing plus declared schema test dependency after reproduced failures",
       "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T16:37:55+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Test repair and authorized remote integration are complete. Fresh affected tests and architecture passed as bounded observations on actual base f9f02dd5. Finish remaining static and package controls.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T16:39:38+00:00",
+      "from": "verifying",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Fresh bounded repair and installed CLI integration controls passed on actual base f9f02dd5. Commit source and run named no-record smoke before four fresh independent reviews. Final qualification remains unverified.",
+      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -210,7 +230,7 @@
   "human_gates_digest": "189ed16faf217a895a92815d88941ce7372cc76c3cbe69d5609f7869f4da03c7",
   "route_id": "44fe064efbab",
   "schema_version": 1,
-  "status": "implementing",
+  "status": "reviewing",
   "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
-  "updated_at": "2026-10-21T15:59:30+00:00"
+  "updated_at": "2026-10-21T16:39:38+00:00"
 }
