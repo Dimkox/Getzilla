@@ -36,6 +36,18 @@
       "resource": null,
       "route_id": "d834158878e0",
       "scope_digest": "ee987907e5dd6270a525b8e3ccd531c2d3addd75016bf5ef2e7792c5dd368ad6"
+    },
+    {
+      "action": null,
+      "actor": "owner",
+      "change_id": "20261021-task-d83415",
+      "decided_at": "2026-10-21T15:20:49+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Existing completion authorization; add the exact offline-inventory test binding to the already approved pinned-dependency consistency criterion. Scope and risk remain unchanged.",
+      "resource": null,
+      "route_id": "d834158878e0",
+      "scope_digest": "d16d819b0b080697b339cad8e6cca627f529f96a1fccf7863aad4bdecdee5b47"
     }
   ],
   "route_id": "d834158878e0",

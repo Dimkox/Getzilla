@@ -113,6 +113,9 @@
           "test": "factory/tests/test_landing_pdf_worker.py"
         },
         {
+          "test": "factory/tests/test_offline_release_builder.py"
+        },
+        {
           "receipt": "verification"
         },
         {
