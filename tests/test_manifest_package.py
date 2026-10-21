@@ -968,6 +968,35 @@ module.main()
                 {' M packages/project.zip', ' M packages/project.zip.sha256'},
             )
 
+    def test_release_cli_ships_crlf_checkouts_and_still_rejects_other_differences(self) -> None:
+        """A .cmd checked out with eol=crlf is the same source as its LF blob; plain CRLF edits are not."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'project'
+            self._init_release_repository(root)
+            (root / '.gitattributes').write_text('*.cmd text eol=crlf\n', encoding='utf-8')
+            (root / 'run.cmd').write_bytes(b'@echo off\r\necho hi\r\n')
+            subprocess.run(['git', 'add', '.gitattributes', 'run.cmd'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Package Test', '-c', 'user.email=package@example.invalid',
+                            'commit', '-q', '-m', 'batch file'], cwd=root, check=True)
+            subprocess.run(['git', 'checkout', '--', 'run.cmd'], cwd=root, check=True)
+            self.assertIn(b'\r\n', (root / 'run.cmd').read_bytes())
+            output = Path(tmp) / 'publish' / 'project.zip'
+            with patch.object(PACKAGE, 'ROOT', root), patch.object(sys, 'argv', ['package_stack.py', '--output', str(output)]):
+                PACKAGE.main()
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.read(next(name for name in archive.namelist() if name.endswith('run.cmd'))),
+                                 b'@echo off\r\necho hi\r\n')
+            for name, content in (('run.cmd', b'@echo off\r\necho changed\r\n'), ('README.md', b'tracked\r\n')):
+                with self.subTest(name=name):
+                    original = (root / name).read_bytes()
+                    (root / name).write_bytes(content)
+                    rejected = Path(tmp) / 'publish' / f'{name}.zip'
+                    with (patch.object(PACKAGE, 'ROOT', root),
+                          patch.object(sys, 'argv', ['package_stack.py', '--output', str(rejected)]),
+                          self.assertRaisesRegex(PACKAGE.PackageError, 'tracked HEAD')):
+                        PACKAGE.main()
+                    (root / name).write_bytes(original)
+
     def test_release_cli_rejects_modified_tracked_head_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'project'
