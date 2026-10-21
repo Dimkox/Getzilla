@@ -1,15 +1,19 @@
-# UNVERIFIED implementation checkpoint
+# Core implementation and bounded controls
 
 Date: 2026-10-21. Branch: feat/eu-ai-act-phase2-20261021. Route:44fe064efbab.
 Comparison base: e158ddc7263a55f5308944c5a426eb1e9f1a4327.
 Initial tree: 9a7fb672e44de0d3d87e37a70fa4861d37681ce6.
 
-The Core source is implemented. This checkpoint is not qualified for review or merge. The final
-validation batch hit the hook circuit breaker. The writer stopped validation and dependent review.
-The owner has now answered "Разрешаю возобновить проверки" to the scoped recovery request.
-Only separate direct read-only validation calls may resume. The denied getzilla_par batches must
-not run again. No hook or denial ledger was changed. Package state is verifying, with every required
-receipt still not_run. This checkpoint precedes the new validation results.
+The Core source is implemented. Fresh bounded controls passed on checkpoint
+fdc02defb766fea9372e939b90180ea37342e2f6, tree f96e020ca5e3018bb593748cf5a36c6e4331c158.
+That checkpoint changed42 files with2464 insertions and282 deletions against the base.
+The source candidate now proceeds to committed-HEAD smoke and independent review. These controls
+are observations, not receipts or merge authority. Final qualification remains UNVERIFIED.
+
+The earlier validation batch hit the hook circuit breaker. The writer stopped validation and
+dependent review. The owner then answered "Разрешаю возобновить проверки" to the scoped recovery
+request. All recovered checks used separate direct tool calls. No denied batch, hook or denial
+ledger was changed or retried. Required receipts remain not_run.
 
 ## Changes
 
@@ -21,6 +25,24 @@ receipt still not_run. This checkpoint precedes the new validation results.
 - Dispatcher and installer include the new compliance wrapper, the previously omitted audit wrapper, and optional EU templates.
 - Matrix, fictional examples, ISO map, tests, README, CHANGELOG, plan and package record behavior and limits. No VERSION or trust-ci source change.
 
+## Fresh controls after scoped recovery
+
+All commands below ran in this worktree at the exact checkpoint above. Tracked state was clean
+after the commands. Subsequent edits only record these observations and the reviewing lifecycle.
+
+| Command | Actual result |
+| --- | --- |
+| taskset -c 0-25 python3 -m pytest -q -n 15 -p no:cacheprovider --tb=short tests/test_eu_ai_act.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_eu_audit_attestation.py tests/test_getzilla_cli.py tests/test_install_on_demand.py tests/test_manifest_package.py tests/test_structure.py | exit0;151 passed,1 skipped,156 subtests passed in13.94s |
+| python3 scripts/getzilla_architecture.py fitness --base e158ddc7263a55f5308944c5a426eb1e9f1a4327 --worktree --json | exit0; fitness_status pass; required scopes architecture and contract; risk yellow from new_contract |
+| python3 scripts/getzilla_spec.py validate --change-id 20261021-task-44fe06 --gate | exit0; oktrue; no errors; all8 criteria mapped |
+| python3 scripts/getzilla_governance.py validate | exit0; overall_status pass; no findings |
+| ruff check .getzilla/getzilla/eu_ai_act.py .getzilla/getzilla/compliance_scaffold.py .getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py scripts/getzilla_audit_bundle.py scripts/getzilla_compliance.py scripts/getzilla_cli.py scripts/install_into.py tests/test_eu_ai_act.py tests/test_eu_audit_attestation.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_getzilla_cli.py | exit0; All checks passed |
+| bandit -q -c bandit.yaml .getzilla/getzilla/eu_ai_act.py .getzilla/getzilla/compliance_scaffold.py .getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py scripts/getzilla_audit_bundle.py scripts/getzilla_compliance.py | exit0; no findings |
+| git diff --exit-code e158ddc7263a55f5308944c5a426eb1e9f1a4327 HEAD -- engineering/contracts/schemas/trust-ci-attestation-envelope.v1.json | exit0; no output; v1 bytes unchanged |
+
+The tests include the final v2 paired-metadata correction. No signed cryptographic integration
+is inferred from these results. The one skipped test remains skipped, not passed.
+
 ## Observed controls before the final correction
 
 All observations below apply to intermediate worktrees based on the base above. They are not
@@ -30,10 +52,10 @@ fingerprint-bound receipts and do not qualify this checkpoint.
 - Initial implementation run: same five modules with --tb=short. Result:49 passed,97 subtests passed in14.93s.
 - Expanded run: taskset -c 0-25 python3 -m pytest -q -n 20 -p no:cacheprovider --tb=short tests/test_eu_ai_act.py tests/test_compliance_scaffold.py tests/test_ai_transparency_template.py tests/test_eu_audit_attestation.py tests/test_getzilla_cli.py tests/test_install_on_demand.py tests/test_manifest_package.py. Result:117 passed,1 skipped,111 subtests passed in12.61s.
 - Later expanded run after symlink and bytecode fixes:119 passed,1 skipped,111 subtests passed in32.59s. This predates the final v2 schema metadata correction and fixture update.
-- Additional red tests reproduced malformed opt-in, template symlink following, Python cache writes and missing required v2 paired metadata. Each caused an observed failure before its repair. The final metadata repair has no fresh passing test run yet.
+- Additional red tests reproduced malformed opt-in, template symlink following, Python cache writes and missing required v2 paired metadata. Each caused an observed failure before its repair. The fresh run above now covers the final metadata repair.
 - Spec gate, changed Python Ruff and changed production Python Bandit each passed in separate direct calls before the final v2 correction. Governance validate passed. Initial architecture rejected same-version signed-schema changes; adding v2 made architecture fitness pass. Diagram --check --json reported no mismatches, so generated views did not change. A read-only git diff --exit-code confirmed v1 bytes match the base.
 
-## Blocked validation objective
+## Validation blocker and scoped recovery
 
 First denied batch: getzilla_par -j3 combining spec validate, Ruff and Bandit. Denial:
 "Blocked opaque control-plane shell mutation; split the command or use Edit/Write/apply_patch so
@@ -48,13 +70,14 @@ BLOCKED, and report the blocker. Original denial: Blocked opaque control-plane s
 No process in that final batch started. The full two invocations and denial text were sent to the
 coordinator. The objective stopped as BLOCKED. The earlier owner recovery covered plan writes only.
 The new exact owner reply above overrides only this validation retry stop. The scope, reason,
-deferred checks and required follow-up are recorded in scope-and-decisions.md. No PASS is inferred.
+deferred checks and required follow-up are recorded in scope-and-decisions.md. The direct checks
+above ran after checkpoint commit. Their observed results close this bounded validation blocker.
 
 ## Pending work and limits
 
-After scoped recovery, run fresh focused tests and bounded architecture/spec/governance/lint checks.
-Run the named clean committed-HEAD quality-gates smoke. Freeze source as reviewing, then collect the
-four independent reviews. The coordinator persists reports and runs one final PR gate and required
+Commit the source with package state reviewing, then run the named clean committed-HEAD quality-gates
+smoke. Report its exact identity and result to the coordinator without a later source edit. Collect
+the four independent reviews. The coordinator persists reports and runs one final PR gate and required
 exact-head public linux/windows checks. No full verifier, review receipt, push or external check ran here.
 
 The Trust CI successor must implement v2 signing/verification, policy-owned argv and opt-in wiring.
