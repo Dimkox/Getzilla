@@ -6,7 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from _support import digest, now, sha
-from adaptive_trust_ci.models import ApprovalEnvelope, ApprovalPayload, AttestationEnvelope, AttestationPayload
+from adaptive_trust_ci.models import ApprovalEnvelope, ApprovalPayload, AttestationEnvelope, AttestationPayload, CommandResult
 from adaptive_trust_ci.signing import ApprovalError, Signer, TrustStore, sign_approval, sign_attestation, verify_approval, verify_attestation
 from adaptive_trust_ci.store import MemoryStore, ReplayError
 
@@ -57,6 +57,38 @@ class SigningTests(unittest.TestCase):
 
     def test_valid_signature_verifies(self) -> None:
         self.assertEqual(self.verify().approval_id, self.payload.approval_id)
+
+    def test_optional_command_argv_roundtrip_and_tampering(self) -> None:
+        command_args = ('python3', 'scripts/getzilla_audit_bundle.py', '--ci-check')
+        for argv in (None, command_args):
+            with self.subTest(argv=argv):
+                command = CommandResult('eu-ai-act-audit', 'pass', 0, 0.125, 'untrusted output', '', digest('d'), argv)
+                result_data = command.attestation_dict()
+                expected = {'name': 'eu-ai-act-audit', 'status': 'pass', 'exit_code': 0,
+                            'duration_seconds': 0.125, 'output_sha256': digest('d')}
+                if argv is not None:
+                    expected['argv'] = list(argv)
+                self.assertEqual(result_data, expected)
+                payload = AttestationPayload(
+                    schema_version=1, attestation_id='argv-attestation', job_id='argv-job',
+                    repository='Dimkox/Getzilla', pr_number=42, base_sha=sha('a'), head_sha=sha('b'),
+                    policy_digest=digest('c'), status='passed', command_results=(result_data,),
+                    changed_files=(), approved_scopes=(), started_at=now().isoformat(),
+                    completed_at=now().isoformat(), key_id=self.signer.key_id,
+                )
+                original = sign_attestation(payload, self.signer).to_dict()
+                decoded = AttestationEnvelope.from_dict(json.loads(json.dumps(original)))
+                memory = MemoryStore()
+                memory.record_attestation('argv-job', decoded)
+                stored = memory.get_attestation('argv-job')
+                assert stored is not None
+                self.assertEqual(stored.to_dict(), original)
+                verified = verify_attestation(stored, self.signer.public_key_pem())
+                self.assertEqual(verified.command_results, (expected,))
+                tampered = json.loads(json.dumps(original))
+                tampered['payload']['command_results'][0]['argv'] = ['python3', 'different.py']
+                with self.assertRaisesRegex(ApprovalError, 'signature'):
+                    verify_attestation(AttestationEnvelope.from_dict(tampered), self.signer.public_key_pem())
 
     def test_payload_tampering_breaks_signature(self) -> None:
         data = self.envelope.to_dict()

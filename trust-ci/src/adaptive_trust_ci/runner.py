@@ -6,7 +6,7 @@ import os
 import re
 import stat
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -562,6 +562,9 @@ class JobRunner:
             holdout_path=holdout_path,
             holdout_host_path=holdout_host_path,
         )
+        # Only the selected policy owns argument evidence. Executor metadata and
+        # stdout cannot add it, including when a command fails or has not opted in.
+        result = replace(result, argv=command.argv if command.attest_argv else None)
         command_results.append(result)
         try:
             workspace.assert_unchanged()

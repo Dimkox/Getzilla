@@ -387,6 +387,7 @@ class CommandResult:
     stdout_tail: str
     stderr_tail: str
     output_sha256: str
+    argv: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip() or self.status not in {"pass", "fail"}:
@@ -402,6 +403,7 @@ class CommandResult:
             "exit_code": self.exit_code,
             "duration_seconds": round(self.duration_seconds, 6),
             "output_sha256": self.output_sha256,
+            **({"argv": list(self.argv)} if self.argv is not None else {}),
         }
 
 

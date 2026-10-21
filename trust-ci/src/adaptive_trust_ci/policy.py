@@ -25,6 +25,11 @@ class CommandSpec:
     argv: tuple[str, ...]
     timeout_seconds: int
     env: tuple[tuple[str, str], ...] = ()
+    attest_argv: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.attest_argv, bool):
+            raise PolicyError('command attest_argv must be a boolean')
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> 'CommandSpec':
@@ -44,7 +49,8 @@ class CommandSpec:
         if not isinstance(env_raw, dict):
             raise PolicyError(f'command {name!r} env must be an object')
         env = tuple(sorted((str(key), str(value)) for key, value in env_raw.items()))
-        return cls(name=name, argv=argv, timeout_seconds=timeout, env=env)
+        return cls(name=name, argv=argv, timeout_seconds=timeout, env=env,
+                   attest_argv=data.get('attest_argv', False))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +59,7 @@ class CommandSpec:
             'timeout_seconds': self.timeout_seconds,
             'env': dict(self.env),
             'required': True,
+            **({'attest_argv': True} if self.attest_argv else {}),
         }
 
 
@@ -273,6 +280,12 @@ class Policy:
             'holdout': holdout.to_dict(),
             'approval_rules': [item.to_dict() for item in parsed_rules],
         }
+        all_commands = (*parsed_commands, *holdout.commands)
+        if any(command.attest_argv for command in all_commands):
+            environment_names = set(normalized['allowed_environment'])
+            environment_names.update(name for command in all_commands for name, _ in command.env)
+            if any(name.startswith('TRUST_CI_') for name in environment_names):
+                raise PolicyError('attest_argv policies cannot override TRUST_CI_* identity environment')
         digest = hashlib.sha256(canonical_json(normalized)).hexdigest()
         return cls(
             schema_version=1,

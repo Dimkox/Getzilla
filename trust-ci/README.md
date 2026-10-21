@@ -30,6 +30,14 @@ Roll out compatible API and worker binaries first while the legacy policy remain
 
 Local Grok hooks, prompt files, change packages, delegated local grants and `.getzilla/runtime` remain useful workflow inputs. They are not merge authority.
 
+### Optional signed command evidence and EU audit
+
+Set a command's strict boolean `attest_argv` to `true` to include its actual selected policy arguments in signed `command_results[].argv`. The runner supplies these arguments and discards executor-supplied argument metadata. Command output cannot set them. Failed commands retain their actual arguments. Synthetic integrity checks omit `argv`. An absent or `false` flag preserves the legacy policy digest, check name and result shape. Setting `true` changes the selected profile's policy epoch.
+
+For an explicitly EU-enabled repository, add the command object in [`config/eu-ai-act-audit.command.example.json`](config/eu-ai-act-audit.command.example.json) to that repository profile's `commands`. Keep it outside default and shared owner profiles. It runs `python3 scripts/getzilla_audit_bundle.py --ci-check` as a mandatory check with a 300-second limit. The Core command reads the exact base from `TRUST_CI_BASE_SHA`, evaluates release obligations from committed input, and fails when the EU opt-in is absent, disabled or skipped. It emits evidence on stdout, writes no receipt, and makes no release claim. Policy argv has no `${BASE_SHA}` expansion. A profile with any attested command must not override `TRUST_CI_*` through command `env` or `allowed_environment`.
+
+Install the compatible Core consumers and attestation schema before enabling this producer feature. Old closed-schema validators reject the added `argv` field. Old signed envelopes remain valid and replay unchanged, but they cannot qualify EU audit evidence when command arguments are absent. Never backfill them. Arguments become durable signed evidence and must not contain secrets. The example fragment is source documentation; it does not change deployed policy. For rollback, stop new argv emission before rolling back consumers and preserve stored envelopes. Engineering evidence, not legal advice.
+
 ## Trust boundary
 
 Trusted:

@@ -1,0 +1,121 @@
+{
+  "change_id": "20261021-task-466751",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "feat/eu-ai-act-trustci-20261021",
+      "change_id": "20261021-task-466751",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-21T13:12:34+00:00",
+      "route_id": "4667515abad1"
+    },
+    {
+      "branch": "feat/eu-ai-act-trustci-20261021",
+      "change_id": "20261021-task-466751",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-21T13:22:47+00:00",
+      "route_id": "4667515abad1"
+    }
+  ],
+  "created_at": "2026-10-21T13:12:34+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "focused producer observations passed; Core integration and final verification pending",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "independent review waits for Core integration",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "independent review waits for Core integration",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "independent review waits for Core integration",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "independent review waits for Core integration",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-21T13:12:34+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-21T13:22:26+00:00",
+      "from": "draft",
+      "open_human_gates": [
+        "scope_and_design_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Scope and acceptance criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-21T13:22:41+00:00",
+      "from": "scoped",
+      "open_human_gates": [
+        "production_action_approval: pending"
+      ],
+      "reason": "Source scope approved by owner request",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-21T13:22:47+00:00",
+      "from": "approved",
+      "open_human_gates": [
+        "production_action_approval: pending"
+      ],
+      "reason": "Begin test first producer implementation",
+      "to": "implementing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "production_action_approval"
+  ],
+  "human_gates_digest": "9c62de5cea86d1538a92a9015155772ccfd4141a901fed2011efe8f53249e49e",
+  "route_id": "4667515abad1",
+  "schema_version": 1,
+  "status": "implementing",
+  "title": "Trust CI signed command evidence for EU AI Act audit",
+  "updated_at": "2026-10-21T13:22:47+00:00"
+}

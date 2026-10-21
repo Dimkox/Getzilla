@@ -165,6 +165,97 @@ class RunnerTests(unittest.TestCase):
     def test_git_workspace_matches_runner_integrity_contract(self):
         self.assertTrue(hasattr(GitWorkspace, 'assert_unchanged'))
 
+    def _use_policy(self, data):
+        self.policy = Policy.from_dict(data)
+        self.store = MemoryStore()
+        request = JobRequest('Dimkox/Getzilla', 9, sha('a'), sha('b'), 'feat/test', 'main')
+        self.store.enqueue(request, self.policy.digest, self.policy.max_attempts, now=now())
+        self.job = self.store.claim('worker-1', self.policy.lease_seconds, now=now())
+        assert self.job is not None
+
+    def test_signed_argv_comes_from_policy_including_failed_commands(self) -> None:
+        for opted_in in (False, True):
+            for status in ('pass', 'fail'):
+                with self.subTest(opted_in=opted_in, status=status):
+                    data = policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)
+                    data['commands'][0]['attest_argv'] = opted_in
+                    data['holdout']['commands'][0]['attest_argv'] = opted_in
+                    self._use_policy(data)
+                    forged = ('forged-executor', '--not-the-policy')
+                    results = [replace(result('external-holdout'), argv=forged),
+                               replace(result('unit', status), argv=forged, stdout_tail=json.dumps({'argv': forged})),
+                               replace(result('compile'), argv=forged)]
+                    runner, executor, _, _ = self.build_runner(results=results)
+                    outcome = runner.process(self.job, 'worker-1')
+                    self.assertEqual(outcome.status, 'passed' if status == 'pass' else 'failed')
+                    envelope = self.store.get_attestation(self.job.job_id)
+                    assert envelope is not None
+                    payload = verify_attestation(envelope, self.signer.public_key_pem())
+                    commands = {item['name']: item for item in payload.command_results}
+                    self.assertNotIn('argv', commands['holdout-bundle-integrity'])
+                    for spec in (self.policy.holdout.commands[0], self.policy.commands[0]):
+                        if opted_in:
+                            self.assertEqual(commands[spec.name]['argv'], list(spec.argv))
+                        else:
+                            self.assertNotIn('argv', commands[spec.name])
+                    self.assertEqual(commands['unit']['status'], status)
+                    self.assertEqual(commands['unit']['exit_code'], 0 if status == 'pass' else 1)
+                    self.assertEqual(commands['unit']['output_sha256'], results[1].output_sha256)
+                    if status == 'pass':
+                        self.assertNotIn('argv', commands['compile'])
+                    for call in executor.calls:
+                        self.assertEqual(call[2]['TRUST_CI_BASE_SHA'], payload.base_sha)
+                        self.assertEqual(call[2]['TRUST_CI_HEAD_SHA'], payload.head_sha)
+                        self.assertEqual(call[2]['TRUST_CI_POLICY_DIGEST'], payload.policy_digest)
+
+    def test_opted_in_source_integrity_result_omits_argv(self) -> None:
+        data = policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)
+        data['holdout']['commands'][0]['attest_argv'] = True
+        self._use_policy(data)
+        runner, _, _, _ = self.build_runner(mutate_on=['external-holdout'])
+        outcome = runner.process(self.job, 'worker-1')
+        self.assertEqual(outcome.status, 'failed')
+        commands = {item['name']: item for item in outcome.details['attestation']['payload']['command_results']}
+        self.assertEqual(commands['external-holdout']['argv'], list(self.policy.holdout.commands[0].argv))
+        self.assertNotIn('argv', commands['external-holdout:source-integrity'])
+        self.assertNotIn('argv', commands['holdout-bundle-integrity'])
+
+    def test_opted_in_typed_spec_failure_omits_argv(self) -> None:
+        data = policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)
+        data['commands'][0]['attest_argv'] = True
+        self._use_policy(data)
+        rel = 'engineering/changes/20261021-malformed/change-spec.yaml'
+        runner, executor, _, _ = self.build_runner(changed_files=[rel], workspace_files={rel: '{'})
+        outcome = runner.process(self.job, 'worker-1')
+        self.assertEqual(outcome.status, 'failed')
+        self.assertEqual(executor.calls, [])
+        commands = outcome.details['attestation']['payload']['command_results']
+        self.assertEqual([item['name'] for item in commands], ['holdout-bundle-integrity', 'typed-spec-metadata'])
+        self.assertTrue(all('argv' not in item for item in commands))
+
+    def test_signed_argv_replays_exactly_after_check_publication_failure(self) -> None:
+        data = policy_data(holdout_path=str(self.holdout), holdout_digest=self.holdout_digest)
+        data['commands'][0]['attest_argv'] = True
+        self._use_policy(data)
+        runner, _, _, _ = self.build_runner(github=FakeGitHub(fail_success_once=True))
+        with self.assertRaisesRegex(RuntimeError, 'GitHub unavailable'):
+            runner.process(self.job, 'worker-1')
+        original = self.store.get_attestation(self.job.job_id)
+        assert original is not None
+        original_data = json.loads(json.dumps(original.to_dict()))
+        self.assertEqual(original_data['payload']['command_results'][2]['argv'], list(self.policy.commands[0].argv))
+        self.store.retry(self.job.job_id, 'worker-1', 'GitHub unavailable', now=now())
+        reclaimed = self.store.claim('worker-2', self.policy.lease_seconds, now=now())
+        assert reclaimed is not None
+        replay_runner, executor, workspaces, tokens = self.build_runner()
+        outcome = replay_runner.process(reclaimed, 'worker-2')
+        self.assertEqual(outcome.status, 'passed')
+        self.assertEqual(outcome.details['attestation'], original_data)
+        self.assertEqual(self.store.get_attestation(self.job.job_id).to_dict(), original_data)
+        self.assertEqual(executor.calls, [])
+        self.assertEqual(workspaces, [])
+        self.assertEqual(tokens, [])
+
     def test_spec_metadata_is_deterministic_data_only(self) -> None:
         checkout = Path(self.temp.name) / 'metadata'
         first = checkout / 'engineering/changes/20260826-a/change-spec.yaml'

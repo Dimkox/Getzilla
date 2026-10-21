@@ -12,10 +12,10 @@ from fastapi.testclient import TestClient
 
 from _support import now, policy_data, sha
 from adaptive_trust_ci.api import create_app
-from adaptive_trust_ci.models import ApprovalPayload, JobRequest, utc_now
+from adaptive_trust_ci.models import ApprovalPayload, AttestationEnvelope, AttestationPayload, CommandResult, JobRequest, utc_now
 from adaptive_trust_ci.policy import Policy, PolicyCatalog
 from adaptive_trust_ci.settings import ApiSettings, CommonSettings
-from adaptive_trust_ci.signing import Signer, TrustStore, sign_approval
+from adaptive_trust_ci.signing import Signer, TrustStore, sign_approval, sign_attestation, verify_attestation
 from adaptive_trust_ci.store import MemoryStore
 
 
@@ -419,6 +419,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn('stdout_tail', response.text)
         self.assertNotIn('secret output', response.text)
+
+    def test_attestation_endpoint_preserves_signed_argv_and_legacy_envelopes(self) -> None:
+        signer = Signer.generate()
+        command = CommandResult(
+            'eu-ai-act-audit', 'pass', 0, 0.1, 'private output', '', 'd' * 64,
+            ('python3', 'scripts/getzilla_audit_bundle.py', '--ci-check'),
+        )
+        payload = AttestationPayload(
+            schema_version=1, attestation_id='argv-api', job_id='argv-job',
+            repository='Dimkox/Getzilla', pr_number=15, base_sha=sha('a'), head_sha=sha('b'),
+            policy_digest=self.policy.digest, status='passed', command_results=(command.attestation_dict(),),
+            changed_files=(), approved_scopes=(), started_at=now().isoformat(),
+            completed_at=now().isoformat(), key_id=signer.key_id,
+        )
+        current = sign_attestation(payload, signer).to_dict()
+        legacy = json.loads((Path(__file__).parent / 'fixtures/pre-m1-attestation-postgres.json').read_text(encoding='utf-8'))
+        for original, public_key in ((current, signer.public_key_pem()),
+                                     (legacy['envelope'], legacy['public_key_pem'].encode())):
+            with self.subTest(job=original['payload']['job_id']):
+                envelope = AttestationEnvelope.from_dict(json.loads(json.dumps(original)))
+                self.store.record_attestation(envelope.payload.job_id, envelope)
+                url = f'/attestations/{envelope.payload.job_id}'
+                self.assertEqual(self.client.get(url).status_code, 401)
+                for _ in range(2):
+                    response = self.client.get(url, headers=self.read_headers)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), original)
+                    self.assertNotIn('private output', response.text)
+                    verified = verify_attestation(AttestationEnvelope.from_dict(response.json()), public_key)
+                    self.assertEqual(verified.job_id, envelope.payload.job_id)
+                self.assertEqual(self.store.get_attestation(envelope.payload.job_id).to_dict(), original)
 
     def test_metrics_require_bearer_and_expose_no_high_cardinality_data(self) -> None:
         body = self.webhook_body()
