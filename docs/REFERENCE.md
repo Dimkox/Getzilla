@@ -534,6 +534,63 @@ Declared route `human_gates` are flags: their decisions are recorded in the acti
 | `scripts/install_into.py` | Plan an existing repository read-only or atomically materialize an absent new target |
 | `adaptive-trust-ci` | External API, worker, migration, signed approvals, holdout verification, attestation verification and app-bound branch protection |
 
+## Reviewed verification dispositions
+
+The optional target-owned `engineering/verification-dispositions.json` classifies two narrow observations from `secret-scan` and `git-diff-check`. The installer does not own this file, and Getzilla ships no active dispositions. Absence preserves strict detection. These records are local review evidence, not authenticated approvals or merge authority. Independent review must check the public identity or historical origin, rationale, and evidence before adding an entry.
+
+Version 1 has exactly two top-level fields: `schema_version` (integer `1`) and `dispositions` (an array). Each entry has `id`, `check`, `kind`, `rule`, `path`, `sha256`, `line`, `reason`, and `evidence`. The `evidence` object has exactly `path` and `sha256`. A public-token entry additionally requires `column` and `match_sha256`. All hashes are lowercase SHA-256 of complete raw bytes; the match hash covers the exact UTF-8 scanner match, including assignment and quotes. Positions are one-based Unicode text line/column positions. No matched secret value is included in the report.
+
+| Check | Kind | Rule | Eligible observation |
+|---|---|---|---|
+| `secret-scan` | `public-token-address` | `generic-secret` | An exact lowercase standalone `token` assignment whose entire quoted value is `0x` plus 40 hexadecimal digits |
+| `git-diff-check` | `immutable-markdown-whitespace` | `new-blank-line-at-eof` | Git's exact `new blank line at EOF.` diagnostic on a regular, nonexecutable `.md` file |
+
+Public-address shape alone grants no disposition. The entry must identify the exact occurrence, file bytes, and separate review evidence. Credential variable names such as `auth_token`, `password`, `secret`, and `api_key` do not qualify. Private-key and AWS rules never qualify. Every match is retained, so another credential or another occurrence still fails. An immutable Markdown entry covers only its exact EOF diagnostic. Trailing whitespace, other files, unknown output, Git errors, and range-selection errors remain blocking.
+
+Standalone-token admission uses a limited source-prefix grammar. The entire prefix must be ASCII, including completed strings and comments; even harmless Unicode text before the occurrence makes it ineligible. The name must start the source or follow ASCII whitespace (space, tab, CR, LF, form feed or vertical tab) or one of `{`, `[`, `(`, `,`, `;`. Completed single/double-quoted strings and line/block comments are recognized while inspecting preceding context. Member-access punctuation across whitespace or comments and occurrences inside strings or comments are ineligible. Code outside strings and comments permits ASCII letters, digits, whitespace and `_ $ ( ) [ ] { } . , : ; = + - * ! & | % ? ^ ~ < >`. Legacy HTML comments, regex/division syntax, templates, code escapes and unsupported code characters before the occurrence are conservatively refused. This is an eligibility check, not a language parser. Ordinary standalone declarations and comma-separated object fields remain eligible; unsupported context keeps the raw finding blocking.
+
+This is an inert shape example. Replace every placeholder with reviewed source information; do not copy it as active policy:
+
+```json
+{
+  "schema_version": 1,
+  "dispositions": [
+    {
+      "id": "public-contract",
+      "check": "secret-scan",
+      "kind": "public-token-address",
+      "rule": "generic-secret",
+      "path": "src/protocol.ts",
+      "sha256": "<full-file-sha256>",
+      "line": 12,
+      "column": 3,
+      "match_sha256": "<exact-assignment-sha256>",
+      "reason": "Review establishes the chain and public token contract identity.",
+      "evidence": {"path": "engineering/reviews/public-contract.md", "sha256": "<review-sha256>"}
+    },
+    {
+      "id": "historical-eof",
+      "check": "git-diff-check",
+      "kind": "immutable-markdown-whitespace",
+      "rule": "new-blank-line-at-eof",
+      "path": "docs/evidence/historical-report.md",
+      "sha256": "<full-file-sha256>",
+      "line": 42,
+      "reason": "Review establishes that these historical evidence bytes are immutable.",
+      "evidence": {"path": "engineering/reviews/historical-report.md", "sha256": "<review-sha256>"}
+    }
+  ]
+}
+```
+
+The loader rejects unknown fields, versions, rules and kinds, duplicate JSON keys, duplicate IDs or finding identities, invalid hashes, stale occurrences, missing or changed evidence, and unsafe paths. Every entry is validated, including entries outside the changed-file selection. Paths use ASCII letters, digits, underscores, dots and hyphens separated by single `/` characters; absolute paths, dot components, traversal, globs, symlinks and runtime paths are refused. Configuration, evidence and targets must be tracked regular source files without assume-unchanged or skip-worktree flags. Evidence must be separate nonexecutable `.md` source. Configuration is also nonexecutable. These requirements keep the inputs in the normal source fingerprint; ignored or untracked review policy is not authority.
+
+Limits are 128 KiB of configuration, 128 entries, 2,000,000 bytes per target/evidence file, and 32,000,000 aggregate source bytes. IDs use an ASCII letter followed by at most 63 letters, digits, underscores or hyphens. Reasons contain 1–2,000 characters of nonempty single-line text. A change to reviewed bytes requires a new review and new hashes; removal of the policy restores ordinary failures.
+
+For whitespace, the worktree must still contain the reviewed target bytes. Each command also checks the actual worktree, index or HEAD blob it inspected, including its executable mode. A current worktree hash cannot authorize a different staged or committed blob. All existing selected ranges run. Full stdout, stderr, command and original exit code are retained in `diff-check-command` details; the combined output is not truncated before classification or reporting. Source and Git-layer bytes are checked again during classification. Unexpected or incomplete output cannot produce a disposition.
+
+The verification report keeps schema version 1 with additive detail fields. Original `severity`, rule, path and observation remain visible; `effective_severity` becomes `info` only for a matched reviewed disposition. Its `disposition` object contains ID, kind, reason, evidence, configuration path/hash and file hash. Text output includes the disposition ID in the finding message. The `disposition-summary` detail reports the configuration hash and counts of configured entries, observed findings, disposed findings, and unresolved error records (including configuration or command errors). A check can pass with raw error observations only when every blocking observation has a valid disposition and no unresolved error remains. Report consumers must use check status or effective severity for that outcome; raw severity continues to describe what the scanner or Git observed. The mandatory quality gates and receipt binding stay in force.
+
 ## Known vulnerabilities
 
 `getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. A finding fails the check with its OSV/GHSA/CVE ids, severity and fixed versions.

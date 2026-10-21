@@ -49,6 +49,7 @@ from .util import (
     resolve_command,
 )
 from .workflow_artifacts import WorkflowArtifactError, validate_stored_workflow
+from . import verification_dispositions as reviewed_dispositions
 from .verification_scope import (
     FOCUSED_TEST_TARGETS,
     focused_command,
@@ -66,7 +67,7 @@ class CheckResult:
     stdout: str = ''
     stderr: str = ''
     duration_hint: str | None = None
-    details: list[dict[str, str]] = field(default_factory=list)
+    details: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -1282,11 +1283,25 @@ def _git_diff_check(
                 'target': selected.target_sha,
             })
 
-    failures = bool(selection.findings)
+    try:
+        policy = reviewed_dispositions.Dispositions(root)
+    except (reviewed_dispositions.DispositionError, OSError):
+        policy = None
+        details.append(reviewed_dispositions.invalid_finding())
+    failures = bool(selection.findings) or policy is None
     failed_commands = 0
     output: list[str] = []
     errors: list[str] = []
     for label, command in checks:
+        layer = label if label in {'worktree', 'index'} else 'HEAD'
+        snapshots = {}
+        if policy:
+            try:
+                snapshots = policy.snapshots(layer)
+            except (reviewed_dispositions.DispositionError, OSError):
+                details.append(reviewed_dispositions.invalid_finding())
+                failures = True
+                policy = None
         proc = run(
             command,
             cwd=root,
@@ -1295,47 +1310,91 @@ def _git_diff_check(
             errors='backslashreplace',
         )
         if proc.stdout:
-            output.append(f'[{label}]\n{proc.stdout.rstrip()}')
+            output.append(f'[{label}]\n{proc.stdout}')
         if proc.stderr:
-            errors.append(f'[{label}]\n{proc.stderr.rstrip()}')
-        if proc.returncode != 0:
-            failures = True
+            errors.append(f'[{label}]\n{proc.stderr}')
+        details.append({
+            'severity': 'info', 'code': 'diff-check-command', 'path': label,
+            'message': f'exit={proc.returncode}: {" ".join(command)}',
+            'command': command, 'exit_code': proc.returncode,
+            'stdout': proc.stdout, 'stderr': proc.stderr,
+        })
+        if policy:
+            try:
+                if snapshots != policy.snapshots(layer):
+                    raise reviewed_dispositions.DispositionError('Git snapshot changed')
+                policy.assert_current()
+            except (reviewed_dispositions.DispositionError, OSError):
+                details.append(reviewed_dispositions.invalid_finding())
+                failures = True
+                policy = None
+        observations, parsed = reviewed_dispositions.diff_findings(proc.stdout, policy, snapshots, label)
+        details.extend(observations)
+        covered = (proc.returncode == 2 and not proc.stderr and parsed and bool(observations)
+                   and all(item['effective_severity'] == 'info' for item in observations))
+        if proc.returncode != 0 or proc.stdout or proc.stderr:
             failed_commands += 1
+            failures |= not covered
             details.append({
                 'severity': 'error',
+                'effective_severity': 'info' if covered else 'error',
                 'code': 'diff-check-failed',
                 'path': label,
                 'message': f'exit={proc.returncode}: {" ".join(command)}',
             })
+    disposition_summary = reviewed_dispositions.summary(policy, details)
+    details.append(disposition_summary)
     rendered_bases = ','.join(
         f'{item.kind}:{item.comparison_base_sha}' for item in selection.bases
     ) or 'none'
     return CheckResult(
         name='git-diff-check',
         status='fail' if failures else 'pass',
-        summary=f'{len(checks) - failed_commands}/{len(checks)} checks passed; bases={rendered_bases}',
-        stdout='\n'.join(output)[-12000:],
-        stderr='\n'.join(errors)[-12000:],
+        summary=(f'{len(checks) - failed_commands}/{len(checks)} commands clean; '
+                 f'{disposition_summary["disposed"]} findings disposed; '
+                 f'{disposition_summary["unresolved"]} unresolved; bases={rendered_bases}'),
+        stdout='\n'.join(output),
+        stderr='\n'.join(errors),
         details=details,
     )
 
 
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
-    patterns = {
-        'private-key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
-        'aws-access-key': re.compile(r'AKIA[0-9A-Z]{16}'),
-        'generic-secret': re.compile(r'(?i)(?:api[_-]?key|secret|password|token)\s*[:=]\s*["\'][^"\']{12,}["\']'),
-    }
-    findings: list[dict[str, str]] = []
+    findings: list[dict[str, object]] = []
+    try:
+        policy = reviewed_dispositions.Dispositions(root)
+    except (reviewed_dispositions.DispositionError, OSError):
+        policy = None
+        findings.append(reviewed_dispositions.invalid_finding())
     for rel in files:
         path = root / rel
         if not path.is_file() or path.stat().st_size > 2_000_000:
             continue
         text = read_text_limited(path)
-        for label, pattern in patterns.items():
-            if pattern.search(text):
-                findings.append({'severity': 'error', 'code': label, 'path': rel, 'message': 'Potential committed secret.'})
-    return CheckResult('secret-scan', 'fail' if findings else 'pass', f'{len(findings)} potential secrets', details=findings)
+        with path.open('rb') as stream:
+            raw = stream.read(reviewed_dispositions.MAX_FILE_BYTES + 1)
+        file_hash = hashlib.sha256(raw).hexdigest()
+        for label, pattern in reviewed_dispositions.SECRET_PATTERNS.items():
+            for match in pattern.finditer(text):
+                line, column = reviewed_dispositions.location(text, match.start())
+                finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
+                           'code': label, 'path': rel, 'line': line, 'column': column,
+                           'file_sha256': file_hash, 'message': 'Potential committed secret.'}
+                if policy:
+                    entry = policy.secret(rel, file_hash, text, match) if label == 'generic-secret' else None
+                    policy.apply(finding, entry)
+                findings.append(finding)
+    if policy:
+        try:
+            policy.assert_current()
+        except (reviewed_dispositions.DispositionError, OSError):
+            findings.append(reviewed_dispositions.invalid_finding())
+    disposition_summary = reviewed_dispositions.summary(policy, findings)
+    findings.append(disposition_summary)
+    return CheckResult('secret-scan', 'fail' if disposition_summary['unresolved'] else 'pass',
+                       f'{disposition_summary["observed"]} potential secrets; '
+                       f'{disposition_summary["disposed"]} disposed; {disposition_summary["unresolved"]} unresolved',
+                       details=findings)
 
 
 def _php_lint(root: Path, files: list[str]) -> CheckResult:

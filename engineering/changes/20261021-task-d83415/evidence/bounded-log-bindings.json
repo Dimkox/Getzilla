@@ -1,0 +1,29 @@
+{
+  "location": "/home/pall/projects/liqvera/.getzilla/runtime/completion",
+  "logs": {
+    "getzilla-dispositions-red.log": {
+      "sha256": "6b140c4b41cbaefd32118b904fe010ace142f63e5a073dfce935a88f9a957698",
+      "bytes": 103659
+    },
+    "getzilla-dispositions-packaging-red.log": {
+      "sha256": "ee215f0db33be04235c8452091e5543e4df62d90bc40ec4182f15f17fe89094d",
+      "bytes": 474108
+    },
+    "getzilla-dispositions-green.log": {
+      "sha256": "4bdce09157cd393c2acea70d89c784c79f5ab4e61b51430433d5b65641b9443a",
+      "bytes": 3244
+    },
+    "getzilla-dispositions-controls.log": {
+      "sha256": "eb44fac75c1b797381e8a1e3de58bb422e63ccc196005aefc03ddc202eca6a49",
+      "bytes": 3499
+    },
+    "getzilla-dispositions-bounded.log": {
+      "sha256": "761d99298cf3d985deb563e0c30854c9113acea28218ffdd0dcb53f9f91e69f5",
+      "bytes": 93637
+    },
+    "getzilla-dispositions-packaging-green.log": {
+      "sha256": "8d0550a657091a8af0b8b8154e655ed788f51392ee72bdff5adae180269c4a4f",
+      "bytes": 3255
+    }
+  }
+}

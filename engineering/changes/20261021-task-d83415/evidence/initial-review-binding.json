@@ -1,0 +1,13 @@
+{
+  "reviewed_commit": "9e29128aed4abea3dbe50d7f797aecbb26ff17d9",
+  "reviewed_tree": "eb9006a8a0e0b861a101b15d6094ddb6df228f96",
+  "result": "request_changes",
+  "blocker": "Standalone token eligibility admitted identifier continuations and member-access trivia; original credential-name fixtures did not use the actual scanner occurrence.",
+  "reports": {
+    "code": "2d15ddf5e005c861d175d3d83db12031749ed0f0e2721fc4bf2fa99129371293",
+    "test": "ec4ce3ac2dc49b3c8bcb0d797e8796c0bb94be834e016239792c2fdc6e5ff3dd",
+    "security": "6b728c177c37377ca703a35776a2f788d3b0d23bb58cfda8ea07c396bf8a9053",
+    "release": "18146c13d2eed74df98831a00c7d2085929d7c15908f475be8b044fa4d9ba4eb"
+  },
+  "final_gate": "NOT_RUN"
+}

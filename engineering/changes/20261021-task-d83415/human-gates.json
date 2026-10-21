@@ -1,0 +1,31 @@
+{
+  "change_id": "20261021-task-d83415",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner",
+      "change_id": "20261021-task-d83415",
+      "decided_at": "2026-10-21T13:08:47+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner said доделывай after the explicit three-point design: precise public-address dispositions, immutable-evidence hash binding and fresh complete verification; no production mutation.",
+      "resource": null,
+      "route_id": "d834158878e0",
+      "scope_digest": "48113533590385b93f567a5f54f4ccee7cfa078958055badb16d79a2952fec47"
+    },
+    {
+      "action": null,
+      "actor": "owner",
+      "change_id": "20261021-task-d83415",
+      "decided_at": "2026-10-21T13:22:27+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Existing owner approval of the precise dispositions design; refreshed binding after correcting the rollback schema value to forward_fix without changing scope.",
+      "resource": null,
+      "route_id": "d834158878e0",
+      "scope_digest": "69e6cc8ac943ed342bd81e89dc6f741922d629e95913054a1a0245f477e880b2"
+    }
+  ],
+  "route_id": "d834158878e0",
+  "schema_version": 1
+}

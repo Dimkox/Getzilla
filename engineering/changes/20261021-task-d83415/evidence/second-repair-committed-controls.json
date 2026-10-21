@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-21T14:06:13+00:00",
+  "mode": "fast",
+  "profiles": [],
+  "route_id": null,
+  "tree_fingerprint": "638065cdbe8167146bab6256af55cc9e183be188ae6dfc2207c44d641d851393",
+  "fingerprint_before": "638065cdbe8167146bab6256af55cc9e183be188ae6dfc2207c44d641d851393",
+  "head_before": "a8c8a15e4a25b959539e7e1940423154dcff5e9d",
+  "head_after": "a8c8a15e4a25b959539e7e1940423154dcff5e9d",
+  "changed_files": [],
+  "checks": [
+    {
+      "name": "python-named-smoke",
+      "status": "pass",
+      "summary": "exit=0 seconds=6.760 budget=180",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "-m",
+        "unittest",
+        "tests.test_verification_dispositions",
+        "tests.test_manifest_package.ManifestTests.test_disposition_helper_ships_without_target_review_policy"
+      ],
+      "stdout": "",
+      "stderr": ".............................\n----------------------------------------------------------------------\nRan 29 tests in 6.463s\n\nOK\n",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "path": "tests",
+          "message": "observation only; no verification receipt"
+        }
+      ]
+    },
+    {
+      "name": "source-stability",
+      "status": "pass",
+      "summary": "repository fingerprint remained stable",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    }
+  ],
+  "status": "pass",
+  "terminal_state": "completed",
+  "evidence_status": "not_recorded"
+}
