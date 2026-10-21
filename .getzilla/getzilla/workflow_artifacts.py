@@ -9,6 +9,7 @@ import stat
 import ctypes
 import errno
 import threading
+import time
 import unicodedata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -1611,7 +1612,27 @@ def _rename_noreplace(
         raise OSError(error, os.strerror(error))
 
 
+CAS_LOCK_ATTEMPTS = 5
+
+
 def _acquire_cas_lock(root: Path, change_id: str, relative_target: str) -> tuple[int, fsx.DirHandle]:
+    """Acquire the CAS lock; a transient ENOENT while two writers create its path is retried.
+
+    macOS APFS was seen to answer ENOENT to the second of two concurrent writers. Every step
+    is an idempotent mkdir/open/flock that writes no data, so a bounded retry is safe.
+    """
+    for attempt in range(1, CAS_LOCK_ATTEMPTS + 1):
+        try:
+            return _acquire_cas_lock_once(root, change_id, relative_target)
+        except WorkflowArtifactError as exc:
+            if (exc.code != "io" or not isinstance(exc.__cause__, FileNotFoundError)
+                    or attempt == CAS_LOCK_ATTEMPTS):
+                raise
+            time.sleep(0.01 * attempt)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _acquire_cas_lock_once(root: Path, change_id: str, relative_target: str) -> tuple[int, fsx.DirHandle]:
     _, root_fd = _open_root(root)
     directory_fd = root_fd
     lock_fd: int | None = None

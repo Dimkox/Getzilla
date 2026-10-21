@@ -570,6 +570,28 @@ class SerializedCasTests(unittest.TestCase):
                     ARTIFACTS.cas_write(root, "change", "task-graph.json", ours, old_digest)
             self.assertEqual(target.read_bytes(), b"competitor")
 
+    def test_cas_lock_retries_only_a_transient_enoent_and_stays_bounded(self) -> None:
+        def failure(cause: OSError) -> ARTIFACTS.WorkflowArtifactError:
+            error = ARTIFACTS.WorkflowArtifactError("CAS lock acquisition failed", code="io")
+            error.__cause__ = cause
+            return error
+
+        enoent = failure(FileNotFoundError(2, "No such file or directory"))
+        with patch.object(ARTIFACTS, "_acquire_cas_lock_once", side_effect=[enoent, (7, 8)]) as once, \
+                patch.object(ARTIFACTS.time, "sleep"):
+            self.assertEqual(ARTIFACTS._acquire_cas_lock(Path("r"), "change", "task-graph.json"), (7, 8))
+        self.assertEqual(once.call_count, 2)
+        with patch.object(ARTIFACTS, "_acquire_cas_lock_once", side_effect=failure(PermissionError(13, "denied"))) \
+                as once, patch.object(ARTIFACTS.time, "sleep"):
+            with self.assertRaises(ARTIFACTS.WorkflowArtifactError):
+                ARTIFACTS._acquire_cas_lock(Path("r"), "change", "task-graph.json")
+        self.assertEqual(once.call_count, 1)
+        with patch.object(ARTIFACTS, "_acquire_cas_lock_once", side_effect=enoent) as once, \
+                patch.object(ARTIFACTS.time, "sleep"):
+            with self.assertRaises(ARTIFACTS.WorkflowArtifactError):
+                ARTIFACTS._acquire_cas_lock(Path("r"), "change", "task-graph.json")
+        self.assertEqual(once.call_count, ARTIFACTS.CAS_LOCK_ATTEMPTS)
+
     def test_concurrent_cooperating_writers_serialize_one_winner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
