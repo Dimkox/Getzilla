@@ -107,11 +107,8 @@
     },
     {
       "id": "AC-008",
-      "statement": "The offline runtime inventory and PDF worker guard agree with already-pinned dependencies; formerly skipped pinned-PDF cases execute without weakening isolation or resource limits.",
+      "statement": "The offline runtime inventory is exactly derived from already-pinned dependencies; unrelated existing PDF-profile API incompatibility remains disclosed outside this audit repair.",
       "evidence": [
-        {
-          "test": "factory/tests/test_landing_pdf_worker.py"
-        },
         {
           "test": "factory/tests/test_offline_release_builder.py"
         },

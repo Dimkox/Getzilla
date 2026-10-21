@@ -8,4 +8,4 @@
 
 Capacity: 26 verified CPUs, two reserved. Four analyses used at most one CPU each. Getzilla implementation controls may use eight CPUs; Liqvera build-heavy Python tests remain serialized on four CPUs to avoid shared build-directory races. Heavy gates will not oversubscribe.
 
-First full gate failed; preserve it and repair metadata, measured queue capacity, local hook resolution, pinned inventory and PDF guard with the same sole source writer. Use short trusted non-Git TMPDIR and explicit supported UV_PYTHON. Keep the factory timeout and original full comparison range. Fresh four-role review and a new full gate remain mandatory.
+First full gate failed; preserve it and repair metadata, measured queue capacity, local hook resolution, pinned inventory with the same sole source writer. Use short trusted non-Git TMPDIR and explicit supported UV_PYTHON. Keep the factory timeout and original full comparison range. Fresh four-role review and a new full gate remain mandatory.

@@ -4,4 +4,4 @@ Use target-owned engineering/verification-dispositions.json, outside installer-m
 
 ## Full-gate repairs
 
-Retain eager queue inspection and all finite budgets; size only dependency module/depth budgets to measured source closure. Resolve hook libraries from the invoking installation first. Align generated inventory and PDF guard with existing dependency pins. Execution uses a trusted non-Git temporary root and an explicit supported uv interpreter. No runtime database, payment, timeout or external-authority change. See evidence/first-gate-repair.md and the full independent diagnosis records.
+Retain eager queue inspection and all finite budgets; size only dependency module/depth budgets to measured source closure. Resolve hook libraries from the invoking installation first. Align generated inventory with existing dependency pins. Execution uses a trusted non-Git temporary root and an explicit supported uv interpreter. No runtime database, payment, timeout or external-authority change. See evidence/first-gate-repair.md and the full independent diagnosis records.

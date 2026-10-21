@@ -48,6 +48,18 @@
       "resource": null,
       "route_id": "d834158878e0",
       "scope_digest": "d16d819b0b080697b339cad8e6cca627f529f96a1fccf7863aad4bdecdee5b47"
+    },
+    {
+      "action": null,
+      "actor": "owner",
+      "change_id": "20261021-task-d83415",
+      "decided_at": "2026-10-21T15:26:12+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Preserve the original Liqvera audit and necessary verifier corrections. Exclude the unrelated incompatible PDF feature prototype; retain its diagnostic evidence and existing native skips. Only exact inventory consistency remains in AC-008, with no contract or test weakening.",
+      "resource": null,
+      "route_id": "d834158878e0",
+      "scope_digest": "8a95e53d5828e35679d63e4f57d79f4e880dcbeb7aea16989482f3a82b9b8064"
     }
   ],
   "route_id": "d834158878e0",
