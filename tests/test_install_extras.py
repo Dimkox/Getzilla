@@ -81,5 +81,25 @@ class InstallExtrasTests(unittest.TestCase):
             self.assertIn('extra:bitrix', on_demand.load_manifest(project)['components'])
 
 
+    def test_doctor_accepts_a_fresh_install_without_domain_skills(self) -> None:
+        from getzilla.doctor import run_doctor
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            for entry in MODULE.build_payload(ROOT, selection=MODULE.PayloadSelection(('qwen',))):
+                target = project / entry.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(entry.content)
+            items = {item.name: item for item in run_doctor(project)}
+        self.assertEqual(items['skill:bitrix-development'].status, 'info')
+        self.assertIn('extra:bitrix', items["skill:bitrix-development"].message)
+        self.assertFalse([name for name, item in items.items() if name.startswith('skill:') and item.status == 'fail'])
+
+    def test_eu_audit_and_compliance_scripts_ship_only_with_the_eu_component(self) -> None:
+        scripts = {'scripts/getzilla_audit_bundle.py', 'scripts/getzilla_compliance.py'}
+        for path in scripts:
+            self.assertEqual(MODULE.component_of(path), 'compliance:eu-ai-act')
+        self.assertFalse(paths(MODULE.PayloadSelection(('qwen',))) & scripts)
+        self.assertEqual(paths(MODULE.PayloadSelection(('qwen',), compliance=('eu-ai-act',))) & scripts, scripts)
+
 if __name__ == '__main__':
     unittest.main()

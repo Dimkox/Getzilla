@@ -51,6 +51,7 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     managed = load_json(root / '.getzilla/config/managed.json', {}) or {}
     managed_agents = managed.get('agents', [])
     managed_skills = managed.get('skills', [])
+    extra_skills = managed.get('extra_skills') if isinstance(managed.get('extra_skills'), dict) else {}
 
     for name in managed_agents:
         path = root / '.grok/agents' / f'{name}.toml'
@@ -67,14 +68,18 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     for name in managed_skills:
         path = root / '.agents/skills' / name / 'SKILL.md'
         if not path.is_file():
-            items.append(DoctorItem('fail', f'skill:{name}', 'managed skill is missing'))
+            if name in extra_skills:
+                items.append(DoctorItem('info', f'skill:{name}', f'not installed; add it with getzilla components add {extra_skills[name]}'))
+            else:
+                items.append(DoctorItem('fail', f'skill:{name}', 'managed skill is missing'))
             continue
         skill_text = path.read_text(encoding='utf-8')
         valid = skill_text.startswith('---\n') and '\nname:' in skill_text[:500] and '\ndescription:' in skill_text[:1000]
         items.append(DoctorItem('pass' if valid else 'fail', f'skill:{name}', 'valid frontmatter' if valid else 'invalid frontmatter'))
 
     unmanaged_agents = [path.name for path in (root / '.grok/agents').glob('*.toml') if path.stem not in managed_agents]
-    unmanaged_skills = [path.parent.name for path in (root / '.agents/skills').glob('*/SKILL.md') if path.parent.name not in managed_skills]
+    unmanaged_skills = [path.parent.name for path in (root / '.agents/skills').glob('*/SKILL.md')
+                        if path.parent.name not in managed_skills and path.parent.name not in extra_skills]
     if unmanaged_agents:
         items.append(DoctorItem('info', 'unmanaged-agents', ', '.join(sorted(unmanaged_agents))))
     if unmanaged_skills:
