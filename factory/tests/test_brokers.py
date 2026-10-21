@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from getzilla_factory.brokers import (
@@ -127,6 +128,24 @@ class BrokerTests(unittest.TestCase):
                 ),
                 context(), owner="writer-01", fence=7,
             )
+
+    def test_pem_redaction_is_linear_and_matches_labels(self):
+        from getzilla_factory import brokers
+
+        begin = "-----BEGIN " + "RSA PRIVATE KEY-----"
+        end = "-----END " + "RSA PRIVATE KEY-----"
+        other_end = "-----END " + "EC PRIVATE KEY-----"
+        self.assertEqual(
+            brokers._redact_pem_blocks("a " + begin + "\nx\n" + end + " b " + begin + "y" + end + " c"),
+            "a [REDACTED] b [REDACTED] c",
+        )
+        self.assertEqual(
+            brokers._redact_pem_blocks(begin + "x" + other_end), begin + "x" + other_end,
+        )
+        hostile = begin * 20000
+        started = time.perf_counter()
+        self.assertEqual(brokers._redact_pem_blocks(hostile), hostile)
+        self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_raw_secret_size_is_bounded_before_redaction(self):
         large_pem = (

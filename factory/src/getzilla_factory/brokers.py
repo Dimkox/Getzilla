@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 from dataclasses import asdict, dataclass
 import json
 from pathlib import PurePosixPath
@@ -23,10 +24,8 @@ from .pricing import PriceTableV1, PricingContractError, UsageTokens, calculate_
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _MEDIA_TYPE = re.compile(r"^[a-z0-9.+-]+/[a-z0-9.+-]+$")
-_PEM_BLOCK = re.compile(
-    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----.*?-----END \1-----",
-    re.DOTALL,
-)
+_PEM_BEGIN = re.compile(r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----")
+_PEM_END = re.compile(r"-----END ([A-Z0-9 ]*PRIVATE KEY)-----")
 _PEM_MARKER = re.compile(r"-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----")
 _BEARER = re.compile(r"(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]+")
 _AUTHORIZATION = re.compile(
@@ -181,6 +180,30 @@ def _bounded_proposal(proposal):
     return proposal
 
 
+def _redact_pem_blocks(value: str) -> str:
+    # One pass per marker kind: a backreferenced lazy regex is quadratic on
+    # many BEGIN markers without an END.
+    ends: dict[str, list[int]] = {}
+    spans: dict[str, list[int]] = {}
+    for match in _PEM_END.finditer(value):
+        ends.setdefault(match.group(1), []).append(match.start())
+        spans.setdefault(match.group(1), []).append(match.end())
+    parts: list[str] = []
+    position = 0
+    for begin in _PEM_BEGIN.finditer(value):
+        if begin.start() < position:
+            continue
+        starts = ends.get(begin.group(1), [])
+        index = bisect.bisect_left(starts, begin.end())
+        if index == len(starts):
+            continue
+        parts.append(value[position:begin.start()])
+        parts.append("[REDACTED]")
+        position = spans[begin.group(1)][index]
+    parts.append(value[position:])
+    return "".join(parts)
+
+
 def _redact(value: str, max_bytes: int) -> str:
     if not isinstance(value, str):
         raise BrokerError("invalid_text")
@@ -190,7 +213,7 @@ def _redact(value: str, max_bytes: int) -> str:
         raise BrokerError("invalid_text") from exc
     if len(raw) > max_bytes:
         raise BrokerError("text_too_large")
-    redacted = _PEM_BLOCK.sub("[REDACTED]", value)
+    redacted = _redact_pem_blocks(value)
     if _PEM_MARKER.search(redacted):
         raise BrokerError("secret_content")
     redacted = _AUTHORIZATION.sub("[REDACTED]", redacted)
