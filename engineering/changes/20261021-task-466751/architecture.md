@@ -42,3 +42,9 @@ Superseded ruling: add optional argv under signed v1. Architecture fitness rejec
 ## Risks and mitigations
 
 Arguments may expose secrets; operators must keep them out of attested commands. Signed invocation proves exact-source audit execution and its status, not legal conformity or regenerated bundle bytes. Old validators require a reader-first rollout. Core integration remains required before review freeze.
+
+## Integration preparation boundary
+
+The test-only local executor runs exact policy argv and uses production result construction. A local checkout adapter replaces network fetching while retaining production Git reset, integrity checks and cleanup. MemoryStore and the authenticated API return the actual signed envelope. A non-editable verifier install outside the consumer checks it before the real Core CLI consumes it. The only signing key is an ephemeral test key held in memory; files contain public key material only.
+
+Prepare on frozen Core checkpoint `585edde8be99ad2145a389dd86164daf2e2fc1c7`. Keep the runtime route comparison base unchanged until the actual Core merge. This stacked preparation is UNVERIFIED. Repeat integration after rebasing onto actual merged Core before final controls, reviews or qualification. The harness makes no claim about container isolation, PostgreSQL durability, deployed policy or production acceptance.

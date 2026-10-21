@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. Route: `4667515abad1`. Writer: `ai_implementer`.
 
-This is a source preparation checkpoint. It does not qualify phase 2, a release, or a merge. Core integration, committed controls, independent reviews, the final local gate and external exact-head checks remain pending.
+This is a source preparation checkpoint. It does not qualify phase 2, a release, or a merge. Real integration on a frozen Core candidate now passes as recorded below. Repetition on actual merged Core, committed controls, independent reviews, the final local gate and external exact-head checks remain pending.
 
 After the initial producer commit, Core architecture fitness found that `FIT-SIGNED-PAYLOAD-EXACT` forbids adding argv to the signed v1 contract. The architect approved a separate v2 contract. The correction is committed below. The initial optional-v1 design and its focused evidence are historical preparation only. The v1 contract remains unchanged.
 
@@ -15,6 +15,7 @@ After the initial producer commit, Core architecture fitness found that `FIT-SIG
 - Worktree: `/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci`.
 - Initial tracked staged and unstaged inventories were empty. Only this package was untracked.
 - Product changed paths: `trust-ci/README.md`; `trust-ci/config/eu-ai-act-audit.command.example.json`; `trust-ci/src/adaptive_trust_ci/models.py`, `policy.py`, `runner.py`; `trust-ci/tests/test_api.py`, `test_policy.py`, `test_runner.py`, `test_signing.py`.
+- Integration preparation adds `trust-ci/tests/test_eu_audit_integration.py` only. It adds no production executor or dependency.
 - Workflow changes are confined to `engineering/changes/20261021-task-466751/`.
 - After the producer commit, `git status --porcelain=v1 --untracked-files=all` returned no entries.
 
@@ -103,6 +104,38 @@ git diff --check
 
 Observed: `All checks passed!`, exit 0; diff check returned no output, exit 0. Product bytes did not change after these checks. All test and lint processes ended, and the four-worker allocation was released to the coordinator. Joined Core integration, independent reviews and final gates remain pending. Status remains **UNVERIFIED**.
 
+## Frozen Core integration preparation
+
+The coordinator authorized a preparatory rebase onto immutable Core checkpoint `585edde8be99ad2145a389dd86164daf2e2fc1c7`, tree `011d43f5d873e105719b96ca36dcb1c68d34b8e3`. That checkpoint includes then-current main `a103b373031f477efad0e7bd9ffab24a96e6c63f`. It was not merged Core. The rebase command was:
+
+```sh
+git rebase --onto 585edde8be99ad2145a389dd86164daf2e2fc1c7 e158ddc7263a55f5308944c5a426eb1e9f1a4327
+```
+
+The rebase had no conflicts. Old successor HEAD was `a2b291a95b3a7955bbc7b3af7345fb741d3cd4d8`. New successor HEAD was `1eb06ca7928c47fd641ea05178dbe9ee8c5b915b`, tree `be234cc6d16c011829b971257f24c94ce624b601`. The worktree was clean after rebase. The runtime route comparison base stays `e158ddc7263a55f5308944c5a426eb1e9f1a4327` until the coordinator records the actual merged Core base. These identities do not replace earlier evidence identities.
+
+The harness exports committed source with `git archive`. During these observations, both the consumer implementation and installed Trust CI verifier came from `1eb06ca7928c47fd641ea05178dbe9ee8c5b915b`. The new integration test was untracked; four package documents were modified during the final focused run. No producer implementation changed after rebase. Fixture work stays under the canonical `.getzilla/runtime/scratch/` in private temporary directories.
+
+Each consumer commits the frozen Core script/package, fresh obligations, decision inputs and empty or case-specific registry as base B. Only README changes between B and head H. This avoids requesting or fabricating a human approval. Local Git checkout replaces only the network fetch; production reset, source-integrity checks and cleanup remain active. The test executor runs the actual selected argv and builds its result with production `_command_result`. The holdout checks actual H and the existence of B. Signing uses an in-memory ephemeral test signer. Only its public key is written.
+
+The test reads the envelope through authenticated `GET /attestations/{job_id}` with the actual MemoryStore and an empty injected human trust store. Three repeated GETs return identical bytes. A failed publication transport then retries the stored envelope with checkout, token and executor factories that raise if called. The command count remains two. GitHub calls are test publication records only.
+
+The verifier is the actual `adaptive-trust-ci` entry point, installed non-editably in a separate scratch virtual environment. The install uses `--no-index --no-deps --no-build-isolation` and provisioned system packages. The test checks that loaded verifier files live inside that environment and that models, signing and CLI bytes equal the committed export. This is source integration evidence, not validation of the pinned deployment dependency set. Missing install or crypto prerequisites fail as `NOT_RUN`; no JSON-printing shim is used.
+
+Cases exercise enabled, disabled, absent and missing-obligations inputs; REVIEW from a stale matrix; BLOCK from a prohibited system; and a real holdout failure that skips the audit command. Signed argv, base and version tampering fail. Separately signed invalid v2 versions, exit-code types, argv and missing metadata fail at the installed verifier. Real v1 output remains valid but gains no EU audit authority, including a legacy raw-argv case without metadata. Valid v2 yields `trust-ci-attested` authority. Every resulting bundle remains release-blocked because no verification receipt exists. The CI command creates no runtime directory, receipt or release claim. Normal bundle creation may create an empty runtime directory.
+
+First harness run: `11 failed, 2 passed in 8.66s`, exit 1. The fixture omitted required `now` arguments on MemoryStore calls. Second run: `18 failed, 4 passed, 3 subtests passed in 22.62s`, exit 1. Real commands and signature checks ran, but the test incorrectly forbade an empty runtime directory during normal bundle creation. Both were test setup defects, not product failures. After those test repairs, the integration module returned `8 passed, 17 subtests passed in 33.00s`, exit 0.
+
+Final combined focused command:
+
+```sh
+taskset -c 18-23 python3 -m pytest -q -n 6 -p no:cacheprovider -o 'pythonpath=/home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/src /home/pall/projects/getzilla/.getzilla/runtime/worktrees/eu-ai-act-trustci/trust-ci/tests' --tb=short trust-ci/tests/test_policy.py trust-ci/tests/test_signing.py trust-ci/tests/test_runner.py trust-ci/tests/test_api.py trust-ci/tests/test_eu_audit_integration.py
+```
+
+Observed: `131 passed, 136 subtests passed in 21.87s`, exit 0. The isolated integration command used the same options with only `trust-ci/tests/test_eu_audit_integration.py` selected. `python3 -m ruff check --no-cache trust-ci/tests/test_eu_audit_integration.py` returned `All checks passed!`, exit 0. `git diff --check` returned no output, exit 0. A fresh attached capacity snapshot confirms 26 usable CPUs with the two-CPU reserve. The coordinator allocated only six workers on CPUs 18-23 for this phase.
+
+These are bounded observations on an unmerged Core candidate. They do not test container isolation, PostgreSQL durability, a deployed policy or production acceptance. No full verifier, final controls, review or external gate ran. Repeat real integration on actual merged Core before those stages. Status remains **UNVERIFIED**.
+
 ## Behavior covered
 
 - Omitted/false flags keep the fixture digest `198a4655a16ba7fb36cfe4729e110127860b97286a12aa43f41e91ecf7a7750d` and its legacy check name.
@@ -116,7 +149,7 @@ Observed: `All checks passed!`, exit 0; diff check returned no output, exit 0. P
 
 ## Pending dependency and delivery
 
-Core/schema must merge before this producer's final qualification. Rebase onto the actual agreed merged base, record both base identities, then add and run a real signed audit integration case. Execute enabled, disabled and absent EU opt-in input through real Core and the installed trusted verifier outside the candidate. Include v2 tampering, rejection of legacy v1 for EU authority, repeated authenticated GET and replay without command re-execution. Use only ephemeral test attestation signing material. Current runner tests use a stub executor and do not prove Core audit execution or joined consumer qualification.
+Core/schema must merge before this producer's final qualification. Rebase onto the actual agreed merged base, record both base identities, then repeat the real signed audit integration suite. The frozen-candidate integration above is preparation only. The older runner unit tests still use a stub executor and are not substitutes for that real integration.
 
 The complete Trust CI suite, PostgreSQL integration, committed-HEAD controls, route reviews, mutation probes, final local PR verifier and external checks have not run for this candidate. The coordinator owns those later stages. State remains `implementing`. Production approval remains pending and out of scope.
 
@@ -127,6 +160,8 @@ Decision: omit false/absent optional fields to preserve legacy identities; fixed
 Mistake: the initial pytest command omitted the Trust CI test import path, and the first correction used paths relative to the wrong pytest root. Use absolute pytest `pythonpath` entries in this nested worktree. A separate read-only inline Python digest probe hit the hook's ambiguous-root parser; one rewrite to a named canonical scratch script succeeded.
 
 Mistake: the initial design treated an optional signed field as compatible with the closed v1 contract. Architecture fitness correctly rejected it. Use an explicit contract version before changing signed payload fields; keep old readers and replay rules exact.
+
+Decision: export frozen Git source before building the verifier; this keeps pip artifacts outside the candidate and binds both sides to an exact commit. Mistake: the first integration fixture omitted the MemoryStore clock argument and applied the CI read-only directory rule to normal bundle creation. Inspect each seam's real contract and keep CI execution separate from bundle construction assertions. An env-prefixed shell invocation also hit the root parser; removing that prefix and deriving canonical scratch from Git common-dir resolved the command without relaxing the guard.
 
 ## Rollback and residual risk
 
