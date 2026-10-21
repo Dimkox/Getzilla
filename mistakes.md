@@ -4,6 +4,10 @@
 
 Checking only the scratch directory's 0700 mode missed two task-owned 0775 ancestors, so packaging controls correctly rejected their rename authority. Check the complete ancestor chain before running archive tests; removing group-write from those two directories preserved the security check and allowed the same bounded cases to run. The failed and corrected observations remain in the change evidence.
 
+## 2026-10-21 — Audit input inventory and platform guarantees were incomplete
+
+The audit bound only its obvious EU files and disk-present modules; ignored rules/providers and hidden deletions could change decisions under one HEAD. The scaffold treated Windows path handles as POSIX descriptors, and the Node timeout relied on an ignorable signal. Inventory every decision input, pass immutable parsed data, refuse writes without the needed primitive, and test a real stubborn child instead of only mocking timeout results.
+
 ## 2026-10-21 — A later batch reused a live denial objective
 
 A validation batch was denied as an opaque mutation. Its allowed split rewrite passed, but a later getzilla_par batch still matched the hook's active objective fingerprint. Stop the objective until scoped recovery; a successful split does not prove the fingerprint has expired.

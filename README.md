@@ -17,7 +17,9 @@ Getzilla lets an AI write code for your project and checks that code before it i
 
 The optional [EU AI Act layer](docs/eu-ai-act.md) includes matrix freshness checks, risk records,
 Python and Node transparency adapters, and audit evidence. Run `getzilla compliance scaffold`
-to create an adapter for a registered system. Read-only CI checks and a trusted installed verifier
+to create an adapter for a registered system on platforms with descriptor-relative file creation.
+On Windows, copy the installed template manually; the scaffold command refuses before writing.
+Read-only CI checks and a trusted installed verifier
 can record signed audit execution. Normal audit bundles still need local verification receipts.
 The ISO/IEC 42001 map is informational. These are engineering evidence tools, not legal advice.
 Trust CI signed-argv emission and policy wiring ship in a separate successor; legacy attestations

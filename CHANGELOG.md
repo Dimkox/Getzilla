@@ -12,9 +12,9 @@
   - the audit bundle adds the `review` release decision.
   - matrix source checks older than 180 days, or missing valid review metadata, give `MATRIX_STALE` REVIEW;
   - optional likelihood/severity scores, residual acceptance and next-review dates extend risk records;
-  - `getzilla compliance scaffold` creates a Python or Node TypeScript adapter with exclusive writes and language-specific hints;
-  - optional C2PA output is separate from original media; failure preserves the original;
-  - read-only `--ci-check` requires committed EU opt-in and reports evidence without receipts or release eligibility;
+  - `getzilla compliance scaffold` creates a Python or Node TypeScript adapter with exclusive descriptor-relative writes and language-specific hints; Windows refuses before mutation and retains manual template use;
+  - optional C2PA output is separate from original media; failure preserves the original, and the Node timeout forcefully terminates a stubborn child;
+  - read-only `--ci-check` binds all five decision inputs to one commit and reports evidence without receipts or release eligibility;
   - the installed verifier adapter validates signed exact-source audit execution; normal bundles retain local receipt rules;
   - a new v2 signed-result contract accepts optional argv; v1 remains unchanged; upgrade verifiers and closed-schema consumers before the separate Trust CI producer rollout;
   - the project-authored ISO/IEC 42001 clause map is informational and never gates.

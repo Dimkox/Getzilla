@@ -116,10 +116,16 @@ prints registry hints and leaves the registry unchanged. Python uses `mark_gener
 `label_published_content`; TypeScript uses `markGeneratedContent` and `labelPublishedContent`.
 Use `AI_DISCLOSURE` at the point of interaction.
 
+Automatic scaffolding requires descriptor-relative file creation. It refuses before any write on
+Windows, whose current helpers use paths and cannot prevent a parent-directory swap. On Windows,
+copy the installed template manually from `.getzilla/templates/eu-ai-act/transparency/python/` or
+`typescript/`, then add the language-specific registry hints. Both adapters remain usable.
+
 Both adapters return original content and caller-approved public provenance labels. They do not
 read model names or secrets from the environment. Returning this metadata alone does not embed
 marking. If configured, `c2patool` has 30 seconds to mark a private copy and return separate marked
 bytes. Missing tooling, errors and timeouts leave the input unchanged and set `c2pa_error`.
+The Node adapter sends SIGKILL at timeout so a child that ignores SIGTERM cannot keep it waiting.
 Configure a trusted C2PA signing identity separately. Test the actual publication path and verify
 the output credentials before claiming embedded marking. Engineering evidence, not legal advice.
 Check Article 50 against the official text.
@@ -128,7 +134,13 @@ Check Article 50 against the official text.
 
 An EU-enabled CI profile can run `python3 scripts/getzilla_audit_bundle.py --ci-check`. Supply
 `--base <exact SHA>` or the runner-owned `TRUST_CI_BASE_SHA`. No shell placeholder is expanded.
-This mode requires committed opt-in, matrix and any registry/source inputs. It evaluates release
+This mode binds `compliance.json`, the obligations matrix, `ai-systems.json`, `diff-risk-rules.json`
+and `cost-providers.json` to committed bytes. Only the registry may be absent, and then it must be
+absent in both Git and the working directory. It also compares committed and present executable
+inputs, including hidden deletions. The evaluator receives explicit committed inputs for `--root`;
+installed module defaults and provider caches cannot replace them. Git reads use a sanitized
+environment with replacement objects disabled. One commit, base and UTC date govern evaluation;
+optional ISO mapping and VERSION also come from that commit. It evaluates release
 obligations, emits stdout only, and returns nonzero for REVIEW or BLOCK. It creates no receipt,
 audit file or release-ready claim. Normal bundle generation keeps its local verification receipt
 requirement. Engineering evidence, not legal advice.

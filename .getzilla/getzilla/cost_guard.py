@@ -35,7 +35,12 @@ CODE_SUFFIXES = ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.go', '.rs', '.c
 
 @lru_cache(maxsize=4)
 def load_providers(path: Path = CONFIG) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding='utf-8'))
+    return parse_providers(path.read_bytes())
+
+
+def parse_providers(content: bytes) -> dict[str, Any]:
+    """Validate captured provider bytes without reusing a cached path load."""
+    data = json.loads(content)
     if data.get('schema_version') != 'cost-providers-v1':
         raise ValueError('unknown cost providers schema')
     return data
@@ -375,7 +380,8 @@ def file_findings(path: str, content: bytes, providers: Mapping[str, Any] | None
     return []
 
 
-def diff_cost_findings(root: Path, base: str | None, head: str) -> list[CostFinding]:
+def diff_cost_findings(root: Path, base: str | None, head: str,
+                       providers: Mapping[str, Any] | None = None) -> list[CostFinding]:
     from .diff_risk import changed_paths
     from .project_ingestion import _git
     findings: list[CostFinding] = []
@@ -384,7 +390,7 @@ def diff_cost_findings(root: Path, base: str | None, head: str) -> list[CostFind
             continue
         blob = _git(root, 'show', f'{head}:{change.path}', check=False)
         if blob.returncode == 0:
-            findings.extend(file_findings(change.path, blob.stdout))
+            findings.extend(file_findings(change.path, blob.stdout, providers))
     return findings
 
 

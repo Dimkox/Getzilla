@@ -46,6 +46,8 @@ class Repo:
         self.fresh_matrix(TODAY)
         if installed:
             self.write(eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.opt_in_record(['eu-ai-act']).decode('utf-8'))
+        for name in ('diff-risk-rules.json', 'cost-providers.json'):
+            self.write('.getzilla/config/' + name, (ROOT / '.getzilla/config' / name).read_text(encoding='utf-8'))
         self.write('README.md', '# app\n')
         self.base = self.commit('base')
 

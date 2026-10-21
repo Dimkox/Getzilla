@@ -18,6 +18,7 @@ import subprocess  # nosec B404
 import sys
 import threading
 import time
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,8 +33,60 @@ def _canonical(value: object) -> bytes:
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, encoding='utf-8',  # nosec B603 B607
-                          check=True, timeout=30).stdout.strip()
+    return _git_bytes(root, *args).decode('utf-8', 'surrogateescape').strip()
+
+
+def _git_bytes(root: Path, *args: str) -> bytes:
+    from getzilla.project_ingestion import _env
+
+    return subprocess.run(['git', '--no-replace-objects', '--no-optional-locks', '-c', 'core.fsmonitor=false',  # nosec B603 B607
+                           '-c', 'core.untrackedCache=false', '-c', 'protocol.allow=never', '-C', str(root), *args],
+                          capture_output=True, env=_env(), check=True, timeout=30).stdout
+
+
+def _committed_blob(root: Path, head: str, relative: str) -> bytes | None:
+    entry = _git(root, 'ls-tree', head, '--', relative)
+    if not entry.startswith(('100644 ', '100755 ')):
+        return None
+    return _git_bytes(root, 'show', f'{head}:{relative}')
+
+
+def _git_paths(root: Path, *args: str) -> set[str]:
+    raw = _git_bytes(root, *args)
+    if raw and not raw.endswith(b'\0'):
+        raise RuntimeError('malformed Git path inventory')
+    return {os.fsdecode(path) for path in raw.split(b'\0') if path}
+
+
+def _tracked_changes(root: Path, head: str) -> set[str]:
+    return (_git_paths(root, 'diff', '--name-only', '--no-renames', '-z', '--cached', head)
+            | _git_paths(root, 'diff', '--name-only', '--no-renames', '-z', head))
+
+
+def _audit_fingerprint(root: Path, head: str) -> str:
+    """Keep the local receipt digest grammar, with one head and sanitized Git inventories."""
+    from getzilla.util import _fingerprint_noise, file_sha256
+
+    paths = _tracked_changes(root, head)
+    indexed = _git_paths(root, 'ls-files', '--cached', '-z')
+    for relative in _git_paths(root, 'ls-files', '--others', '--exclude-standard', '-z'):
+        if relative in paths or relative in indexed or not (
+                _fingerprint_noise(relative) or relative.startswith('.qwen/tmp/')):
+            paths.add(relative)
+    digest = hashlib.sha256(head.encode())
+    for relative in sorted(paths):
+        digest.update(os.fsencode(relative))
+        path = root / relative
+        try:
+            if path.is_symlink():
+                digest.update(os.fsencode(os.readlink(path)))
+            elif path.is_file():
+                digest.update(file_sha256(path).encode())
+            else:
+                digest.update(b'MISSING')
+        except OSError:
+            digest.update(b'ERROR')
+    return digest.hexdigest()
 
 
 def _base(root: Path, base: str | None, *, required: bool = False) -> str | None:
@@ -44,40 +97,52 @@ def _base(root: Path, base: str | None, *, required: bool = False) -> str | None
     return _git(root, 'rev-parse', '--verify', '--end-of-options', base + '^{commit}')
 
 
-def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> str:
-    from getzilla import eu_ai_act
+def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> tuple[str, dict[str, bytes | None]]:
+    from getzilla import eu_ai_act, fsx
 
-    if _git(root, 'status', '--porcelain', '--untracked-files=no'):
+    head = _git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
+    if _tracked_changes(root, head):
         raise RuntimeError('the audit needs a clean committed tree')
-    head = _git(root, 'rev-parse', 'HEAD')
     if require_opt_in and not eu_ai_act.enabled(root):
         raise RuntimeError('CI audit requires enabled EU opt-in')
-    paths = {eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.OBLIGATIONS, eu_ai_act.REGISTRY, AUDIT_SCRIPT}
-    # Also check local executable inputs when installed in the audited tree. An ignored added
-    # module must not change evaluation while the signed identity still names only HEAD.
+    data_paths = {eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.OBLIGATIONS, eu_ai_act.REGISTRY,
+                  '.getzilla/config/diff-risk-rules.json', '.getzilla/config/cost-providers.json'}
+    required = data_paths - {eu_ai_act.REGISTRY} if require_opt_in or eu_ai_act.enabled(root) else set()
+    paths = data_paths | {AUDIT_SCRIPT}
+    # Check the union of committed and present executable inputs. Looking only at disk misses
+    # deletions hidden from status by skip-worktree or assume-unchanged bits.
+    committed = _git_bytes(root, 'ls-tree', '-r', '--name-only', '-z', head).decode('utf-8', 'surrogateescape')
+    paths.update(name for name in committed.split('\0')
+                 if name.startswith('.getzilla/getzilla/') and name.endswith('.py'))
     package = root / '.getzilla/getzilla'
     if package.exists():
-        if package.is_symlink():
+        if fsx.is_link(package.lstat()):
             raise RuntimeError('audit source inputs must be committed regular files')
         for directory, directories, files in os.walk(package, followlinks=False):
             for name in directories:
-                if (Path(directory) / name).is_symlink():
+                if fsx.is_link((Path(directory) / name).lstat()):
                     raise RuntimeError('audit source inputs must not contain symlinks')
             paths.update((Path(directory) / name).relative_to(root).as_posix() for name in files if name.endswith('.py'))
+    inputs: dict[str, bytes | None] = {}
     for relative in sorted(paths):
         path = root / relative
-        if not path.exists() and not path.is_symlink():
-            continue
-        if any(parent.is_symlink() for parent in (path, *path.parents) if parent != root and root in parent.parents):
-            raise RuntimeError(f'{relative} must be a committed regular file without links')
         entry = _git(root, 'ls-tree', head, '--', relative)
-        if not entry.startswith(('100644 ', '100755 ')) or not path.is_file():
-            raise RuntimeError(f'{relative} must be committed before audit')
-        blob = subprocess.run(['git', '-C', str(root), 'show', f'{head}:{relative}'],  # nosec B603 B607
-                              capture_output=True, check=True, timeout=30).stdout
+        present = os.path.lexists(path)
+        if not present and not entry and relative not in required:
+            if relative in data_paths:
+                inputs[relative] = None
+            continue
+        if not present or not entry.startswith(('100644 ', '100755 ')) or not path.is_file():
+            raise RuntimeError(f'{relative} must be present as a committed regular file before audit')
+        if any(fsx.is_link(parent.lstat()) for parent in (path, *path.parents)
+               if parent != root and root in parent.parents):
+            raise RuntimeError(f'{relative} must be a committed regular file without links')
+        blob = _git_bytes(root, 'show', f'{head}:{relative}')
         if blob != path.read_bytes():
             raise RuntimeError(f'{relative} differs from committed audit input')
-    return head
+        if relative in data_paths:
+            inputs[relative] = blob
+    return head, inputs
 
 
 def _repository(root: Path, expected: str | None) -> str | None:
@@ -211,24 +276,25 @@ def verify_attestation(root: Path, attestation: Path, public_key: Path, verifier
             job.close()
 
 
-def _compliance(root: Path, base: str | None) -> tuple[dict, list[str], list[str]]:
+def _compliance(root: Path, base: str | None, head: str, today: date,
+                inputs: dict[str, bytes | None]) -> tuple[dict, list[str], list[str]]:
     from getzilla import eu_ai_act
 
     reasons: list[str] = []
     review: list[str] = []
-    mapping = eu_ai_act.load_iso_map(root)
+    mapping = eu_ai_act.parse_iso_map(_committed_blob(root, head, eu_ai_act.ISO_MAP))
     compliance: dict[str, object] = {
         'eu_ai_act': None,
         'iso42001': {'gating': False, 'map': mapping, 'note': eu_ai_act.ISO_NOTE} if mapping is not None else None,
     }
-    if eu_ai_act.enabled(root):
-        report = eu_ai_act.evaluate(root, 'release', [base] if base else [], 'HEAD')
-        registry = root / eu_ai_act.REGISTRY
+    if inputs[eu_ai_act.OBLIGATIONS] is not None and eu_ai_act.config_enabled(inputs[eu_ai_act.COMPLIANCE_CONFIG]):
+        report = eu_ai_act.evaluate(root, 'release', [base] if base else [], head, today=today, audit_inputs=inputs)
+        registry = inputs[eu_ai_act.REGISTRY]
         compliance['eu_ai_act'] = {
             **report.to_dict(),
-            'obligations_sha256': hashlib.sha256((root / eu_ai_act.OBLIGATIONS).read_bytes()).hexdigest(),
-            'registry_sha256': hashlib.sha256(registry.read_bytes()).hexdigest() if registry.is_file() else None,
-            'registry': json.loads(registry.read_text(encoding='utf-8')) if registry.is_file() else None,
+            'obligations_sha256': hashlib.sha256(inputs[eu_ai_act.OBLIGATIONS]).hexdigest(),
+            'registry_sha256': hashlib.sha256(registry).hexdigest() if registry is not None else None,
+            'registry': json.loads(registry) if registry is not None else None,
         }
         if report.status != 'pass':
             (review if report.decision == 'review' else reasons).extend(report.problems or [report.summary])
@@ -240,9 +306,10 @@ def ci_check(root: Path, base: str | None, *, repository: str | None = None) -> 
     previous = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        head = _committed_inputs(root, require_opt_in=True)
+        today = datetime.now(timezone.utc).date()
+        head, inputs = _committed_inputs(root, require_opt_in=True)
         base = _base(root, base, required=True)
-        compliance, reasons, review = _compliance(root, base)
+        compliance, reasons, review = _compliance(root, base, head, today, inputs)
         return {'schema_version': 'getzilla-eu-audit-check-v1', 'commit': head, 'comparison_base': base,
                 'repository': _repository(root, repository), 'authority': 'evidence-only',
                 'decision': 'block' if reasons else 'review' if review else 'pass',
@@ -253,13 +320,14 @@ def ci_check(root: Path, base: str | None, *, repository: str | None = None) -> 
 
 def build(root: Path, base: str | None, *, attestation: Path | None = None, public_key: Path | None = None,
           verifier: Path | None = None, repository: str | None = None) -> dict[str, object]:
-    from getzilla.util import runtime_dir, tree_fingerprint
+    from getzilla.util import runtime_dir
 
     if bool(attestation) != bool(public_key):
         raise ValueError('attestation and public-key must be supplied together')
-    head = _committed_inputs(root, require_opt_in=attestation is not None)
+    today = datetime.now(timezone.utc).date()
+    head, inputs = _committed_inputs(root, require_opt_in=attestation is not None)
     base = _base(root, base, required=attestation is not None)
-    fingerprint = tree_fingerprint(root)
+    fingerprint = _audit_fingerprint(root, head)
     receipts = []
     for path in sorted((runtime_dir(root) / 'receipts').glob('*/*.json')):
         try:
@@ -271,13 +339,14 @@ def build(root: Path, base: str | None, *, attestation: Path | None = None, publ
             receipts.append({'route_id': path.parent.name, 'kind': data.get('kind', path.stem),
                              'status': data.get('status'), 'created_at': data.get('created_at'),
                              'sha256': hashlib.sha256(content).hexdigest()})
-    compliance, reasons, review = _compliance(root, base)
+    compliance, reasons, review = _compliance(root, base, head, today, inputs)
     if not any(item['kind'] == 'verification' and item['status'] == 'pass' for item in receipts):
         reasons.append('no passing verification receipt for this tree; run scripts/getzilla_verify.py --mode release')
+    version = _committed_blob(root, head, 'VERSION')
     bundle = {
         'schema_version': 'getzilla-audit-bundle-v1',
-        'version': (root / 'VERSION').read_text(encoding='utf-8').strip() if (root / 'VERSION').is_file() else None,
-        'commit': head, 'tree': _git(root, 'rev-parse', 'HEAD^{tree}'), 'tree_fingerprint': fingerprint,
+        'version': version.decode('utf-8', 'replace').strip() if version is not None else None,
+        'commit': head, 'tree': _git(root, 'rev-parse', head + '^{tree}'), 'tree_fingerprint': fingerprint,
         'comparison_base': base, 'repository': _repository(root, repository),
         'compliance': compliance, 'receipts': receipts,
         'authority': 'evidence only; the independent decision is Trust CI running this command on the exact commit',

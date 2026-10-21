@@ -5,11 +5,15 @@
 - [x] Implement Core, v2 schema, adapters, installer and docs. Preserve v1 bytes.
 - [x] Run fresh focused checks after scoped recovery:151 passed,1 skipped,156 subtests passed; architecture, spec, governance, Ruff and Bandit passed.
 - [x] Record the implementation and bounded controls for source state reviewing.
-- [ ] Run the named committed-HEAD smoke after the reviewing commit and report its exact result to the coordinator.
-- [ ] Coordinator collects independent reviews.
+- [x] Historical named smoke passed on source 5e8b873 with no receipt.
+- [x] Coordinator collected all four first-wave reports in 4abde00; code/security review found three Medium defects.
+- [x] Rebase onto actual main e42398d and implement one repair batch after red regressions.
+- [ ] Run fresh bounded controls on the repair checkpoint.
+- [ ] Prepare repaired source state reviewing, then run the named committed-HEAD smoke.
+- [ ] Coordinator collects four fresh independent reviews.
 - [ ] Coordinator freezes reports and runs final local PR gate and external exact-head checks.
 
 Trust CI producer and example policy are a separate successor. No extra write agent shares this candidate.
 
-Final qualification is UNVERIFIED. Fresh controls cover the final v2 metadata change.
-No independent review, final local gate, push or external exact-head check ran for this candidate.
+Final qualification is UNVERIFIED. First-wave controls and reports are historical after rebase/repair.
+No fresh independent review, final local gate, push or external exact-head check ran for this repair.

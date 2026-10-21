@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-21 — Bind audit inputs and refuse unsafe platform writes
+
+Pass captured committed rule/provider bytes into the evaluator instead of using module-relative defaults or path caches. This preserves --root while keeping one commit, base and UTC date throughout the audit. Refuse automatic scaffolding where descriptor-relative creation is unavailable; manual template use remains possible without claiming race-safe Windows writes.
+
 ## 2026-10-21 — Separate CI audit evidence from local release receipts
 
 Use a read-only EU audit command for independent CI execution. It avoids a circular need for local receipts inside a read-only runner, while normal bundles keep their receipt rule. Tests cover disabled opt-in, ignored inputs, exact signed command claims and no Python cache writes.

@@ -26,6 +26,13 @@ The separate Trust CI writer adds strict CommandSpec.attest_argv defaultFalse, o
 
 ## Verification and progress
 
+The first review wave found three Medium defects. The repair batch binds all decision inputs,
+refuses unsafe Windows scaffolding before mutation, and forcefully terminates the Node child at
+timeout. Templates remain available for manual Windows use. Five Low test gaps are deferred to
+issue122. The branch rebased onto actual main e42398ddaa41e662e921d7af68ab87b1e28e3554 after PR121
+and PR114. Earlier controls/reviews remain historical. Fresh controls and all four reviews are
+required for the repaired source; no earlier PASS is carried forward.
+
 Final qualification remains UNVERIFIED. A validation batch hit the hook's circuit breaker and the
 writer stopped. The owner then approved scoped direct-command recovery. Fresh controls passed on
 checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not final qualification.
@@ -35,8 +42,11 @@ checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. They are observations, not 
 - [x] Initial focused implementation tests:49 passed and97 subtests passed. This is a bounded observation, not final verification.
 - [x] Implement the Core source and docs. Earlier bounded observations passed 119 tests and 111 subtests with one skip; they precede the final v2 metadata correction.
 - [x] Run fresh focused behavior and installation checks after scoped recovery:151 passed,1 skipped,156 subtests passed. Architecture, spec, governance, Ruff and Bandit passed.
-- [ ] Commit implementation with package state reviewing, then bounded committed-HEAD controls.
-- [ ] Collect all four independent reviews, save reports, commit/freeze and run one final PR verifier.
+- [x] Historical source commit 5e8b873 recorded state reviewing; its bounded committed-HEAD smoke passed without a receipt.
+- [x] Historical first wave collected all four reviews. Reports were committed as 4abde00; code/security review found the three Medium repairs above.
+- [x] Rebase onto actual main and implement the three confirmed repairs after failing regressions.
+- [ ] Run fresh repair controls, commit state reviewing, then run the named committed-HEAD smoke.
+- [ ] Collect four fresh independent reviews, save reports, commit/freeze and run one final PR verifier.
 - [ ] Require exact-head public linux/windows Actions checks and resolve review threads before delivery.
 - [ ] Deliver and qualify the separate Trust CI successor.
 

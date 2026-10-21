@@ -37,35 +37,35 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Fresh focused controls passed on fdc02defb766fea9372e939b90180ea37342e2f6. Named committed smoke and final qualifying PR gate remain pending; observations create no receipt.",
+        "reason": "First-wave controls are historical after rebase and three Medium repairs. Fresh repair controls, named smoke and final qualifying PR gate remain pending; observations create no receipt.",
         "receipt_kind": "verification",
         "status": "not_run"
       },
       {
         "id": "code_review",
         "kind": "receipt",
-        "reason": "Not run: coordinator will dispatch independent review after the reviewing commit and named committed smoke.",
+        "reason": "First-wave report retained as historical. Fresh repair review and receipt remain pending.",
         "receipt_kind": "code_review",
         "status": "not_run"
       },
       {
         "id": "test_review",
         "kind": "receipt",
-        "reason": "Not run: coordinator will dispatch independent review after the reviewing commit and named committed smoke.",
+        "reason": "First-wave report retained as historical. Fresh repair review and receipt remain pending.",
         "receipt_kind": "test_review",
         "status": "not_run"
       },
       {
         "id": "security_review",
         "kind": "receipt",
-        "reason": "Not run: coordinator will dispatch independent review after the reviewing commit and named committed smoke.",
+        "reason": "First-wave report retained as historical. Fresh repair review and receipt remain pending.",
         "receipt_kind": "security_review",
         "status": "not_run"
       },
       {
         "id": "release_review",
         "kind": "receipt",
-        "reason": "Not run: coordinator will dispatch independent review after the reviewing commit and named committed smoke.",
+        "reason": "First-wave report retained as historical. Fresh repair review and receipt remain pending.",
         "receipt_kind": "release_review",
         "status": "not_run"
       }
@@ -129,6 +129,26 @@
       ],
       "reason": "Fresh focused controls passed on committed checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. Independent reviews and final gates remain pending.",
       "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T14:18:23+00:00",
+      "from": "reviewing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Repair three confirmed Medium review findings after rebase onto the actual main. First-wave evidence is historical.",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T14:39:56+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Three Medium repairs implemented after red regressions. Prepare committed repair checkpoint for fresh bounded controls.",
+      "to": "verifying"
     }
   ],
   "human_gates": [
@@ -139,7 +159,7 @@
   "human_gates_digest": "189ed16faf217a895a92815d88941ce7372cc76c3cbe69d5609f7869f4da03c7",
   "route_id": "44fe064efbab",
   "schema_version": 1,
-  "status": "reviewing",
+  "status": "verifying",
   "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
-  "updated_at": "2026-10-21T13:54:16+00:00"
+  "updated_at": "2026-10-21T14:39:56+00:00"
 }

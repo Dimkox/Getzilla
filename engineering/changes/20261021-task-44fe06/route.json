@@ -18,7 +18,15 @@
     "ai_architect",
     "integration_architect"
   ],
-  "base_commit": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+  "base_commit": "e42398ddaa41e662e921d7af68ab87b1e28e3554",
+  "comparison_base_history": [
+    {
+      "previous_base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "base_commit": "e42398ddaa41e662e921d7af68ab87b1e28e3554",
+      "reason": "Official update_route refresh after rebase onto actual fetched origin/main after PR121 and PR114.",
+      "creation_base_fingerprint": "37510300d29a6043ce2f884e053f7b4f9f0a0c53eb124051d9c05ba338685540"
+    }
+  ],
   "base_fingerprint": "37510300d29a6043ce2f884e053f7b4f9f0a0c53eb124051d9c05ba338685540",
   "complexity": "high-risk",
   "created_at": "2026-10-21T13:01:49+00:00",

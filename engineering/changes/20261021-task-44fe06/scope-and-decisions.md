@@ -2,6 +2,10 @@
 
 User instruction: finish EU AI Act from PR120 using Getzilla. Exact plan base: e158ddc7263a55f5308944c5a426eb1e9f1a4327. This is source implementation authority, not production or human security approval.
 
+Repair comparison base: e42398ddaa41e662e921d7af68ab87b1e28e3554, the actual fetched origin/main after PR121 and PR114. The isolated branch rebased without conflicts from report commit 4abde003d25997c2d6cd86af20e046f005367a67 to 5613f7fa2544b3e7ed2e6fc687aca515f19fc2a4. The official getzilla.state.update_route API refreshed only the comparison base and recorded its history. Route44fe064efbab and the original creation fingerprint remain unchanged. Earlier controls and the four complete first-wave reports are historical; they do not qualify the repaired tree.
+
+Confirmed repair scope: bind all five decision data files and the union of committed/present executable inputs; pass immutable committed data, fixed identities and one UTC date into evaluation; disable Git replacement objects through the existing sanitized environment. Refuse scaffold writes without descriptor-relative safe creation, including Windows. Keep manual template use available. Force the Node child to terminate at timeout. No Win32 subsystem or unrelated risk/architecture inputs are added. Five Low test gaps are deferred together to https://github.com/Dimkox/Getzilla/issues/122 and are outside this repair batch.
+
 The unrelated draft 20261015-task-9d5992 was cancelled through the official change command under L5 process authority. Its files and pending checks were retained.
 
 Ruling: split Core/contract and Trust CI producer/policy into two PRs. FIT-TRUST-CI-SEPARATION remains unchanged. Core calls the existing trusted installed offline attestation-verify CLI through a bounded subprocess. It never imports Trust CI.
