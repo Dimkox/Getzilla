@@ -429,14 +429,14 @@ class StructureTests(unittest.TestCase):
         readme = (ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
-        self.assertEqual(version, "2.3.0")
+        self.assertEqual(version, "2.3.1")
         self.assertTrue(readme.startswith(f"# Getzilla v{version}\n"))
-        self.assertIn("Identity: **2.3.0 source candidate**", readme)
+        self.assertIn("Identity: **2.3.1 source candidate**", readme)
         self.assertTrue(
-            changelog.startswith("# Changelog\n\n## 2.3.0 — 2026-10-20 (source candidate)\n")
+            changelog.startswith("# Changelog\n\n## 2.3.1 — 2026-10-21 (source candidate)\n")
         )
         self.assertIn(
-            "product version: 2.3.0 source candidate (latest published release: v2.2.1; U5/U6 default-off and not live-qualified)",
+            "product version: 2.3.1 source candidate (latest published release: v2.3.0; U5/U6 default-off and not live-qualified)",
             roadmap,
         )
         sys.path.insert(0, str(ROOT / ".getzilla"))
