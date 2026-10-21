@@ -1,6 +1,6 @@
 # Grok Build handoff — self-hosted Trust CI
 
-Current Getzilla source is the unpublished 2.3.1 release candidate; latest published is immutable [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1). Continue the [2.3.1 source package](engineering/changes/20261011-task-65799e/brief.md) through [START_HERE.md](START_HERE.md) and `PROJECT_STATE.json.current_continuation`; the self-hosted predecessor handoff below remains historical.
+Current Getzilla source is the unpublished 2.3.1 release candidate; latest published is immutable [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0). Continue the [2.3.1 source package](engineering/changes/20261011-task-65799e/brief.md) through [START_HERE.md](START_HERE.md) and `PROJECT_STATE.json.current_continuation`; the self-hosted predecessor handoff below remains historical.
 
 ## Status — historical P0 handoff; Trust CI is deployed and serving (2026-09-13)
 

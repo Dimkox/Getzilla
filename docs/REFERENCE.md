@@ -97,7 +97,7 @@ The observed **controller + 12 child-agent slots**, routing cap `max_parallel_an
 
 ## Current state
 
-Identity: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.2.1) is immutable: published 2026-10-09T03:47:35Z, annotated tag `5bec32144e82bec3c4a789a4b9cb3ce75dc97024`, commit `05f85f12b72b3a897c45c24e172fac8317120b7c`, tree `ea0e67c678c90764196dadce09910954d6be0371`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
+Identity: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0) is immutable: published 2026-10-21T11:01:37Z, annotated tag `815aeabc5d215d65e72651692a6457920de9fa71`, commit `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, tree `81076df2cd7db8713f7178ead66ebaa2728f861e`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
 
 Observed main on 2026-10-12: `540c12f93e798c2f483455a5086ab0018ac3216e`. This is the release contour comparison base. PR #79 contains the command-policy and routing repairs plus this release candidate. It remains unmerged; current source checks must qualify this exact candidate.
 
