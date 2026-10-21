@@ -1,0 +1,67 @@
+{
+  "source_commit": "209a80b",
+  "isolated_writer_commit": "8d0e004e6037f982128ce8bd650a08f8e3b19a0b",
+  "committed_observation": "a8c8a15e4a25b959539e7e1940423154dcff5e9d",
+  "results": {
+    "red": "84 failed; 4 passed; 21 passing subtests",
+    "green": "28 passed; 193 passing subtests",
+    "mutations": "context guard removal killed by 131 assertions; FF/VT handling removal killed by 6 assertions; zero test errors",
+    "real_liqvera": "2 observed, 2 disposed, 0 unresolved",
+    "committed_controls": "29 named tests pass; source stability pass; no receipt",
+    "initial_control_preflight": "Refused before testing because newly prepared environment metadata was uncommitted; retained as exit 2. The subsequent clean committed control passed."
+  },
+  "logs": {
+    "getzilla-r2-boundary-red.log": {
+      "sha256": "31f3e2abc91bbc9510d9fb49c05848fc4477eae226e5a4f36e6188b7b0398993",
+      "bytes": 111239
+    },
+    "getzilla-r2-boundary-green.log": {
+      "sha256": "a5e2644c67bffa15c1f95e28bef8b916ef89deba092b6a7ef6b333009757c289",
+      "bytes": 2488
+    },
+    "getzilla-r2-boundary-mutation-results.json": {
+      "sha256": "c3edd2b59e50ce68dc03affcba31a7f35bc1cd4960c75b3cca9af7149befc9f3",
+      "bytes": 527
+    },
+    "getzilla-r2-boundary-mutation-remove-context-gate.log": {
+      "sha256": "b350e6f96340e008f26c745f20a9c84142e4785f0e8fc352d777e12e1d7dda16",
+      "bytes": 118612
+    },
+    "getzilla-r2-boundary-mutation-remove-ascii-ff-vt.log": {
+      "sha256": "3d80c478d67bc4ed6c6fe5a1a3563efc6a7fbd8120178db99d1fde8f79744b39",
+      "bytes": 5907
+    },
+    "getzilla-r2-boundary-liqvera-native.json": {
+      "sha256": "918dbde46481aceb60bbcfe5f8eec99d9d5ddd363583e4de277d964d74187183",
+      "bytes": 3314
+    },
+    "getzilla-r2-boundary-ruff.log": {
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    "getzilla-r2-boundary-bandit.log": {
+      "sha256": "667d31efef78c4d21de3432a3e09453a7c35d80c1451e05c4461acceaadbb695",
+      "bytes": 674
+    },
+    "getzilla-r2-boundary-diffcheck.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "getzilla-r2-boundary-controls.py": {
+      "sha256": "0615cd82a30af72619f78d0f965244e373469f4bc5279d8d0229c9e8a507cdf2",
+      "bytes": 3554
+    },
+    "getzilla-r3-committed-controls.json": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "getzilla-r3-committed-controls.stderr": {
+      "sha256": "e8e941bd192eb8d12d6063a51ba9bc0c101dc8a4f55f2db7643c4d0a12d98be7",
+      "bytes": 367
+    },
+    "getzilla-r3-committed-controls-valid.json": {
+      "sha256": "6e6708e2071a4121c40fa67235b845dd29dffa81ca8dc7b9bcd9120d9c2037bf",
+      "bytes": 1618
+    }
+  }
+}
