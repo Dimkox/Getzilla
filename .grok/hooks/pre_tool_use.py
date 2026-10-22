@@ -211,6 +211,31 @@ def _denial_fingerprints(
     return exact, objective
 
 
+# What the agent can do instead, by the reason the command's directory could not be established.
+_ROOT_HINTS = (
+    ('command.inline-program',
+     ' Inline interpreter code (python -c, php -r, node -e, a heredoc into an interpreter) can touch any path, '
+     'so it is not run. Write the program to .getzilla/runtime/scratch/<name>.py (no grant needed) and run it '
+     'as a file: python3 .getzilla/runtime/scratch/<name>.py.'),
+    ('command.dynamic-substitution',
+     ' $(...) and backticks hide the directory. Run the inner command on its own, then use its output as a '
+     'literal path.'),
+    ('command.control-flow',
+     ' Only && and ; are followed. Split pipes, || and & into separate commands.'),
+)
+
+
+def _root_hint(context: Any) -> str:
+    sources = set(getattr(context, 'command_workdirs', {}) or {})
+    for source, hint in _ROOT_HINTS:
+        if source in sources:
+            return hint
+    if getattr(context, 'resolution_status', '') == 'ambiguous-command-root':
+        return (' Use one literal directory: no $VARIABLES, globs or braces in cd, pushd or git -C, and no two '
+                'repositories in one command.')
+    return ''
+
+
 def _command_target(input_data: dict[str, Any]) -> str | None:
     command = input_data.get('command') if isinstance(input_data, dict) else None
     if not isinstance(command, str):
@@ -480,7 +505,8 @@ def main() -> None:
                 _warn_observer_failure()
         if action and not context.sensitive_safe:
             allowed = False
-            reason = f'Sensitive action {action} denied: root resolution status is {context.resolution_status}.'
+            reason = (f'Sensitive action {action} denied: root resolution status is {context.resolution_status}.'
+                      + _root_hint(context))
         elif root is None:
             allowed, reason = True, None
         else:

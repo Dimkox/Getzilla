@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from . import STACK_DIR
 
 MANIFEST = '.getzilla/managed-components.json'
 # A synced project has the sync record; a fresh install has the core package and no record.
@@ -49,7 +50,7 @@ def is_source_checkout(path: Path) -> bool:
 def getzilla_home() -> Path:
     """The full checkout components come from: $GETZILLA_HOME, this checkout, then ~/Getzilla."""
     candidates = [Path(os.environ['GETZILLA_HOME'])] if os.environ.get('GETZILLA_HOME') else []
-    candidates += [Path(__file__).resolve().parents[2], Path.home() / 'Getzilla']
+    candidates += [STACK_DIR.parent, Path.home() / 'Getzilla']
     for candidate in candidates:
         if is_source_checkout(candidate):
             return candidate

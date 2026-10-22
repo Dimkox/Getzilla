@@ -16,11 +16,12 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from . import STACK_DIR
 
 from .project_ingestion import _git
 
 RULES_SCHEMA = 'diff-risk-rules-v1'
-DEFAULT_RULES = Path(__file__).resolve().parents[1] / 'config' / 'diff-risk-rules.json'
+DEFAULT_RULES = STACK_DIR / 'config' / 'diff-risk-rules.json'
 ORDER = {'low': 0, 'medium': 1, 'high': 2}
 MAX_GRAPH_FILES = 5000
 

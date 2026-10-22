@@ -29,6 +29,37 @@ def _read(parent: fsx.DirHandle, name: str) -> bytes:
         os.close(descriptor)
 
 
+@unittest.skipIf(fsx.WINDOWS, 'POSIX process groups')
+class KillProcessTreeTests(unittest.TestCase):
+    def test_a_group_that_already_exited_is_not_an_error(self) -> None:
+        from unittest import mock
+        with mock.patch.object(fsx.os, 'killpg', side_effect=ProcessLookupError), \
+                mock.patch.object(fsx.os, 'kill') as kill:
+            fsx.kill_process_tree(12345)
+        kill.assert_not_called()
+
+    def test_macos_eperm_for_an_unreaped_leader_falls_back_to_the_leader(self) -> None:
+        from unittest import mock
+        with mock.patch.object(fsx.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+                mock.patch.object(fsx.os, 'kill') as kill:
+            fsx.kill_process_tree(12345)
+        kill.assert_called_once_with(12345, signal.SIGKILL)
+        with mock.patch.object(fsx.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+                mock.patch.object(fsx.os, 'kill', side_effect=PermissionError(1, 'Operation not permitted')):
+            with self.assertRaises(PermissionError):
+                fsx.kill_process_tree(12345)
+
+    @unittest.skipUnless(hasattr(os, 'waitid'), 'os.waitid is missing (macOS before Python 3.13)')
+    def test_an_exited_but_unreaped_child_is_killed_without_error(self) -> None:
+        import subprocess
+        process = subprocess.Popen([sys.executable, '-c', 'pass'], **fsx.process_group_kwargs())
+        try:
+            os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)  # exited, still a zombie
+            fsx.kill_process_tree(process.pid)
+        finally:
+            process.wait()
+
+
 class FsxTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

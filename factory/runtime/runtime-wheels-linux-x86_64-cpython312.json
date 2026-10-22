@@ -1,12 +1,12 @@
 {
-  "lock_sha256": "546b59e943616b6e114cd34fdf0a2d24d0ffde05598e11af447530c69d320900",
+  "lock_sha256": "8be006c54e43f790bdc6ae1412a60f3efbbcd98be5e527cf699da4f36d2041a8",
   "profile": "ubuntu-24.04-x86_64-cpython312",
   "schema_version": "factory-runtime-wheels/v1",
   "wheels": [
     {"filename":"annotated_doc-0.0.5-py3-none-any.whl","name":"annotated-doc","sha256":"117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101","version":"0.0.5"},
     {"filename":"annotated_types-0.8.0-py3-none-any.whl","name":"annotated-types","sha256":"f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0","version":"0.8.0"},
     {"filename":"anyio-4.14.2-py3-none-any.whl","name":"anyio","sha256":"9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494","version":"4.14.2"},
-    {"filename":"certifi-2026.7.22-py3-none-any.whl","name":"certifi","sha256":"62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775","version":"2026.7.22"},
+    {"filename":"certifi-2026.10.19-py3-none-any.whl","name":"certifi","sha256":"42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b","version":"2026.10.19"},
     {"filename":"click-8.5.0-py3-none-any.whl","name":"click","sha256":"255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360","version":"8.5.0"},
     {"filename":"fastapi-0.142.4-py3-none-any.whl","name":"fastapi","sha256":"8a651aa071a9f92c8217cca1d0b044bf9c326f336578be0a728a1a1f22ec52d2","version":"0.142.4"},
     {"filename":"h11-0.16.0-py3-none-any.whl","name":"h11","sha256":"63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86","version":"0.16.0"},
@@ -18,7 +18,7 @@
     {"filename":"psycopg_binary-3.3.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl","name":"psycopg-binary","sha256":"e7510c37550f91a187e3660a8cc50d4b760f8c3b8b2f89ebc5698cd2c7f2c85d","version":"3.3.4"},
     {"filename":"pydantic-2.13.5-py3-none-any.whl","name":"pydantic","sha256":"346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73","version":"2.13.5"},
     {"filename":"pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","name":"pydantic-core","sha256":"0fc5be0abd4a407e200d844b404e33639a554e7bd0d448e7b9ae181be4789ac2","version":"2.46.5"},
-    {"filename":"pypdf-6.19.0-py3-none-any.whl","name":"pypdf","sha256":"7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14","version":"6.19.0"},
+    {"filename":"pypdf-6.21.2-py3-none-any.whl","name":"pypdf","sha256":"1d44d1a3a200f25062adff0085b02040e4646431ac2ccac22e42679e91466084","version":"6.21.2"},
     {"filename":"starlette-1.7.0-py3-none-any.whl","name":"starlette","sha256":"67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e","version":"1.7.0"},
     {"filename":"typing_extensions-4.16.0-py3-none-any.whl","name":"typing-extensions","sha256":"481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8","version":"4.16.0"},
     {"filename":"typing_inspection-0.4.4-py3-none-any.whl","name":"typing-inspection","sha256":"65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147","version":"0.4.4"},

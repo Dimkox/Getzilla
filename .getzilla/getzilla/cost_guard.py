@@ -19,10 +19,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from . import STACK_DIR
 
 from .risk_terms import RiskVocabulary, load_vocabulary
 
-CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'cost-providers.json'
+CONFIG = STACK_DIR / 'config' / 'cost-providers.json'
 CONTRACT_NAME = 'cost-contract.json'
 STATE_NAME = 'cost-guard.json'
 GATE = 'paid_run_approval'

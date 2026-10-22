@@ -20,6 +20,21 @@ class DoctorItem:
     message: str
 
 
+def _engine_archive_item(archive: Path) -> DoctorItem:
+    """The archive carries bytecode for the Python that installed it; another Python reads the sources."""
+    import importlib.util
+    import zipfile
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            header = bundle.read('getzilla/policy.pyc')[:4]
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        return DoctorItem('fail', 'engine-archive', f'unreadable: {exc}')
+    if header != importlib.util.MAGIC_NUMBER:
+        return DoctorItem('warn', 'engine-archive', 'bytecode is for another Python, so hooks compile the engine '
+                          'on every call; reinstall Getzilla into this project with the current Python')
+    return DoctorItem('pass', 'engine-archive', 'engine archive with bytecode for this Python')
+
+
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
 
@@ -48,15 +63,23 @@ def run_doctor(root: Path) -> list[DoctorItem]:
         except Exception as exc:
             items.append(DoctorItem('fail', f'json:{rel}', str(exc)))
 
+    archive = root / '.getzilla/getzilla.zip'
+    if archive.is_file():
+        items.append(_engine_archive_item(archive))
+
     managed = load_json(root / '.getzilla/config/managed.json', {}) or {}
     managed_agents = managed.get('agents', [])
     managed_skills = managed.get('skills', [])
     extra_skills = managed.get('extra_skills') if isinstance(managed.get('extra_skills'), dict) else {}
+    extra_agents = managed.get('extra_agents') if isinstance(managed.get('extra_agents'), dict) else {}
 
     for name in managed_agents:
         path = root / '.grok/agents' / f'{name}.toml'
         if not path.is_file():
-            items.append(DoctorItem('fail', f'agent:{name}', 'managed agent is missing'))
+            if name in extra_agents:
+                items.append(DoctorItem('info', f'agent:{name}', f'not installed; add it with getzilla components add {extra_agents[name]}'))
+            else:
+                items.append(DoctorItem('fail', f'agent:{name}', 'managed agent is missing'))
             continue
         try:
             data = tomllib.loads(path.read_text(encoding='utf-8'))

@@ -371,7 +371,16 @@ def kill_process_tree(pid: int) -> None:
         subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], capture_output=True, check=False)
         return
     import signal
-    os.killpg(pid, signal.SIGKILL)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return  # the whole group has already exited
+    except PermissionError:
+        # macOS answers EPERM when the group holds only an unreaped leader; that leader is ours.
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
 
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000

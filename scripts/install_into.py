@@ -193,11 +193,18 @@ AGENT_COMPONENT_PATHS = {
     "cursor": (".cursor/", ".grok/cursor-rules/"),
 }
 KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
+# Grok Build reads these briefs; the router, doctor and generated harnesses read the .toml beside them.
+GROK_AGENT_BRIEFS = ".grok/agents/"
+# A fresh install ships the engine as one archive (sources plus bytecode for the installing Python);
+# __init__.py stays a file and adds the archive to the package path. Upgrades keep the file layout.
+ENGINE_DIR = ".getzilla/getzilla/"
+ENGINE_INIT = ".getzilla/getzilla/__init__.py"
+ENGINE_ARCHIVE = ".getzilla/getzilla.zip"
 # Domain skills a project gets only when it has that domain (or asks): a plain Python repository
 # never receives Bitrix or SEO-landing material. Matched anywhere in a skills path, so every
 # agent's copy belongs to the extra as well as to that agent.
 EXTRA_COMPONENT_PATHS = {
-    "bitrix": ("/skills/bitrix-development/",),
+    "bitrix": ("/skills/bitrix-development/", "/agents/bitrix_"),
     "seo-landing": ("/skills/seo-landing/",),
 }
 KNOWN_EXTRAS = tuple(EXTRA_COMPONENT_PATHS)
@@ -216,6 +223,8 @@ COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"
 
 
 def _agent_of(path: str) -> str | None:
+    if path.startswith(GROK_AGENT_BRIEFS) and path.endswith(".md"):
+        return "grok"
     for agent, prefixes in AGENT_COMPONENT_PATHS.items():
         if path.startswith(prefixes):
             return agent
@@ -232,9 +241,9 @@ def component_of(path: str) -> str:
     for name, prefixes in COMPLIANCE_COMPONENT_PATHS.items():
         if path.startswith(prefixes):
             return f"compliance:{name}"
-    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
-        if path.startswith(prefixes):
-            return f"agent:{agent}"
+    agent = _agent_of(path)
+    if agent is not None:
+        return f"agent:{agent}"
     return "core"
 
 
@@ -243,7 +252,7 @@ class PayloadSelection:
 
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
                  compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
-                 root_shims: bool = False) -> None:
+                 root_shims: bool = False, engine_archive: bool = False) -> None:
         unknown = sorted(set(agents) - set(KNOWN_AGENTS))
         if unknown:
             raise UnsafeInstallTarget(f"unknown agent(s): {', '.join(unknown)}")
@@ -258,6 +267,7 @@ class PayloadSelection:
         self.extras = tuple(extras)
         # Root hook shims serve hook configs from before .grok/hooks; only upgrades keep them.
         self.root_shims = root_shims
+        self.engine_archive = engine_archive
 
     @classmethod
     def full_layout(cls) -> "PayloadSelection":
@@ -268,6 +278,10 @@ class PayloadSelection:
             return True
         if path in ROOT_HOOK_SHIMS:
             return self.root_shims
+        if path == ENGINE_ARCHIVE:
+            return self.engine_archive
+        if self.engine_archive and path.startswith(ENGINE_DIR) and path != ENGINE_INIT:
+            return False
         component = component_of(path)
         if component.startswith("extra:"):
             agent = _agent_of(path)
@@ -300,6 +314,43 @@ def has_root_shims(target: Path) -> bool:
     return any((target / name).is_file() for name in ROOT_HOOK_SHIMS)
 
 
+def _engine_report(payload: "tuple[InstallEntry, ...]") -> dict[str, object]:
+    archive = next((entry for entry in payload if entry.path == ENGINE_ARCHIVE), None)
+    if archive is None:
+        return {"layout": "files"}
+    return {"layout": "archive", "path": ENGINE_ARCHIVE, "bytes": archive.size}
+
+
+def wants_engine_archive(target: Path) -> bool:
+    """True unless the target already runs the engine from files (an upgrade keeps its layout)."""
+    engine = target / ENGINE_DIR
+    return not engine.is_dir() or not any(path.name != "__init__.py" for path in engine.glob("*.py"))
+
+
+def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
+    """One deterministic zip: every engine file plus unchecked-hash bytecode for this Python."""
+    import importlib.util
+    import io
+    import zipfile
+    from importlib import _bootstrap_external  # type: ignore[attr-defined]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for entry in sorted(entries, key=lambda item: item.path):
+            name = entry.path[len(".getzilla/"):]
+            members = [(name, entry.content)]
+            if name.endswith(".py"):
+                code = compile(entry.content, name, "exec", dont_inherit=True)
+                pyc = _bootstrap_external._code_to_hash_pyc(code, importlib.util.source_hash(entry.content), False)
+                members.append((name[:-3] + ".pyc", bytes(pyc)))
+            for member, data in members:
+                info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                archive.writestr(info, data)
+    return InstallEntry(ENGINE_ARCHIVE, buffer.getvalue(), 0o644)
+
+
 def detect_agents(target: Path) -> tuple[str, ...]:
     """Agents to install for: GETZILLA_AGENT, else agents whose folders the target already has, else qwen."""
     chosen = os.environ.get("GETZILLA_AGENT", "").strip().lower()
@@ -322,11 +373,14 @@ def footprint(payload: "tuple[InstallEntry, ...]", selection: "PayloadSelection 
     components: dict[str, dict[str, object]] = {}
     for entry in payload:
         name = component_of(entry.path)
-        item = components.setdefault(name, {"files": 0, "bytes": 0, "included": True})
+        item = components.setdefault(name, {"files": 0, "bytes": 0, "included": selection is None,
+                                            "included_files": 0, "included_bytes": 0})
         item["files"] = int(item["files"]) + 1
         item["bytes"] = int(item["bytes"]) + len(entry.content)
-        if selection is not None:
-            item["included"] = selection.includes(entry.path)
+        if selection is None or selection.includes(entry.path):
+            item["included"] = True
+            item["included_files"] = int(item["included_files"]) + 1
+            item["included_bytes"] = int(item["included_bytes"]) + len(entry.content)
     return dict(sorted(components.items()))
 
 
@@ -848,6 +902,10 @@ def build_payload(
     if selection is None or selection.full:
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
+    if selection.engine_archive:
+        engine = [entry for entry in payload if entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+                  and "/__pycache__/" not in entry.path]
+        chosen += (engine_archive_entry(engine),)
     if selection.compliance:
         # The explicit opt-in record: without it an installed matrix never gates (eu_ai_act.enabled).
         record = json.dumps({"schema_version": "getzilla-compliance-v1", "enabled": sorted(set(selection.compliance))},
@@ -1247,6 +1305,7 @@ def _make_plan(
         "entries": [entry.manifest() for entry in deliverable],
         "selection": (selection or PayloadSelection.full_layout()).to_dict(),
         "components": footprint(full_payload, selection),
+        "engine": _engine_report(selected_payload),
         "post_install": [
             {"component": "baseline:security", "installed_by": "scripts/getzilla_update.py --only osv --only opengrep"},
             {"component": "baseline:workflow", "installed_by": "scripts/getzilla_baseline.py apply"},
@@ -1894,7 +1953,8 @@ def main() -> None:
             extras = tuple(item.strip().lower() for item in (args.extras or "").split(",") if item.strip())
             selection = PayloadSelection(agents or detect_agents(target), compliance=compliance,
                                          extras=extras or detect_extras(target),
-                                         root_shims=has_root_shims(target))
+                                         root_shims=has_root_shims(target),
+                                         engine_archive=wants_engine_archive(target))
         except UnsafeInstallTarget as exc:
             parser.error(str(exc))
     if args.materialize_new:
