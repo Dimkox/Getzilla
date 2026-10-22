@@ -1,8 +1,54 @@
 # Mistakes
 
+## 2026-10-21 — Reuse the actual registry contract in installed fixtures
+
+The new installed CLI fixture guessed the registry schema id and failed validation before testing enabled scaffolding. Use the existing ai-systems-v1 contract; keep lean refusal and exact file/registry preservation assertions.
+
+## 2026-10-21 — Test fixtures inherited the runner's source imports
+
+The runner's PYTHONPATH placed the healthy source package before deliberately broken fixture modules. Plain focused tests passed, but the covered full runner hid degraded behavior. Bind child imports to the fixture while preserving the rest of its environment; the poisoned-path regression must record degradation and retain refusal.
+
+## 2026-10-21 — Instrumentation and host packages hid test requirements
+
+The huge-argv test timed instrumented policy execution against an ordinary-runtime limit. The first repair recommendation still used wall time in a child and failed at9.7127s under load; one isolated probe took4.224s in both wall and CPU time. The approved test contract now keeps the covered verdict, deterministic deadline/entry controls, an8s CPU-work bound and15s child timeout; it makes no wall<8s promise under arbitrary load.
+
+The new schema test used an undeclared host jsonschema package. Pin the test dependency and prove it in a fresh environment; a successful host import does not establish declared CI dependencies.
+
+The timing repair removed the shared time import although another test still used it. The first six-module control caught the NameError; retain that import and validate the whole affected module.
+
+The new poison regression was placed in a module that already imports verification. Touching it exposed a9-module local dependency chain against the queue analyzer's unchanged limit8; move the regression intact to the existing lighter degraded-hook module, rather than change architecture limits.
+
+The optional fresh-environment install hit the circuit breaker, and the initial response stopped all reviews and qualification. That dependency was invented: route-required local gates can use the existing host while normal exact-head CI checks the declared pin. Keep the exact optional install blocked and disclose the host/pinned-version evidence difference.
+
+## 2026-10-21 — Live authorization and shared sanitization used different evidence
+
+The early opt-in read authorized a different snapshot from the evaluator's captured config. Reusing strict Git sanitization for receipt inventory also removed global excludes that the existing verifier honors. Bind authorization to captured bytes and preserve ignore compatibility only in the pinned untracked inventory reader.
+
+The first global-ignore regression installed the ignore before the fixture's initial commit, so the required rule file was never tracked. Commit the fixture before applying the exclusion under test.
+
 ## 2026-10-21 — Private scratch still had group-writable ancestors
 
 Checking only the scratch directory's 0700 mode missed two task-owned 0775 ancestors, so packaging controls correctly rejected their rename authority. Check the complete ancestor chain before running archive tests; removing group-write from those two directories preserved the security check and allowed the same bounded cases to run. The failed and corrected observations remain in the change evidence.
+
+## 2026-10-21 — Audit input inventory and platform guarantees were incomplete
+
+The audit bound only its obvious EU files and disk-present modules; ignored rules/providers and hidden deletions could change decisions under one HEAD. The scaffold treated Windows path handles as POSIX descriptors, and the Node timeout relied on an ignorable signal. Inventory every decision input, pass immutable parsed data, refuse writes without the needed primitive, and test a real stubborn child instead of only mocking timeout results.
+
+## 2026-10-21 — Audit fingerprint reused live Git identity
+
+The shared fingerprint helper reread HEAD and inherited Git environment after the audit captured its identity. A branch move or inherited Git state could therefore give the bundle a different fingerprint. Keep the audit helper local, compare changes against the captured commit, sanitize each Git call and test receipt-grammar parity.
+
+## 2026-10-21 — A later batch reused a live denial objective
+
+A validation batch was denied as an opaque mutation. Its allowed split rewrite passed, but a later getzilla_par batch still matched the hook's active objective fingerprint. Stop the objective until scoped recovery; a successful split does not prove the fingerprint has expired.
+
+## 2026-10-21 — An optional signed field still changes a closed contract
+
+The phase2 plan assumed that optional argv was compatible with the closed v1 signed schema. Architecture fitness correctly rejected that same-version semantic change. Keep the old signed grammar intact and version the new grammar before producer rollout.
+
+## 2026-10-21 — Read-only command imports wrote Python caches
+
+The first CI audit implementation avoided explicit file writes but left Python import caching enabled. A subprocess regression test observed __pycache__ creation even on a disabled audit. Suppress bytecode writes before CI imports and restore the prior setting afterward.
 
 ## 2026-10-08 — Pushed review fixes to a branch whose PR had already merged
 

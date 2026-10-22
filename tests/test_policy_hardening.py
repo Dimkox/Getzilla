@@ -7,9 +7,11 @@ inputs are synthetic hook payloads; nothing here executes the commands.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import subprocess
 import sys
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -402,13 +404,97 @@ class Review2PosixTests(_Case):
         ))
 
     def test_secret_scan_is_bounded_and_fails_closed_on_a_huge_argv(self) -> None:
-        # S59-1: a large argv must not let the scan exceed the hook timeout; it fails closed.
+        # S59-1: retain the covered denial and bound ordinary CPU work with a cold cache.
         command = 'cat ' + ' '.join(f'x{i}' for i in range(20000)) + ' .env'
-        start = time.monotonic()
         allowed, reason = self.bash(command)
-        elapsed = time.monotonic() - start
-        self.assertFalse(allowed, 'huge argv was allowed')
-        self.assertLess(elapsed, 8.0, f'secret scan took {elapsed:.1f}s')
+        self.assertFalse(allowed, f'huge argv was allowed: {reason}')
+        # Keep the verdict covered. The child retains all coverage environment and must
+        # prove it is untraced. Wall time is diagnostic; timeout bounds child lifetime.
+        script = textwrap.dedent('''
+            import json
+            import sys
+            import time
+            from pathlib import Path
+            from getzilla import _policy_legacy as legacy
+            from getzilla import policy
+
+            root = Path(sys.argv[1])
+            payload = json.load(sys.stdin)
+            legacy._SECRET_SCAN_CACHE.clear()
+            monitoring = []
+            if hasattr(sys, 'monitoring'):
+                monitoring = [sys.monitoring.get_tool(i) for i in range(6) if sys.monitoring.get_tool(i) is not None]
+            trace, profile = repr(sys.gettrace()), repr(sys.getprofile())
+            cpu_start, wall_start = time.process_time(), time.monotonic()
+            allowed, reason = policy.evaluate_pre_tool(root, payload)
+            wall_seconds = time.monotonic() - wall_start
+            cpu_seconds = time.process_time() - cpu_start
+            print(json.dumps({
+                'allowed': allowed, 'reason': reason, 'cpu_seconds': cpu_seconds,
+                'wall_seconds': wall_seconds, 'trace': trace, 'profile': profile,
+                'monitoring': monitoring, 'policy_origin': str(Path(policy.__file__).resolve()),
+                'legacy_origin': str(Path(legacy.__file__).resolve()),
+            }))
+        ''')
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join((str(self.root), str(self.root / '.getzilla')))}
+        proc = subprocess.run(
+            [sys.executable, '-c', script, str(self.root)], cwd=self.root, env=env,
+            input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': command}}),
+            text=True, capture_output=True, timeout=15, check=True,
+        )
+        measured = json.loads(proc.stdout)
+        self.assertIs(measured['allowed'], False, measured['reason'])
+        self.assertEqual(measured['trace'], 'None')
+        self.assertEqual(measured['profile'], 'None')
+        self.assertEqual(measured['monitoring'], [])
+        self.assertEqual(measured['policy_origin'], str(self.root / '.getzilla/getzilla/policy.py'))
+        self.assertEqual(measured['legacy_origin'], str(self.root / '.getzilla/getzilla/_policy_legacy.py'))
+        self.assertLess(measured['cpu_seconds'], 8.0, measured)
+
+    def test_scan_deadline_denies_an_ordinary_read_only_after_expiry(self) -> None:
+        command = 'cat src/app.py'
+        self.addCleanup(legacy._SECRET_SCAN_CACHE.clear)
+        for expired in (False, True):
+            with self.subTest(expired=expired), mock.patch.object(legacy, 'time') as clock:
+                clock.monotonic.return_value = 100.0
+                budget = legacy._Budget()
+                clock.monotonic.return_value = 103.001 if expired else 100.0
+                with mock.patch.object(legacy, '_Budget', return_value=budget):
+                    legacy._SECRET_SCAN_CACHE.clear()
+                    marker = legacy.shell_secret_reference(self.root, command, legacy.DEFAULT_SECRET_READ)
+                    legacy._SECRET_SCAN_CACHE.clear()
+                    allowed, reason = self.bash(command)
+                if expired:
+                    self.assertEqual(marker, legacy._BUDGET_MARKER)
+                    self.assertFalse(allowed)
+                    self.assertIn(legacy._BUDGET_MARKER, reason or '')
+                else:
+                    self.assertIsNone(marker)
+                    self.assertTrue(allowed, reason)
+
+    def test_scan_entry_limit_denies_an_ordinary_read_after_twenty_thousand_ticks(self) -> None:
+        command = 'cat src/app.py'
+        self.addCleanup(legacy._SECRET_SCAN_CACHE.clear)
+        with mock.patch.object(legacy, 'time') as clock:
+            clock.monotonic.return_value = 100.0
+            exhausted = legacy._Budget()
+            for _ in range(20000):
+                exhausted.tick()
+            with self.assertRaises(legacy._BudgetExceeded):
+                exhausted.tick()
+            for spent, budget in ((False, legacy._Budget()), (True, exhausted)):
+                with self.subTest(spent=spent), mock.patch.object(legacy, '_Budget', return_value=budget):
+                    legacy._SECRET_SCAN_CACHE.clear()
+                    marker = legacy.shell_secret_reference(self.root, command, legacy.DEFAULT_SECRET_READ)
+                    legacy._SECRET_SCAN_CACHE.clear()
+                    allowed, reason = self.bash(command)
+                if spent:
+                    self.assertEqual(marker, legacy._BUDGET_MARKER)
+                    self.assertFalse(allowed)
+                    self.assertIn(legacy._BUDGET_MARKER, reason or '')
+                else:
+                    self.assertIsNone(marker)
+                    self.assertTrue(allowed, reason)
 
     def test_oversize_command_fails_closed_immediately(self) -> None:
         command = 'cat ' + 'A' * 200000 + ' .env'

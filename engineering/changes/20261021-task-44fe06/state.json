@@ -1,0 +1,236 @@
+{
+  "change_id": "20261021-task-44fe06",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "feat/eu-ai-act-phase2-20261021",
+      "change_id": "20261021-task-44fe06",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-21T13:01:49+00:00",
+      "route_id": "44fe064efbab"
+    },
+    {
+      "branch": "feat/eu-ai-act-phase2-20261021",
+      "change_id": "20261021-task-44fe06",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-21T13:18:19+00:00",
+      "route_id": "44fe064efbab"
+    }
+  ],
+  "created_at": "2026-10-21T13:01:49+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "Frozen d7f91344 failed its final local gate and public Linux tests. Test repair and remote55e7cb05 are preserved through merge2a7738c3 on actual basef9. Fresh affected controls passed170 tests and175 subtests with1 skip; static/spec/architecture checks passed. Optional pinned installation stays BLOCKED/NOT_RUN. Named smoke, fresh reviews and final gates remain pending. No coverage gate PASS is claimed.",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-21T13:01:49+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-21T13:17:39+00:00",
+      "from": "draft",
+      "open_human_gates": [
+        "scope_and_design_approval: pending",
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Source scope and typed acceptance criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-21T13:17:54+00:00",
+      "from": "scoped",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Owner selected source plan with no deployed actions",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-21T13:18:19+00:00",
+      "from": "approved",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Regression tests before Core behavior changes",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T13:44:52+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "UNVERIFIED source checkpoint. Validation objective blocked by hook circuit breaker.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T13:54:16+00:00",
+      "from": "verifying",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Fresh focused controls passed on committed checkpoint fdc02defb766fea9372e939b90180ea37342e2f6. Independent reviews and final gates remain pending.",
+      "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T14:18:23+00:00",
+      "from": "reviewing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Repair three confirmed Medium review findings after rebase onto the actual main. First-wave evidence is historical.",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T14:39:56+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Three Medium repairs implemented after red regressions. Prepare committed repair checkpoint for fresh bounded controls.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T14:47:25+00:00",
+      "from": "verifying",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Fresh bounded repair controls passed on checkpoint 585edde8 at actual base a103. Named smoke and four fresh reviews remain pending.",
+      "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T15:09:00+00:00",
+      "from": "reviewing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Repair the two confirmed wave2 Medium findings after preserving all four reports. Historical controls do not qualify this repair.",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T15:17:47+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "scope_and_design_approval: stale",
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Two wave2 Medium repairs implemented after red regressions. Focused tests and lint passed; complete remaining bounded controls before clean source handoff.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T15:19:44+00:00",
+      "from": "verifying",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Two wave2 Medium repairs passed focused tests, static checks, architecture, spec and governance. Fresh committed-HEAD smoke and four independent reviews remain pending.",
+      "to": "reviewing"
+    },
+    {
+      "at": "2026-10-21T15:59:30+00:00",
+      "from": "reviewing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Repair final gate fixture isolation and timing plus declared schema test dependency after reproduced failures",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-21T16:37:55+00:00",
+      "from": "implementing",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Test repair and authorized remote integration are complete. Fresh affected tests and architecture passed as bounded observations on actual base f9f02dd5. Finish remaining static and package controls.",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-21T16:39:38+00:00",
+      "from": "verifying",
+      "open_human_gates": [
+        "migration_or_external_write_approval: pending",
+        "production_action_approval: pending"
+      ],
+      "reason": "Fresh bounded repair and installed CLI integration controls passed on actual base f9f02dd5. Commit source and run named no-record smoke before four fresh independent reviews. Final qualification remains unverified.",
+      "to": "reviewing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "migration_or_external_write_approval",
+    "production_action_approval"
+  ],
+  "human_gates_digest": "189ed16faf217a895a92815d88941ce7372cc76c3cbe69d5609f7869f4da03c7",
+  "route_id": "44fe064efbab",
+  "schema_version": 1,
+  "status": "reviewing",
+  "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
+  "updated_at": "2026-10-21T16:39:38+00:00"
+}

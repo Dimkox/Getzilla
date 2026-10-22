@@ -61,6 +61,8 @@ MANAGED_FILES = (
     "scripts/getzilla_spec.py",
     "scripts/getzilla_artifacts.py",
     "scripts/getzilla_verify.py",
+    "scripts/getzilla_audit_bundle.py",
+    "scripts/getzilla_compliance.py",
     "scripts/getzilla_vulns.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
@@ -213,7 +215,8 @@ EXTRA_MARKERS = {
 }
 # Opt-in compliance layers; never installed unless asked for (the installer asks only on EU hints).
 COMPLIANCE_COMPONENT_PATHS = {
-    "eu-ai-act": (".getzilla/compliance/eu-ai-act/",),
+    "eu-ai-act": (".getzilla/compliance/eu-ai-act/", ".getzilla/templates/eu-ai-act/",
+                  "scripts/getzilla_audit_bundle.py", "scripts/getzilla_compliance.py"),
 }
 KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
 COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"

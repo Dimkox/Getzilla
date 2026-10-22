@@ -62,6 +62,9 @@ class GetzillaCliTests(unittest.TestCase):
         proc = run('route', '--help')
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('adaptive task route', proc.stdout)
+        proc = run('compliance', '--help')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('scaffold', proc.stdout)
 
     def test_project_scripts_take_precedence_inside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

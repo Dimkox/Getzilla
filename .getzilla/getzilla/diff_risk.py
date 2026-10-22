@@ -58,7 +58,12 @@ def matches(path: str, patterns: Iterable[str]) -> bool:
 
 
 def load_rules(path: Path = DEFAULT_RULES) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding='utf-8'))
+    return parse_rules(path.read_bytes())
+
+
+def parse_rules(content: bytes) -> dict[str, Any]:
+    """Validate captured rules without consulting module-relative defaults."""
+    data = json.loads(content)
     if data.get('schema_version') != RULES_SCHEMA:
         raise DiffRiskError('unknown diff risk rules schema')
     for rule in data.get('rules', []):

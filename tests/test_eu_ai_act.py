@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +43,11 @@ class Repo:
         target = self.root / eu_ai_act.OBLIGATIONS
         target.parent.mkdir(parents=True)
         shutil.copyfile(ROOT / eu_ai_act.OBLIGATIONS, target)
+        self.fresh_matrix(TODAY)
         if installed:
             self.write(eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.opt_in_record(['eu-ai-act']).decode('utf-8'))
+        for name in ('diff-risk-rules.json', 'cost-providers.json'):
+            self.write('.getzilla/config/' + name, (ROOT / '.getzilla/config' / name).read_text(encoding='utf-8'))
         self.write('README.md', '# app\n')
         self.base = self.commit('base')
 
@@ -55,6 +58,12 @@ class Repo:
 
     def registry(self, *systems: dict) -> None:
         self.write(eu_ai_act.REGISTRY, json.dumps({'schema_version': 'ai-systems-v1', 'systems': list(systems)}))
+
+    def fresh_matrix(self, today: date) -> None:
+        path = self.root / eu_ai_act.OBLIGATIONS
+        matrix = json.loads(path.read_text(encoding='utf-8'))
+        matrix['reviewed'] = today.isoformat()
+        path.write_text(json.dumps(matrix), encoding='utf-8')
 
     def commit_sha(self) -> str:
         return git(self.root, 'rev-parse', 'HEAD')
@@ -92,7 +101,95 @@ class DraftClassTests(unittest.TestCase):
         self.assertTrue(draft.reasons)
 
 
+class MatrixFreshnessTests(unittest.TestCase):
+    def test_exact_window_and_invalid_metadata(self):
+        recent = {'reviewed': TODAY.isoformat(), 'sources': ['https://eur-lex.europa.eu/eli/reg/2024/1689/oj']}
+        self.assertIsNone(eu_ai_act.matrix_review_problem(recent, TODAY + timedelta(days=180)))
+        self.assertIn('181 days', eu_ai_act.matrix_review_problem(recent, TODAY + timedelta(days=181)))
+        for data in ({}, {**recent, 'reviewed': 'bad'}, {**recent, 'reviewed': True},
+                     {**recent, 'sources': []}, {**recent, 'sources': 'url'}, {**recent, 'sources': ['']},
+                     {**recent, 'reviewed': (TODAY + timedelta(days=1)).isoformat()}):
+            with self.subTest(data=data):
+                self.assertIsNotNone(eu_ai_act.matrix_review_problem(data, TODAY))
+
+    def test_empty_registry_reports_stale_matrix_and_legacy_still_parses(self):
+        repo = Repo(self)
+        data = json.loads((repo.root / eu_ai_act.OBLIGATIONS).read_text(encoding='utf-8'))
+        data.pop('reviewed', None)
+        data.pop('sources', None)
+        repo.write(eu_ai_act.OBLIGATIONS, json.dumps(data))
+        repo.registry()
+        repo.commit('legacy matrix')
+        self.assertTrue(eu_ai_act.load_obligations(repo.root))
+        report = repo.evaluate()
+        self.assertEqual(codes(report), ['MATRIX_STALE'])
+        self.assertEqual((report.decision, report.status), ('review', 'fail'))
+        self.assertEqual(repo.evaluate('fast').status, 'pass')
+        repo.write(eu_ai_act.COMPLIANCE_CONFIG, '{}')
+        self.assertEqual(repo.evaluate().status, 'skip')
+
+
+class RiskRecordTests(unittest.TestCase):
+    def test_next_review_is_enforced_only_when_obligation_applies(self):
+        repo = Repo(self)
+        repo.registry({'id': 'score', 'purpose': 'credit scoring', 'paths': ['src/score/*'],
+                       'class': 'high-risk', 'annex': 'III', 'role': 'provider',
+                       'confirmation': CONFIRMED, 'risk_register': 'risk.json'})
+        repo.write('risk.json', json.dumps({'risks': [{'risk': 'bias', 'mitigation': 'evaluate',
+                   'owner': 'risk team', 'reviewed': '2027-12-01', 'next_review': 'invalid'}]}))
+        repo.fresh_matrix(date(2027, 12, 1))
+        repo.commit('not applicable yet')
+        before = repo.evaluate(today=date(2027, 12, 1))
+        after = repo.evaluate(today=date(2027, 12, 2))
+        self.assertEqual(next(row['status'] for row in before.matrix if row['obligation'] == 'AIA-9'), 'met')
+        self.assertEqual(next(row['status'] for row in after.matrix if row['obligation'] == 'AIA-9'), 'unmet')
+
+    def test_optional_scores_acceptance_and_deadlines(self):
+        repo = Repo(self)
+        risk = {'risk': 'bias', 'mitigation': 'evaluation', 'owner': 'risk team', 'reviewed': TODAY.isoformat()}
+        cases = [({}, None), ({'likelihood': 1, 'severity': 5, 'residual': 'low'}, None)]
+        for field in ('likelihood', 'severity'):
+            cases += [({field: value}, f'{field} must be 1-5') for value in (0, 6, True, False, 2.0, '2', None)]
+        cases += [({'residual': 'severe'}, 'residual must be low, medium or high'),
+                  ({'residual': 'high'}, 'high residual risk needs accepted_by'),
+                  ({'residual': 'high', 'accepted_by': CONFIRMED}, None),
+                  ({'residual': 'high', 'accepted_by': {'by': 'x'}}, 'confirmation'),
+                  ({'next_review': '2026-10-19'}, 'next_review 2026-10-19 has passed'),
+                  ({'next_review': TODAY.isoformat()}, None), ({'next_review': 'bad'}, 'YYYY-MM-DD')]
+        for extra, expected in cases:
+            with self.subTest(extra=extra):
+                repo.write('risk.json', json.dumps({'risks': [{**risk, **extra}]}))
+                repo.commit('risk record')
+                problem = eu_ai_act._risk_register_problem(repo.root, 'HEAD', 'risk.json', TODAY)
+                if expected is None:
+                    self.assertIsNone(problem)
+                else:
+                    self.assertIn(expected, problem or '')
+
+
+class IsoMapTests(unittest.TestCase):
+    def test_map_covers_obligations_and_is_non_gating(self):
+        mapping = eu_ai_act.load_iso_map(ROOT)
+        self.assertEqual(set(mapping), {item['id'] for item in eu_ai_act.load_obligations(ROOT)})
+        for clauses in mapping.values():
+            self.assertTrue(clauses)
+            for clause in clauses:
+                self.assertRegex(clause, r'^A\.(?:[2-9]|10)$')
+        repo = Repo(self)
+        baseline = repo.evaluate().decision
+        for invalid in ('{', 'null', '[]', '{"AIA-9": ["wrong"]}'):
+            repo.write('.getzilla/compliance/eu-ai-act/iso42001-map.json', invalid)
+            self.assertIsNone(eu_ai_act.load_iso_map(repo.root))
+            self.assertEqual(repo.evaluate().decision, baseline)
+
+
 class GateTests(unittest.TestCase):
+    def test_malformed_opt_in_is_disabled(self):
+        repo = Repo(self)
+        for value in ('eu-ai-act', {'eu-ai-act': True}, True, 1):
+            repo.write(eu_ai_act.COMPLIANCE_CONFIG, json.dumps({'enabled': value}))
+            self.assertFalse(eu_ai_act.enabled(repo.root))
+
     def test_without_the_opt_in_record_the_matrix_never_gates(self) -> None:
         repo = Repo(self, installed=False)
         repo.write('src/bot.py', ASSISTANT)
@@ -166,10 +263,12 @@ class GateTests(unittest.TestCase):
         self.assertTrue(any('AIA-9' in item and '2027-12-02' in item for item in before.upcoming))
         self.assertTrue(any('AIA-9' in problem for problem in repo.evaluate(today=date(2027, 12, 2)).problems))
         repo.registry({**system, 'annex': 'I'})
+        repo.fresh_matrix(date(2027, 12, 2))
         repo.commit('annex I')
         self.assertEqual(repo.evaluate(today=date(2027, 12, 2)).status, 'pass')
         self.assertEqual(repo.evaluate(today=date(2028, 8, 2)).decision, 'block')
         repo.registry(system)
+        repo.fresh_matrix(TODAY)
         stale['risks'][0]['reviewed'] = '2026-10-01'
         repo.write('compliance/risks.json', json.dumps(stale))
         repo.commit('reviewed register')
@@ -288,6 +387,7 @@ class AuditBundleTests(unittest.TestCase):
                        'class': 'limited', 'generates_content': True, 'disclosure_symbol': 'AI_DISCLOSURE',
                        'role': 'provider', 'marking_symbol': 'mark_generated_content', 'confirmation': CONFIRMED})
         repo.write('.gitignore', '.getzilla/runtime/\n')
+        repo.fresh_matrix(datetime.now(timezone.utc).date())
         repo.commit('release candidate')
         module = self._bundle_module()
         out = repo.root / 'out'
@@ -334,6 +434,12 @@ class OptInTests(unittest.TestCase):
         self.assertNotIn(eu_ai_act.OBLIGATIONS, {entry.path for entry in lean})
         self.assertNotIn(eu_ai_act.COMPLIANCE_CONFIG, {entry.path for entry in lean})
         self.assertIn(eu_ai_act.OBLIGATIONS, {entry.path for entry in chosen})
+        for path in ('scripts/getzilla_compliance.py', 'scripts/getzilla_audit_bundle.py'):
+            self.assertNotIn(path, {entry.path for entry in lean})
+            self.assertIn(path, {entry.path for entry in chosen})
+        template = '.getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py'
+        self.assertNotIn(template, {entry.path for entry in lean})
+        self.assertIn(template, {entry.path for entry in chosen})
         record = next(entry for entry in chosen if entry.path == eu_ai_act.COMPLIANCE_CONFIG)
         self.assertEqual(json.loads(record.content)['enabled'], ['eu-ai-act'])
         self.assertFalse((ROOT / eu_ai_act.COMPLIANCE_CONFIG).exists(), 'the Getzilla source never opts itself in')
@@ -348,6 +454,7 @@ class OptInTests(unittest.TestCase):
             self.assertFalse(eu_ai_act.enabled(project))
             ensure_components(project, ['compliance:eu-ai-act'], source=ROOT)
             self.assertTrue(eu_ai_act.enabled(project))
+            self.assertTrue((project / '.getzilla/templates/eu-ai-act/transparency/typescript/aiTransparency.ts').is_file())
             ensure_components(project, ['compliance:eu-ai-act'], source=ROOT)
             record = json.loads((project / eu_ai_act.COMPLIANCE_CONFIG).read_text(encoding='utf-8'))
             self.assertEqual(record['enabled'], ['eu-ai-act'])

@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla.hook_health import degraded_events  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
 
 PROTECTED = (
@@ -40,6 +43,30 @@ def decision(root: Path, tool: str, tool_input: dict) -> str:
 
 
 class DegradedFailClosedTests(unittest.TestCase):
+    def test_broken_fixture_policy_is_not_hidden_by_parent_pythonpath(self) -> None:
+        with project_copy() as root:
+            (root / '.getzilla/getzilla/policy.py').write_text(
+                'raise ImportError("fixture policy broken")\n', encoding='utf-8',
+            )
+            polluted = os.pathsep.join(str(path) for path in (ROOT, ROOT / 'tests', ROOT / '.getzilla'))
+            with mock.patch.dict(os.environ, {'PYTHONPATH': polluted}):
+                code, data, err = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root), 'tool_name': 'Bash', 'tool_input': {'command': 'ls'},
+                })
+                self.assertEqual(code, 0, err)
+                self.assertEqual(data.get('decision'), 'allow')
+                code, data, err = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root), 'tool_name': 'Bash', 'tool_input': {'command': 'git push origin main'},
+                })
+                self.assertEqual(code, 0, err)
+                self.assertEqual(data.get('decision'), 'deny')
+            events = degraded_events(root)
+            self.assertEqual(len(events), 2)
+            for event in events:
+                self.assertEqual(event['kind'], 'HOOK_DEGRADED')
+                self.assertEqual(event['hook'], 'pre_tool_use')
+                self.assertIn('fixture policy broken', event['error'])
+
     def _check(self, breakage: str, content: str) -> None:
         with project_copy() as root:
             (root / breakage).write_text(content, encoding='utf-8')
