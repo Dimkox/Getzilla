@@ -75,6 +75,26 @@ class ProjectSyncTests(unittest.TestCase):
         upgrade.sync_project(ROOT, self.project)
         self.assertEqual((self.project / 'ruff.toml').read_bytes(), local)
 
+    def test_accept_local_records_the_current_digest_of_a_changed_kept_file(self) -> None:
+        old = (self.project / 'AGENTS.md').read_bytes()
+        record = {'schema_version': 1, 'kept_local': ['AGENTS.md'],
+                  'kept_local_sha256': {'AGENTS.md': hashlib.sha256(old).hexdigest()}}
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps(record), encoding='utf-8')
+        self.commit('keep AGENTS.md')
+        (self.project / 'AGENTS.md').write_text('# Project rules, edited later\n', encoding='utf-8')
+        self.commit('edit AGENTS.md')
+        with self.assertRaisesRegex(upgrade.UpdateError, '--accept-local'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        result = upgrade.sync_project(ROOT, self.project, accept=True)
+        self.assertIn('kept your current AGENTS.md', result)
+        self.assertEqual((self.project / 'AGENTS.md').read_text(encoding='utf-8'), '# Project rules, edited later\n')
+        saved = json.loads((self.project / '.getzilla/AGBP_SYNC.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['kept_local_sha256']['AGENTS.md'],
+                         hashlib.sha256(b'# Project rules, edited later\n').hexdigest())
+        self.assertEqual(saved['kept_local'], ['AGENTS.md'])
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+
     def test_existing_update_branch_is_not_reused(self) -> None:
         git(self.project, 'branch', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
         with self.assertRaisesRegex(upgrade.UpdateError, 'already exists'):
