@@ -1,5 +1,17 @@
 # Mistakes
 
+## 2026-10-22 — Edited protected files after a commit invalidated their grant
+
+Root cause: a protected-path grant is bound to Git HEAD, and I sent edits in parallel with, or after, a commit instead of creating a fresh grant first. The hook denied them, and the repeated denials tripped the circuit breaker, which blocked the objective for the rest of the denial window. After every commit, create the next exact grant before the first edit, and send edits only after that grant succeeds.
+
+## 2026-10-21 — Security lock update left its derived inventory stale
+
+Commit 58b493c changed the certifi lock entry but did not refresh the offline runtime wheel inventory. The narrow 63-test Factory unit set omits that inventory regression, so its pass did not detect the mismatch. Regenerate from the unchanged approved lock and run the existing exact-inventory test before claiming synchronization.
+
+## 2026-10-21 — Dependency validation guessed a missing test configuration
+
+The coordinator assumed Core had a pyproject.toml and passed that nonexistent path to pytest. A tracked-file search showed that Core has no pytest configuration file. Use the actual test root and explicit import paths; the corrected pinned-environment run passed 23 tests and 30 subtests.
+
 ## 2026-10-21 — Reuse the actual registry contract in installed fixtures
 
 The new installed CLI fixture guessed the registry schema id and failed validation before testing enabled scaffolding. Use the existing ai-systems-v1 contract; keep lean refusal and exact file/registry preservation assertions.
