@@ -6,7 +6,7 @@ import os
 import stat
 from pathlib import Path
 
-from . import eu_ai_act, fsx
+from . import STACK_DIR, eu_ai_act, fsx
 from .source_paths import path_problem
 
 TEMPLATES = {
@@ -28,7 +28,8 @@ def registry_hints(lang: str) -> dict[str, str]:
 
 
 def _template_bytes(relative: str) -> bytes:
-    handles = [fsx.open_dir(Path(__file__).resolve().parents[1])]
+    # STACK_DIR, not this file's parent: in a lean install this module runs from getzilla.zip.
+    handles = [fsx.open_dir(STACK_DIR)]
     parts = ('templates/eu-ai-act/transparency/' + relative).split('/')
     try:
         for part in parts[:-1]:

@@ -147,6 +147,14 @@ class CiAuditTests(unittest.TestCase):
         self.assertIsNone(result['compliance']['iso42001'])
         self.assertEqual(len(result['reasons']), 1)
 
+    def test_an_uncommitted_engine_archive_stops_the_audit(self):
+        # getzilla.zip joins the engine package path ahead of the files, so it is executable input.
+        repo = self.repo()
+        mod = self.module()
+        repo.write('.getzilla/getzilla.zip', 'not the committed engine')
+        with self.assertRaisesRegex(RuntimeError, 'getzilla.zip'):
+            mod.ci_check(repo.root, repo.base)
+
     def test_all_decision_inputs_are_committed_and_present(self):
         paths = ('.getzilla/config/compliance.json', '.getzilla/compliance/eu-ai-act/obligations.json',
                  '.getzilla/config/ai-systems.json', '.getzilla/config/diff-risk-rules.json',

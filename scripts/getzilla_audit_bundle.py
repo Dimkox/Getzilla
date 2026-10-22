@@ -28,6 +28,7 @@ VERIFIER_OUTPUT_LIMIT = 1024 * 1024
 GIT_INVENTORY_TIMEOUT = 30
 GIT_PATH_OUTPUT_LIMIT = 16 * 1024 * 1024
 AUDIT_SCRIPT = 'scripts/getzilla_audit_bundle.py'
+ENGINE_ARCHIVE = '.getzilla/getzilla.zip'
 
 
 def _canonical(value: object) -> bytes:
@@ -174,7 +175,8 @@ def _committed_inputs(root: Path, *, require_opt_in: bool = False) -> tuple[str,
         raise RuntimeError('the audit needs a clean committed tree')
     data_paths = {eu_ai_act.COMPLIANCE_CONFIG, eu_ai_act.OBLIGATIONS, eu_ai_act.REGISTRY,
                   '.getzilla/config/diff-risk-rules.json', '.getzilla/config/cost-providers.json'}
-    paths = data_paths | {AUDIT_SCRIPT}
+    # A present getzilla.zip joins the engine package path ahead of the files, so it is an input too.
+    paths = data_paths | {AUDIT_SCRIPT, ENGINE_ARCHIVE}
     # Check the union of committed and present executable inputs. Looking only at disk misses
     # deletions hidden from status by skip-worktree or assume-unchanged bits.
     committed = _git_bytes(root, 'ls-tree', '-r', '--name-only', '-z', head).decode('utf-8', 'surrogateescape')

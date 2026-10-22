@@ -122,7 +122,7 @@ class ScaffoldTests(unittest.TestCase):
         source = repo.root / 'source.txt'
         source.write_text('private fixture', encoding='utf-8')
         template.symlink_to(source)
-        with mock.patch.object(mod, '__file__', str(template_root / 'getzilla/compliance_scaffold.py')):
+        with mock.patch.object(mod, 'STACK_DIR', template_root):
             with self.assertRaises(mod.ScaffoldError):
                 mod.scaffold(repo.root, 'bot', 'python')
         self.assertFalse((repo.root / 'src/bot/ai_transparency.py').exists())
