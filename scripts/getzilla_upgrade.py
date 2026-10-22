@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -27,7 +28,7 @@ from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
-OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--help')
+OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
 STEPS = {
     'core': 'update only Getzilla itself',
@@ -136,8 +137,39 @@ def blob_id(content: bytes, object_format: str) -> str:
     return digest.hexdigest()
 
 
-def planned_changes(installer, home: Path, project: Path) -> list[tuple[str, bytes, str]]:
+def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None, list[str]]:
+    """Digests of the kept paths as committed now: (digests, new sync record or None, accepted paths).
+
+    A kept path with a recorded digest stops the update once its bytes change. `--accept-local`
+    records the committed bytes as the project's chosen version instead; it never changes them.
+    """
+    raw = git(project, 'cat-file', 'blob', f'HEAD:{installer.STACK_SYNC_RECORD}', data=b'')
+    if raw.returncode != 0:
+        return {}, None, []
+    installer._kept_local(project)  # the same shape checks the plan applies
+    record = json.loads(raw.stdout.decode('utf-8'))
+    digests = dict(record.get('kept_local_sha256', {}))
+    accepted = []
+    for path, digest in sorted(digests.items()):
+        blob = git(project, 'cat-file', 'blob', f'HEAD:{path}', data=b'')
+        if blob.returncode != 0:
+            continue  # an absent kept path is already allowed
+        current = hashlib.sha256(blob.stdout).hexdigest()
+        if current != digest:
+            digests[path] = current
+            accepted.append(path)
+    if not accepted:
+        return digests, None, []
+    record['kept_local_sha256'] = digests
+    return digests, (json.dumps(record, indent=2, sort_keys=True) + '\n').encode('utf-8'), accepted
+
+
+def planned_changes(installer, home: Path, project: Path,
+                    digests: dict[str, str] | None = None) -> list[tuple[str, bytes, str]]:
     """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD."""
+    if digests is not None:
+        # This installer module was loaded for this run only, so the override stays local to it.
+        installer._kept_local_digests = lambda _target: digests
     selection = installer.PayloadSelection(
         installer.detect_agents(project),
         extras=installer.detect_extras(project),
@@ -194,7 +226,7 @@ def commit_changes(project: Path, changes: list[tuple[str, bytes, str]], message
     return _git_out(project, 'commit-tree', tree, '-p', 'HEAD', '-m', message)
 
 
-def sync_project(home: Path, project: Path) -> str:
+def sync_project(home: Path, project: Path, *, accept: bool = False) -> str:
     """Commit the managed files on a new branch and check it out; returns a one-line result."""
     project = project.resolve()
     top = git(project, 'rev-parse', '--show-toplevel')
@@ -204,9 +236,14 @@ def sync_project(home: Path, project: Path) -> str:
         raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
     installer = load_installer(home)
     try:
-        changes = planned_changes(installer, home, project)
+        digests, record, accepted = accept_local(installer, project) if accept else ({}, None, [])
+        changes = planned_changes(installer, home, project, digests if accepted else None)
     except installer.UnsafeInstallTarget as exc:
-        raise UpdateError(str(exc)) from exc
+        hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
+                if 'no longer matches its declared divergence' in str(exc) else '')
+        raise UpdateError(f'{exc}{hint}') from exc
+    if record is not None:
+        changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
     if not changes:
         return f'{project.name} is up to date'
     version = version_of(home)
@@ -224,7 +261,8 @@ def sync_project(home: Path, project: Path) -> str:
     if switched.returncode != 0:
         raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
                           f'{switched.stderr.strip()}; run `git switch {branch}`')
-    return (f'{project.name}: {len(changes)} file(s) updated on branch {branch}; '
+    kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
+    return (f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
             'review it and open a pull request')
 
 
@@ -258,6 +296,9 @@ def main(argv: list[str] | None = None) -> int:
     if step is None:
         parser.add_argument('--no-self', action='store_true', help='do not update Getzilla itself')
         parser.add_argument('--no-tools', action='store_true', help='do not update third-party tools')
+    if step != 'core':
+        parser.add_argument('--accept-local', action='store_true',
+                            help='keep the committed version of kept files that changed since their digest was recorded')
     args = parser.parse_args(rest)
     try:
         if step == 'core':
@@ -267,14 +308,15 @@ def main(argv: list[str] | None = None) -> int:
             print(update_self(HOME, args.ref), flush=True)
             # Steps 2 and 3 run on the code just fetched, not on this process's old copy.
             project = args.project or find_project(Path.cwd(), HOME)
-            again = [*([str(project)] if project else []), '--no-self', *(['--no-tools'] if args.no_tools else [])]
+            again = [*([str(project)] if project else []), '--no-self', *(['--no-tools'] if args.no_tools else []),
+                     *(['--accept-local'] if args.accept_local else [])]
             return subprocess.run([sys.executable, str(HOME / 'scripts/getzilla_upgrade.py'), *again],
                                   check=False).returncode
         project = Path(args.project) if args.project else find_project(Path.cwd(), HOME)
         if project is None:
             print('no project here: run `getzilla update` inside a project to update it too')
         else:
-            print(sync_project(HOME, project), flush=True)
+            print(sync_project(HOME, project, accept=args.accept_local), flush=True)
     except UpdateError as exc:
         print(f'getzilla update: {exc}', file=sys.stderr)
         return 1
