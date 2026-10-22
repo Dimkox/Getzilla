@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-21 — Select the interpreter by verified runtime capabilities
+
+Use system Python 3.12 with explicit UV_PYTHON, disabled managed Python/downloads and UV_LOCKED for the Factory gate. The uv-managed 3.11 build lacks pidfd, while the system interpreter passed all 20 inventory/process controls, including failed-update recovery. Keep production capability checks and the security-pinned lock unchanged.
+
 ## 2026-10-21 — Preserve concurrent branch history and test the installed command
 
 Merge the authorized remote head after committing local repairs, then refresh the route to the actual PR merge-base through its API. Real lean/chosen payload tests exercised dispatcher fallback, opt-in refusal and exact adapter writes. This preserved both contributors' work and tested the installation boundary that source-only CLI tests omit.
