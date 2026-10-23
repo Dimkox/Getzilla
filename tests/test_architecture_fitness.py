@@ -3391,6 +3391,77 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertNotEqual(result.status, 'not_applicable', result)
                 self.assertIn('new_queue', report.triggers, report)
 
+    def test_callable_declaration_rejects_non_name_binding_forms(self) -> None:
+        bindings = [
+            'import leaf as helper', 'from leaf import queue as helper',
+            'from leaf import *', 'if enabled:\n    from leaf import queue as helper',
+            'try:\n    work()\nexcept Exception as helper:\n    pass',
+            'match value:\n    case helper:\n        pass',
+            'match value:\n    case [*helper]:\n        pass',
+            'match value:\n    case {"x": value, **helper}:\n        pass',
+            'def mutate():\n    global helper\n    from leaf import queue as helper',
+        ]
+        for binding in bindings:
+            with self.subTest(binding=binding):
+                tree = ast.parse('def helper():\n    return 1\n' + binding + '\n')
+                self.assertFalse(FIT._plain_callable_declaration(tree, frozenset({'helper'})))
+
+    def test_import_rebinding_is_not_a_stable_callable(self):
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        repo.write_text('src/leaf.py', 'from rq import Queue\nqueue = Queue()\n')
+        repo.write_text('src/runtime.py', 'def helper():\n    return 1\nfrom leaf import queue as helper\n')
+        imported = 'from runtime import helper\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('queue alias baseline')
+        repo.write_text('src/use.py', imported + 'helper.enqueue(job)\n')
+        head = repo.commit('queue alias operation')
+        report = self._evaluate(repo, base, head, pre_risk='yellow')
+        result = self._results(report)['background_job']
+        print('background_job:', result.status, result.applicability.reason_code, 'triggers:', report.triggers, flush=True)
+        with patch.object(FIT, '_plain_callable_declaration', return_value=False):
+            control = self._evaluate(repo, base, head, pre_risk='yellow')
+        print('without declaration shortcut:', self._results(control)['background_job'].status,
+              'triggers:', control.triggers, flush=True)
+        self.assertNotEqual(result.status, 'not_applicable')
+        self.assertIn('new_queue', report.triggers)
+
+    def test_plain_declaration_module_cap_is_cache_order_invariant(self):
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        count = FIT.MAX_QUEUE_ADAPTER_MODULES + 8
+        for index in range(count):
+            repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+        def source(indices):
+            return ''.join(f'from part{index} import ordinary as chosen{index}\n' for index in indices) + ''.join(f'chosen{index}()\n' for index in indices)
+        all_source = source(range(count))
+        repo.write_text('src/use.py', '')
+        base = repo.commit('declarations')
+        repo.write_text('src/use.py', all_source)
+        head = repo.commit('all declaration calls')
+        snapshot = ARCHITECTURE.load_architecture(repo.root)
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        roots = FIT._queue_source_roots(snapshot)
+        def run(cache, text, path):
+            try:
+                result = FIT._queue_signals(repo.root, diff, ast.parse(text), 'head', cache, '', roots,
+                    source_path=path, source=text.encode())
+                return result.state
+            except ARCHITECTURE.ArchitectureError as error:
+                return f'error:{error.code}:{error}'
+        cold = run(FIT._queue_module_inventory(repo.root, diff, 'head', roots), all_source, 'src/use.py')
+        warm_cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+        middle = count // 2
+        print('WARM_PREFIX', run(warm_cache, source(range(middle)), 'src/warm1.py'), flush=True)
+        print('WARM_SUFFIX', run(warm_cache, source(range(middle, count)), 'src/warm2.py'), flush=True)
+        warm = run(warm_cache, all_source, 'src/use.py')
+        print('COLD', cold, 'WARM', warm, flush=True)
+        self.assertEqual(cold, warm)
+
     def test_queue_aggregate_resource_exhaustion_is_not_a_queue_trigger(self) -> None:
         for name in ('MAX_QUEUE_ANALYSIS_BYTES', 'MAX_QUEUE_ANALYSIS_AST_NODES', 'MAX_QUEUE_ANALYSIS_WORK'):
             with self.subTest(budget=name):
@@ -3449,7 +3520,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertTrue(summary.footprint.sources)
                 self.assertTrue(all(item.nodes > 0 for item in summary.footprint.sources))
                 inventory = FIT._queue_module_inventory
-                for name, boundary in [('MAX_QUEUE_ANALYSIS_BYTES', expected_bytes),
+                for name, boundary in [('MAX_QUEUE_ADAPTER_MODULES', len(sources) + 1),
+                                       ('MAX_QUEUE_ANALYSIS_BYTES', expected_bytes),
                                        ('MAX_QUEUE_ANALYSIS_AST_NODES', expected_nodes),
                                        ('MAX_QUEUE_ANALYSIS_WORK', expected_work)]:
                     for warmed in (False, True):

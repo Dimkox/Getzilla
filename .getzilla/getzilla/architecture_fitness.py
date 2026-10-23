@@ -282,6 +282,10 @@ class _QueueBudget:
     def _source(self, item: _QueueSourceFootprint) -> None:
         key = (item.path, item.digest)
         previous = self.sources.get(key)
+        # Every inspected source counts, including the importer, declarations
+        # and transitive cache hits. Cache warmth cannot change admission.
+        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
+            raise ArchitectureError('queue adapter module limit exceeded', code='limit')
         byte_total = self.source_bytes + (0 if previous else item.size)
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
         if byte_total > MAX_QUEUE_ANALYSIS_BYTES:
@@ -2600,7 +2604,14 @@ def _plain_callable_declaration(tree: ast.Module, requested: frozenset[str] | No
     definitions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     if not requested <= definitions.keys() or any(definitions[name].decorator_list for name in requested):
         return False
-    if any((isinstance(node, ast.Global) and requested.intersection(node.names))
+    # Python binds names through more nodes than Name(Store). Inspect these
+    # across conditional and nested bodies; uncertainty falls back to analysis.
+    if any((isinstance(node, (ast.Global, ast.Nonlocal)) and requested.intersection(node.names))
+           or (isinstance(node, ast.alias) and (node.name == '*' or (node.asname or node.name.split('.')[0]) in requested))
+           or (isinstance(node, ast.ExceptHandler) and node.name in requested)
+           or (isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in requested)
+           or (isinstance(node, ast.MatchMapping) and node.rest in requested)
+           or (isinstance(node, ast.Name) and node.id in requested and isinstance(node.ctx, (ast.Store, ast.Del)))
            or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                and node.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'})
            or (isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
