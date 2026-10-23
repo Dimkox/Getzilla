@@ -1,0 +1,143 @@
+{
+  "allowed_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect",
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer",
+    "integration_implementer",
+    "release_reviewer"
+  ],
+  "analysis_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect"
+  ],
+  "base_commit": "8a02bab3d3e2a4e4cf8e023068a9652cbb89a5be",
+  "base_fingerprint": "dc865d185dc86936a5ba99dd1243ca3f3c83d145cce601057d28e048ffeb73c4",
+  "change_id": "20261023-task-5311cd",
+  "complexity": "standard",
+  "created_at": "2026-10-23T06:52:03+00:00",
+  "delivery_expected": true,
+  "delivery_lane": "full",
+  "diff_escalation": {
+    "added_reviewers": [
+      "release_reviewer"
+    ],
+    "rules_digest": "778f69237f422c40e2a47c7c0851671d15bee8d3871688caf26a3620ba5ca2da",
+    "source_head": "193c547266ed831e76139ee9b7d92a67a770345c",
+    "source_root": "/home/pall/projects/getzilla/.getzilla/runtime/worktrees/pr127-followup"
+  },
+  "domains": [
+    "integration",
+    "api"
+  ],
+  "effective_risk": "high",
+  "human_gates": [],
+  "intent": "bugfix",
+  "matched_keywords": {
+    "integration": [
+      "внешн"
+    ]
+  },
+  "primary_skill": "getzilla-delivery",
+  "quality_profiles": [
+    "base",
+    "contracts",
+    "integration"
+  ],
+  "rationale": [
+    "medium-risk integration, contract, data, AI, or modernization work",
+    "intent=bugfix",
+    "domains=integration,api",
+    "repository=generic",
+    "write-owner=integration_implementer",
+    "analysis-wave=4/10"
+  ],
+  "repo": {
+    "bitrix_modules": [],
+    "detected_languages": [
+      "python"
+    ],
+    "domains": [
+      "api"
+    ],
+    "kind": "generic",
+    "language_scan": {
+      "bytes": 269360,
+      "directories": 438,
+      "entries": 4645,
+      "files": 4000,
+      "incomplete_reasons": [
+        "files:4000"
+      ],
+      "non_regular": 0,
+      "skipped_symlinks": 0,
+      "status": "incomplete",
+      "truncated": true,
+      "unknown": true,
+      "unknown_extensions": {
+        ".cmd": 1,
+        ".html": 1,
+        ".json": 787,
+        ".jsonl": 2,
+        ".patch": 1,
+        ".psd1": 1,
+        ".sha256": 3,
+        ".toml": 1,
+        ".yaml": 153
+      },
+      "unreadable": 0
+    },
+    "languages": [],
+    "package_scripts": [],
+    "signals": [
+      "contract:engineering/contracts/openapi",
+      "undetected-language",
+      "undetected-language:python=21",
+      "undetected-source-extension:.cmd=1",
+      "undetected-source-extension:.html=1",
+      "undetected-source-extension:.json=787",
+      "undetected-source-extension:.jsonl=2",
+      "undetected-source-extension:.patch=1",
+      "undetected-source-extension:.psd1=1",
+      "undetected-source-extension:.sha256=3",
+      "undetected-source-extension:.toml=1",
+      "undetected-source-extension:.yaml=153",
+      "language-scan:incomplete=files:4000"
+    ]
+  },
+  "required_evidence": [
+    "verification",
+    "code_review",
+    "test_review",
+    "security_review",
+    "release_review"
+  ],
+  "review_agents": [
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer",
+    "release_reviewer"
+  ],
+  "risk": "medium",
+  "route_id": "5311cdded150",
+  "schema_version": 1,
+  "session_id": "manual",
+  "status": "reviewing",
+  "task": "Я влил main в ветку PR #127 и запушил. Новый head — 496c318. Конфликтов не было. Это обычный мерж-коммит, история ветки не переписана.\n\nЧто ветка получила из main:\n\nисправление killpg на macOS: из-за него падал test_eu_audit_attestation;\nисправление блокировки CAS на macOS;\ngetzilla update;\nподсказки в отказах хука.\nПроверка. Тесты на файлы, которые затронули обе стороны, проходят на Linux. Среди них test_eu_audit_attestation, test_fsx, test_install_extras и test_workflow_sources. CI на новом head запустится сам.\n\nВажно для вашей локальной копии. По описанию \n#127 у вас есть незапушенные локальные коммиты: dc3d66bc (исправление списка wheel) и f6df5325 (checkpoint). Перед следующим пушем подтяните ветку так:\n\nИначе пуш будет отклонён.\n\nЧто ещё не сделано в \n#127. Ветка остаётся в статусе UNVERIFIED. Описание PR требует:\n\nsmoke-прогон;\nновые независимые ревью;\nновый замороженный head;\nлокальную и внешнюю проверку.\nМерж main эти шаги не заменяет. За \n#127 я не слежу: этот PR не мой, и вы не просили его вести.\n\nдочини там всё",
+  "task_domains": [
+    "integration"
+  ],
+  "updated_at": "2026-10-23T07:13:32+00:00",
+  "workflow_skills": [
+    "getzilla-delivery",
+    "bugfix-workflow",
+    "api-event-change",
+    "enterprise-integration"
+  ],
+  "write_agent": "integration_implementer"
+}

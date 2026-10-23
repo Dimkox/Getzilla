@@ -259,6 +259,29 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         with patch.object(self.linux.subprocess, "run", side_effect=self.linux.subprocess.TimeoutExpired("python", 1)):
             self.assertFalse(self.linux._host_supported(timeout=1))
 
+    def test_missing_controller_pidfd_api_refuses_start_before_launch(self):
+        result = SimpleNamespace(returncode=0, stdout="Python 3.12.3\n")
+        with (
+            patch.object(self.linux.platform, "system", return_value="Linux"),
+            patch.object(self.linux.platform, "machine", return_value="x86_64"),
+            patch.object(self.linux.Path, "read_text", return_value='ID="ubuntu"\nVERSION_ID="24.04"\n'),
+            patch.object(self.linux.subprocess, "run", return_value=result),
+            patch.object(self.linux.os, "pidfd_open", create=True),
+            patch.object(self.linux.signal, "pidfd_send_signal", create=True),
+            patch.object(self.linux.subprocess, "Popen") as launch,
+        ):
+            self.assertTrue(self.adapter.preflight("factory-python", timeout=2))
+            for module, name in ((self.linux.os, "pidfd_open"), (self.linux.signal, "pidfd_send_signal")):
+                with self.subTest(api=name), patch.object(module, name):
+                    delattr(module, name)
+                    self.assertFalse(self.adapter.preflight("factory-python", timeout=2))
+                    with self.assertRaises(setup.InstallerError) as error:
+                        self.adapter.start(self.release, timeout=2)
+                    self.assertEqual(error.exception.code, "UNSUPPORTED_HOST")
+                    launch.assert_not_called()
+        self.assertFalse((self.root / "state/process").exists())
+        self.assertEqual(list((self.root / "logs").iterdir()), [])
+
     def test_logs_are_capped_on_disk_before_tail_is_returned(self):
         log = self.root / "logs" / (self.release.name + ".log")
         log.write_bytes(b"x" * (self.linux.MAX_LOG_BYTES * 2))

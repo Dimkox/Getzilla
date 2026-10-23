@@ -1,0 +1,126 @@
+{
+  "change_id": "20261023-task-5311cd",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/pr127-validation-20261023",
+      "change_id": "20261023-task-5311cd",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "8a02bab3d3e2a4e4cf8e023068a9652cbb89a5be",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-23T06:52:03+00:00",
+      "route_id": "5311cdded150"
+    },
+    {
+      "branch": "fix/pr127-validation-20261023",
+      "change_id": "20261023-task-5311cd",
+      "detached": false,
+      "dirty_product_paths": [
+        "factory/runtime/linux_process_adapter.py",
+        "factory/tests/test_linux_process_adapter.py",
+        "mistakes.md"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [
+        "uncommitted_product_zero_ahead"
+      ],
+      "head": "8a02bab3d3e2a4e4cf8e023068a9652cbb89a5be",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-23T06:58:15+00:00",
+      "route_id": "5311cdded150"
+    }
+  ],
+  "created_at": "2026-10-23T06:52:03+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "receipt_kind": "release_review",
+        "status": "not_run",
+        "reason": "Exact-diff risk escalation selected release review; final fingerprint-bound receipt pending"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-23T06:52:03+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-23T06:58:14+00:00",
+      "from": "draft",
+      "reason": "Exact scope, typed criteria, analysis and bounded design recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-23T06:58:14+00:00",
+      "from": "scoped",
+      "reason": "User requested PR127 completion; no named human gate; no production action",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-23T06:58:15+00:00",
+      "from": "approved",
+      "reason": "Single integration implementer reproduces controller capability gap",
+      "to": "implementing"
+    },
+    {
+      "at": "2026-10-23T06:59:31+00:00",
+      "from": "implementing",
+      "reason": "Regression failed before repair; 21 bounded process/inventory tests pass",
+      "to": "verifying"
+    },
+    {
+      "at": "2026-10-23T06:59:32+00:00",
+      "from": "verifying",
+      "reason": "Freeze source and tracked workflow before clean-HEAD smoke and independent reviews",
+      "to": "reviewing"
+    }
+  ],
+  "human_gates": [],
+  "human_gates_digest": "74c8ebb9b2e2eb44d01e3a5422d6c64ffd4ec154a61f58657eda582425a76c44",
+  "route_id": "5311cdded150",
+  "schema_version": 1,
+  "status": "reviewing",
+  "title": "Я влил main в ветку PR #127 и запушил. Новый head — 496c318. Конфликтов не было. Это обычный мерж-коммит, история ветки не переписана.\n\nЧто ветка получила из main:\n\nисправление killpg на macOS: из-за него падал test_eu_audit_attestation;\nисправление блокировки CAS на macOS;\ngetzilla update;\nподсказки в отказах хука.\nПроверка. Тесты на файлы, которые затронули обе стороны, проходят на Linux. Среди них test_eu_audit_attestation, test_fsx, test_install_extras и test_workflow_sources. CI на новом head запустится сам.\n\nВажно для вашей локальной копии. По описанию \n#127 у вас есть незапушенные локальные коммиты: dc3d66bc (исправление списка wheel) и f6df5325 (checkpoint). Перед следующим пушем подтяните ветку так:\n\nИначе пуш будет отклонён.\n\nЧто ещё не сделано в \n#127. Ветка остаётся в статусе UNVERIFIED. Описание PR требует:\n\nsmoke-прогон;\nновые независимые ревью;\nновый замороженный head;\nлокальную и внешнюю проверку.\nМерж main эти шаги не заменяет. За \n#127 я не слежу: этот PR не мой, и вы не просили его вести.\n\nдочини там всё",
+  "updated_at": "2026-10-23T06:59:32+00:00"
+}
