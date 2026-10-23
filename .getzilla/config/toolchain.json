@@ -273,6 +273,24 @@
         "windows": "winget install -e --id sigstore.cosign",
         "generic": "https://github.com/sigstore/cosign/releases"
       }
+    },
+    {
+      "id": "jscpd",
+      "name": "jscpd (scan supports exactly 4.0.5)",
+      "required": false,
+      "profile": "duplicates",
+      "commands": [
+        "jscpd"
+      ],
+      "version_args": [
+        "--version"
+      ],
+      "minimum": "4.0.5",
+      "built": "4.0.5",
+      "fallback": "4.0.5",
+      "install": {
+        "generic": "npm install -g --ignore-scripts --no-audit --no-fund jscpd@4.0.5"
+      }
     }
   ],
   "workflow_sources": {
