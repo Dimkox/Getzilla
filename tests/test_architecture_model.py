@@ -1670,6 +1670,26 @@ class ArchitectureModelTests(unittest.TestCase):
                     [(finding.code, finding.path) for finding in findings], expected
                 )
 
+    def test_runtime_scratch_is_excluded_only_when_ignored_and_untracked(self) -> None:
+        root = self._repo()
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        (root / '.gitignore').write_text('.getzilla/runtime/\n')
+        source = root / '.getzilla/runtime/scratch/probe.py'
+        source.parent.mkdir(parents=True)
+        source.write_text('VALUE = 1\n')
+        snapshot = ARCH.load_architecture(root)
+        self.assertEqual(ARCH.validate_repository_drift(root, snapshot), ())
+        subprocess.run(['git', 'add', '-f', '.getzilla/runtime/scratch/probe.py'], cwd=root, check=True)
+        findings = ARCH.validate_repository_drift(root, snapshot)
+        self.assertIn(('undeclared_source', '.getzilla/runtime/scratch/probe.py'),
+                      [(item.code, item.path) for item in findings])
+        (root / '.gitignore').unlink()
+        untracked = source.with_name('untracked.py')
+        untracked.write_text('VALUE = 2\n')
+        findings = ARCH.validate_repository_drift(root, snapshot)
+        self.assertIn(('undeclared_source', '.getzilla/runtime/scratch/untracked.py'),
+                      [(item.code, item.path) for item in findings])
+
     def test_repository_drift_detects_force_added_source_under_dot_venv(self) -> None:
         root = self._repo()
         source = root / "factory/.venv/project.py"

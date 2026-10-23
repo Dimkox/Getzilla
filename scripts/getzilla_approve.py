@@ -16,7 +16,8 @@ RELEASE_ACTIONS = ['git-push-branch', 'git-push-tag', 'github-release']
 parser = argparse.ArgumentParser(
     description=(
         'Materialize an explicitly delegated local grant bound to the current '
-        'repository, route, change, Git HEAD and tree fingerprint. Local grants '
+        'repository, route, change and TTL. Protected edits bind the branch and exact files; '
+        'production/external operations bind exact Git HEAD and tree. Local grants '
         'never satisfy external Trust CI approvals.'
     )
 )
@@ -82,7 +83,8 @@ except ValueError as exc:
 result['external_trust_ci_authority'] = False
 result['notice'] = (
     'This delegated local grant authorizes only the listed operation on the '
-    'exact current tree. It cannot create adaptive-trust-ci/verified or a '
+    'bound branch/file set for protected edits, or exact current tree for other scopes. '
+    'It cannot create adaptive-trust-ci/verified or a '
     'human-signed Trust CI approval.'
 )
 print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -404,18 +404,24 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def tree_fingerprint(root: Path, exclude: Iterable[str] = ()) -> str:
-    """HEAD plus the content of every changed path, except the exact repository paths in ``exclude``."""
+def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None) -> str:
+    """HEAD plus changed bytes; a fixed anchor admits commits only inside exact exclusions."""
     skipped = {str(item).replace('\\', '/') for item in exclude}
     digest = hashlib.sha256()
-    head = git_head(root) or 'NO_HEAD'
+    head = anchor or git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
-    for rel in changed_files(root):
+    inventory = changed_file_statuses(root, anchor, rename_detection=False) if anchor else None
+    if anchor and inventory is None:
+        raise ValueError('cannot establish complete grant file inventory')
+    paths = sorted({item['path'] for item in inventory}) if inventory is not None else changed_files(root)
+    for rel in paths:
         if rel.replace('\\', '/') in skipped:
             continue
         digest.update(os.fsencode(rel))
         path = root / rel
         try:
+            if anchor and path.exists():
+                digest.update(str(path.lstat().st_mode).encode())
             if path.is_symlink():
                 digest.update(os.fsencode(os.readlink(path)))
             elif path.is_file():

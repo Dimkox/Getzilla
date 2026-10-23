@@ -76,7 +76,7 @@ class RouteRecordTests(unittest.TestCase):
             archived = root / f'.getzilla/runtime/routes/{route.route_id}.json'
             self.assertEqual(json.loads(archived.read_text())['matched_keywords'], expected)
             change = start_change(root)
-            copied = root / 'engineering/changes' / change['change_id'] / 'route.json'
+            copied = root / '.getzilla/runtime/changes' / change['change_id'] / 'route.json'
             self.assertEqual(json.loads(copied.read_text())['matched_keywords'], expected)
 
 

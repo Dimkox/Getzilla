@@ -22,7 +22,7 @@ def _load_module():
 
 
 def _write_manifest(root: Path, sources: list[dict[str, str]]) -> Path:
-    path = root / "engineering/changes/change/workflow/manifest.json"
+    path = root / ".getzilla/runtime/changes/change/workflow/manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema_version": 1, "sources": sources}), encoding="utf-8")
     return path
@@ -234,7 +234,7 @@ class WorkflowCompileTests(unittest.TestCase):
             target.write_text(content, encoding="utf-8")
             entries.append({"source_type": source_type, "source_version": "1", "role": role, "path": path})
         bundle = self.artifacts.load_source_manifest(root, _write_manifest(root, entries))
-        (root / "engineering/changes/change/change-spec.yaml").write_text(
+        (root / ".getzilla/runtime/changes/change/change-spec.yaml").write_text(
             json.dumps(
                 {
                     "schema_version": 2,
@@ -482,7 +482,7 @@ class WorkflowConvergenceTests(unittest.TestCase):
     def test_report_is_deterministic_and_blocks_placeholders_and_advanced_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            change = root / "engineering/changes/change"
+            change = root / ".getzilla/runtime/changes/change"
             change.mkdir(parents=True)
             (change / "change-spec.yaml").write_text(
                 json.dumps(
@@ -555,7 +555,7 @@ class WorkflowConvergenceTests(unittest.TestCase):
     def test_report_detects_explicit_goal_criterion_architecture_and_status_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            change = root / "engineering/changes/change"
+            change = root / ".getzilla/runtime/changes/change"
             workflow = change / "workflow"
             workflow.mkdir(parents=True)
             native = {

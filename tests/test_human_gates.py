@@ -80,9 +80,9 @@ class HumanGateTests(unittest.TestCase):
             state = self._active_change(root, ['production_action_approval'])
             status = gate_statuses(root)[0]
             self.assertEqual(status['state'], 'pending')
-            self.assertEqual(status['evidence_path'], f"engineering/changes/{state['change_id']}/human-gates.json")
+            self.assertEqual(status['evidence_path'], f".getzilla/runtime/changes/{state['change_id']}/human-gates.json")
 
-            package = root / 'engineering/changes' / state['change_id']
+            package = root / '.getzilla/runtime/changes' / state['change_id']
             (package / 'human-gates.json').write_text('{ malformed', encoding='utf-8')
             self.assertEqual(gate_statuses(root)[0]['state'], 'invalid')
 
@@ -148,7 +148,7 @@ class HumanGateTests(unittest.TestCase):
             record_gate_decision(root, 'scope_and_design_approval', 'rejected', 'Needs revision', actor='human')
             self.assertEqual(gate_statuses(root)[0]['state'], 'rejected')
             record_gate_decision(root, 'scope_and_design_approval', 'approved', 'Revised scope accepted', actor='human')
-            (root / 'engineering/changes' / state['change_id'] / 'requirements.md').write_text('changed scope\n', encoding='utf-8')
+            (root / '.getzilla/runtime/changes' / state['change_id'] / 'requirements.md').write_text('changed scope\n', encoding='utf-8')
             self.assertEqual(gate_statuses(root)[0]['state'], 'stale')
             result = transition(root, state['change_id'], 'approved', 'scope changed after approval')
             self.assertEqual(result['history'][-1]['open_human_gates'], ['scope_and_design_approval: stale'])

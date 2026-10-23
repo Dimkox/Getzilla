@@ -59,6 +59,7 @@ class ChangeTests(unittest.TestCase):
             self.assertEqual(state['status'], 'draft')
             self.assertIsNotNone(active)
             change = root / str(active['path'])
+            self.assertTrue(str(active['path']).startswith('.getzilla/runtime/changes/'))
             self.assertTrue((change / 'requirements.md').is_file())
             for name in ('requirements.md', 'architecture.md'):
                 text = (change / name).read_text(encoding='utf-8')
@@ -79,7 +80,7 @@ class ChangeTests(unittest.TestCase):
             first = start_change(root, 'First private title')
             second = start_change(root, 'Another private title')
             self.assertEqual(first['change_id'], second['change_id'])
-            self.assertEqual(list((root / 'engineering/changes').iterdir()), [root / str(get_active_change(root)['path'])])
+            self.assertEqual(list((root / '.getzilla/runtime/changes').iterdir()), [root / str(get_active_change(root)['path'])])
 
     def test_valid_transitions(self) -> None:
         with project_copy() as root:
@@ -760,6 +761,7 @@ class ContourTests(unittest.TestCase):
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
             route['required_evidence'] = ['verification', 'code_review', 'test_review']
             route['quality_profiles'] = ['base']
+            route['delivery_lane'] = 'full'
             set_active_route(root, route)
             start_change(root)
             active = get_active_change(root)

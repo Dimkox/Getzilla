@@ -51,7 +51,7 @@ class GrantLifecycleTests(unittest.TestCase):
             (root / 'AGENTS.md').write_text('changed\n', encoding='utf-8')
             self.assertFalse(valid(root))
 
-    def test_commit_still_invalidates(self) -> None:
+    def test_commit_inside_granted_file_set_retains_approval(self) -> None:
         with github_project() as root:
             add_approval(root, 'protected-path', 'TDD on one test', 15,
                          actions=['protected-path-write'], resources=[TARGET])
@@ -59,7 +59,7 @@ class GrantLifecycleTests(unittest.TestCase):
             (root / TARGET).write_text('# test\n', encoding='utf-8')
             subprocess.run(['git', 'add', TARGET], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'test'], cwd=root, check=True)
-            self.assertFalse(valid(root))
+            self.assertTrue(valid(root))
 
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:

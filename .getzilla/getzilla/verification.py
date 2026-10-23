@@ -33,7 +33,7 @@ from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 from .stacks import load_registry, stack_checks
-from .state import get_active_change, get_active_route
+from .state import get_active_change, get_active_route, update_route
 from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
 from .util import (
     find_tool,
@@ -422,8 +422,8 @@ def _workflow_artifacts_check(
             "configured": False,
             "status": "not_configured",
         }
-    expected = f"engineering/changes/{change_id}"
-    if relative != expected:
+    from .workflow_storage import valid_package_path
+    if not valid_package_path(relative, change_id):
         return CheckResult("workflow-artifacts", "fail", "active change path is not canonical"), {
             "configured": True,
             "status": "fail",
@@ -1561,7 +1561,7 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
 
 def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str) -> tuple[CheckResult, dict[str, object]]:
     gate = mode in {'pr', 'release'}
-    exempt = _docs_micro_exempt(route, files)
+    exempt = bool(route and (route.get('light_diff') or {}).get('admitted')) or _docs_micro_exempt(route, files)
     selected = {
         rel for rel in files
         if rel.startswith('engineering/changes/') and rel.endswith('/change-spec.yaml')
@@ -2572,7 +2572,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     active_profiles = profiles or (route.get('quality_profiles', ['base']) if route else ['base'])
     report.update(tree_fingerprint=checked_fingerprint, route_id=route.get('route_id') if route else None,
                   profiles=active_profiles)
-    git_ranges = _git_range_selection(root, route, mode)
+    git_ranges = _git_range_selection(root, route, 'pr' if mode == 'fast' and route and route.get('delivery_lane') == 'light' else mode)
     files, changed_file_inventory = _changed_file_inventory(
         root,
         route,
@@ -2595,6 +2595,23 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             state=state,
         )
 
+    # Admission precedes package checks: the prompt lane is provisional until source is measured.
+    diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
+    if route and (route.get('delivery_lane') == 'light' or route.get('light_lane_candidate') or 'light_diff' in route):
+        from .light_lane import inspect_light_diff
+        from .router import escalate_route
+        light = inspect_light_diff(root, sorted({item.comparison_base_sha for item in git_ranges.bases}),
+            risk=str(diff_metadata.get('effective_risk', 'high')),
+            complete=diff_metadata.get('status') == 'computed' and not diff_metadata.get('gaps') and not git_ranges.findings)
+        if light['admitted']:
+            route = {**route, 'delivery_lane': 'light', 'light_diff': light, 'light_lane_candidate': True,
+                     'review_agents': ['code_reviewer'], 'required_evidence': ['verification', 'code_review']}
+        else:
+            full = escalate_route({**route, 'delivery_lane': 'light'}, str(diff_metadata.get('effective_risk', route.get('risk', 'low'))), root, force_full=True)
+            route = {**route, 'delivery_lane': 'full', 'light_diff': light, 'light_lane_candidate': True,
+                     'review_agents': full['review_agents'], 'required_evidence': full['required_evidence']}
+        update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence')})
+        report['light_diff'] = light
     spec_check, spec_metadata = _change_specs(root, files, route, mode)
     report['spec'] = spec_metadata
     cancellation.check()
@@ -2678,7 +2695,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     results = state.results
     state.stage = 'diff-risk'
     cancellation.check()
-    diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
+    if mode == 'fast' and route and route.get('light_lane_candidate') and not (route.get('light_diff') or {}).get('admitted'):
+        dispatch.add(CheckResult('light-lane', 'fail', 'Measured diff requires the full PR gate and review floor'))
     dispatch.add(diff_check)
     report['diff_risk'] = diff_metadata
     state.stage = 'cost-guard'

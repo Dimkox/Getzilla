@@ -16,7 +16,7 @@ import json
 import os
 import signal
 
-from getzilla.util import find_root
+from getzilla.util import find_root, dump_json, git_head
 from getzilla.python_test_runner import RunCancelled, RunnerError, _cancellation
 from getzilla.verification import CheckResult, VerificationCancelled, _record_verification_receipt, verify, verify_named_tests
 from getzilla.verification_scope import FORCE_FULL_VARIABLE
@@ -60,6 +60,9 @@ except VerificationCancelled as exc:
 
 
 def _emit_report():
+    report["git_head"] = git_head(root)
+    report["ci_run_id"] = os.environ.get("GITHUB_RUN_ID")
+    dump_json(root / ".getzilla/runtime/evidence/verification.json", report)
     if args.json:
         print(json.dumps(report, ensure_ascii=True, indent=2))
     else:

@@ -175,7 +175,8 @@ class CliTests(unittest.TestCase):
             set_active_change(root, {'change_id': package.name, 'path': package.relative_to(root).as_posix()})
             proc = self.run_cli(root, '--attach')
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            evidence = json.loads((package / 'evidence/startup-capacity.json').read_text())
+            self.assertFalse((package / 'evidence/startup-capacity.json').exists())
+            evidence = json.loads((root / '.getzilla/runtime/changes' / package.name / 'evidence/startup-capacity.json').read_text())
             self.assertEqual(evidence['change_id'], package.name)
 
 

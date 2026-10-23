@@ -243,6 +243,7 @@ class _QueueProvenanceResult(NamedTuple):
     reason: str
     signals: tuple[str, ...]
     paths: tuple[str, ...] = ()
+    limits: tuple[tuple[str, str, str], ...] = ()
 
 
 class _QueueAdapterResolution(NamedTuple):
@@ -2422,9 +2423,11 @@ def _new_queue_sources(
     applicable: list[str] = []
     unsupported: list[str] = []
     changed_signals: set[str] = set()
+    limits: list[tuple[str, str, str]] = []
     head_cache = _queue_module_inventory(root, diff, "head", source_roots)
     base_cache = _queue_module_inventory(root, diff, "base", source_roots)
     for path in _python_paths(diff):
+        side = "head"
         try:
             current_package = _module_package(path, source_roots)
             head = _queue_signals(
@@ -2436,6 +2439,7 @@ def _new_queue_sources(
                 current_package,
                 source_roots,
             )
+            side = "base"
             base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
@@ -2459,8 +2463,11 @@ def _new_queue_sources(
                 else:
                     applicable.append(path)
         except ArchitectureError as exc:
-            unsupported.append(path)
-            changed_signals.add(f"{path}:unsupported:{exc.code}")
+            if exc.code == "limit":
+                limits.append((path, side, str(exc)))
+            else:
+                unsupported.append(path)
+                changed_signals.add(f"{path}:unsupported:{exc.code}")
         except (SyntaxError, UnicodeDecodeError):
             value = read_diff_file(root, diff, path, "head") or b""
             if re.search(
@@ -2469,12 +2476,13 @@ def _new_queue_sources(
             ):
                 unsupported.append(path)
                 changed_signals.add(f"{path}:unsupported:syntax")
-    if unsupported:
+    if unsupported or limits:
         return _QueueProvenanceResult(
             "unsupported",
-            "queue_provenance_unresolved",
+            "analysis_limit_exceeded" if limits else "queue_provenance_unresolved",
             tuple(sorted(changed_signals)),
             tuple(sorted(set((*applicable, *unsupported)))),
+            tuple(sorted(limits)),
         )
     if applicable:
         return _QueueProvenanceResult(
@@ -2496,6 +2504,16 @@ def _background_jobs(
     rules = snapshot.rules["background_job_policies"]
     predicate = "declared background edges and exact changed-source queue signals are governed"
     source_scope = queue_provenance.paths
+    if queue_provenance.limits:
+        return _result(
+            "background_job", status="unsupported",
+            rules=(rule["id"] for rule in rules),
+            findings=(f"analysis limit exceeded ({side}): {path}: {message}"
+                      for path, side, message in queue_provenance.limits),
+            predicate=predicate,
+            scope=(*source_scope, *(item[0] for item in queue_provenance.limits)),
+            reason="analysis_limit_exceeded",
+        )
     if not rules:
         if source_scope:
             return _result(
@@ -2743,7 +2761,7 @@ def _risk(
     if pre_risk not in RISK_ORDER:
         raise ArchitectureError("pre_risk must be green, yellow, or red", code="risk")
     triggers = set(_risk_triggers(snapshot, diff))
-    if queue_provenance.state != "not_queue":
+    if queue_provenance.signals:
         triggers.add("new_queue")
     if _new_network_client(root, snapshot, diff, python):
         triggers.add("new_network_client")

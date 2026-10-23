@@ -104,6 +104,24 @@ class ReviewSourceTests(unittest.TestCase):
         with self.assertRaises((RuntimeError, ValueError)):
             self.record()
 
+    def test_ignored_runtime_review_binds_exact_source_and_rechecks_content(self):
+        self.report = '.getzilla/runtime/reviews/test/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Independent runtime review.\n')
+        receipt = json.loads(self.record().read_text())
+        self.assertEqual(receipt['review_source']['contract'], 'getzilla.review-source/runtime-v1')
+        self.assertEqual(validate_evidence(self.root, self.route), [])
+        (self.root / self.report).write_text('Altered report.\n')
+        self.assertTrue(validate_evidence(self.root, self.route))
+
+    def test_runtime_review_rejects_later_commit_even_when_tree_matches(self):
+        self.report = '.getzilla/runtime/reviews/test/code-review.md'
+        (self.root / self.report).parent.mkdir(parents=True)
+        (self.root / self.report).write_text('Review.\n')
+        self.git('commit', '--allow-empty', '-qm', 'later')
+        with self.assertRaisesRegex(RuntimeError, 'exact reviewed commit'):
+            self.record()
+
     def test_pass_requires_reviewed_identity(self):
         with self.assertRaisesRegex((ValueError, RuntimeError), 'reviewed'):
             write_receipt(self.root, 'code_review', 'pass', self.report)

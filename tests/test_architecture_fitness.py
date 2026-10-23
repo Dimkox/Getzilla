@@ -2256,7 +2256,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     "unsupported",
                 )
                 self.assertEqual(report.status, "fail")
-                self.assertIn("new_queue", report.triggers)
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertEqual(self._results(report)["background_job"].applicability.reason_code, "analysis_limit_exceeded")
 
         repo = GitArchitectureRepo(self)
         repo.model(system, rules)
@@ -2321,6 +2322,30 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(report.status, "pass")
         self.assertNotIn("new_queue", report.triggers)
 
+    def test_analysis_limit_and_real_queue_are_reported_separately(self) -> None:
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        repo.write_text("adapters/one.py", "from adapters.two import app\n")
+        repo.write_text("adapters/two.py", "import celery\napp = celery.Celery('jobs')\n")
+        repo.write_text("src/limited.py", "from adapters.one import app\n")
+        base = repo.commit("base")
+        repo.write_text("src/limited.py", "from adapters.one import app\n@app.task\ndef run(): pass\n")
+        head = repo.commit("limited")
+        with patch.object(FIT, "MAX_QUEUE_ADAPTER_MODULES", 1):
+            report = self._evaluate(repo, base, head)
+        result = self._results(report)["background_job"]
+        self.assertEqual(report.status, "fail")
+        self.assertEqual(result.applicability.reason_code, "analysis_limit_exceeded")
+        self.assertTrue(any("analysis limit exceeded" in item and "head" in item for item in result.findings))
+        self.assertNotIn("new_queue", report.triggers)
+        repo.write_text("src/actual.py", "import celery\napp = celery.Celery('jobs')\n@app.task\ndef run(): pass\n")
+        head = repo.commit("real queue too")
+        with patch.object(FIT, "MAX_QUEUE_ADAPTER_MODULES", 1):
+            report = self._evaluate(repo, base, head)
+        self.assertEqual(report.status, "fail")
+        self.assertIn("new_queue", report.triggers)
+        self.assertEqual(self._results(report)["background_job"].applicability.reason_code, "analysis_limit_exceeded")
+
     def test_local_queue_adapter_dependency_chains_do_not_silently_truncate(self) -> None:
         system = _system()
         system["nodes"][0]["type"] = "worker"
@@ -2371,7 +2396,9 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(result.status, "unsupported")
                 self.assertEqual(report.status, "fail")
                 self.assertIn("src/jobs.py", result.applicability.scanned_scope)
-                self.assertIn("new_queue", report.triggers)
+                self.assertEqual("new_queue" in report.triggers, label == "below")
+                if label != "below":
+                    self.assertEqual(result.applicability.reason_code, "analysis_limit_exceeded")
                 self.assertGreaterEqual(
                     FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
                 )
@@ -2426,7 +2453,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 "app",
                 "unsupported",
                 "fail",
-                True,
+                False,
             ),
             (
                 "queue-adjacent module nonqueue export",
@@ -3163,7 +3190,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 with patch.object(FIT, "read_diff_files", wraps=real_batch) as batches:
                     report = self._evaluate(repo, base, head, pre_risk="yellow")
                 self.assertEqual(self._results(report)["background_job"].status, "unsupported")
-                self.assertIn("new_queue", report.triggers)
+                self.assertNotIn("new_queue", report.triggers)
+                self.assertEqual(self._results(report)["background_job"].applicability.reason_code, "analysis_limit_exceeded")
                 self.assertTrue(all(len(call.args[2]) <= FIT.MAX_QUEUE_ADAPTER_MODULES for call in batches.call_args_list))
 
     def test_local_module_and_wildcard_imports_resolve_queue_exports(self) -> None:
@@ -3304,7 +3332,9 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     "unsupported" if expected_queue else "not_applicable",
                 )
                 self.assertEqual(report.status, "fail" if expected_queue else "pass")
-                self.assertEqual("new_queue" in report.triggers, expected_queue)
+                self.assertEqual("new_queue" in report.triggers, label == "missing below")
+                if expected_queue and label != "missing below":
+                    self.assertEqual(result.applicability.reason_code, "analysis_limit_exceeded")
                 if expected_queue:
                     self.assertIn(
                         "src/project/jobs.py", result.applicability.scanned_scope

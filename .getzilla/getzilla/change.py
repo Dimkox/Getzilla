@@ -9,6 +9,7 @@ from .package_status import collect_worktree, read_package_file
 from .state import get_active_route, set_active_change, update_route
 from .spec import dump_canonical_spec, generate_spec
 from .util import atomic_write_text, dump_json, now_utc
+from .workflow_storage import change_directory
 
 GOVERNANCE_AUTHORITY_NOTICE = (
     "Canonical governance JSON under `governance/` remains separately reviewed "
@@ -53,12 +54,11 @@ def _checkpoint(root: Path, route: dict[str, Any], change_id: str, kind: str) ->
     }
 
 
-def _mirror_checkpoints(path: Path, state: dict[str, Any]) -> None:
+def _mirror_checkpoints(root: Path, path: Path, state: dict[str, Any]) -> None:
     """State is canonical; a failed README write is explicit and retryable."""
     if not state.get('checkpoint_mirror_pending'):
         return
     readme = path / 'evidence/README.md'
-    root = path.parents[2]
     content = read_package_file(root, readme.relative_to(root).as_posix()).decode('utf-8', 'strict')
     for checkpoint in state.get('checkpoints', []):
         marker = f"<!-- checkpoint:{checkpoint['kind']} -->"
@@ -81,11 +81,11 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
         raise RuntimeError('No active route. Submit a development task or run scripts/getzilla_route.py first.')
     title = title or route['task']
     change_id = f"{route['created_at'][:10].replace('-', '')}-{public_change_slug(title)}-{route['route_id'][:6]}"
-    path = root / 'engineering/changes' / change_id
+    path = change_directory(root, change_id, writable=True)
     if path.exists():
         state = json.loads((path / 'state.json').read_text(encoding='utf-8'))
         set_active_change(root, {'change_id': change_id, 'path': path.relative_to(root).as_posix()})
-        _mirror_checkpoints(path, state)
+        _mirror_checkpoints(root, path, state)
         return state
     template = root / '.getzilla/templates/change'
     shutil.copytree(template, path)
@@ -144,18 +144,20 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
     dump_json(path / 'state.json', state)
     set_active_change(root, {'change_id': change_id, 'path': path.relative_to(root).as_posix()})
     update_route(root, change_id=change_id)
-    _mirror_checkpoints(path, state)
+    _mirror_checkpoints(root, path, state)
     return state
 
 
 def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str, Any]:
-    path = root / 'engineering/changes' / change_id / 'state.json'
+    package = change_directory(root, change_id, writable=True)
+    path = package / 'state.json'
     if not path.is_file():
         raise FileNotFoundError(path)
     state = json.loads(path.read_text(encoding='utf-8'))
+    set_active_change(root, {'change_id': change_id, 'path': package.relative_to(root).as_posix()})
     current = state['status']
     if target == current and state.get('checkpoint_mirror_pending'):
-        _mirror_checkpoints(path.parent, state)
+        _mirror_checkpoints(root, path.parent, state)
         update_route(root, status=target)
         return state
     if target not in TRANSITIONS.get(current, set()):
@@ -177,6 +179,6 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
         entry['open_human_gates'] = open_gates  # flags: shown, never enforced
     state.setdefault('history', []).append(entry)
     dump_json(path, state)
-    _mirror_checkpoints(path.parent, state)
+    _mirror_checkpoints(root, path.parent, state)
     update_route(root, status=target)
     return state

@@ -34,14 +34,14 @@ ARTIFACTS = _load_artifacts()
 
 
 def _manifest(root: Path, sources: list[dict[str, str]]) -> Path:
-    path = root / "engineering/changes/change/workflow/manifest.json"
+    path = root / ".getzilla/runtime/changes/change/workflow/manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema_version": 1, "sources": sources}), encoding="utf-8")
     return path
 
 
 def _native_spec(root: Path) -> None:
-    path = root / "engineering/changes/change/change-spec.yaml"
+    path = root / ".getzilla/runtime/changes/change/change-spec.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -345,7 +345,7 @@ class NativeStatusTests(unittest.TestCase):
                 encoding="utf-8",
             )
             _native_spec(root)
-            native = root / "engineering/changes/change/tasks.md"
+            native = root / ".getzilla/runtime/changes/change/tasks.md"
             native.write_text("- [x] T0 implemented\n", encoding="utf-8")
             bundle = ARTIFACTS.load_source_manifest(
                 root,
@@ -386,7 +386,7 @@ class NativeStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle = _bundle(root, [_task(key="t0")])
-            tasks = root / "engineering/changes/change/tasks.md"
+            tasks = root / ".getzilla/runtime/changes/change/tasks.md"
             tasks.write_text("- [x] T0 implemented\n", encoding="utf-8")
             graph = ARTIFACTS.compile_task_graph(root, "change", bundle, _route())
             report = ARTIFACTS.converge(
@@ -525,7 +525,7 @@ class CanonicalReceiptTests(unittest.TestCase):
 
 class SerializedCasTests(unittest.TestCase):
     def _workflow(self, root: Path) -> Path:
-        path = root / "engineering/changes/change/workflow"
+        path = root / ".getzilla/runtime/changes/change/workflow"
         path.mkdir(parents=True)
         return path
 

@@ -97,6 +97,49 @@ class ApprovalResourceTests(unittest.TestCase):
             )
             self.assertFalse(allowed)
 
+    def test_edit_grant_survives_only_commits_inside_exact_file_set_on_same_branch(self) -> None:
+        with github_project() as root:
+            grant = add_approval(root, 'protected-path', 'edit approved files', 5,
+                actions=['protected-path-write'], resources=['AGENTS.md'])
+            def valid():
+                return has_valid_approval(root, 'protected-path', action='protected-path-write', resource='AGENTS.md')
+            for index in range(2):
+                with (root / 'AGENTS.md').open('a') as handle:
+                    handle.write(f'\nApproved edit {index}\n')
+                subprocess.run(['git', 'add', 'AGENTS.md'], cwd=root, check=True)
+                subprocess.run(['git', 'commit', '-qm', 'approved edit'], cwd=root, check=True)
+                self.assertTrue(valid())
+            subprocess.run(['git', 'checkout', '-qb', 'different-branch'], cwd=root, check=True)
+            self.assertFalse(valid())
+            subprocess.run(['git', 'checkout', '-q', grant['git_branch'].removeprefix('refs/heads/')], cwd=root, check=True)
+            self.assertTrue(valid())
+            (root / 'outside.txt').write_text('outside approved file set')
+            subprocess.run(['git', 'add', 'outside.txt'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'outside edit'], cwd=root, check=True)
+            self.assertFalse(valid())
+
+    def test_protected_grant_fails_closed_when_git_inventory_is_unavailable(self) -> None:
+        from unittest.mock import patch
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 5,
+                actions=['protected-path-write'], resources=['AGENTS.md'])
+            with patch('getzilla.util.changed_file_statuses', return_value=None):
+                self.assertFalse(has_valid_approval(root, 'protected-path',
+                    action='protected-path-write', resource='AGENTS.md'))
+                with self.assertRaisesRegex(ValueError, 'inventory'):
+                    add_approval(root, 'protected-path', 'one file', 5,
+                        actions=['protected-path-write'], resources=['AGENTS.md'])
+
+    def test_cli_refuses_detached_protected_grant_without_traceback(self) -> None:
+        with github_project() as root:
+            subprocess.run(['git', 'checkout', '-q', '--detach'], cwd=root, check=True)
+            proc = subprocess.run([sys.executable, str(ROOT / 'scripts/getzilla_approve.py'),
+                'protected-path', '--action', 'protected-path-write', '--resource', 'AGENTS.md',
+                '--reason', 'edit'], cwd=root, text=True, capture_output=True, check=False)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn('named Git branch', proc.stderr)
+            self.assertNotIn('Traceback', proc.stderr)
+
     def test_cli_refuses_wildcard_resource_without_traceback(self) -> None:
         with github_project() as root:
             proc = subprocess.run(

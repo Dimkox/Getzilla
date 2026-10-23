@@ -44,7 +44,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
     def _project(self, tmp: str) -> tuple[Path, str]:
         root = Path(tmp)
         change_id = "change"
-        change = root / "engineering/changes" / change_id
+        change = root / ".getzilla/runtime/changes" / change_id
         workflow = change / "workflow"
         workflow.mkdir(parents=True)
         source = root / ".specify/specs/tasks.md"
@@ -90,7 +90,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (root / ".getzilla/runtime").mkdir(parents=True)
+        (root / ".getzilla/runtime").mkdir(parents=True, exist_ok=True)
         (root / ".getzilla/runtime/active-route.json").write_text(
             json.dumps(
                 {
@@ -103,7 +103,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / ".getzilla/runtime/active-change.json").write_text(
-            json.dumps({"change_id": change_id, "path": f"engineering/changes/{change_id}"}), encoding="utf-8"
+            json.dumps({"change_id": change_id, "path": f".getzilla/runtime/changes/{change_id}"}), encoding="utf-8"
         )
         return root, change_id
 
@@ -121,7 +121,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
     def test_compile_is_read_only_by_default_and_cas_write_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)
-            target = root / f"engineering/changes/{change_id}/workflow/task-graph.json"
+            target = root / f".getzilla/runtime/changes/{change_id}/workflow/task-graph.json"
             code, result = self._run(root, ["compile", "--change-id", change_id])
             self.assertEqual(code, 0)
             self.assertFalse(target.exists())
@@ -185,7 +185,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             root, change_id = self._project(tmp)
             source = root / ".specify/specs/tasks.md"
             before = source.read_bytes()
-            target = root / f"engineering/changes/{change_id}/workflow/exports/spec-kit.md"
+            target = root / f".getzilla/runtime/changes/{change_id}/workflow/exports/spec-kit.md"
             code, _ = self._run(
                 root, ["export", "spec-kit", "--change-id", change_id, "--write", "--expected-digest", "0" * 64]
             )
@@ -198,7 +198,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             root, change_id = self._project(tmp)
             outside = root / "outside"
             outside.mkdir()
-            exports = root / f"engineering/changes/{change_id}/workflow/exports"
+            exports = root / f".getzilla/runtime/changes/{change_id}/workflow/exports"
             exports.symlink_to(outside, target_is_directory=True)
             code, _ = self._run(
                 root, ["export", "spec-kit", "--change-id", change_id, "--write", "--expected-digest", "0" * 64]
@@ -209,7 +209,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
     def test_cas_rejects_symlink_workflow_directory_without_external_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)
-            workflow = root / f"engineering/changes/{change_id}/workflow"
+            workflow = root / f".getzilla/runtime/changes/{change_id}/workflow"
             workflow.rename(workflow.with_name("workflow-original"))
             outside = root / "outside"
             outside.mkdir()
@@ -224,7 +224,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             root, change_id = self._project(tmp)
             self._run(root, ["compile", "--change-id", change_id, "--write", "--expected-digest", "0" * 64])
             self._run(root, ["converge", "--change-id", change_id, "--write", "--expected-digest", "0" * 64])
-            report = root / f"engineering/changes/{change_id}/workflow/convergence-report.json"
+            report = root / f".getzilla/runtime/changes/{change_id}/workflow/convergence-report.json"
             data = json.loads(report.read_text())
             data["report_digest"] = "f" * 64
             report.write_text(json.dumps(data), encoding="utf-8")

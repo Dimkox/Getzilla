@@ -11,6 +11,7 @@ from typing import Any
 from .architecture_diff import _exact_commit, _git, _git_blob
 from .architecture import ArchitectureError, _read_regular_bytes
 from .state import get_active_route
+from .workflow_storage import valid_package_path
 
 
 REVIEW_REPORT_NAMES = frozenset({
@@ -54,13 +55,13 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
             raise
         selected_present = False
         active = None
-    prefixes = {'engineering/reviews/'}
+    prefixes = {'engineering/reviews/', f'.getzilla/runtime/reviews/{route_id}/'}
     if selected_present:
         if not isinstance(active, dict):
             raise ValueError('selected active change must be a valid package record')
         package = _safe_path(active.get('path'))
         change_id = active.get('change_id')
-        if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id) or package != 'engineering/changes/' + change_id:
+        if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id) or not valid_package_path(package, change_id):
             raise ValueError('selected active change must be a valid package record')
         prefixes.add(package + '/evidence/')
     elif route.get('change_id') or not (
@@ -82,6 +83,17 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
         info = (root / path).lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o111:
             raise RuntimeError('review report must be a non-executable regular file')
+        if path.startswith('.getzilla/runtime/'):
+            if head != reviewed_commit:
+                raise RuntimeError('runtime report requires the exact reviewed commit')
+            if (_git(root, ['check-ignore', '--quiet', '--', path], allow_failure=True) is None
+                    or _git(root, ['ls-files', '-z', '--', path])):
+                raise RuntimeError('runtime review report must be ignored and untracked')
+            content = _read_regular_bytes(root, path, label='review report')
+            if len(content) > 1_048_576:
+                raise RuntimeError('review report is too large')
+            content.decode('utf-8', 'strict')
+            return content
         entries = (_git(root, ['ls-tree', '-z', commit, '--', path]) or b'').split(b'\x00')
         if len(entries) != 2 or not entries[0].startswith(b'100644 blob ') or entries[0].split(b'\t', 1)[-1] != path.encode('utf-8'):
             raise RuntimeError('review report Git entry is not a regular Markdown file')
@@ -93,6 +105,14 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
 
     report = _safe_path(report)
     report_bytes = regular_report(report, head)
+    if report.startswith('.getzilla/runtime/'):
+        tree = (_git(root, ['rev-parse', head + '^{tree}']) or b'').decode('ascii').strip()
+        return {'contract': 'getzilla.review-source/runtime-v1', 'route_id': route_id,
+                'change_id': active.get('change_id') if isinstance(active, dict) else None,
+                'report_namespace': report.rsplit('/', 1)[0], 'report_paths': [report],
+                'reviewed_commit': reviewed_commit, 'reviewed_tree': tree,
+                'frozen_commit': head, 'frozen_tree': tree,
+                'report_sha256': hashlib.sha256(report_bytes).hexdigest()}
     raw = _git(root, ['diff', '--name-status', '-z', '--no-renames', reviewed_commit, head, '--']) or b''
     fields = raw.split(b'\x00')
     if fields[-1] != b'' or (len(fields) - 1) % 2:

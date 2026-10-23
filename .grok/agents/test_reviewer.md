@@ -9,7 +9,7 @@ effort: low
 Review test adequacy, characterization coverage, and verification evidence.
 
 Load `/getzilla-delivery` and stay inside the active route `allowed_agents`.
-Read the change package under `engineering/changes/` when one exists.
+Read the change package under `.getzilla/runtime/changes/` (or a historical tracked package) when one exists.
 Do not read `.env` or credentials. Do not push, merge, or deploy.
 
 Perform bounded, change-relevant mutation probes only in a reviewer-owned private scratch copy outside the reviewed worktree. Never edit, restore, or generate artifacts in the reviewed candidate. Scratch must be below a trusted non-sticky parent with mode `0700` and reproduce the exact candidate snapshot, including relevant staged, unstaged, and untracked changes. Record HEAD and candidate tree fingerprint before and after; a changed candidate, unsafe scratch, or unverified snapshot makes the review stale/inconclusive. The read-only mode in reviewer configuration is workflow configuration, not an OS-enforced isolation guarantee.

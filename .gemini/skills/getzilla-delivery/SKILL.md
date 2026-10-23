@@ -1,171 +1,46 @@
 ---
 name: getzilla-delivery
-description: Use for every routed software-development task. Reads the active route, dispatches only selected agents, enforces one write owner, and closes the task with fingerprint-bound verification and independent review evidence.
+description: Use for routed software-development tasks. Keep one writer, independent review, exact-source evidence and the external merge gate.
 ---
 
-# Getzilla Delivery Controller
+# Getzilla delivery
 
-## Inputs
-
-Read `.getzilla/runtime/active-route.json`. It contains:
-
-- intent, domains, risk, and complexity;
-- required workflow skills;
-- parallel read-only analysis agents;
-- exactly one write agent or no write agent;
-- independent review agents;
-- quality profiles, human gates, and evidence kinds.
-
-Do not substitute your own generic workflow when a route exists.
+Read `.getzilla/runtime/active-route.json` and load its workflow skills. Use only selected agents. Keep exactly one writer per isolated task; review fixes return to that writer. Measure startup capacity before dispatch and bound concurrent workers to that capacity. Dispatch all independent selected analyses in one wave, then synthesize their findings before implementation. Give each analysis the route ID, canonical root, selected package, narrow question and runtime report destination.
 
 ## Light lane
 
-When the route says `delivery_lane: light` (low risk, micro or standard, no sensitive task
-domain, nothing paid or in production), the steps below replace sections 1-7. Evidence and an
-independent review stay; the ceremony does not.
+A route with `delivery_lane: light` is provisional. The verifier admits it only from a complete, clean Git comparison: at most 50 added plus deleted code lines, excluding ordinary tests and non-executable Markdown/RST/text. It checks sensitive paths before these exclusions. Control files, hooks, runtime code, Trust CI, migrations, dependencies, locks and CI require the full lane. Binary, rename, submodule, unknown and incomplete inventories also require the full lane. Medium/high risk or a larger diff restores the full review floor.
 
-1. Run `python scripts/getzilla_status.py` and load the route's `workflow_skills`. No change
-   package: the brief, the acceptance criteria and the test plan live in the task thread.
-2. Dispatch the single analysis agent the route lists, if any.
-3. The write agent adds a failing test, makes the smallest change and runs the focused tests.
-4. Commit, then dispatch the one route reviewer. It reviews the committed diff and its tests
-   together and saves `code-review.md` under `engineering/reviews/`. Mutation probes in a
-   scratch copy are optional: use them only when a test is weak or a claim is untested.
-5. Run `python3 scripts/getzilla_verify.py --mode fast` on the committed candidate and open the
-   PR. CI runs the full suite and is the merge gate.
+For an admitted small change, keep scope and acceptance in the task or PR. Do not create a change package. Add a failing regression, implement the change, and run focused checks. Commit source once. Have one independent code reviewer inspect code and tests. Save the report to `.getzilla/runtime/reviews/<route-id>/code-review.md`. Run `python3 scripts/getzilla_verify.py --mode fast`; the measured selector must admit the change. CI retains its full suite and exact-head merge gate.
 
-The lane is a starting point, not a downgrade. Switch to the full controller when the diff
-touches `.getzilla/**`, hooks, Trust CI, release or packaging, a migration, secrets or a paid
-call, or when verification escalates the route's risk.
+## Full lane
 
-## 1. Establish the run
+1. Run `python3 scripts/getzilla_change.py start`. New packages live in `.getzilla/runtime/changes/<id>/` and are ignored by Git. Existing tracked packages remain readable history; commands copy them into runtime before new writes.
+2. Record scope, acceptance, design, tests, rollout and rollback in the package. Dispatch independent selected analyses and save concise findings in `<package>/evidence/analysis-<agent>.md`. When a named human gate lacks approval, present the concrete decision and stop before its dependent action. Existing explicit owner decisions remain valid within their scope. Record the scoped/approved lifecycle transitions with `getzilla_change.py transition`; ordinary tasks with no named gate proceed after the bounded design.
+3. The selected writer adds a failing test, implements the bounded change, and runs focused checks. Keep exact commands and outcomes in runtime evidence.
+4. Commit the source candidate. Dispatch all selected independent reviewers against that exact HEAD/tree. Reviewers return reports out-of-band and do not modify the candidate. Save reports in the runtime package evidence directory or `.getzilla/runtime/reviews/<route-id>/`.
+5. Run one final `python3 scripts/getzilla_verify.py --mode pr`, or the existing focused landing mode when its closed inventory qualifies. Do not shorten the comparison range. Record skips as skips. No report-only or workflow-state freeze commit is needed.
+6. After the gate passes, record each passing report with `python3 scripts/getzilla_review.py <kind> --status pass --report <runtime-report> --reviewed-commit <exact-full-sha>`. Runtime reports must be ignored, regular, non-executable UTF-8 Markdown using the conventional review names. The receipt binds route/change, exact reviewed HEAD/tree and content hash; consumption rechecks them. Any source commit or report-content change stales the receipt.
+7. Run `python3 scripts/getzilla_status.py`; completion requires zero evidence gaps. Runtime state may transition to ready without changing source. Deliver through a PR with the required external exact-head checks. Local evidence never replaces merge authority, branch protection or human security approvals.
 
-1. Run `python scripts/getzilla_status.py`.
-2. Load every skill named in `workflow_skills`.
-3. For `standard` and `high-risk` work, create a durable change package:
+## Evidence and handoff
 
-```bash
-python scripts/getzilla_change.py start
-```
+Store state, startup snapshots, analyses, reviews and verification output outside Git. At most one concise summary may be tracked per change. Keep durable product contracts, canonical docs and source in Git. Export portable local evidence with `python3 scripts/getzilla_evidence.py --output .getzilla/runtime/exports/<change-id>.zip`; attach it separately to a PR or publish the concise findings in PR comments. The bounded archive contains source identities and hashes, never approval grants or keys. Importing an archive does not activate receipts.
 
-4. Use the change package for scope, requirements, architecture, tests, decisions, release, rollback, and human approval evidence.
+Public CI exports its own actual run logs, startup snapshot, verification report when produced, state and exact source provenance. It retains artifacts for 30 days. A fresh runner does not have workstation analyses or reviews and labels them unavailable. Do not claim they were rerun or uploaded by CI.
 
-Micro changes may stay in chat if they are genuinely bounded, but still require verification and selected reviews.
+Historical tracked review receipts retain their old report-only-delta validation. Do not rewrite historical evidence or pinned fixtures to adopt the new layout.
 
-## 2. Parallel analysis
+## Review and authority
 
-Dispatch all `analysis_agents` whose work is independent. Give each agent:
+Review security, duplicate external writes/idempotency and tests. Keep reports short. Code and test reviewers use bounded, change-relevant mutation probes; reproduce the exact candidate snapshot in scratch. Unsafe scratch, a mismatched snapshot or modified candidate makes the review inconclusive/stale. A failed check or finding returns to the selected writer. Run useful mutation probes in reviewer-owned private scratch under the canonical root's `.getzilla/runtime`, outside the reviewed candidate, with a trusted non-sticky parent and mode 0700. Record reviewed HEAD/tree before and after, `reviewed-tree-modified: no`, commands, outcomes and unexecuted claims. Inconclusive probes are not passes.
 
-- route ID and task;
-- exact repository root;
-- active change path when available;
-- one narrow question;
-- a report destination under `<change>/evidence/analysis-<agent>.md`.
+Protected edit grants name exact files and bind the branch, repository, route, change and TTL. Approved-file commits retain the grant; other changes, another branch or expired TTL invalidate it. Production/external grants retain exact HEAD/tree binding and separate authority. Follow conditional AGENTS L5 for merge, tag and release; `getzilla_deploy.py` remains prepare-only without separate authorization. If review or verification cannot run, record NOT_RUN or BLOCKED and its reason. Never fabricate approvals, independent reports or successful receipts. An explicit owner override of a local rule records the rule, scope, reason, deferred checks and follow-up; label the result UNVERIFIED until those checks run. It never bypasses external exact-head checks, branch protection or human private-key authority.
 
-Wait for all reports. Synthesize facts, conflicts, and unresolved decisions. Do not ask the user for facts recoverable from the repository.
+After a tool denial, do not repeat it unchanged. One semantic correction is allowed. A second denial for the same objective is a blocker; report the named action and reason. Request a protected-path grant only for exact targets identified by the hook.
 
-Dispatch every `analysis_agents` entry in one wave. The route already caps that list (default 10); do not spawn extra names to fill the cap. Keep exactly one write owner.
-
-## 3. Scope and design gate
-
-Write or update the change brief, acceptance criteria, architecture, risk, and test plan.
-
-When `human_gates` contains `scope_and_design_approval`, present the decision and stop before implementation. For ordinary low/medium-risk tasks without a named gate, proceed after recording a bounded design.
-
-Transition durable changes:
-
-```bash
-python scripts/getzilla_change.py transition <change-id> scoped --reason "scope and acceptance criteria written"
-python scripts/getzilla_change.py transition <change-id> approved --reason "approved or no named human gate"
-```
-
-## 4. Single-owner implementation
-
-Dispatch only the route's `write_agent`.
-
-The write agent must:
-
-1. Read the change package and analysis reports.
-2. Add a failing test or characterization test.
-3. Implement the smallest coherent vertical change.
-4. Run focused checks.
-5. Return changed files, commands, results, residual risk, rollout, and rollback notes.
-
-Do not spawn a second write agent for the same route. Review fixes return to the same write owner.
+Reviewers return the complete report to the coordinator out-of-band. After all reviews finish, save reports outside Git and run one final qualifying gate. Use one canonical project root. Put private scratch outside the reviewed candidate and outside the reviewed worktree, beneath that root's `.getzilla/runtime`. Record HEAD and tree fingerprint before/after, scratch path, `reviewed-tree-modified: no`, exact commands and observed output. Report killed, survived and inconclusive mutants and all unexecuted claims. Read-only configuration is not an OS-enforced isolation boundary.
 
 ## Tool-denial circuit breaker
 
-1. Never repeat an identical denied invocation.
-2. One semantic rewrite is allowed: split a compound command, remove unnecessary temporary output, use a structured tool, or follow the exact denial guidance.
-3. If the rewritten invocation is denied for the same objective, mark that objective `BLOCKED`, stop dependent subagents, skip its verification and review work, and report the blocker.
-4. Request a protected-path grant only when the hook names at least one exact repository-relative protected target. An opaque denial requires explicit targets, not a speculative grant.
-5. Treat the hook's exact-repeat and same-objective fingerprints as authoritative within their active denial window; cosmetic command changes do not reset the objective.
-
-## 5. Bounded observations
-
-Delivery order: 1. bounded local checks; 2. independent reviews of one committed candidate; 3. save the complete review reports; 4. commit and freeze the candidate; 5. one final qualifying gate: `python3 scripts/getzilla_verify.py --mode pr`, or `--mode focused-static-seo-landing` for a positively classified landing-only inventory.
-
-Run change-relevant checks during implementation and repair. On a clean committed HEAD, a named smoke may use the contract's `--mode fast --no-record --test tests.test_module --budget 180` form. These observations create no verification receipt or scope admission; do not run a preliminary full qualifying gate before reviews.
-
-Record exact commands, comparison base/HEAD and outcomes. A failing check returns to the write owner. Do not manufacture an active route, shorten the comparison range or record passing evidence against a failing or stale tree.
-
-## 6. Independent review
-
-Dispatch all route `review_agents` in parallel. Each reviews the same committed candidate from its own perspective and records its commit and tree hash (`git rev-parse HEAD HEAD^{tree}`) and returns the complete report to the coordinator out-of-band; reviewers must not write into the candidate worktree.
-
-Code and test reviewers perform bounded, change-relevant mutation probes in a reviewer-owned private scratch copy outside the reviewed worktree. The candidate stays read-only: do not edit or restore it, or generate artifacts there. Scratch must be below a trusted non-sticky parent with mode `0700` and reproduce the exact candidate snapshot, including relevant staged, unstaged, and untracked changes. Record HEAD and candidate tree fingerprint before and after review; unsafe scratch, mismatched snapshot, or changed candidate makes the review inconclusive/stale. Read-only reviewer configuration and prompts are workflow requirements, not OS-enforced filesystem isolation.
-
-Reports list source identity, scratch path, literal `reviewed-tree-modified: no`, each claim probed, exact commands and concise observed output, and each mutant as killed/survived/inconclusive. List unexecuted claims and why; static claims without executable probes are unexecuted. Survivors are findings or explicit limitations; do not apply an unstated blanket mutation-score threshold. After all reviews finish, the coordinator persists the returned reports under the change evidence directory. Persist these reports before the final qualifying gate below; do not claim that an implementation-time observation qualifies the changed candidate.
-
-## 7. Final verification and receipts
-
-After all selected independent reports are complete and persisted, commit and freeze the candidate. The frozen candidate tree must equal the tree the reviewers saw except for the saved report files: before the final gate, `git diff --name-only <reviewed-commit> HEAD` lists only those reports; any other difference makes every review stale.
-
-First classify the final product changed-file inventory, then run exactly one final qualifying gate on that exact candidate using the measured CPU allocation. Never run the PR gate and then a second gate.
-
-- A positively established product change confined to `side-projects/seo-landings/**` plus one explicitly named focused landing test in one landing directory uses the focused contract, which is the default for that inventory:
-
-  ```bash
-  python3 scripts/getzilla_verify.py --mode focused-static-seo-landing
-  ```
-
-- Every other inventory uses the PR gate:
-
-  ```bash
-  python3 scripts/getzilla_verify.py --mode pr
-  ```
-
-The existing fail-closed selector, not a route label or the agent's assertion, determines admissible verification scope inside the run. Record the exact base/head, changed-path digest, profile/reason and all skipped checks. A skip is not a pass; historical component evidence is not fresh verification.
-
-The active `engineering/changes/<id>/` package is workflow evidence, not product scope. Mixed or unknown paths, multiple landing directories, missing/ambiguous tests, invalid/incomplete route or range inventory, and runtime, contracts, Trust CI, packages, architecture, workflow/configuration, SEO-skill or showcase changes require the PR path. This instruction creates no additional fast path or permission to downgrade scope.
-
-For every genuinely passing independent report, after the qualifying gate succeeds, record its exact evidence kind with fresh fingerprint-bound receipts that cover the persisted reports and final tree:
-
-```bash
-python scripts/getzilla_review.py code_review --status pass --report engineering/changes/<id>/evidence/code-review.md --reviewed-commit <exact-full-sha>
-python scripts/getzilla_review.py test_review --status pass --report engineering/changes/<id>/evidence/test-review.md --reviewed-commit <exact-full-sha>
-```
-
-Use `bitrix_review`, `security_review`, `data_review`, and `release_review` when requested. If review or verification cannot execute, record `NOT_RUN` or `BLOCKED` with the reason; do not fabricate a passing receipt or substitute self-review for an independent reviewer. Any change after review invalidates all receipts: repeat the independent reviews on the new tree, save the new reports, commit and freeze again, and run a new final gate. Never reuse evidence from another tree.
-
-## 8. Close
-
-Run `python scripts/getzilla_status.py`. Completion requires zero evidence gaps. For durable changes, freeze tracked state at `reviewing` before independent review; current receipts and exact-head gates qualify completion.
-
-Follow conditional AGENTS L5 for repository merge, tag and release. Record exact grants after green exact-head checks, independent review and resolved threads. Production mutation, deploy, external writes and security approvals need separate scoped authority. `python3 scripts/getzilla_deploy.py` remains prepare-only unless separately authorized.
-
-PASS review receipts require `--reviewed-commit <exact-full-sha>`. The CLI and core require a clean committed candidate and recheck ancestry plus a delta limited to non-executable regular Markdown files in `engineering/reviews/` or the valid active change evidence directory. Deleted, renamed, executable, symlinked and unknown-path reports do not qualify. Missing legacy or forged source bindings are evidence gaps. Failure observations need no reviewed identity.
-
-## Manual override
-
-An explicit owner override of a local workflow rule is acceptable. Record the exact rule, scope, reason, deferred checks and follow-up validation in the change package. Label the result UNVERIFIED until those checks run. Never create a fake PASS receipt, review or external attestation. This does not grant authority to bypass exact-head external checks, branch protection or the human private-key boundary.
-
-
-Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
-
-Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
-
-
-## Task workspace
-
-Use one canonical project root for the task. Put task-owned worktrees, private scratch, reports, archives and temporary outputs only under that root's `.getzilla/runtime`. Do not use home-level defaults or sibling project directories. Keep reviewer private scratch outside the reviewed candidate as a sibling beneath that runtime root. Use a trusted non-sticky parent and mode `0700`. Do not treat a nested worktree as a new canonical project root. Durable specs and final evidence remain in the tracked change package. This rule is workflow discipline, not OS isolation.
+Never repeat an identical denied invocation. One semantic rewrite is allowed. If that also fails, report the blocked objective and stop dependent work. An opaque denial requires explicit targets before requesting a protected-path grant.
