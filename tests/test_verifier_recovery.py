@@ -39,6 +39,8 @@ def routed_fixture():
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
         route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
         set_active_route(root, route)
+        from getzilla.review_plan import reconcile_route
+        route = reconcile_route(root)
         # Tool availability is unrelated to these deterministic boundary faults.
         previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
         try:
@@ -50,6 +52,18 @@ def routed_fixture():
         finally:
             for number, handler in previous.items():
                 signal.signal(number, handler)
+
+
+def verification_only_legacy_route(root, route):
+    """Exercise legacy receipt envelopes without claiming a modern review plan.
+
+    Modern plan bindings are covered by test_review_plan and real verifier runs.
+    These synthetic publication tests intentionally request one receipt only.
+    """
+    route.pop('risk_assessment', None)
+    route.pop('review_plan', None)
+    route['required_evidence'] = ['verification']
+    set_active_route(root, route)
 
 
 @contextlib.contextmanager
@@ -642,8 +656,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_large_scope_metadata_roundtrips_through_bounded_report(self):
         with routed_fixture() as (root, route):
-            route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            verification_only_legacy_route(root, route)
             fingerprint = util.tree_fingerprint(root)
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/20260918-historical-delivery-provenance-and-acceptance-123abc/evidence/historical-{index:05d}-source-contract.md' for index in range(1442)]
@@ -660,8 +673,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_large_verification_report_preserves_complete_logs_and_scope(self):
         with routed_fixture() as (root, route):
-            route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            verification_only_legacy_route(root, route)
             fingerprint = util.tree_fingerprint(root)
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/example/evidence/checked-{index:05d}.md' for index in range(1500)]
@@ -829,8 +841,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_verification_classification_serialization_faults_retire_prior_pass(self):
         for failure, error in (('circular', ValueError), ('unserializable', TypeError)):
             with self.subTest(failure=failure), routed_fixture() as (root, route):
-                route['required_evidence'] = ['verification']
-                set_active_route(root, route)
+                verification_only_legacy_route(root, route)
                 receipts.write_receipt(root, 'verification', 'pass')
                 self.assertEqual(receipts.validate_evidence(root, route), [])
                 details = {}
@@ -884,7 +895,8 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_same_tree_new_head_invalidates_receipt(self):
         with routed_fixture() as (root, route):
-            receipt_route = {**route, 'required_evidence': ['verification']}
+            verification_only_legacy_route(root, route)
+            receipt_route = route
             receipts.write_receipt(root, 'verification', 'pass')
             self.assertEqual(receipts.validate_evidence(root, receipt_route), [])
             subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'new exact head'], cwd=root, check=True)

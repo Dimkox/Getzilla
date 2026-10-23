@@ -13,7 +13,7 @@ from .util import git_head, tree_fingerprint, unique_ordered
 
 RULE_PATH = '.getzilla/config/diff-risk-rules.json'
 DEFAULT_AUDITS = {
-    'security': {'minimum_risk': 'medium', 'rules': ['AUTH_PATH', 'MONEY_PATH', 'SECRET_PATH', 'CONTROL_PLANE', 'RISK_POLICY']},
+    'security': {'minimum_risk': 'medium', 'rules': ['AUTH_PATH', 'MONEY_PATH', 'SECRET_PATH', 'CONTROL_PLANE', 'RISK_POLICY', 'ARCHITECTURE_SECRET_NODE']},
     'data': {'minimum_risk': 'medium', 'rules': ['DATA_MIGRATION', 'DATA_SCHEMA', 'ARCHITECTURE_RESTRICTED_NODE']},
     'release': {'minimum_risk': 'medium', 'rules': ['DEPENDENCY_OR_CI', 'RELEASE_PATH']},
 }
@@ -113,6 +113,10 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                     if change.status not in {'A', 'M', 'D', 'R', 'C'}:
                         gaps.append('UNKNOWN_CHANGED_STATUS')
                 reasons.extend(dict(reason) for reason in risk.reasons if dict(reason) not in reasons)
+                # A baseline can predate the secret-node audit mapping. Preserve
+                # its security meaning even if the candidate removes the secret.
+                if any(reason['rule'].startswith('ARCHITECTURE_SECRET_NODE:') for reason in risk.reasons):
+                    audit_categories.add('security')
                 for category, policy in audit_rules.items():
                     for reason in risk.reasons:
                         matched = reason['rule'].split(':')[0] in policy['rules']

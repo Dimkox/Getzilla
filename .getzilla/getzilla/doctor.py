@@ -111,7 +111,8 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     profile = detect_repo(root)
     items.append(DoctorItem('pass', 'repo-detection', f'{profile.kind}; domains={profile.domains}; signals={profile.signals[:5]}'))
     sample = build_route(root, 'Исправить ошибку в обработчике события Битрикс D7 и добавить PHPUnit тест', 'doctor')
-    if sample.write_agent == 'bitrix_implementer' and 'bitrix_reviewer' in sample.review_agents:
+    if (sample.write_agent == 'bitrix_implementer' and sample.review_agents == ['code_reviewer']
+            and sample.risk_assessment.get('status') == 'provisional'):
         items.append(DoctorItem('pass', 'adaptive-routing', 'Bitrix route selects specialized agents'))
     else:
         items.append(DoctorItem('fail', 'adaptive-routing', str(sample.to_dict())))

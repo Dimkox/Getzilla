@@ -107,6 +107,60 @@ class ReviewPlanTests(unittest.TestCase):
         self.commit()
         self.assertTrue(validate_review_plan(self.root, route))
 
+    def test_secret_node_selects_security_audit_even_when_candidate_removes_secrets(self):
+        for remove in (False, True):
+            with self.subTest(remove=remove):
+                system = {'nodes': [{'id': 'worker', 'repository_paths': ['src'],
+                                     'data_classification': 'public', 'secrets': ['token']}]}
+                self.write('architecture/system.yaml', json.dumps(system))
+                self.write('architecture/rules.yaml', '{}')
+                self.write('src/service.py', 'value = 1\n')
+                self.commit()
+                self.base = git(self.root, 'rev-parse', 'HEAD')
+                git(self.root, 'update-ref', 'refs/remotes/origin/main', self.base)
+                if remove:
+                    system['nodes'][0]['secrets'] = []
+                    self.write('architecture/system.yaml', json.dumps(system))
+                self.write('src/service.py', 'value = 2\n')
+                self.commit()
+                self.route()
+                current = self.reconcile()
+                self.assertEqual(current['risk_assessment']['status'], 'complete')
+                self.assertEqual(current['risk'], 'high')
+                self.assertIn('security_reviewer', current['review_agents'])
+                self.assertIn('security_reviewer', current['allowed_agents'])
+                self.assertIn('security_review', current['required_evidence'])
+
+    def test_restricted_data_node_keeps_data_audit(self):
+        self.write('architecture/system.yaml', json.dumps({'nodes': [
+            {'id': 'worker', 'repository_paths': ['src'], 'data_classification': 'private'}]}))
+        self.write('architecture/rules.yaml', json.dumps({'tenant_authorization_policies': [
+            {'data_classifications': ['private']}]}))
+        self.write('src/service.py', 'value = 1\n')
+        self.commit()
+        self.base = git(self.root, 'rev-parse', 'HEAD')
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', self.base)
+        self.write('src/service.py', 'value = 2\n')
+        self.commit()
+        self.route()
+        current = self.reconcile()
+        self.assertIn('data_reviewer', current['review_agents'])
+
+    def test_modern_receipt_validation_rejects_missing_or_stale_review_plan(self):
+        from getzilla.receipts import validate_evidence, write_receipt
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        self.route()
+        current = self.reconcile()
+        write_receipt(self.root, 'verification', 'pass')
+        self.assertFalse(any('review plan' in gap for gap in validate_evidence(self.root, current)))
+        missing = dict(current)
+        missing.pop('review_plan')
+        self.assertTrue(any('review plan' in gap for gap in validate_evidence(self.root, missing)))
+        self.write('app.py', 'value = 3\n')
+        self.commit()
+        self.assertTrue(any('review plan' in gap for gap in validate_evidence(self.root, current)))
+
     def test_legacy_explicit_reviews_remain_selected_and_incident_archive_is_not_outage(self):
         from getzilla.state import update_route
         route = self.route('Implement dated incidents and recurring lessons')

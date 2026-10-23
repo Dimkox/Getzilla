@@ -95,6 +95,11 @@ def prepare_review_source(root: Path) -> dict[str, str]:
     subprocess.run(['git', 'add', '.'], cwd=root, check=True)
     subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'freeze reviewed fixture'], cwd=root, check=True)
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    from getzilla.state import get_active_route
+    route = get_active_route(root)
+    if route and 'risk_assessment' in route:
+        from getzilla.review_plan import reconcile_route
+        reconcile_route(root)
     return {'report': report, 'reviewed_commit': head}
 
 

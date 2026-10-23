@@ -29,6 +29,7 @@ class TrivialProfileTests(unittest.TestCase):
         git(self.repo, 'init', '-q', '-b', 'main')
         (self.repo / 'README.md').write_text('# app\nteh typo\n', encoding='utf-8')
         (self.repo / 'app.py').write_text('x = 1\n', encoding='utf-8')
+        (self.repo / '.gitignore').write_text('.getzilla/runtime/\n')
         git(self.repo, 'add', '-A')
         git(self.repo, 'commit', '-q', '-m', 'base')
         self.base = git(self.repo, 'rev-parse', 'HEAD')
@@ -39,6 +40,8 @@ class TrivialProfileTests(unittest.TestCase):
         git(self.repo, 'commit', '-q', '-m', path)
 
     def check(self, route=TYPO, mode='pr'):
+        from getzilla.state import set_active_route
+        set_active_route(self.repo, dict(route))
         head = git(self.repo, 'rev-parse', 'HEAD')
         ranges = verification.GitRangeSelection(bases=[verification.GitRangeBase('route', 't', head, self.base)])
         return verification._diff_risk_check(self.repo, route, mode, ranges, tree_fingerprint(self.repo))
@@ -47,9 +50,9 @@ class TrivialProfileTests(unittest.TestCase):
         self.change('README.md', '# app\nthe typo\n')
         check, metadata = self.check()
         self.assertEqual(check.status, 'pass')
-        self.assertIn('TRIVIAL_PROVEN_BY_DIFF', check.summary)
-        self.assertEqual(metadata['waived_evidence'], ['test_review'])
-        self.assertEqual(metadata['profile_reason'], 'TRIVIAL_PROVEN_BY_DIFF')
+        self.assertIn('exact-source review plan', check.summary)
+        self.assertEqual(metadata['profile_candidate'], 'trivial')
+        self.assertEqual(metadata['waived_evidence'], [])
         self.assertNotEqual(TYPO['write_agent'], 'code_reviewer')  # the reviewer is not the author
 
     def test_same_prompt_with_code_change_keeps_the_standard_profile(self) -> None:

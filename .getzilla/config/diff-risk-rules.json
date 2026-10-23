@@ -198,6 +198,7 @@
         "AUTH_PATH",
         "MONEY_PATH",
         "SECRET_PATH",
+        "ARCHITECTURE_SECRET_NODE",
         "CONTROL_PLANE",
         "RISK_POLICY"
       ]

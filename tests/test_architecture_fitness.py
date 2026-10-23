@@ -3227,6 +3227,31 @@ class ArchitectureFitnessTests(unittest.TestCase):
                             self.assertIn(paths[0], result.applicability.scanned_scope)
                         self.assertNotIn(paths[1], result.applicability.scanned_scope)
 
+    def test_imported_callable_effects_and_nested_factory_returns_are_distinct(self) -> None:
+        cases = (
+            ('ordinary effect', 'from rq import Queue\ndef make():\n    local = Queue()\n    local.get()\n    return 1\n', False),
+            ('nested factory', 'from rq import Queue\ndef make():\n    def inner():\n        return Queue()\n    return inner()\n', True),
+            ('helper factory', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make():\n    return inner()\n', True),
+            ('helper alias', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make():\n    alias = inner\n    return alias()\n', True),
+            ('shadowed helper', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make(inner):\n    return inner()\n', False),
+        )
+        for label, source, queued in cases:
+            for reexport in (False, True):
+                with self.subTest(case=label, reexport=reexport):
+                    repo = GitArchitectureRepo(self)
+                    system = _system()
+                    system['nodes'][0]['repository_paths'] = ['src']
+                    repo.model(system, _rules())
+                    repo.write_text('src/runtime.py', source)
+                    repo.write_text('src/exports.py', 'from runtime import make\n')
+                    imported = 'from exports import make\n' if reexport else 'from runtime import make\n'
+                    repo.write_text('src/use.py', imported)
+                    base = repo.commit('imported callable baseline')
+                    repo.write_text('src/use.py', imported + 'value = make()\nvalue.enqueue(job)\n')
+                    head = repo.commit('operation on returned value')
+                    report = self._evaluate(repo, base, head, pre_risk='yellow')
+                    self.assertEqual('new_queue' in report.triggers, queued, report)
+
     def test_queue_object_fields_do_not_taint_ordinary_sibling_field(self) -> None:
         for field, queued in [('queue', True), ('form', False)]:
             with self.subTest(field=field):

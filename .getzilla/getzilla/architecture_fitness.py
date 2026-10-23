@@ -2189,11 +2189,15 @@ def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Modu
 
 
 @lru_cache(maxsize=128)
-def _queue_return_exports(tree: ast.Module, adapters: frozenset[str]) -> set[str]:
+def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
+                          requested: frozenset[str] | None = None, depth: int = 0) -> set[str]:
     """Return values are not the effects performed while computing them."""
-    import copy
+    if depth > MAX_QUEUE_ADAPTER_DEPTH:
+        raise ArchitectureError('queue factory return depth limit exceeded', code='limit')
     marker = '__getzilla_return_projection__'
-    if any(isinstance(node, ast.Name) and node.id == marker for node in ast.walk(tree)):
+    if any(isinstance(node, ast.Name) and (node.id == marker or
+           (node.id.startswith(('__getzilla_return_factory_', '__getzilla_nested_factory_')) and node.id not in adapters))
+           for node in ast.walk(tree)):
         raise ArchitectureError('return projection name collision', code='fitness')
 
     class Returns(ast.NodeTransformer):
@@ -2206,22 +2210,65 @@ def _queue_return_exports(tree: ast.Module, adapters: frozenset[str]) -> set[str
                                           args=[node.value or ast.Constant(value=None)], keywords=[]))
 
     found = set()
+    # Resolve helper returns to a fixed point. A helper's queue effects alone
+    # never establish a queue return; only the return projection can do so.
+    for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
+        previous = set(found)
+        known = {'__getzilla_return_factory_' + name for name in found}
+        projected_body = []
+        for statement in tree.body:
+            projected_body.append(statement)
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name in found:
+                projected_body.append(ast.Assign(targets=[ast.Name(id=statement.name, ctx=ast.Store())],
+                    value=ast.Name(id='__getzilla_return_factory_' + statement.name, ctx=ast.Load())))
+        found.update(_queue_direct_return_exports(ast.Module(body=projected_body, type_ignores=[]), adapters | known, marker, Returns, requested, depth))
+        if found == previous:
+            return found
+    raise ArchitectureError('queue factory return dependency limit exceeded', code='limit')
+
+
+def _queue_direct_return_exports(tree: ast.Module, adapters: frozenset[str] | set[str], marker: str, transformer: type,
+                                 requested: frozenset[str] | None, depth: int) -> set[str]:
+    import copy
+    found = set()
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if requested is not None and node.name not in requested:
             continue
         projection = _queue_export_slice(tree, frozenset({node.name}))
         selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == node.name)
         prefix = [item for item in projection.body if item is not selected]
         initialize = ast.Assign(targets=[ast.Name(id=marker, ctx=ast.Store())], value=ast.List(elts=[], ctx=ast.Load()))
         arguments = [*selected.args.posonlyargs, *selected.args.args]
-        defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
-                    for argument, default in zip(arguments[-len(selected.args.defaults):], selected.args.defaults)]
+        # Parameters shadow sibling helper summaries in the projected scope.
+        parameters = [*arguments, *selected.args.kwonlyargs,
+                      *([selected.args.vararg] if selected.args.vararg else []),
+                      *([selected.args.kwarg] if selected.args.kwarg else [])]
+        defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=ast.Constant(value=None))
+                    for argument in parameters]
+        defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
+                    for argument, default in zip(arguments[-len(selected.args.defaults):], selected.args.defaults))
         defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
                         for argument, default in zip(selected.args.kwonlyargs, selected.args.kw_defaults) if default is not None)
-        body = [*defaults, *(Returns().visit(copy.deepcopy(item)) for item in selected.body)]
+        nested = [item for item in selected.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        nested_factories = set()
+        if nested:
+            # The lexical prefix makes outer imports and aliases available to
+            # nested helpers, without including the enclosing definition again.
+            nested_tree = ast.Module(body=[*prefix, *defaults, *selected.body], type_ignores=[])
+            nested_factories = _queue_return_exports(nested_tree, frozenset(adapters),
+                frozenset(item.name for item in nested), depth + 1)
+        nested_names = {'__getzilla_nested_factory_' + name for name in nested_factories}
+        body = list(defaults)
+        for item in selected.body:
+            body.append(transformer().visit(copy.deepcopy(item)))
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in nested_factories:
+                body.append(ast.Assign(targets=[ast.Name(id=item.name, ctx=ast.Store())],
+                    value=ast.Name(id='__getzilla_nested_factory_' + item.name, ctx=ast.Load())))
         for decorator in selected.decorator_list:
             body.append(ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()), args=[decorator], keywords=[])))
-        result = analyze_queue_tree(ast.Module(body=[*prefix, initialize, *body], type_ignores=[]), adapters)
+        result = analyze_queue_tree(ast.Module(body=[*prefix, initialize, *body], type_ignores=[]), frozenset(adapters) | nested_names)
         if marker in result.derived_names:
             found.add(node.name)
     return found

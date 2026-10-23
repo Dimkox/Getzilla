@@ -50,7 +50,8 @@ class DeliveryLaneTests(unittest.TestCase):
             with self.subTest(prompt=prompt):
                 route = self.route(prompt)
                 self.assertEqual(route.delivery_lane, 'full')
-                self.assertNotEqual(route.review_agents, ['code_reviewer'])
+                self.assertEqual(route.review_agents, ['code_reviewer'])
+                self.assertEqual(route.risk_assessment['status'], 'provisional')
 
     def test_read_only_work_is_never_light(self) -> None:
         route = self.route('Review the payment module changes')
