@@ -856,7 +856,11 @@ class PythonTestRunnerTests(unittest.TestCase):
         # avoid the legacy serial coverage timeout without requiring a repo-local opt-in file.
         repo_root = Path(__file__).resolve().parents[1]
         self.assertFalse((repo_root / '.getzilla-test-runner.json').exists())
-        self.assertIsNone(selected_workers(repo_root))
+        # This assertion covers the default, not an inherited explicit opt-in.
+        with patch.dict(os.environ):
+            os.environ.pop('GETZILLA_TEST_WORKERS', None)
+            os.environ.pop('_GETZILLA_TEST_CHILD', None)
+            self.assertIsNone(selected_workers(repo_root))
 
         class Core:
             tests = python_test_runner.ProcessResult(['parallel'], 0)

@@ -62,12 +62,38 @@ def _audits(rules: dict) -> dict:
     return configured
 
 
+def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) -> list[str]:
+    from .router import REVIEW_EVIDENCE
+    configured = json.loads(raw) if raw is not None else {}
+    if not isinstance(configured, dict):
+        raise ValueError('invalid routing policy')
+    floors = configured.get('review_floors', {})
+    if not isinstance(floors, dict):
+        raise ValueError('invalid review floors')
+    for values in floors.values():
+        if not isinstance(values, list) or any(name not in REVIEW_EVIDENCE for name in values):
+            raise ValueError('invalid review floor agent')
+    groups = ['delivery']
+    if profile == 'trivial':
+        groups += ['docs', 'trivial']
+    if (route or {}).get('delivery_lane') == 'light':
+        groups.append('light')
+    if (route or {}).get('intent') == 'review':
+        groups.append('review_intent')
+    # An operational release keeps its configured release floor. Intent does
+    # not turn unrelated ordinary work into an audit.
+    if (route or {}).get('intent') == 'release':
+        groups.append('release')
+    return unique_ordered(name for group in groups for name in floors.get(group, []))
+
+
 def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | None = None) -> dict:
     """Classify both baseline and candidate policy; an edited policy cannot lower itself."""
     from .router import REVIEW_EVIDENCE
     bases = sorted({item.comparison_base_sha for item in selection.bases})
     gaps = [str(item.get('code', 'untrusted_base')) for item in selection.findings]
     reasons, policies, risks, audit_categories = [], [], [], set()
+    floor_reviewers: list[str] = []
     head = git_head(root)
     fingerprint = fingerprint or tree_fingerprint(root)
     tree = None
@@ -102,6 +128,10 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                 audit_rules = _audits(rules)
                 policies.append({'ref': ref, 'rules': _digest(rules), 'architecture': _digest(model), 'audits': _digest(audit_rules)})
                 risk = classify_diff(root, base, head, rules=rules, architecture=model)
+                routing = _document(root, ref, '.getzilla/config/routing.json')
+                floor = _policy_review_floor(routing, route, risk.profile_candidate)
+                floor_reviewers.extend(floor)
+                policies[-1]['review_floors'] = _digest(floor)
                 risks.append(risk)
                 gaps.extend(risk.gaps)
                 for change in risk.changed:
@@ -139,7 +169,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     # Existing records remain readable and retain their explicitly selected wave.
     if route and 'risk_assessment' not in route:
         explicit = unique_ordered([*explicit, *route.get('review_agents', [])])
-    reviewers = unique_ordered(['code_reviewer', *explicit, *(name + '_reviewer' for name in sorted(audit_categories))])
+    reviewers = unique_ordered(['code_reviewer', *floor_reviewers, *explicit, *(name + '_reviewer' for name in sorted(audit_categories))])
     reviewers = [name for name in reviewers if name in REVIEW_EVIDENCE]
     evidence = ['verification', *(REVIEW_EVIDENCE[name] for name in reviewers)]
     profile = 'full' if risk_level == 'high' else ('trivial' if risks and all(item.profile_candidate == 'trivial' for item in risks) else 'standard')

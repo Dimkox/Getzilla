@@ -2191,7 +2191,12 @@ def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Modu
 @lru_cache(maxsize=128)
 def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
                           requested: frozenset[str] | None = None, depth: int = 0) -> set[str]:
-    """Return values are not the effects performed while computing them."""
+    return _queue_return_exports_scoped(tree, adapters, requested, depth, [MAX_QUEUE_DEPENDENCY_WORK])
+
+
+def _queue_return_exports_scoped(tree: ast.Module, adapters: frozenset[str],
+                                 requested: frozenset[str] | None, depth: int, budget: list[int]) -> set[str]:
+    """Evaluate helper dependencies first; nested scopes share one work budget."""
     if depth > MAX_QUEUE_ADAPTER_DEPTH:
         raise ArchitectureError('queue factory return depth limit exceeded', code='limit')
     marker = '__getzilla_return_projection__'
@@ -2199,6 +2204,59 @@ def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
            (node.id.startswith(('__getzilla_return_factory_', '__getzilla_nested_factory_')) and node.id not in adapters))
            for node in ast.walk(tree)):
         raise ArchitectureError('return projection name collision', code='fitness')
+    projections = {}
+    for node in tree.body:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and (requested is None or node.name in requested) and node.name not in projections):
+            projection = _queue_export_slice(tree, frozenset({node.name}))
+            selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == node.name)
+            projections[node.name] = (selected, [item for item in projection.body if item is not selected])
+    dependencies = {}
+    for name, (selected, prefix) in projections.items():
+        names = {item.id for item in ast.walk(selected) if isinstance(item, ast.Name)}
+        # Module aliases can carry a helper into a return without naming it in
+        # the function. Function bodies in the prefix belong to their own scope.
+        for statement in prefix:
+            if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.update(item.id for item in ast.walk(statement) if isinstance(item, ast.Name))
+        dependencies[name] = (names & projections.keys()) - {name}
+    dependents = {name: set() for name in projections}
+    for name, needed in dependencies.items():
+        for dependency in needed:
+            dependents[dependency].add(name)
+    remaining = {name: set(needed) for name, needed in dependencies.items()}
+    ready = deque(sorted(name for name, needed in remaining.items() if not needed))
+    order = []
+    while ready:
+        name = ready.popleft()
+        order.append(name)
+        for dependent in sorted(dependents[name]):
+            remaining[dependent].discard(name)
+            if not remaining[dependent]:
+                ready.append(dependent)
+    order.extend(name for name in projections if name not in order)  # cycles retain bounded rechecks
+    pending, queued, found = deque(order), set(order), set()
+    while pending:
+        name = pending.popleft()
+        queued.remove(name)
+        if name in found:
+            continue
+        if budget[0] <= 0:
+            raise ArchitectureError('queue factory return dependency limit exceeded', code='limit')
+        budget[0] -= 1
+        selected, prefix = projections[name]
+        if _queue_projected_return(selected, prefix, adapters, found, marker, depth, budget):
+            found.add(name)
+            for dependent in sorted(dependents[name] - found - queued):
+                pending.append(dependent)
+                queued.add(dependent)
+    return found
+
+
+def _queue_projected_return(selected: ast.FunctionDef | ast.AsyncFunctionDef, prefix: list[ast.stmt],
+                             adapters: frozenset[str], known: set[str], marker: str,
+                             depth: int, budget: list[int]) -> bool:
+    import copy
 
     class Returns(ast.NodeTransformer):
         def visit_FunctionDef(self, node):
@@ -2209,69 +2267,43 @@ def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
             return ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()),
                                           args=[node.value or ast.Constant(value=None)], keywords=[]))
 
-    found = set()
-    # Resolve helper returns to a fixed point. A helper's queue effects alone
-    # never establish a queue return; only the return projection can do so.
-    for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
-        previous = set(found)
-        known = {'__getzilla_return_factory_' + name for name in found}
-        projected_body = []
-        for statement in tree.body:
-            projected_body.append(statement)
-            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name in found:
-                projected_body.append(ast.Assign(targets=[ast.Name(id=statement.name, ctx=ast.Store())],
-                    value=ast.Name(id='__getzilla_return_factory_' + statement.name, ctx=ast.Load())))
-        found.update(_queue_direct_return_exports(ast.Module(body=projected_body, type_ignores=[]), adapters | known, marker, Returns, requested, depth))
-        if found == previous:
-            return found
-    raise ArchitectureError('queue factory return dependency limit exceeded', code='limit')
-
-
-def _queue_direct_return_exports(tree: ast.Module, adapters: frozenset[str] | set[str], marker: str, transformer: type,
-                                 requested: frozenset[str] | None, depth: int) -> set[str]:
-    import copy
-    found = set()
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if requested is not None and node.name not in requested:
-            continue
-        projection = _queue_export_slice(tree, frozenset({node.name}))
-        selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == node.name)
-        prefix = [item for item in projection.body if item is not selected]
-        initialize = ast.Assign(targets=[ast.Name(id=marker, ctx=ast.Store())], value=ast.List(elts=[], ctx=ast.Load()))
-        arguments = [*selected.args.posonlyargs, *selected.args.args]
-        # Parameters shadow sibling helper summaries in the projected scope.
-        parameters = [*arguments, *selected.args.kwonlyargs,
-                      *([selected.args.vararg] if selected.args.vararg else []),
-                      *([selected.args.kwarg] if selected.args.kwarg else [])]
-        defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=ast.Constant(value=None))
-                    for argument in parameters]
-        defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
+    inherited = set()
+    projected_prefix = []
+    for statement in prefix:
+        projected_prefix.append(statement)
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name in known:
+            alias = '__getzilla_return_factory_' + statement.name
+            inherited.add(alias)
+            projected_prefix.append(ast.Assign(targets=[ast.Name(id=statement.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
+    adapters = adapters | inherited
+    initialize = ast.Assign(targets=[ast.Name(id=marker, ctx=ast.Store())], value=ast.List(elts=[], ctx=ast.Load()))
+    arguments = [*selected.args.posonlyargs, *selected.args.args]
+    parameters = [*arguments, *selected.args.kwonlyargs,
+                  *([selected.args.vararg] if selected.args.vararg else []),
+                  *([selected.args.kwarg] if selected.args.kwarg else [])]
+    defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=ast.Constant(value=None))
+                for argument in parameters]
+    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
                     for argument, default in zip(arguments[-len(selected.args.defaults):], selected.args.defaults))
-        defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
-                        for argument, default in zip(selected.args.kwonlyargs, selected.args.kw_defaults) if default is not None)
-        nested = [item for item in selected.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        nested_factories = set()
-        if nested:
-            # The lexical prefix makes outer imports and aliases available to
-            # nested helpers, without including the enclosing definition again.
-            nested_tree = ast.Module(body=[*prefix, *defaults, *selected.body], type_ignores=[])
-            nested_factories = _queue_return_exports(nested_tree, frozenset(adapters),
-                frozenset(item.name for item in nested), depth + 1)
-        nested_names = {'__getzilla_nested_factory_' + name for name in nested_factories}
-        body = list(defaults)
-        for item in selected.body:
-            body.append(transformer().visit(copy.deepcopy(item)))
-            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in nested_factories:
-                body.append(ast.Assign(targets=[ast.Name(id=item.name, ctx=ast.Store())],
-                    value=ast.Name(id='__getzilla_nested_factory_' + item.name, ctx=ast.Load())))
-        for decorator in selected.decorator_list:
-            body.append(ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()), args=[decorator], keywords=[])))
-        result = analyze_queue_tree(ast.Module(body=[*prefix, initialize, *body], type_ignores=[]), frozenset(adapters) | nested_names)
-        if marker in result.derived_names:
-            found.add(node.name)
-    return found
+    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
+                    for argument, default in zip(selected.args.kwonlyargs, selected.args.kw_defaults) if default is not None)
+    nested = [item for item in selected.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    nested_factories = set()
+    if nested:
+        nested_tree = ast.Module(body=[*projected_prefix, *defaults, *selected.body], type_ignores=[])
+        nested_factories = _queue_return_exports_scoped(nested_tree, frozenset(adapters),
+            frozenset(item.name for item in nested), depth + 1, budget)
+    nested_names = {'__getzilla_nested_factory_' + name for name in nested_factories}
+    body = list(defaults)
+    for item in selected.body:
+        body.append(Returns().visit(copy.deepcopy(item)))
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in nested_factories:
+            body.append(ast.Assign(targets=[ast.Name(id=item.name, ctx=ast.Store())],
+                value=ast.Name(id='__getzilla_nested_factory_' + item.name, ctx=ast.Load())))
+    for decorator in selected.decorator_list:
+        body.append(ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()), args=[decorator], keywords=[])))
+    result = analyze_queue_tree(ast.Module(body=[*projected_prefix, initialize, *body], type_ignores=[]), frozenset(adapters) | nested_names)
+    return marker in result.derived_names
 
 
 def _resolve_import_module(current_package: str, module: str | None, level: int) -> str:
@@ -2369,10 +2401,10 @@ def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
     return any(path.endswith(package_path) for path in cache.paths) or module not in cache.modules and any(name.startswith(module + ".") for name in cache.modules)
 
 
-def _module_member_demands(tree: ast.AST, access_name: str) -> frozenset[str] | None:
+def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
     members: set[str] = set()
     covered: set[int] = set()
-    patches = literal_patch_members(tree)
+    patches = literal_patch_members(tree) if patches is None else patches
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and id(node) in patches and patches[id(node)][0] == access_name:
             members.add(patches[id(node)][1])
@@ -2639,7 +2671,15 @@ def _queue_adapter_names(
     dependency_result = _operation_dependencies(tree, requested=requested)
     dependencies = set(dependency_result.names)
     return_demands = _returned_call_demands(tree, dependency_result.names, returns=bool(requested))
-    for _target, _member, replacement, factory in literal_patch_members(tree).values():
+    patches = literal_patch_members(tree)
+    member_demands: dict[str, frozenset[str] | None] = {}
+
+    def demanded_members(access_name: str) -> frozenset[str] | None:
+        if access_name not in member_demands:
+            member_demands[access_name] = _module_member_demands(tree, access_name, patches)
+        return member_demands[access_name]
+
+    for _target, _member, replacement, factory in patches.values():
         names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
         dependencies.update(names)
         if factory:
@@ -2683,7 +2723,7 @@ def _queue_adapter_names(
                 seen,
                 bounded_source_roots,
                 requested=(frozenset({target_name}) if target_name and not wildcard else
-                           frozenset(reachable) if wildcard else _module_member_demands(tree, access_name)),
+                           frozenset(reachable) if wildcard else demanded_members(access_name)),
                 callable_only=local_name not in requested and local_name not in return_demands,
             )
             modules.update(resolution.modules)
@@ -2692,7 +2732,7 @@ def _queue_adapter_names(
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
                 _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen))
                 resolution = _local_queue_resolution(root, diff, target_module, side, cache, active, seen, bounded_source_roots,
-                                                     requested=_module_member_demands(tree, access_name),
+                                                     requested=demanded_members(access_name),
                                                      callable_only=local_name not in requested and local_name not in return_demands)
                 modules.update(resolution.modules)
                 height = max(height, resolution.height if resolution.modules else 0)

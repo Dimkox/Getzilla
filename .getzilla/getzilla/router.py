@@ -544,6 +544,8 @@ def build_route(
     review_floors = cfg.get('review_floors') if isinstance(cfg.get('review_floors'), dict) else {}
     # Intent selects implementation support, not source-risk audits.
     review = ['code_reviewer'] if write_agent or intent in {'review', 'release'} else []
+    if review:
+        review += _string_list(review_floors.get('delivery'))
 
     # Low-risk micro and standard work takes the light lane: one analysis agent, one reviewer
     # who also reads the tests, no durable change package. High risk, sensitive task domains,
@@ -560,9 +562,7 @@ def build_route(
         generic_analysis = set(_string_list(floors.get('feature_like'))) | set(_string_list(floors.get('standard'))) | {'architect'}
         analysis = [agent for agent in analysis if agent not in generic_analysis
                     or agent in _string_list(floors.get('always'))]
-        generic_review = set(_string_list(review_floors.get('delivery'))) | set(_string_list(review_floors.get('docs')))
-        review = list(_string_list(review_floors.get('light')) or ['code_reviewer']) + [
-            agent for agent in review if agent not in generic_review]
+        review = list(_string_list(review_floors.get('light')) or ['code_reviewer']) + review
     delivery_lane = 'light' if light else 'full'
 
     workflow_skills = ['getzilla-delivery']

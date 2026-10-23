@@ -161,6 +161,31 @@ class ReviewPlanTests(unittest.TestCase):
         self.commit()
         self.assertTrue(any('review plan' in gap for gap in validate_evidence(self.root, current)))
 
+    def test_configured_review_floor_survives_reconciliation_and_candidate_removal(self):
+        cases = [('baseline', 'security_reviewer', False), ('candidate', 'test_reviewer', False),
+                 ('baseline', 'test_reviewer', True)]
+        for side, reviewer, remove in cases:
+            with self.subTest(side=side, reviewer=reviewer, remove=remove):
+                policy = json.loads((ROOT / '.getzilla/config/routing.json').read_text())
+                policy['review_floors']['delivery'] = ['code_reviewer', reviewer] if side == 'baseline' else ['code_reviewer']
+                self.write('.getzilla/config/routing.json', json.dumps(policy))
+                self.write('app.py', 'value = ' + repr((side, reviewer, remove)) + '\n')
+                self.commit()
+                self.base = git(self.root, 'rev-parse', 'HEAD')
+                git(self.root, 'update-ref', 'refs/remotes/origin/main', self.base)
+                if side == 'candidate' or remove:
+                    policy['review_floors']['delivery'] = ['code_reviewer'] if remove else ['code_reviewer', reviewer]
+                    self.write('.getzilla/config/routing.json', json.dumps(policy))
+                self.write('app.py', 'value = 2\n' * 60)
+                self.commit()
+                initial = self.route()
+                if side == 'baseline' and not remove:
+                    self.assertIn(reviewer, initial['review_agents'])
+                current = self.reconcile()
+                self.assertEqual(current['risk_assessment']['status'], 'complete')
+                self.assertIn(reviewer, current['review_agents'])
+                self.assertIn(reviewer, current['allowed_agents'])
+
     def test_legacy_explicit_reviews_remain_selected_and_incident_archive_is_not_outage(self):
         from getzilla.state import update_route
         route = self.route('Implement dated incidents and recurring lessons')

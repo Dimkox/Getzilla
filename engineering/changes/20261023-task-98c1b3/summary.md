@@ -6,6 +6,10 @@ Repair imported queue return provenance, select security review for architecture
 
 Acceptance: paired queue regressions distinguish ordinary values from returned queues; a baseline secret still selects security review after its removal; restricted data still selects data review; source-bound receipts reject missing and stale plans; focused and full checks pass on the frozen candidate.
 
+The first independent review wave failed. Repairs preserve configured baseline and candidate review floors, order helper-return dependencies, share one nested-analysis budget, and reuse patch inventories inside each source analysis. Counter-based regressions cover a 40-function chain, repeated imports, cycles and shadowing. Complete failed reports remain historical runtime evidence.
+
+Observation mistake: tests ran while source edits continued. Installer byte comparisons and cloned HEAD then observed different candidates. Freeze the source before broad observations; the mixed-source run is FAIL and cannot prove the current candidate.
+
 One implementation owner writes this branch. Four independent analyses precede repair. Reviews follow committed controls. Run the complete final PR verifier after reviews. The host snapshot allows 26 workers; implementation tests use at most 24. Logs and complete reports remain in local runtime evidence.
 
 The owner's L5 contract authorizes source repair and process decisions. No production mutation or security approval is requested. The controller recorded the local scope disposition as `controller-under-owner-L5` for the existing PR 144 repair. This is not a human-signed approval or permission to skip exact-head CI.

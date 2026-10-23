@@ -3234,6 +3234,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
             ('helper factory', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make():\n    return inner()\n', True),
             ('helper alias', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make():\n    alias = inner\n    return alias()\n', True),
             ('shadowed helper', 'from rq import Queue\ndef inner():\n    return Queue()\ndef make(inner):\n    return inner()\n', False),
+            ('queue cycle', 'from rq import Queue\ndef first():\n    return second()\ndef second():\n    if enabled:\n        return Queue()\n    return first()\ndef make():\n    return first()\n', True),
+            ('ordinary cycle', 'from rq import Queue\ndef first():\n    local = Queue()\n    return second()\ndef second():\n    return first()\ndef make():\n    return first()\n', False),
         )
         for label, source, queued in cases:
             for reexport in (False, True):
@@ -3251,6 +3253,38 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     head = repo.commit('operation on returned value')
                     report = self._evaluate(repo, base, head, pre_risk='yellow')
                     self.assertEqual('new_queue' in report.triggers, queued, report)
+
+    def test_reverse_factory_chain_evaluates_each_return_without_full_rescans(self) -> None:
+        count = 40
+        source = 'from rq import Queue\n' + ''.join(
+            f'def factory{index}():\n    return ' + (f'factory{index + 1}()' if index + 1 < count else 'Queue()') + '\n'
+            for index in range(count))
+        tree = ast.parse(source)
+        with patch.object(FIT, 'analyze_queue_tree', wraps=FIT.analyze_queue_tree) as analyzed:
+            found = FIT._queue_return_exports(tree, frozenset())
+        self.assertEqual(found, {f'factory{index}' for index in range(count)})
+        self.assertLessEqual(analyzed.call_count, 2 * count, 'factory returns were repeatedly re-evaluated')
+
+    def test_repeated_module_demands_reuse_one_patch_inventory(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        repo.write_text('src/runtime.py', 'value = 1\n')
+        imported = 'import runtime as api\n' * 20
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('repeated module imports')
+        repo.write_text('src/use.py', imported + 'api.value.enqueue(job)\n')
+        head = repo.commit('ordinary module operation')
+        with patch.object(FIT, 'literal_patch_members', wraps=FIT.literal_patch_members) as patches:
+            report = self._evaluate(repo, base, head, pre_risk='yellow')
+        self.assertNotIn('new_queue', report.triggers)
+        self.assertLessEqual(patches.call_count, 6, 'imports repeated the complete patch scan')
+
+    def test_nested_factory_returns_share_the_outer_work_budget(self) -> None:
+        tree = ast.parse('from rq import Queue\ndef make():\n    def inner():\n        return Queue()\n    return inner()\n')
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'return dependency limit'):
+            FIT._queue_return_exports_scoped(tree, frozenset(), None, 0, [1])
 
     def test_queue_object_fields_do_not_taint_ordinary_sibling_field(self) -> None:
         for field, queued in [('queue', True), ('form', False)]:
