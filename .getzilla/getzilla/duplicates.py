@@ -31,6 +31,47 @@ def _identity(value: os.stat_result) -> tuple:
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
 
 
+def _command(binary: str) -> list[str]:
+    """Bypass npm batch shims; Windows can otherwise invoke an implicit shell.
+
+    Only the known jscpd4 entry in standard npm global/local layouts is supported.
+    Never read or execute shim text, or use package metadata to choose a script.
+    """
+    shim = Path(binary)
+    if shim.suffix.lower() not in {'.cmd', '.bat'}:
+        return [binary]
+    node = find_tool('node')
+    if not node or Path(node).suffix.lower() not in {'', '.exe'} or not Path(node).is_file():
+        raise ValueError('jscpd batch shim requires a native Node executable')
+    resolved_node = Path(node).resolve()
+    if resolved_node.suffix.lower() not in {'', '.exe'}:
+        raise ValueError('jscpd batch shim requires a native Node executable')
+    packages = [shim.parent / 'node_modules/jscpd']
+    if shim.parent.name.lower() == '.bin':
+        packages = [shim.parent.parent / 'jscpd']
+    for package in packages:
+        metadata = package / 'package.json'
+        entry = package / 'bin/jscpd'
+        if not metadata.is_file() or not entry.is_file() or metadata.is_symlink() or entry.is_symlink():
+            continue
+        if metadata.stat().st_size > 65536:
+            continue
+        with metadata.open('rb') as handle:
+            raw = handle.read(65537)
+        if len(raw) > 65536:
+            continue
+        try:
+            manifest = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        if (not isinstance(manifest, dict) or manifest.get('name') != 'jscpd'
+                or manifest.get('version') != VERSION
+                or manifest.get('bin') != {'jscpd': './bin/jscpd'}):
+            continue
+        return [node, str(entry)]
+    raise ValueError('unsupported jscpd batch shim installation; require standard npm jscpd4 layout')
+
+
 def inventory(root: Path, *, include_tests: bool = False) -> dict[str, bytes]:
     """Apply path policy before opening bytes; refuse incomplete or changing input."""
     root, descriptor = _open_root(root)
@@ -155,6 +196,11 @@ def scan(root: Path, *, include_tests: bool = False, min_tokens: int = 50,
         result['reason'] = 'jscpd missing; run getzilla update --only jscpd'
         return result
     try:
+        command = _command(binary)
+    except (OSError, ValueError, RuntimeError) as exc:
+        result['reason'] = str(exc)[:200]
+        return result
+    try:
         if not 1 <= min_tokens <= 10000 or not 1 <= min_lines <= 10000 or not 1 <= timeout <= 120:
             raise ValueError('invalid scan bounds')
         files = inventory(root, include_tests=include_tests)
@@ -172,13 +218,13 @@ def scan(root: Path, *, include_tests: bool = False, min_tokens: int = 50,
                 target.write_bytes(data)
             config = work / 'controlled.json'
             config.write_text('{}', encoding='utf-8', newline='\n')
-            code, version = _execute([binary, '--version'], work, timeout=10)
+            code, version = _execute([*command, '--version'], work, timeout=10)
             result['version'] = version.strip()
             if code or version.strip() != VERSION:
                 result['reason'] = f'unsupported jscpd version; require {VERSION}'
                 return result
             report = work / 'report/jscpd-report.json'
-            argv = [binary, 'source', '--config', str(config), '--reporters', 'json',
+            argv = [*command, 'source', '--config', str(config), '--reporters', 'json',
                     '--output', str(report.parent), '--min-tokens', str(min_tokens),
                     '--min-lines', str(min_lines), '--max-lines', '1000000', '--max-size', '2mb',
                     '--absolute', '--noSymlinks', '--silent']

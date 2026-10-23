@@ -13,6 +13,78 @@ from getzilla import updater
 
 
 class DuplicateTests(unittest.TestCase):
+    def _npm_fixture(self, base, local=False):
+        package = base / 'node_modules/jscpd'
+        entry = package / 'bin/jscpd'
+        entry.parent.mkdir(parents=True)
+        entry.write_bytes(b'fixture entry\n')
+        (package / 'package.json').write_text(json.dumps({'name': 'jscpd', 'version': '4.0.5',
+            'bin': {'jscpd': './bin/jscpd'}}), encoding='utf-8', newline='\n')
+        shim = base / ('node_modules/.bin/jscpd.cmd' if local else 'jscpd.cmd')
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.write_bytes(b'fixture must never be read or executed\n')
+        node = base / 'node.exe'
+        node.write_bytes(b'fixture native executable\n')
+        return shim, node, entry
+
+    def test_batch_shims_use_native_node_for_both_calls_with_literal_paths(self):
+        from getzilla import duplicates
+        for local in (False, True):
+            with self.subTest(local=local), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                shim, node, entry = self._npm_fixture(base, local)
+                project = base / 'project & data% literal'
+                project.mkdir()
+                calls = []
+                def popen(argv, **kwargs):
+                    calls.append(argv)
+                    self.assertEqual(argv[:2], [str(node), str(entry)])
+                    self.assertFalse(kwargs.get('shell', False))
+                    if '--version' in argv:
+                        kwargs['stdout'].write(b'4.0.5\n')
+                    else:
+                        self.assertEqual(argv[2], 'source')
+                        config = argv[argv.index('--config') + 1]
+                        output = argv[argv.index('--output') + 1]
+                        self.assertEqual(config, str(kwargs['cwd'] / 'controlled.json'))
+                        self.assertEqual(output, str(kwargs['cwd'] / 'report'))
+                        self.assertIn('project & data% literal', config)
+                        report = Path(output) / 'jscpd-report.json'
+                        report.parent.mkdir()
+                        report.write_text('{"duplicates": []}', encoding='utf-8', newline='\n')
+                    process = mock.MagicMock()
+                    process.__enter__.return_value = process
+                    process.poll.return_value = 0
+                    process.returncode = 0
+                    return process
+                with mock.patch.object(duplicates, 'find_tool', side_effect={'jscpd': str(shim), 'node': str(node)}.get), \
+                        mock.patch.object(duplicates.subprocess, 'Popen', side_effect=popen):
+                    result = duplicates.scan(project)
+                self.assertEqual(result['status'], 'complete', result)
+                self.assertEqual(len(calls), 2)
+
+    def test_batch_shims_fail_closed_before_subprocess_for_unsupported_install(self):
+        from getzilla import duplicates
+        for scenario in ('missing-node', 'batch-node', 'missing-entry', 'bad-package'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                shim, node, entry = self._npm_fixture(base)
+                if scenario == 'missing-node':
+                    node = None
+                elif scenario == 'batch-node':
+                    node = base / 'node.cmd'
+                    node.write_bytes(b'never execute\n')
+                elif scenario == 'missing-entry':
+                    entry.unlink()
+                else:
+                    (entry.parent.parent / 'package.json').write_text('{}', encoding='utf-8', newline='\n')
+                tools = {'jscpd': str(shim), 'node': str(node) if node else None}
+                with mock.patch.object(duplicates, 'find_tool', side_effect=tools.get), \
+                        mock.patch.object(duplicates.subprocess, 'Popen') as execute:
+                    result = duplicates.scan(base)
+                self.assertEqual(result['status'], 'unavailable', result)
+                execute.assert_not_called()
+
     def _scan(self, mutate=None):
         from getzilla import duplicates
         def execute(argv, cwd, report=None, timeout=120):

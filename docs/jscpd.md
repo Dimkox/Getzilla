@@ -7,6 +7,9 @@ and checks its version. Offline mirror mode skips npm and uses no network.
 Missing npm produces an explicit skip. Update state records the installed version.
 
 The scanner supports exactly jscpd 4.0.5. Other versions return unavailable.
+For npm `.cmd` or `.bat` shims, it calls the fixed package entry with native Node.
+It supports standard global and local npm layouts. Missing native Node or an
+unknown shim layout returns unavailable. It never reads or executes shim text.
 It never installs packages or uses npx. It copies supported UTF-8 source files
 to a private snapshot and runs the installed binary with its own config.
 It does not read project config, package scripts or reporter modules.
