@@ -8,4 +8,3 @@ run_disposable_exit.py inherits environment, creates a temporary uv environment,
 validate_committed_inventory requires exact derive_inventory(factory/uv.lock) equality. Test: factory.tests.test_offline_release_builder.OfflineReleaseBuilderTests.test_committed_inventory_is_exactly_derived_from_uv_lock.
 Bounded control: system Python unittest for that inventory test and factory.tests.test_linux_process_adapter. Final gate uses supported environment and measured CPU allocation. Do not use repository-sandbox to skip PostgreSQL.
 No Factory suite, PostgreSQL operation, Docker operation or install ran. Capabilities are fresh; prior tests are historical. reviewed-tree-modified: no
-

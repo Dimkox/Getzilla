@@ -20,7 +20,7 @@
     },
     {
       "id": "AC-003",
-      "statement": "The frozen candidate has fresh full local verification and independent code, test and security review.",
+      "statement": "The frozen candidate has fresh full local verification and independent code, test, security and release review.",
       "evidence": [
         {
           "receipt": "verification"
@@ -33,6 +33,9 @@
         },
         {
           "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
         }
       ]
     }

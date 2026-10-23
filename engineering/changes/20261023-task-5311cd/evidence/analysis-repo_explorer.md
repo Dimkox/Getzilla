@@ -8,4 +8,3 @@ f6df5325 changes three workflow files only and records a blocked smoke.
 Offline builder, Linux process adapter and their tests are unchanged from dc3d66bc. Minimum controls: seven offline builder tests, thirteen process adapter tests and tests.test_quality_gates. The full verifier invokes factory/tests/run_disposable_exit.py.
 Historical records prescribe system Python3.12 and explicit UV_PYTHON, UV_NO_MANAGED_PYTHON=1, UV_PYTHON_DOWNLOADS=never, UV_LOCKED=1. Historical results are not current verification.
 No tests or mutations ran. reviewed-tree-modified: no
-

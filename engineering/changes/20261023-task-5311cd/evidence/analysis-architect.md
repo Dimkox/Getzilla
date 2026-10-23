@@ -7,4 +7,3 @@ Historical f6df5325 evidence separates inventory drift and missing managed-Pytho
 _host_supported checks the host and child Python but omits controller APIs used by stop. A controller can pass preflight, start a child and fail cleanup. Refuse before process creation using existing UNSUPPORTED_HOST behavior. Test each missing API and no spawn. Preserve identity checks and bounded cleanup; no PID-only fallback.
 Use the four documented UV variables for new controls and final full gate. Require actual PostgreSQL execution. Rollback is a source revert. No schema, dependency, production-state or public-contract change.
 No files changed or heavy tests ran. reviewed-tree-modified: no
-

@@ -5,7 +5,7 @@
 - Completed: four read-only analyses in parallel, one CPU each.
 - Active: one integration_implementer owns product source and tests. Coordinator owns workflow records. No overlapping writers.
 - Next: bounded controls, clean source commit, smoke.
-- Next: code/test/security review wave; each uses private scratch and at most eight test workers.
+- Next: code/test/security/release review wave; each uses private scratch and at most eight test workers.
 - Next: persist reports, freeze, final full local gate and external exact-head CI.
 - Next: receipts, thread resolution and conditional L5 exact-grant merge.
 

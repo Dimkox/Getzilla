@@ -2002,3 +2002,7 @@ The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child test
 ## 2026-10-23 — Route the original task text
 
 A coordinator paraphrase added production and migration terms to a validation task. It created unrelated human gates before any implementation. Cancel the unused package and route the exact user request in the isolated worktree.
+
+## 2026-10-23 — Check the full staged and committed inventory
+
+The coordinator checked only tracked worktree changes before adding analysis files. That missed extra EOF lines in newly added Markdown, so the final gate refused the committed range. Check the index after staging and the exact base-to-HEAD range before review.

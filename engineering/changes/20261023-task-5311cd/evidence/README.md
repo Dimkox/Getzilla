@@ -95,3 +95,14 @@ Local observation only; not verification or publication evidence.
   "note": "implementation started; preserve work before handoff"
 }
 ```
+
+## Delivery boundary and admission observations
+
+The first frozen candidate193c547 received a required release-review escalation before heavy tests. Runtime routing adopted only the reviewers/evidence selected by router.escalate_route. The next candidatea5c598e reached the range whitespace check and found extra EOF lines in four newly added analysis reports. Both results are failures, not passing gates. Raw reports are under canonical runtime scratch/pr127-final.
+
+The source repair is unchanged. This repair batch normalizes the four reports, records effective review scope and refreshes all selected reviews before a new freeze.
+
+Push is BLOCKED by the tool-denial circuit breaker. The first native exec push lost its workdir at the harness bridge; the hook checked the canonical checkout. Explicit cd then failed cross-root before grant lookup. No push occurred. Open a new session with /home/pall/projects/getzilla/.getzilla/runtime/worktrees/pr127-followup as the actual workspace root. Refresh the exact branch grant, push the frozen candidate, open a successor PR and require exact-head linux/windows CI plus resolved threads. Never retry around the root boundary in this session.
+
+The Low archived-install regression gap was added to issue122:
+https://github.com/Dimkox/Getzilla/issues/122#issuecomment-6359615975

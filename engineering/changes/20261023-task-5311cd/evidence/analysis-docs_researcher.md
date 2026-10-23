@@ -10,4 +10,3 @@ Live protection requires linux/windows from Actions App15368 and resolved conver
 Issue122 defers six Low negative-test gaps: local verifier, role/date validation, matrix URL schemes, attestation identity and provider-cache independence. Issue134 defers updater/fsx Low findings, including EU updates omitted from planned_changes. Keep Low work separate.
 Sources: https://github.com/Dimkox/Getzilla/pull/127 ; https://github.com/Dimkox/Getzilla/issues/122 ; https://github.com/Dimkox/Getzilla/issues/134 .
 No tests or writes. reviewed-tree-modified: no
-
