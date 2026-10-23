@@ -83,6 +83,33 @@ class DuplicateTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('value = 1\n')
             self.assertEqual(set(duplicates.inventory(root)), {'.getzilla/getzilla/module.py'})
+
+    def test_nested_runtime_is_excluded_before_read(self):
+        from getzilla import duplicates
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ('nested/.getzilla/getzilla/module.py', 'nested/.getzilla/runtime/data.py'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('value = 1\n')
+            self.assertEqual(set(duplicates.inventory(root)), {'nested/.getzilla/getzilla/module.py'})
+
+    def test_linked_scratch_ancestor_cannot_receive_snapshot_writes(self):
+        from getzilla import duplicates
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            project, outside = base / 'project', base / 'outside'
+            project.mkdir()
+            outside.mkdir()
+            try:
+                (project / '.getzilla').symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest('symlinks unavailable')
+            with mock.patch.object(duplicates, 'find_tool', return_value='/tools/jscpd'), \
+                    mock.patch.object(duplicates, '_execute', return_value=(0, '4.0.5')):
+                result = duplicates.scan(project)
+            self.assertEqual(result['status'], 'error')
+            self.assertEqual(list(outside.iterdir()), [])
     def test_updater_installs_exact_pin_and_checks_version(self):
         calls = []
         def run(command, cwd):

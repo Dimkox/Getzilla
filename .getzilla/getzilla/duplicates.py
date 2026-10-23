@@ -43,7 +43,7 @@ def inventory(root: Path, *, include_tests: bool = False) -> dict[str, bytes]:
         for directory, folders, files in os.walk(root, topdown=True, followlinks=False, onerror=failed):
             folders[:] = sorted(name for name in folders if name.lower() not in excluded
                                 and not (Path(directory) / name).is_symlink())
-            if Path(directory).relative_to(root).as_posix() == '.getzilla':
+            if Path(directory).name == '.getzilla':
                 folders[:] = [name for name in folders if name == 'getzilla']
                 files = []
             entries += len(folders) + len(files)
@@ -105,6 +105,25 @@ def _execute(argv: list[str], cwd: Path, report: Path | None = None, timeout: in
             return process.returncode, data.decode('utf-8', 'replace')
 
 
+def _scratch(root: Path) -> Path:
+    """Reject existing linked output ancestors before creating snapshot directories.
+
+    This is a local path guard, not isolation from concurrent hostile renames.
+    """
+    current = root
+    for name in ('.getzilla', 'runtime', 'scratch'):
+        current = current / name
+        try:
+            current.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        metadata = current.lstat()
+        reparse = getattr(metadata, 'st_file_attributes', 0) & 0x400
+        if not stat.S_ISDIR(metadata.st_mode) or reparse:
+            raise ValueError('unsafe snapshot scratch ancestor')
+    return current
+
+
 def _span(value: object, source: Path, files: dict[str, bytes]) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get('name'), str):
         raise ValueError('invalid clone file')
@@ -142,8 +161,7 @@ def scan(root: Path, *, include_tests: bool = False, min_tokens: int = 50,
         hashes = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
         result['source_hashes'] = hashes
         result['inventory_digest'] = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
-        scratch = root / '.getzilla/runtime/scratch'
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = _scratch(root)
         with tempfile.TemporaryDirectory(prefix='duplicates-', dir=scratch) as temporary:
             work = Path(temporary)
             source = work / 'source'
