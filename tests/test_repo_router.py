@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.change import start_change
 from getzilla.repo import detect_repo
+from getzilla import router as router_module
 from getzilla.router import (
     build_route,
     can_reuse_active_route,
@@ -669,6 +670,37 @@ class RouterTests(unittest.TestCase):
             route = build_route(root, 'прод упал почини срочно', 's-prod')
             self.assertEqual(route.risk, 'high')
             self.assertIn('production_action_approval', route.human_gates)
+
+    # A pasted document (a CVE digest, a review of the project) names risky subjects without asking to
+    # change them. Seen 2026-10-22/23: such messages became `incident`/high routes with production gates.
+    PASTED_DIGEST = (
+        '## Critical vulnerabilities disclosed today\n\n'
+        + ''.join(f'- CVE-2026-{1000 + n} (PHP) — unauthenticated RCE, security incident in production, '
+                  f'credentials exposed, patch 8.{n}.1.\n' for n in range(12))
+        + '\n```\nCVE-2026-1001 RCE auth bypass production outage\n```\n'
+        + '\nThis incident shows how much insecure code reaches production every year. ' * 8
+    )
+
+    def test_pasted_material_caps_word_risk_and_drops_incident_and_production_gate(self) -> None:
+        self.assertGreater(len(self.PASTED_DIGEST), 1500)
+        with project_copy() as root:
+            route = build_route(root, self.PASTED_DIGEST, 's-pasted')
+            self.assertNotEqual(route.intent, 'incident')
+            self.assertEqual(route.risk, 'medium')
+            self.assertNotIn('production_action_approval', route.human_gates)
+            self.assertTrue(any('PASTED_MATERIAL' in line for line in route.rationale))
+
+    def test_pasted_material_with_an_explicit_deploy_command_stays_high(self) -> None:
+        with project_copy() as root:
+            route = build_route(root, 'Deploy the patched build to production now.\n\n' + self.PASTED_DIGEST, 's-pasted-op')
+            self.assertEqual(route.risk, 'high')
+            self.assertIn('production_action_approval', route.human_gates)
+
+    def test_short_risky_tasks_are_not_pasted_material(self) -> None:
+        for prompt in ('прод упал почини срочно', 'Добавь RAG с tenant isolation и защитой от prompt injection',
+                       'Review "publish SQL auth package in production"'):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(router_module._is_pasted_material(prompt))
 
     def test_primary_test_request_uses_test_intent(self) -> None:
         with project_copy() as root:
