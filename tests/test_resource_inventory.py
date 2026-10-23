@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.resource_inventory import PROTECTED, classify, disposable, inventory, measure  # noqa: E402
+from getzilla.resource_inventory import EPHEMERAL, PROTECTED, classify, disposable, inventory, measure  # noqa: E402
 
 
 def snapshot(base: Path) -> dict[str, bytes]:
@@ -54,8 +54,15 @@ class InventoryTests(unittest.TestCase):
             self.assertFalse(disposable(self.root, self.runtime / name))
         self.assertFalse(PROTECTED & {'par', 'scratch'})
 
+    def test_every_protected_name_stays_protected_and_only_par_is_ephemeral(self) -> None:
+        self.assertEqual(EPHEMERAL, frozenset({'par'}))
+        self.assertFalse(PROTECTED & EPHEMERAL)
+        for name in [*PROTECTED, '.state.lock', '.approvals.lock']:
+            self.assertEqual(classify(self.root, self.runtime / name), 'protected', name)
+
     def test_traversal_and_outside_paths_are_unknown(self) -> None:
-        self.assertEqual(classify(self.root, self.runtime / 'par' / '..' / 'receipts'), 'protected')
+        self.assertEqual(classify(self.root, self.runtime / 'par' / '..' / 'receipts'), 'unknown')
+        self.assertFalse(disposable(self.root, self.runtime / 'par' / 'run-1' / '..' / 'run-1'))
         self.assertFalse(disposable(self.root, self.runtime / 'par' / '..' / '..' / '..' / 'src'))
         self.assertFalse(disposable(self.root, self.root / 'src'))
         self.assertFalse(disposable(self.root, self.base / 'tmp' / 'grok-core-parallel-abc'))
@@ -68,9 +75,25 @@ class InventoryTests(unittest.TestCase):
         self.link(self.runtime / 'par' / 'escape', outside)
         self.assertEqual(classify(self.root, self.runtime / 'par' / 'escape'), 'unknown')
         self.assertFalse(disposable(self.root, self.runtime / 'par' / 'escape' / 'work.txt'))
+        (outside / 'deep').mkdir()
+        self.assertFalse(disposable(self.root, self.runtime / 'par' / 'escape' / 'deep' / '..' / 'work.txt'))
         (self.runtime / 'par').rename(self.base / 'real-par')
         self.link(self.runtime / 'par', self.base / 'real-par')
         self.assertFalse(disposable(self.root, self.runtime / 'par' / 'run-1'))
+
+    def test_a_linked_runtime_folder_is_never_disposable(self) -> None:
+        other = self.base / 'other'
+        (other / '.getzilla').mkdir(parents=True)
+        self.link(other / '.getzilla' / 'runtime', self.runtime)
+        self.assertEqual(classify(other, other / '.getzilla' / 'runtime' / 'par' / 'run-1'), 'unknown')
+        linked = self.base / 'linked'
+        linked.mkdir()
+        self.link(linked / '.getzilla', self.root / '.getzilla')
+        self.assertFalse(disposable(linked, linked / '.getzilla' / 'runtime' / 'par' / 'run-1'))
+
+    def test_unreadable_path_parts_fail_closed(self) -> None:
+        (self.runtime / 'par' / 'file').write_text('not a directory')
+        self.assertEqual(classify(self.root, self.runtime / 'par' / 'file' / 'child'), 'unknown')
 
     def test_measure_does_not_follow_links_and_discloses_the_budget(self) -> None:
         big = self.base / 'big'

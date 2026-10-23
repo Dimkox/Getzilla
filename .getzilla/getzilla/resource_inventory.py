@@ -1,8 +1,11 @@
 """Read-only inventory of Getzilla resources and the guard every later cleanup must pass (#168).
 
 Each `.getzilla/runtime` entry gets one class: `protected` (state, approvals, receipts, evidence,
-worktrees), `ephemeral` (output Getzilla can recreate) or `unknown`. Unknown is never disposable,
-and a symlink anywhere on the path makes the entry unknown. Nothing in this module deletes.
+worktrees), `ephemeral` (output Getzilla can recreate) or `unknown`. Unknown is never disposable.
+A `..` part, a linked `.getzilla` or runtime folder, or a symlink below it makes the entry unknown.
+Nothing in this module deletes. `disposable()` is a path check, not a lock: a deleting caller must
+re-check each part through held directory descriptors (`O_NOFOLLOW`, `dir_fd`) and must skip
+entries a live run still owns, such as `par/<stamp>-<pid>` while that pid runs.
 """
 from __future__ import annotations
 
@@ -15,10 +18,11 @@ from typing import Any
 
 RUNTIME = '.getzilla/runtime'
 PROTECTED = frozenset({
-    '.gitignore', '.gitkeep', 'active-change.json', 'active-route.json', 'agent-state.json', 'approvals.json',
-    'audit', 'changes', 'checkpoints', 'evidence', 'handoff.json', 'hook-events.jsonl', 'last-fingerprint.json',
-    'last-session-end.json', 'metrics.jsonl', 'owner-autonomy', 'parallel-guard.json', 'path-hints.json',
-    'receipts', 'reviews', 'routes', 'sessions', 'startup-capacity.json', 'tool-denials.json',
+    '.agents.guard', '.gitignore', '.gitkeep', 'active-change.json', 'active-route.json', 'agent-state.json',
+    'approvals.json', 'audit', 'changes', 'checkpoints', 'evidence', 'handoff.json', 'hook-events.jsonl',
+    'last-fingerprint.json', 'last-session-end.json', 'metrics.jsonl', 'owner-autonomy', 'parallel-guard.json',
+    'path-hints.json', 'receipts', 'reviews', 'routes', 'sessions', 'startup-capacity.json', 'stop-attempts.json',
+    'tool-denials.json', 'workflow-cas',
     # Git safety checks for worktrees arrive with their own deletion story; until then they stay.
     'worktrees',
 })
@@ -32,12 +36,20 @@ MAX_ENTRIES = 200_000
 
 def classify(root: Path, path: Path) -> str:
     """The class of `path`; anything outside the runtime folder, odd or linked is `unknown`."""
+    if '..' in Path(path).parts:
+        return 'unknown'  # `link/..` collapses as text but the OS resolves it through the link
     runtime = Path(os.path.abspath(root / RUNTIME))
     target = Path(os.path.abspath(path))
     if target == runtime:
         return 'protected'
     if runtime not in target.parents:
         return 'unknown'
+    for folder in (runtime.parent, runtime):
+        try:
+            if stat.S_ISLNK(os.lstat(folder).st_mode):
+                return 'unknown'
+        except OSError:
+            return 'unknown'
     current = runtime
     for part in target.relative_to(runtime).parts:
         current = current / part
@@ -49,7 +61,7 @@ def classify(root: Path, path: Path) -> str:
         except OSError:
             return 'unknown'
     top = target.relative_to(runtime).parts[0]
-    if top in PROTECTED:
+    if top in PROTECTED or (top.startswith('.') and top.endswith('.lock')):  # state.runtime_lock files
         return 'protected'
     return 'ephemeral' if top in EPHEMERAL else 'unknown'
 
