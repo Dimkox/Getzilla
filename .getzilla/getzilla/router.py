@@ -99,9 +99,9 @@ DEFAULT_ROUTING: dict[str, Any] = {
         'ai': ['ai_architect'],
     },
     'review_floors': {
-        'delivery': ['code_reviewer', 'test_reviewer'],
+        'delivery': ['code_reviewer'],
         'docs': ['code_reviewer'],
-        'review_intent': ['code_reviewer', 'test_reviewer'],
+        'review_intent': ['code_reviewer'],
         'release': ['release_reviewer'],
     },
     'review_domain_agents': {
@@ -190,6 +190,7 @@ class Route:
     rationale: list[str] = field(default_factory=list)
     matched_keywords: dict[str, list[str]] = field(default_factory=dict)
     delivery_lane: str = 'full'
+    risk_assessment: dict[str, object] = field(default_factory=lambda: {'schema_version': 1, 'status': 'provisional'})
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -330,6 +331,8 @@ def _is_pasted_material(text: str) -> bool:
 def _best_intent(text: str, *, operational_intent: bool, pasted: bool = False) -> str:
     scores = _score(text, INTENT_KEYWORDS)
     scores.pop('release', None)
+    if re.search(r'\b(?:dated|historical|archive|archives|lessons)\b|истори|архив|урок', text, re.I) and not re.search(r'\b(?:outage|down|unavailable|ongoing)\b|недоступ|авари', text, re.I):
+        scores.pop('incident', None)
     if operational_intent:
         scores['release'] = 1
     if not scores:
@@ -539,27 +542,10 @@ def build_route(
             write_agent = 'general_implementer'
 
     review_floors = cfg.get('review_floors') if isinstance(cfg.get('review_floors'), dict) else {}
-    review_domain = cfg.get('review_domain_agents') if isinstance(cfg.get('review_domain_agents'), dict) else {}
-    review_risk = cfg.get('review_risk_agents') if isinstance(cfg.get('review_risk_agents'), dict) else {}
-    review: list[str] = []
-    if write_agent:
-        review.extend(_string_list(review_floors.get('docs' if intent == 'docs' else 'delivery')))
-    elif intent == 'review':
-        review.extend(_string_list(review_floors.get('review_intent')))
-    elif intent == 'release':
-        review.extend(_string_list(review_floors.get('delivery')))
-    if 'bitrix' in domains:
-        review.extend(_string_list(review_domain.get('bitrix')))
-    if risk == 'high':
-        review.extend(_string_list(review_risk.get('high')))
-    elif any(d in domains for d in ('security', 'ai', 'integration')):
-        for key in ('security', 'ai', 'integration'):
-            if key in domains:
-                review.extend(_string_list(review_domain.get(key)))
-    if 'data' in domains:
-        review.extend(_string_list(review_domain.get('data')))
-    if intent == 'release' or risk == 'high':
-        review.extend(_string_list(review_floors.get('release')))
+    # Intent selects implementation support, not source-risk audits.
+    review = ['code_reviewer'] if write_agent or intent in {'review', 'release'} else []
+    if review:
+        review += _string_list(review_floors.get('delivery'))
 
     # Low-risk micro and standard work takes the light lane: one analysis agent, one reviewer
     # who also reads the tests, no durable change package. High risk, sensitive task domains,
@@ -576,9 +562,7 @@ def build_route(
         generic_analysis = set(_string_list(floors.get('feature_like'))) | set(_string_list(floors.get('standard'))) | {'architect'}
         analysis = [agent for agent in analysis if agent not in generic_analysis
                     or agent in _string_list(floors.get('always'))]
-        generic_review = set(_string_list(review_floors.get('delivery'))) | set(_string_list(review_floors.get('docs')))
-        review = list(_string_list(review_floors.get('light')) or ['code_reviewer']) + [
-            agent for agent in review if agent not in generic_review]
+        review = list(_string_list(review_floors.get('light')) or ['code_reviewer']) + review
     delivery_lane = 'light' if light else 'full'
 
     workflow_skills = ['getzilla-delivery']
@@ -720,13 +704,6 @@ def escalate_route(route: dict[str, object], risk: str, root: Path, *, force_ful
         cfg = load_routing_config(root)
         floors = cfg.get('review_floors') or {}
         added_reviewers.extend(agent for agent in _string_list(floors.get('delivery')) if agent not in reviewers)
-    if effective == 'high' and route_risk != 'high':
-        cfg = load_routing_config(root)
-        risk_agents = cfg.get('review_risk_agents') if isinstance(cfg.get('review_risk_agents'), dict) else {}
-        floors = cfg.get('review_floors') if isinstance(cfg.get('review_floors'), dict) else {}
-        for agent in [*_string_list(risk_agents.get('high')), *_string_list(floors.get('release'))]:
-            if agent not in reviewers and agent not in added_reviewers:
-                added_reviewers.append(agent)
     added_evidence = [REVIEW_EVIDENCE[agent] for agent in added_reviewers
                       if agent in REVIEW_EVIDENCE and REVIEW_EVIDENCE[agent] not in evidence]
     return {'route_risk': route_risk, 'effective_risk': effective,

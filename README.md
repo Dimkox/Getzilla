@@ -45,7 +45,7 @@ Think of a child building a LEGO tower. Building is the fun part, and nobody sho
 | Who checks the work | The same AI that wrote it | A different AI reviewer. The author cannot approve itself |
 | Where changes go | Wherever the AI puts them, sometimes straight into `main` | Every task gets its own branch and pull request |
 | Memory | Gone when the chat ends | Every task leaves a folder: the request, the plan, test results, reviews |
-| Mistakes | The next session repeats them | Lessons are written down in `mistakes.md` and `decisions.md` for the next session |
+| Mistakes | The next session repeats them | [Recurring lessons](engineering/mistakes.md) link to [dated incidents](engineering/incidents/README.md); decisions remain in `decisions.md` |
 | Small vs. risky tasks | Treated the same | Small tasks take a short path. Risky ones get more checks and a human sign-off |
 | Something unclear | The AI guesses | Getzilla stops instead of guessing |
 | Who ships | The AI | The agent uses a pull request. Under conditional L5, it merges after checks and independent review |

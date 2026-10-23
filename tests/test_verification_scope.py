@@ -1117,8 +1117,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:
             root = Path(tmp)
             git, _ = self._repo(root)
-            (root / '.getzilla' / 'getzilla').mkdir(parents=True)
-            (root / '.getzilla' / 'getzilla' / 'service.py').write_text(
+            (root / 'service.py').write_text(
                 'PRODUCT_STATEMENT = 2\n', encoding='utf-8'
             )
             (root / 'README.md').write_text('# probe\n\nidentity 1.0.1\n', encoding='utf-8')

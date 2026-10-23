@@ -7,6 +7,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, NamedTuple
 
@@ -36,7 +37,7 @@ from .architecture_diff import (
     read_diff_file,
     read_diff_files,
 )
-from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree
+from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members, _CONTAINER_MUTATORS
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -56,7 +57,11 @@ FITNESS_CATEGORIES = (
 RISK_ORDER = {"green": 0, "yellow": 1, "red": 2}
 MAX_ANALYZED_PYTHON_FILES = 2_000
 MAX_ANALYZED_AST_NODES = 200_000
-MAX_QUEUE_ADAPTER_MODULES = 32
+MAX_QUEUE_ADAPTER_MODULES = 48
+MAX_QUEUE_ANALYSIS_BYTES = 2 * 1024 * 1024
+MAX_QUEUE_ANALYSIS_AST_NODES = 400_000
+MAX_QUEUE_ANALYSIS_WORK = 4096
+QUEUE_PROJECTION_WORK_NODES = 128
 MAX_QUEUE_ADAPTER_DEPTH = 8
 MAX_QUEUE_SOURCE_ROOTS = 64
 MAX_QUEUE_DEPENDENCY_WORK = 4_096
@@ -246,6 +251,98 @@ class _QueueProvenanceResult(NamedTuple):
     limits: tuple[tuple[str, str, str], ...] = ()
 
 
+class _QueueSourceFootprint(NamedTuple):
+    path: str
+    digest: str
+    size: int
+    nodes: int = 0
+
+
+class _QueueFootprint(NamedTuple):
+    side: str
+    sources: tuple[_QueueSourceFootprint, ...] = ()
+    work: tuple[tuple[str, int], ...] = ()
+
+
+class _QueueBudget:
+    """One importer/side ledger; cache reuse cannot remove logical charges."""
+
+    def __init__(self, side: str) -> None:
+        self.side = side
+        self.sources: dict[tuple[str, str], _QueueSourceFootprint] = {}
+        self.work: dict[str, int] = {}
+        self.frames: list[dict[str, Any]] = []
+        self.source_bytes = self.ast_nodes = self.logical_work = self.actual_work = 0
+        self.summary_work = 0
+        self.root_steps = 0
+
+    def source(self, path: str, value: bytes, nodes: int = 0) -> None:
+        self._source(_QueueSourceFootprint(path, hashlib.sha256(value).hexdigest(), len(value), nodes))
+
+    def _source(self, item: _QueueSourceFootprint) -> None:
+        key = (item.path, item.digest)
+        previous = self.sources.get(key)
+        # Every inspected source counts, including the importer, declarations
+        # and transitive cache hits. Cache warmth cannot change admission.
+        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
+            raise ArchitectureError('queue adapter module limit exceeded', code='limit')
+        byte_total = self.source_bytes + (0 if previous else item.size)
+        node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
+        if byte_total > MAX_QUEUE_ANALYSIS_BYTES:
+            raise ArchitectureError('queue aggregate source byte limit exceeded', code='limit')
+        if node_total > MAX_QUEUE_ANALYSIS_AST_NODES:
+            raise ArchitectureError('queue aggregate AST node limit exceeded', code='limit')
+        self.source_bytes, self.ast_nodes = byte_total, node_total
+        self.sources[key] = item._replace(nodes=max(item.nodes, previous.nodes if previous else 0))
+        for frame in self.frames:
+            existing = frame['sources'].get(key)
+            frame['sources'][key] = item._replace(nodes=max(item.nodes, existing.nodes if existing else 0))
+
+    def _work(self, key: str, cost: int) -> None:
+        total = self.logical_work + max(0, cost - self.work.get(key, 0))
+        if total > MAX_QUEUE_ANALYSIS_WORK:
+            raise ArchitectureError('queue aggregate work limit exceeded', code='limit')
+        self.logical_work = total
+        self.work[key] = max(cost, self.work.get(key, 0))
+        for frame in self.frames:
+            frame['work'][key] = max(cost, frame['work'].get(key, 0))
+
+    def step(self, *, request: bool = False, cost: int = 1) -> None:
+        self.actual_work += cost
+        if not request:
+            self.summary_work += cost
+            if self.summary_work > MAX_QUEUE_ANALYSIS_WORK:
+                raise ArchitectureError('queue aggregate work limit exceeded', code='limit')
+        if self.frames:
+            frame = self.frames[-1]
+            frame['own'] += cost
+            self._work(frame['key'], frame['own'])
+        else:
+            self.root_steps += cost
+            self._work('importer', self.root_steps)
+
+    def enter(self, key: str) -> dict[str, Any]:
+        frame: dict[str, Any] = {'key': key, 'own': 0, 'sources': {}, 'work': {}}
+        self.frames.append(frame)
+        return frame
+
+    def leave(self, frame: dict[str, Any]) -> _QueueFootprint:
+        if not self.frames or self.frames[-1] is not frame:
+            raise ArchitectureError('queue work ledger scope mismatch', code='fitness')
+        self.frames.pop()
+        return _QueueFootprint(self.side, tuple(sorted(frame['sources'].values())), tuple(sorted(frame['work'].items())))
+
+    def merge(self, footprint: _QueueFootprint | None) -> None:
+        if footprint is None:
+            return
+        if footprint.side != self.side:
+            raise ArchitectureError('queue source cache side mismatch', code='fitness')
+        for source in footprint.sources:
+            self._source(source)
+        for key, cost in footprint.work:
+            self._work(key, cost)
+
+
 class _QueueAdapterResolution(NamedTuple):
     state: str
     reason: str
@@ -253,17 +350,23 @@ class _QueueAdapterResolution(NamedTuple):
     signals: tuple[str, ...] = ()
     declared_exports: tuple[str, ...] = ()
     sources: tuple[tuple[str, bytes, str], ...] = ()
+    modules: frozenset[str] = frozenset()
+    height: int = 1
+    footprint: _QueueFootprint | None = None
 
 
 class _QueueResolutionCache(NamedTuple):
     modules: tuple[str, ...]
     paths: tuple[str, ...]
     values: dict[str, _QueueAdapterResolution]
+    demands: dict[tuple[str, frozenset[str] | None, bool], _QueueAdapterResolution]
 
 
 class _QueueAdapterNamesResult(NamedTuple):
     names: frozenset[str]
     unsupported: bool
+    modules: frozenset[str] = frozenset()
+    height: int = 0
 
 
 class _OperationDependencies(NamedTuple):
@@ -1974,9 +2077,10 @@ def _operation_dependencies(
     tree: ast.AST,
     *,
     work_limit: int = MAX_QUEUE_DEPENDENCY_WORK,
+    requested: frozenset[str] = frozenset(),
 ) -> _OperationDependencies:
     """Return names that can feed a changed callable/decorator expression."""
-    dependencies: set[str] = set()
+    dependencies: set[str] = set(requested)
     for node in ast.walk(tree):
         values: list[ast.AST] = []
         if isinstance(node, ast.Call):
@@ -2072,7 +2176,238 @@ def _declared_module_exports(tree: ast.Module) -> tuple[str, ...]:
             declared.add(node.target.id)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             declared.update(alias.asname or alias.name for alias in node.names)
-    return tuple(sorted(name for name in declared if not name.startswith("_")))
+    return tuple(sorted(declared))
+
+
+@lru_cache(maxsize=256)
+def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Module:
+    """Demand closure for unchanged dependencies, retaining possible rebinding.
+
+    Function returns have their own dependency closure. Dynamic namespaces keep
+    the full bounded analysis rather than pretending an export is ordinary.
+    """
+    if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+           and node.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'}
+           for node in ast.walk(tree)):
+        return tree
+
+    shadowed = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef)))
+    shadowed.update(alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names)
+    shadowed.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
+    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name)
+
+    class Scalars(ast.NodeTransformer):
+        def visit_JoinedStr(self, node):
+            if any(isinstance(child, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom)) for child in ast.walk(node)):
+                return self.generic_visit(node)
+            return ast.Constant(value='')
+
+        def visit_Call(self, node):
+            effects = any(isinstance(child, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom))
+                          for argument in (*node.args, *(item.value for item in node.keywords)) for child in ast.walk(argument))
+            if not effects and isinstance(node.func, ast.Name) and node.func.id in {'str', 'bytes', 'int', 'float', 'bool', 'len'} - shadowed:
+                return ast.Constant(value=None)
+            return self.generic_visit(node)
+
+    import copy
+    tree = Scalars().visit(copy.deepcopy(tree))
+
+    @lru_cache(maxsize=None)
+    def names(node: ast.AST) -> set[str]:
+        return {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
+
+    @lru_cache(maxsize=None)
+    def writes(node: ast.AST) -> set[str]:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return {node.name}
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return {alias.asname or alias.name.split('.')[0] for alias in node.names}
+        targets = [item for item in ast.walk(node)
+                   if isinstance(item, (ast.Name, ast.Attribute, ast.Subscript))
+                   and isinstance(item.ctx, (ast.Store, ast.Del))]
+        return set().union(*(names(item) for item in targets)) if targets else set()
+
+    memo: dict[tuple[int, frozenset[str], bool, int], list[ast.stmt]] = {}
+
+    def closure(body: list[ast.stmt], seeds: set[str], *, returns: bool = False, depth: int = 0) -> list[ast.stmt]:
+        if depth > 64:
+            raise ArchitectureError('queue export syntax depth limit exceeded', code='limit')
+        key = (id(body), frozenset(seeds), returns, depth)
+        if key in memo:
+            return memo[key]
+        selected: dict[int, ast.stmt] = {}
+        wanted = set(seeds)
+        for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
+            previous = (len(wanted), len(selected))
+            for index, node in enumerate(body):
+                wildcard = isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names)
+                mutation = isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and bool(names(node) & wanted)
+                returning = returns and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and any(isinstance(item, (ast.Return, ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
+                if not (writes(node) & wanted or wildcard or mutation or returning):
+                    continue
+                chosen = node
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    chosen = copy.copy(node)
+                    chosen.body = closure(node.body, set(), returns=True, depth=depth + 1) or [ast.Pass()]
+                    chosen.returns = None
+                    chosen.args = copy.deepcopy(node.args)
+                    for argument in (*chosen.args.posonlyargs, *chosen.args.args, *chosen.args.kwonlyargs,
+                                     *([chosen.args.vararg] if chosen.args.vararg else []),
+                                     *([chosen.args.kwarg] if chosen.args.kwarg else [])):
+                        argument.annotation = None
+                elif isinstance(node, (ast.If, ast.While, ast.For, ast.AsyncFor, ast.Try, ast.With, ast.AsyncWith)):
+                    chosen = copy.copy(node)
+                    for field in ('body', 'orelse', 'finalbody'):
+                        if hasattr(node, field):
+                            setattr(chosen, field, closure(getattr(node, field), wanted, returns=returns, depth=depth + 1))
+                    if hasattr(chosen, 'test') and not (names(chosen.test) & wanted):
+                        # The value interpreter joins both branches. Keep an
+                        # unknown predicate so the projection cannot imply reachability.
+                        chosen.test = ast.Name(id='__getzilla_unknown_predicate__', ctx=ast.Load())
+                    if isinstance(chosen, (ast.For, ast.AsyncFor)) and not (names(chosen.target) & wanted):
+                        chosen.iter = ast.Tuple(elts=[ast.Constant(value=None)], ctx=ast.Load())
+                    if isinstance(chosen, ast.Try):
+                        chosen.handlers = []
+                        for handler in node.handlers:
+                            selected_handler = copy.copy(handler)
+                            selected_handler.type = None
+                            selected_handler.body = closure(handler.body, wanted, returns=returns, depth=depth + 1)
+                            chosen.handlers.append(selected_handler)
+                selected[index] = chosen
+                wanted.update(names(chosen))
+            if previous == (len(wanted), len(selected)):
+                result = [selected[index] for index in sorted(selected)]
+                memo[key] = result
+                return result
+        raise ArchitectureError('queue export dependency limit exceeded', code='limit')
+
+    return ast.Module(body=closure(tree.body, set(requested)), type_ignores=[])
+
+
+@lru_cache(maxsize=128)
+def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
+                          requested: frozenset[str] | None = None, depth: int = 0) -> set[str]:
+    return _queue_return_exports_scoped(tree, adapters, requested, depth, [MAX_QUEUE_DEPENDENCY_WORK])
+
+
+def _queue_return_exports_scoped(tree: ast.Module, adapters: frozenset[str],
+                                 requested: frozenset[str] | None, depth: int, budget: list[int] | _QueueBudget) -> set[str]:
+    """Evaluate helper dependencies first; nested scopes share one work budget."""
+    if depth > MAX_QUEUE_ADAPTER_DEPTH:
+        raise ArchitectureError('queue factory return depth limit exceeded', code='limit')
+    marker = '__getzilla_return_projection__'
+    if any(isinstance(node, ast.Name) and (node.id == marker or
+           (node.id.startswith(('__getzilla_return_factory_', '__getzilla_nested_factory_')) and node.id not in adapters))
+           for node in ast.walk(tree)):
+        raise ArchitectureError('return projection name collision', code='fitness')
+    projections = {}
+    preparation_cost = max(1, (sum(1 for _ in ast.walk(tree)) + QUEUE_PROJECTION_WORK_NODES - 1)
+                           // QUEUE_PROJECTION_WORK_NODES) if isinstance(budget, _QueueBudget) else 0
+    for node in tree.body:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and (requested is None or node.name in requested) and node.name not in projections):
+            if isinstance(budget, _QueueBudget):
+                budget.step(cost=preparation_cost)
+            projection = _queue_export_slice(tree, frozenset({node.name}))
+            selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == node.name)
+            projections[node.name] = (selected, [item for item in projection.body if item is not selected])
+    dependencies = {}
+    for name, (selected, prefix) in projections.items():
+        names = {item.id for item in ast.walk(selected) if isinstance(item, ast.Name)}
+        # Module aliases can carry a helper into a return without naming it in
+        # the function. Function bodies in the prefix belong to their own scope.
+        for statement in prefix:
+            if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.update(item.id for item in ast.walk(statement) if isinstance(item, ast.Name))
+        dependencies[name] = (names & projections.keys()) - {name}
+    dependents = {name: set() for name in projections}
+    for name, needed in dependencies.items():
+        for dependency in needed:
+            dependents[dependency].add(name)
+    remaining = {name: set(needed) for name, needed in dependencies.items()}
+    ready = deque(sorted(name for name, needed in remaining.items() if not needed))
+    order = []
+    while ready:
+        name = ready.popleft()
+        order.append(name)
+        for dependent in sorted(dependents[name]):
+            remaining[dependent].discard(name)
+            if not remaining[dependent]:
+                ready.append(dependent)
+    order.extend(name for name in projections if name not in order)  # cycles retain bounded rechecks
+    pending, queued, found = deque(order), set(order), set()
+    while pending:
+        name = pending.popleft()
+        queued.remove(name)
+        if name in found:
+            continue
+        if isinstance(budget, _QueueBudget):
+            budget.step()
+        else:
+            if budget[0] <= 0:
+                raise ArchitectureError('queue factory return dependency limit exceeded', code='limit')
+            budget[0] -= 1
+        selected, prefix = projections[name]
+        if _queue_projected_return(selected, prefix, adapters, found, marker, depth, budget):
+            found.add(name)
+            for dependent in sorted(dependents[name] - found - queued):
+                pending.append(dependent)
+                queued.add(dependent)
+    return found
+
+
+def _queue_projected_return(selected: ast.FunctionDef | ast.AsyncFunctionDef, prefix: list[ast.stmt],
+                             adapters: frozenset[str], known: set[str], marker: str,
+                             depth: int, budget: list[int] | _QueueBudget) -> bool:
+    import copy
+
+    class Returns(ast.NodeTransformer):
+        def visit_FunctionDef(self, node):
+            return node
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Return(self, node):
+            return ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()),
+                                          args=[node.value or ast.Constant(value=None)], keywords=[]))
+
+    inherited = set()
+    projected_prefix = []
+    for statement in prefix:
+        projected_prefix.append(statement)
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name in known:
+            alias = '__getzilla_return_factory_' + statement.name
+            inherited.add(alias)
+            projected_prefix.append(ast.Assign(targets=[ast.Name(id=statement.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
+    adapters = adapters | inherited
+    initialize = ast.Assign(targets=[ast.Name(id=marker, ctx=ast.Store())], value=ast.List(elts=[], ctx=ast.Load()))
+    arguments = [*selected.args.posonlyargs, *selected.args.args]
+    parameters = [*arguments, *selected.args.kwonlyargs,
+                  *([selected.args.vararg] if selected.args.vararg else []),
+                  *([selected.args.kwarg] if selected.args.kwarg else [])]
+    defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=ast.Constant(value=None))
+                for argument in parameters]
+    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
+                    for argument, default in zip(arguments[-len(selected.args.defaults):], selected.args.defaults))
+    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
+                    for argument, default in zip(selected.args.kwonlyargs, selected.args.kw_defaults) if default is not None)
+    nested = [item for item in selected.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    nested_factories = set()
+    if nested:
+        nested_tree = ast.Module(body=[*projected_prefix, *defaults, *selected.body], type_ignores=[])
+        nested_factories = _queue_return_exports_scoped(nested_tree, frozenset(adapters),
+            frozenset(item.name for item in nested), depth + 1, budget)
+    nested_names = {'__getzilla_nested_factory_' + name for name in nested_factories}
+    body = list(defaults)
+    for item in selected.body:
+        body.append(Returns().visit(copy.deepcopy(item)))
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in nested_factories:
+            body.append(ast.Assign(targets=[ast.Name(id=item.name, ctx=ast.Store())],
+                value=ast.Name(id='__getzilla_nested_factory_' + item.name, ctx=ast.Load())))
+    for decorator in selected.decorator_list:
+        body.append(ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()), args=[decorator], keywords=[])))
+    result = analyze_queue_tree(ast.Module(body=[*projected_prefix, initialize, *body], type_ignores=[]), frozenset(adapters) | nested_names)
+    return marker in result.derived_names
 
 
 def _resolve_import_module(current_package: str, module: str | None, level: int) -> str:
@@ -2092,7 +2427,14 @@ def _imported_module(package: str, name: str) -> str:
     return f"{package}.{name}" if package else name
 
 
-def _module_package(path: str, source_roots: tuple[str, ...] = ()) -> str:
+def _module_package(path: str, source_roots: tuple[str, ...] = (), paths: tuple[str, ...] = ()) -> str:
+    directories = PurePosixPath(path).parent.parts
+    src = [index + 1 for index, part in enumerate(directories) if part == 'src' and index + 1 < len(directories)]
+    if len(src) == 1:
+        return '.'.join(directories[src[0]:])
+    for index in range(len(directories)):
+        if '/'.join((*directories[:index + 1], '__init__.py')) in paths:
+            return '.'.join(directories[index:])
     relative = path
     matching_roots = [
         root for root in source_roots if root and _matches(path, (root,))
@@ -2129,13 +2471,14 @@ def _queue_source_roots(snapshot: ArchitectureSnapshot) -> tuple[str, ...]:
 def _queue_module_inventory(root: Path, diff: ArchitectureDiff, side: str, source_roots: tuple[str, ...]) -> _QueueResolutionCache:
     paths = _repository_paths(root, diff, source_roots) if side == "head" else git_tree_paths(root, diff.base_sha, source_roots)
     modules = {relative.removesuffix("/__init__.py").removesuffix(".py").replace("/", ".") for path in paths for prefix in source_roots if not prefix or _matches(path, (prefix,)) for relative in (path[len(prefix) + 1:] if prefix else path,) if relative.endswith(".py")}
-    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {})
+    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {}, {})
 
 
 def _prime_local_module_sources(
     root: Path, diff: ArchitectureDiff, modules: set[str], side: str,
     cache: _QueueResolutionCache, source_roots: tuple[str, ...],
     remaining: int,
+    budget: _QueueBudget | None = None,
 ) -> None:
     pending = sorted(module for module in modules if module in cache.modules and module not in cache.values)
     if len(pending) > remaining:
@@ -2156,11 +2499,177 @@ def _prime_local_module_sources(
             continue
         sources = tuple((path, values[path], module if path.endswith("/__init__.py") else module.rsplit(".", 1)[0] if "." in module else "") for path in paths if values[path] is not None)
         cache.values[module] = _QueueAdapterResolution("prefetched", "local_module_prefetched", sources=sources)
+    if budget is not None:
+        for module in sorted(modules):
+            cached = cache.values.get(module)
+            if cached is not None:
+                for path, value, _package in cached.sources:
+                    budget.source(path, value)  # Admit bytes before any AST parse or cache use.
 
 
 def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
     package_path = f"{module.replace('.', '/')}/__init__.py"
     return any(path.endswith(package_path) for path in cache.paths) or module not in cache.modules and any(name.startswith(module + ".") for name in cache.modules)
+
+
+def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
+    members: set[str] = set()
+    covered: set[int] = set()
+    patches = literal_patch_members(tree) if patches is None else patches
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and id(node) in patches and patches[id(node)][0] == access_name:
+            members.add(patches[id(node)][1])
+            covered.add(id(node.args[0]))
+        if not isinstance(node, ast.Attribute):
+            continue
+        parts: list[str] = []
+        value: ast.AST = node
+        while isinstance(value, ast.Attribute):
+            parts.append(value.attr)
+            value = value.value
+        if isinstance(value, ast.Name):
+            chain = '.'.join((value.id, *reversed(parts)))
+            if chain.startswith(access_name + '.'):
+                members.add(chain[len(access_name) + 1:].split('.')[0])
+                covered.add(id(value))
+    # Escaping aliases or dynamic access retain the full export closure.
+    if any(isinstance(node, ast.Name) and node.id == access_name.split('.')[0]
+           and isinstance(node.ctx, ast.Load) and id(node) not in covered for node in ast.walk(tree)):
+        return None
+    return frozenset(members) or None
+
+
+def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, returns: bool = False) -> frozenset[str]:
+    """Distinguish a callable object from a value returned into an operation."""
+    demanded: set[str] = set()
+    local_dependencies: dict[int, frozenset[str]] = {}
+    if not returns and isinstance(tree, ast.Module):
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = ast.Module(body=function.body, type_ignores=[])
+            # Sibling functions do not share local bindings. Keep nested scopes
+            # together for closures, and retain the conservative module demand
+            # for global/nonlocal writes and selected-export return projections.
+            if any(isinstance(node, (ast.Global, ast.Nonlocal)) for node in ast.walk(body)):
+                continue
+            scoped = _operation_dependencies(body)
+            if scoped.exhausted:
+                continue
+            local_dependencies.update((id(node), scoped.names) for node in ast.walk(body)
+                                      if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Call)))
+    for node in ast.walk(tree):
+        values = []
+        if isinstance(node, ast.Call):
+            values.extend(child for child in ast.walk(node.func) if isinstance(child, ast.Call))
+            if (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                    and node.func.attr in {'append', 'extend'} | _CONTAINER_MUTATORS
+                    and node.func.value.id in local_dependencies.get(id(node), dependencies)):
+                values.extend(node.args)
+                values.extend(item.value for item in node.keywords)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = local_dependencies.get(id(node), dependencies)
+            if any(isinstance(child, ast.Name) and child.id in names for target in targets for child in ast.walk(target)):
+                values.append(node.value)
+        elif returns and isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom)):
+            values.append(node.value)
+        for value in values:
+            if value is not None:
+                for call in ast.walk(value):
+                    if isinstance(call, ast.Call):
+                        parts = []
+                        function = call.func
+                        while isinstance(function, ast.Attribute):
+                            parts.append(function.attr)
+                            function = function.value
+                        if isinstance(function, ast.Name):
+                            demanded.add('.'.join((function.id, *reversed(parts))))
+                        else:
+                            pending = [call.func]
+                            while pending:
+                                child = pending.pop()
+                                if isinstance(child, ast.Call):
+                                    continue  # its own return demand is collected separately
+                                if isinstance(child, ast.Name):
+                                    demanded.add(child.id)
+                                pending.extend(ast.iter_child_nodes(child))
+    return frozenset(demanded)
+
+
+def _plain_callable_declaration(tree: ast.Module, requested: frozenset[str] | None) -> bool:
+    """A stable undecorated function object is ordinary; this says nothing about its return."""
+    if not requested:
+        return False
+    definitions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if not requested <= definitions.keys() or any(definitions[name].decorator_list for name in requested):
+        return False
+    # Python binds names through more nodes than Name(Store). Inspect these
+    # across conditional and nested bodies; uncertainty falls back to analysis.
+    if any((isinstance(node, (ast.Global, ast.Nonlocal)) and requested.intersection(node.names))
+           or (isinstance(node, ast.alias) and (node.name == '*' or (node.asname or node.name.split('.')[0]) in requested))
+           or (isinstance(node, ast.ExceptHandler) and node.name in requested)
+           or (isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in requested)
+           or (isinstance(node, ast.MatchMapping) and node.rest in requested)
+           or (isinstance(node, ast.Name) and node.id in requested and isinstance(node.ctx, (ast.Store, ast.Del)))
+           or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'})
+           or (isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
+               and any(isinstance(part, ast.Name) and part.id in requested for part in ast.walk(node.value)))
+           for node in ast.walk(tree)):
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is definitions.get(node.name):
+            continue
+        if any((isinstance(child, ast.Name) and child.id in requested and isinstance(child.ctx, (ast.Store, ast.Del)))
+               or (isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child.name in requested)
+               or (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                   and child.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'})
+               for child in ast.walk(node)):
+            return False
+    return True
+
+
+def _aliased_callable_mutation(tree: ast.Module, requested: frozenset[str] | None) -> bool:
+    functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    original = functions & set(requested or ())
+    aliases = set(original)
+    for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
+        previous = set(aliases)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id in aliases:
+                aliases.update(target.id for target in node.targets if isinstance(target, ast.Name))
+        if aliases == previous:
+            break
+    else:
+        raise ArchitectureError('callable alias dependency limit exceeded', code='limit')
+    return bool(aliases - original) and any(
+        isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
+        and isinstance(node.value, ast.Name) and node.value.id in aliases
+        for node in ast.walk(tree))
+
+
+@lru_cache(maxsize=128)
+def _queue_source_tree(path: str, source: bytes) -> ast.Module:
+    try:
+        tree = ast.parse(source.decode('utf-8'), filename=path)
+    except (SyntaxError, UnicodeDecodeError) as exc:
+        raise ArchitectureError(f'local queue source is not analyzable: {path}', code='fitness') from exc
+    if sum(1 for _ in ast.walk(tree)) > MAX_ANALYZED_AST_NODES:
+        raise ArchitectureError(f'Python AST node limit exceeded: {path}', code='limit')
+    return tree
+
+
+@lru_cache(maxsize=128)
+def _queue_source_node_count(path: str, source: bytes) -> int:
+    return sum(1 for _ in ast.walk(_queue_source_tree(path, source)))
+
+
+def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.Module:
+    budget.source(path, source)
+    tree = _queue_source_tree(path, source)
+    budget.source(path, source, _queue_source_node_count(path, source))
+    return tree
 
 
 def _local_queue_resolution(
@@ -2172,6 +2681,48 @@ def _local_queue_resolution(
     resolving: set[str],
     visited: set[str],
     source_roots: tuple[str, ...],
+    requested: frozenset[str] | None = None,
+    callable_only: bool = False,
+    budget: _QueueBudget | None = None,
+) -> _QueueAdapterResolution:
+    budget = budget if budget is not None else _QueueBudget(side)
+    original_key = (module, requested, callable_only)
+    prefetched = cache.values.get(module)
+    source_identity = tuple((path, hashlib.sha256(value).hexdigest())
+                            for path, value, _package in prefetched.sources) if prefetched else ()
+    work_key = repr((side, module, tuple(sorted(requested)) if requested is not None else None,
+                     callable_only, source_identity))
+    frame = budget.enter(work_key)
+    try:
+        budget.step(request=True)
+        cached = cache.demands.get(original_key)
+        if cached is not None and cached.footprint is None:
+            raise ArchitectureError('queue cached resource footprint is unavailable', code='limit')
+        result = _local_queue_resolution_impl(root, diff, module, side, cache, resolving, visited,
+            source_roots, requested, callable_only, budget)
+        budget.merge(result.footprint)
+    except BaseException:
+        budget.leave(frame)
+        raise
+    footprint = budget.leave(frame)
+    bounded = result._replace(footprint=footprint)
+    if cache.demands.get(original_key) is result:
+        cache.demands[original_key] = bounded
+    return bounded
+
+
+def _local_queue_resolution_impl(
+    root: Path,
+    diff: ArchitectureDiff,
+    module: str,
+    side: str,
+    cache: _QueueResolutionCache,
+    resolving: set[str],
+    visited: set[str],
+    source_roots: tuple[str, ...],
+    requested: frozenset[str] | None,
+    callable_only: bool,
+    budget: _QueueBudget,
 ) -> _QueueAdapterResolution:
     if (
         not module
@@ -2180,17 +2731,40 @@ def _local_queue_resolution(
         return _QueueAdapterResolution("not_queue", "invalid_local_module")
     if module not in cache.modules:
         return _QueueAdapterResolution("not_queue", "local_module_missing")
+    prefetched = cache.values.get(module)
+    demand_key = (module, requested, callable_only)
+    cached_declaration = cache.demands.get(demand_key)
+    if callable_only and cached_declaration is not None and not cached_declaration.modules:
+        return cached_declaration
+    if callable_only and prefetched is not None and prefetched.sources:
+        # Declaration inspection does not expand a dependency. It is bounded by
+        # the prefetched module batch and AST node cap, unlike recursive returns.
+        source_path, value, _package = prefetched.sources[0]
+        declaration = _budgeted_queue_tree(source_path, value, budget)
+        if _aliased_callable_mutation(declaration, requested):
+            raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
+        if _plain_callable_declaration(declaration, requested):
+            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue', declared_exports=_declared_module_exports(declaration))
+            cache.demands[demand_key] = result
+            return result
     if module not in visited:
         if len(visited) >= MAX_QUEUE_ADAPTER_MODULES:
             raise ArchitectureError("queue adapter module limit exceeded", code="limit")
         visited.add(module)
-    prefetched = cache.values.get(module)
     if prefetched is not None and prefetched.state != "prefetched":
         return prefetched
     if module in resolving:
         return _QueueAdapterResolution("unsupported", "cyclic_local_queue_adapter")
     if len(resolving) >= MAX_QUEUE_ADAPTER_DEPTH:
         raise ArchitectureError("queue adapter depth limit exceeded", code="limit")
+    cached = cache.demands.get(demand_key)
+    if cached is not None and not (cached.modules & resolving):
+        if len(visited | cached.modules) > MAX_QUEUE_ADAPTER_MODULES:
+            raise ArchitectureError('queue adapter module limit exceeded', code='limit')
+        if len(resolving) + cached.height > MAX_QUEUE_ADAPTER_DEPTH:
+            raise ArchitectureError('queue adapter depth limit exceeded', code='limit')
+        visited.update(cached.modules)
+        return cached
     resolving.add(module)
     try:
         sources = prefetched.sources if prefetched is not None else ()
@@ -2199,15 +2773,12 @@ def _local_queue_resolution(
             cache.values[module] = result
             return result
         source_path, value, current_package = sources[0]
-        try:
-            tree = ast.parse(value.decode("utf-8"), filename=source_path)
-        except (SyntaxError, UnicodeDecodeError) as exc:
-            raise ArchitectureError(
-                f"relevant local queue adapter is not analyzable: {module}",
-                code="fitness",
-            ) from exc
-        if sum(1 for _ in ast.walk(tree)) > MAX_ANALYZED_AST_NODES:
-            raise ArchitectureError(f"Python AST node limit exceeded: {module}", code="limit")
+        tree = _budgeted_queue_tree(source_path, value, budget)
+        declared = _declared_module_exports(tree)
+        requested = requested if requested is not None else frozenset(declared)
+        if _aliased_callable_mutation(tree, requested):
+            raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
+        tree = _queue_export_slice(tree, requested)
         imported = _queue_adapter_names(
             root,
             diff,
@@ -2218,14 +2789,38 @@ def _local_queue_resolution(
             visited,
             current_package=current_package,
             source_roots=source_roots,
+            requested=requested or frozenset(),
+            budget=budget,
         )
         try:
             analysis = analyze_queue_tree(tree, imported.names)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
-        exports = tuple(sorted(
-            name for name in analysis.derived_names if not name.startswith("_")
-        ))
+        # A projection with no queue imports, values or effects cannot create a
+        # queue return. Avoid reslicing every ordinary helper in that case.
+        try:
+            factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
+        except QueueAnalysisLimit as exc:
+            raise ArchitectureError(str(exc), code='limit') from exc
+        if factories:
+            # The adapter value models a callable's returned queue. Preserve the
+            # selected function body for operation checks, then expose its return
+            # summary before subsequent assignments such as app = make_queue().
+            body = []
+            aliases = {'__getzilla_factory_' + name for name in factories}
+            if any(isinstance(node, ast.Name) and node.id in aliases for node in ast.walk(tree)):
+                raise ArchitectureError('factory projection name collision', code='fitness')
+            for node in tree.body:
+                body.append(node)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in factories:
+                    alias = '__getzilla_factory_' + node.name
+                    body.append(ast.Assign(targets=[ast.Name(id=node.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
+            try:
+                analysis = analyze_queue_tree(ast.Module(body=body, type_ignores=[]), imported.names | aliases)
+            except QueueAnalysisLimit as exc:
+                raise ArchitectureError(str(exc), code='limit') from exc
+        exports = set(analysis.export_paths) - {'__getzilla_factory_' + name for name in factories}
+        exports = tuple(sorted(exports))
         has_queue_provenance = bool(analysis.signals or exports)
         state = (
             "unsupported"
@@ -2234,9 +2829,13 @@ def _local_queue_resolution(
         )
         reason = "local_queue_provenance_resolved" if has_queue_provenance else "local_module_not_queue"
         result = _QueueAdapterResolution(
-            state, reason, exports, analysis.signals, _declared_module_exports(tree)
+            state, reason, exports, analysis.signals, declared,
+            modules=imported.modules | {module}, height=imported.height + 1,
         )
-        cache.values[module] = result
+        # Side/source bytes belong to this snapshot cache; a completed summary
+        # additionally binds the export demand, transitive module cost and depth.
+        if state != 'unsupported':
+            cache.demands[demand_key] = result
         return result
     finally:
         resolving.remove(module)
@@ -2252,21 +2851,58 @@ def _queue_adapter_names(
     visited: set[str] | None = None,
     *, current_package: str = "",
     source_roots: tuple[str, ...],
+    requested: frozenset[str] = frozenset(),
+    budget: _QueueBudget | None = None,
 ) -> _QueueAdapterNamesResult:
+    budget = budget if budget is not None else _QueueBudget(side)
     proven: set[str] = set()
     unsupported = False
+    modules: set[str] = set()
+    height = 0
     active = resolving if resolving is not None else set()
     seen = visited if visited is not None else set()
-    dependency_result = _operation_dependencies(tree)
+    dependency_result = _operation_dependencies(tree, requested=requested)
     dependencies = set(dependency_result.names)
+    return_demands = _returned_call_demands(tree, dependency_result.names, returns=bool(requested))
+    patches = literal_patch_members(tree)
+    member_demands: dict[str, frozenset[str] | None] = {}
+
+    def demanded_members(access_name: str) -> frozenset[str] | None:
+        if access_name not in member_demands:
+            member_demands[access_name] = _module_member_demands(tree, access_name, patches)
+        return member_demands[access_name]
+
+    def resolve_import(module: str, members: frozenset[str] | None, *, split: bool) -> _QueueAdapterResolution:
+        if not split or not members:
+            return _local_queue_resolution(root, diff, module, side, cache, active, seen,
+                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=members,
+                callable_only=local_name not in requested and local_name not in return_demands, budget=budget)
+        results = []
+        for member in sorted(members):
+            prefix = access_name + '.' + member
+            returned = local_name in requested or local_name in return_demands or any(
+                value == prefix or value.startswith(prefix + '.') for value in return_demands)
+            results.append(_local_queue_resolution(root, diff, module, side, cache, active, seen,
+                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=frozenset({member}), callable_only=not returned, budget=budget))
+        if len(results) == 1:
+            return results[0]
+        state = ('unsupported' if any(item.state == 'unsupported' for item in results)
+                 else 'resolved' if any(item.state == 'resolved' for item in results) else 'not_queue')
+        missing = all(item.reason == 'local_module_missing' for item in results)
+        return _QueueAdapterResolution(state, 'local_module_missing' if missing else
+            'local_queue_provenance_resolved' if state != 'not_queue' else 'local_module_not_queue',
+            tuple(sorted({name for item in results for name in item.exports})),
+            tuple(sorted({signal for item in results for signal in item.signals})),
+            tuple(sorted({name for item in results for name in item.declared_exports})),
+            modules=frozenset(name for item in results for name in item.modules),
+            height=max(item.height for item in results))
+
+    for _target, _member, replacement, factory in patches.values():
+        names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
+        dependencies.update(names)
+        if factory:
+            return_demands |= names
     reachable = dependencies | set(dependency_result.frontier)
-    if resolving is not None:
-        dependencies.update(
-            alias.asname or alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-            for alias in node.names
-        )
     normalized: list[tuple[str, str, str, str, int, bool, bool]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -2274,17 +2910,17 @@ def _queue_adapter_names(
         elif isinstance(node, ast.ImportFrom):
             module = _resolve_import_module(current_package, node.module, node.level)
             imports = tuple((
-                _imported_module(module, alias.name) if node.module is None else module,
-                "" if node.module is None else alias.name,
+                module,
+                alias.name,
                 alias.asname or alias.name,
                 alias.asname or alias.name,
-                node.level, node.module is None, alias.name == "*",
+                node.level, False, alias.name == "*",
             ) for alias in node.names)
         else:
             continue
         normalized.extend(imports)
     relevant = [item for item in normalized if item[0].split(".")[0] not in _QUEUE_IMPORTS and (item[6] and reachable or item[2] in dependencies or item[2] in dependency_result.frontier_imports)]
-    _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], MAX_QUEUE_ADAPTER_MODULES - len(seen))
+    _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
     for target_module, target_name, local_name, access_name, level, whole_module, wildcard in normalized:
             if target_module.split(".")[0] in _QUEUE_IMPORTS or not (wildcard and reachable or local_name in dependencies or local_name in dependency_result.frontier_imports):
                 continue
@@ -2295,26 +2931,30 @@ def _queue_adapter_names(
                 unsupported = True
                 continue
             bounded_source_roots = source_roots[:MAX_QUEUE_SOURCE_ROOTS]
-            resolution = _local_queue_resolution(
-                root,
-                diff,
-                target_module,
-                side,
-                cache,
-                active,
-                seen,
-                bounded_source_roots,
-            )
+            resolution = resolve_import(target_module,
+                (frozenset({target_name}) if target_name and not wildcard else
+                 frozenset(reachable) if wildcard else demanded_members(access_name)),
+                split=whole_module and not wildcard)
+            modules.update(resolution.modules)
+            height = max(height, resolution.height if resolution.modules else 0)
             if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
-                _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen))
-                resolution = _local_queue_resolution(root, diff, target_module, side, cache, active, seen, bounded_source_roots)
+                _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
+                resolution = resolve_import(target_module, demanded_members(access_name), split=True)
+                modules.update(resolution.modules)
+                height = max(height, resolution.height if resolution.modules else 0)
                 queue_adjacent = _queue_adjacent_module(target_module)
             export_resolved = (
-                (target_name and target_name in resolution.exports)
+                (target_name and any(value == target_name or value.startswith(target_name + '.') for value in resolution.exports))
                 or (not target_name and bool(resolution.exports))
             )
-            local_values = tuple(sorted(reachable & set(resolution.exports))) if wildcard else (local_name,)
+            if target_name and not wildcard:
+                members = [value[len(target_name):] for value in resolution.exports if value.startswith(target_name + '.')]
+                if members:
+                    proven.update(local_name + member for member in members)
+                    if target_name not in resolution.exports:
+                        continue
+            local_values = tuple(sorted(name for name in reachable & set(resolution.exports) if not name.startswith('_'))) if wildcard else (local_name,)
             if whole_module and resolution.reason in {"local_queue_provenance_resolved", "local_module_not_queue"}:
                 proven.update(f"{access_name}.{export}" for export in resolution.exports)
                 unsupported = unsupported or bool(resolution.exports)
@@ -2382,7 +3022,7 @@ def _queue_adapter_names(
                 target_name and target_name in resolution.exports
             ) or (not target_name and resolution.exports):
                 proven.add(local_name)
-    return _QueueAdapterNamesResult(frozenset(proven), unsupported)
+    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height)
 
 
 def _queue_signals(
@@ -2393,7 +3033,14 @@ def _queue_signals(
     cache: _QueueResolutionCache,
     current_package: str,
     source_roots: tuple[str, ...],
+    *, source_path: str = '<importer>', source: bytes | None = None,
+    budget: _QueueBudget | None = None,
 ) -> _QueueProvenanceResult:
+    budget = budget if budget is not None else _QueueBudget(side)
+    source = source if source is not None else ast.unparse(tree).encode('utf-8')
+    budget.source(source_path, source)
+    budget.source(source_path, source, sum(1 for _ in ast.walk(tree)))
+    budget.step(request=True)
     adapters = _queue_adapter_names(
         root,
         diff,
@@ -2402,6 +3049,7 @@ def _queue_signals(
         cache,
         current_package=current_package,
         source_roots=source_roots,
+        budget=budget,
     )
     try:
         analysis = analyze_queue_tree(tree, adapters.names)
@@ -2429,7 +3077,10 @@ def _new_queue_sources(
     for path in _python_paths(diff):
         side = "head"
         try:
-            current_package = _module_package(path, source_roots)
+            current_package = _module_package(path, source_roots, head_cache.paths)
+            head_value = read_diff_file(root, diff, path, 'head') or b''
+            head_budget = _QueueBudget('head')
+            head_budget.source(path, head_value)
             head = _queue_signals(
                 root,
                 diff,
@@ -2438,11 +3089,14 @@ def _new_queue_sources(
                 head_cache,
                 current_package,
                 source_roots,
+                source_path=path, source=head_value, budget=head_budget,
             )
             side = "base"
             base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
+                base_budget = _QueueBudget('base')
+                base_budget.source(path, base_value)
                 base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
                 if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
                     raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
@@ -2454,6 +3108,7 @@ def _new_queue_sources(
                     base_cache,
                     current_package,
                     source_roots,
+                    source_path=path, source=base_value, budget=base_budget,
                 )
             delta = set(head.signals) - set(base.signals)
             if delta:

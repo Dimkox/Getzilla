@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,20 @@ class ReviewSourceTests(unittest.TestCase):
         self.git('commit', '--allow-empty', '-qm', 'later')
         with self.assertRaisesRegex(RuntimeError, 'exact reviewed commit'):
             self.record()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX executable permission bits')
+    def test_executable_runtime_report_rejects_new_and_invalidates_existing_receipt(self):
+        self.report = '.getzilla/runtime/reviews/test/code-review.md'
+        path = self.root / self.report
+        path.parent.mkdir(parents=True)
+        path.write_text('Independent review of exact source.\n')
+        self.record()
+        self.assertEqual(validate_evidence(self.root, self.route), [])
+        path.chmod(0o755)
+        with self.assertRaisesRegex(RuntimeError, 'non-executable regular file'):
+            self.record()
+        self.assertTrue(any('non-executable regular file' in reason
+                            for reason in validate_evidence(self.root, self.route)))
 
     def test_pass_requires_reviewed_identity(self):
         with self.assertRaisesRegex((ValueError, RuntimeError), 'reviewed'):

@@ -43,12 +43,9 @@ class OperationalIntentTests(unittest.TestCase):
         self.assertEqual(route.risk, 'high')
         self.assertIsNone(route.write_agent)
         self.assertIn('release-readiness', route.workflow_skills)
-        self.assertEqual(set(route.review_agents), {
-            'code_reviewer', 'test_reviewer', 'security_reviewer', 'release_reviewer',
-        })
-        self.assertEqual(set(route.required_evidence), {
-            'verification', 'code_review', 'test_review', 'security_review', 'release_review',
-        })
+        self.assertEqual(route.review_agents, ['code_reviewer'])
+        self.assertEqual(route.risk_assessment['status'], 'provisional')
+        self.assertEqual(route.required_evidence, ['verification', 'code_review'])
         self.assertEqual(route.human_gates, [
             'scope_and_design_approval', 'production_action_approval',
         ])
@@ -202,14 +199,9 @@ class OperationalIntentTests(unittest.TestCase):
                     self.assertEqual(route.risk, 'high')
                     self.assertIsNone(route.write_agent)
                     self.assertIn('release-readiness', route.workflow_skills)
-                    self.assertEqual(set(route.review_agents), {
-                        'code_reviewer', 'test_reviewer', 'security_reviewer',
-                        'release_reviewer',
-                    })
-                    self.assertEqual(set(route.required_evidence), {
-                        'verification', 'code_review', 'test_review',
-                        'security_review', 'release_review',
-                    })
+                    self.assertEqual(route.review_agents, ['code_reviewer'])
+                    self.assertEqual(route.risk_assessment['status'], 'provisional')
+                    self.assertEqual(route.required_evidence, ['verification', 'code_review'])
                     self.assertEqual(route.human_gates, [
                         'scope_and_design_approval', 'production_action_approval',
                     ])

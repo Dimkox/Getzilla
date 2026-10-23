@@ -34,7 +34,7 @@ class SummaryTests(unittest.TestCase):
         ])
         route = summary['routes'][0]
         self.assertEqual((route['minutes_to_pass'], route['verify_runs'], route['verify_blocking'], route['reviews'],
-                          route['review_blocking'], route['caught_before_merge']), (5.0, 2, 2, 2, 1, 3))
+                          route['review_blocking'], route['failed_check_or_review_outcomes']), (5.0, 2, 2, 2, 1, 3))
         self.assertEqual((route['profile'], route['effective_risk']), ('standard', 'medium'))
 
     def test_profiles_aggregate_across_routes(self) -> None:
@@ -44,10 +44,10 @@ class SummaryTests(unittest.TestCase):
             event(60, 'verify', 'b', status='pass', profile='full'),
             event(0, 'route', 'c'), event(40, 'verify', 'c', status='pass', profile='full'),
         ])
-        self.assertEqual(summary['profiles']['trivial'], {'routes': 1, 'verify_runs': 1, 'reviews': 0, 'caught_before_merge': 0,
+        self.assertEqual(summary['profiles']['trivial'], {'routes': 1, 'verify_runs': 1, 'reviews': 0, 'failed_check_or_review_outcomes': 0,
                                                           'median_minutes_to_pass': 2.0, 'verify_runs_per_route': 1.0})
         full = summary['profiles']['full']
-        self.assertEqual((full['routes'], full['median_minutes_to_pass'], full['verify_runs_per_route'], full['caught_before_merge']),
+        self.assertEqual((full['routes'], full['median_minutes_to_pass'], full['verify_runs_per_route'], full['failed_check_or_review_outcomes']),
                          (2, 50.0, 1.5, 3))
 
     def test_profile_comes_from_the_trivial_waiver_or_the_effective_risk(self) -> None:
@@ -70,13 +70,13 @@ class RecordingTests(unittest.TestCase):
         record(self.root, 'verify', 'r1', status='fail', blocking=1, prompt='add payments to /etc/passwd',
                stdout='secret output', profile='/home/user/project', mode='pr')
         item = self.lines()[0]
-        self.assertEqual(set(item), {'at', 'event', 'route_id', 'status', 'blocking', 'profile', 'mode'})
+        self.assertEqual(set(item), {'schema_version', 'event_id', 'at', 'event', 'route_id', 'session_id', 'head', 'base', 'tree', 'status', 'blocking', 'profile', 'mode'})
         self.assertIsNone(item['profile'])
         self.assertNotIn('add payments', json.dumps(item))
 
     def test_a_new_route_and_a_verification_run_are_recorded(self) -> None:
-        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk_level': 'medium', 'quality_profiles': ['base']})
-        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk_level': 'medium', 'quality_profiles': ['base']})
+        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
+        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
         record_verify(self.root, {'route_id': 'r9', 'mode': 'pr', 'status': 'fail', 'diff_risk': {'effective_risk': 'medium'},
                                   'checks': [{'name': 'ruff', 'status': 'fail'}, {'name': 'bandit', 'status': 'pass'}]})
         events = self.lines()
@@ -87,6 +87,112 @@ class RecordingTests(unittest.TestCase):
         (self.root / '.getzilla' / 'runtime').write_text('not a directory', encoding='utf-8')
         record(self.root, 'verify', 'r1', status='pass')  # must not raise
         self.assertEqual(load(self.root), [])
+
+    def test_malformed_rows_and_conflicting_replays_are_disclosed(self):
+        record(self.root, 'verify', 'r1', event_id='run-1', status='pass', blocking=0)
+        path = self.root / METRICS
+        original = path.read_text()
+        path.write_text(original + original + '{truncated\n' + original.replace('"pass"', '"fail"'))
+        result = summarize(load(self.root))
+        self.assertFalse(result['coverage']['complete'])
+        self.assertTrue(any('conflicting' in item for item in result['coverage']['gaps']))
+        self.assertTrue(any('malformed' in item for item in result['coverage']['gaps']))
+        self.assertEqual(result['routes'][0]['verify_runs'], 1)
+
+    def test_nonfinite_and_invalid_timestamp_are_incomplete_not_crashes(self):
+        path = self.root / METRICS
+        path.parent.mkdir(parents=True)
+        path.write_text('{"at":"not-a-time","event":"verify","route_id":"r1"}\n'
+                        '{"at":"2026-10-18T09:00:00Z","event":"verify","route_id":"r1","blocking":NaN}\n')
+        result = summarize(load(self.root))
+        self.assertFalse(result['coverage']['complete'])
+        self.assertEqual(result['routes'], [])
+
+    def test_wrong_field_types_and_bounded_rows_are_rejected(self):
+        from getzilla.metrics_journal import MAX_ROW
+        path = self.root / METRICS
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(event(0, 'verify', 'r1', blocking='not-a-number')) + '\n' + 'x' * MAX_ROW + '\n')
+        result = summarize(load(self.root))
+        self.assertEqual(result['routes'], [])
+        self.assertFalse(result['coverage']['complete'])
+
+    def test_offline_source_observations_distinguish_zero_missing_and_binary_inventory(self):
+        from getzilla.metrics_journal import import_observations
+        from tests.branch_support import git
+        git(self.root, 'init', '-q', '-b', 'work')
+        (self.root / '.gitignore').write_text('.getzilla/runtime/\n')
+        (self.root / 'app.py').write_text('value = 1\n')
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'base')
+        base = git(self.root, 'rev-parse', 'HEAD')
+        (self.root / 'app.py').write_text('value = 2\n')
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'change')
+        head = git(self.root, 'rev-parse', 'HEAD')
+        identity = {'session_id': 's1', 'head': head, 'base': base, 'tree': git(self.root, 'rev-parse', 'HEAD^{tree}')}
+        record(self.root, 'grant', 'r1', event_id='grant:1', source_identity=identity)
+        facts = []
+        for name, extra in [('merge', {}), ('cost', {'amount': 0, 'currency': 'USD'}), ('ci', {'seconds': 60})]:
+            facts.append({**event(20, name, 'r1', **extra), **identity, 'schema_version': 2, 'event_id': name + ':1',
+                          'source': 'github', 'source_ref': 'run123'})
+        path = self.root / '.getzilla/runtime/import.json'
+        path.write_text(json.dumps(facts))
+        self.assertEqual(import_observations(self.root, '.getzilla/runtime/import.json')['imported'], 3)
+        import_observations(self.root, '.getzilla/runtime/import.json')
+        result = summarize(load(self.root), self.root)
+        route = result['routes'][0]
+        self.assertEqual(route['approval_count_per_commit'], 1)
+        self.assertEqual(route['cost_per_changed_line'], 0)
+        self.assertEqual(route['observed_cost'], 0)
+        self.assertEqual(route['ci_minutes'], 1)
+        self.assertIsNone(route['unique_defects_before_merge'])
+        self.assertEqual(result['sessions'][0]['session_id'], 's1')
+        (self.root / 'binary').write_bytes(b'\0value')
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'binary')
+        facts[0].update(head=git(self.root, 'rev-parse', 'HEAD'), event_id='merge:2')
+        path.write_text(json.dumps([facts[0]]))
+        import_observations(self.root, '.getzilla/runtime/import.json')
+        route = summarize(load(self.root), self.root)['routes'][0]
+        self.assertIsNone(route['approval_count_per_commit'])
+        self.assertIsNone(route['cost_per_changed_line'])
+
+    def test_failed_grant_publication_does_not_record_materialization(self):
+        from unittest.mock import patch
+        from getzilla.state import add_approval
+        from tests.branch_support import git
+        git(self.root, 'init', '-q', '-b', 'work')
+        (self.root / 'file.py').write_text('value = 1\n')
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'base')
+        git(self.root, 'remote', 'add', 'origin', 'https://github.com/example/metrics-fixture.git')
+        with patch('getzilla.state.dump_json', side_effect=OSError('disk unavailable')):
+            with self.assertRaises(OSError):
+                add_approval(self.root, 'protected-path', 'owner', actions=['protected-path-write'], resources=['file.py'])
+        self.assertFalse(any(item.get('event') == 'grant' for item in load(self.root)))
+
+    def test_unsafe_metrics_path_never_mutates_external_file(self):
+        outside = self.root / 'outside'
+        outside.write_text('unchanged')
+        path = self.root / METRICS
+        path.parent.mkdir(parents=True)
+        try:
+            path.symlink_to(outside)
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        record(self.root, 'verify', 'r1', status='pass')
+        self.assertEqual(outside.read_text(), 'unchanged')
+        self.assertFalse(summarize(load(self.root))['coverage']['complete'])
+
+    def test_measured_lane_is_distinct_from_provisional_route(self):
+        record(self.root, 'route', 'r1', risk='low')
+        record_verify(self.root, {'route_id': 'r1', 'status': 'pass', 'created_at': 'run1', 'light_diff': {'admitted': True, 'code_lines': 2}})
+        result = summarize(load(self.root))['routes'][0]
+        self.assertEqual((result['fast_lane_admitted'], result['fast_lane_known']), (1, 1))
+        self.assertIsNone(result['approval_count_per_commit'])
+        self.assertIsNone(result['cost_per_changed_line'])
+        self.assertIsNone(result['unique_defects_before_merge'])
 
     def test_report_cli_prints_profiles_and_hook_counters(self) -> None:
         runtime = self.root / '.getzilla' / 'runtime'
@@ -108,7 +214,7 @@ class RecordingTests(unittest.TestCase):
         self.assertIn('chain 2, loop 1', text)
         data = json.loads(subprocess.run([*cli, '--json', '--since', 'all'], cwd=self.root, capture_output=True,
                                          text=True, check=True).stdout)
-        self.assertEqual(data['profiles']['standard']['caught_before_merge'], 2)
+        self.assertEqual(data['profiles']['standard']['failed_check_or_review_outcomes'], 2)
         self.assertEqual(data['routes'][0]['minutes_to_pass'], 20.0)
 
 

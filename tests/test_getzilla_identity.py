@@ -90,6 +90,10 @@ def _tracked_files() -> list[str]:
 
 
 def _checked(relative: str) -> bool:
+    if relative.startswith('engineering/incidents/'):
+        from tests.test_incident_history import historical_incident
+        if historical_incident(relative):
+            return False
     return not (
         relative in HISTORICAL_FILES
         or relative in LEGACY_AWARE_FILES

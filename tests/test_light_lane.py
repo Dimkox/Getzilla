@@ -38,6 +38,22 @@ class LightLaneTests(unittest.TestCase):
     def test_fifty_one_code_lines_promote_to_full(self):
         self.assertFalse(self.admit({'src/page.py': 'x = 1\n' * 51})['admitted'])
 
+    def test_replacement_counts_both_removed_and_added_code_lines(self):
+        from getzilla.light_lane import inspect_light_diff
+        path = self.root / 'app.py'
+        path.write_text('old_value = 1\n' * 25)
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'replacement baseline')
+        base = git(self.root, 'rev-parse', 'HEAD')
+        for added, admitted, reason in [(25, True, 'small_diff'), (26, False, 'code_line_limit_exceeded')]:
+            with self.subTest(added=added):
+                path.write_text('new_value = 2\n' * added)
+                git(self.root, 'add', '.')
+                git(self.root, 'commit', '-qm', 'replacement')
+                result = inspect_light_diff(self.root, [base], risk='low', complete=True)
+                self.assertEqual(result['code_lines'], 25 + added)
+                self.assertEqual((result['admitted'], result['reason']), (admitted, reason))
+
     def test_sensitive_docs_paths_and_binary_content_never_qualify(self):
         for path, data in [('docs/AGENTS.md', 'control'), ('docs/requirements.txt', 'dependency'),
                            ('docs/bitrix-local-AGENTS.md', 'installed instructions'),
@@ -107,11 +123,12 @@ class LightLaneVerificationTests(unittest.TestCase):
                 self.assertEqual(current['write_agent'], original['write_agent'])
                 self.assertEqual(current['analysis_agents'], original['analysis_agents'])
                 self.assertTrue(set(original['allowed_agents']) <= set(current['allowed_agents']))
-                self.assertIn('test_reviewer', current['review_agents'])
+                self.assertEqual(current['review_agents'], ['code_reviewer', 'security_reviewer'] if path.startswith('.getzilla/') else ['code_reviewer'])
+                reviewer = 'security_reviewer' if path.startswith('.getzilla/') else 'code_reviewer'
                 allowed, refusal = evaluate_pre_tool(root, {'tool_name': 'Agent',
-                    'tool_input': {'agent_type': 'test_reviewer'}})
+                    'tool_input': {'agent_type': reviewer}})
                 self.assertTrue(allowed, refusal)
-                self.assertEqual(start_agent(root, 'test-review', 'test_reviewer')['lifecycle'], 'running')
+                self.assertEqual(start_agent(root, 'test-review', reviewer)['lifecycle'], 'running')
 
     def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
         from getzilla.router import build_route
@@ -142,6 +159,6 @@ class LightLaneVerificationTests(unittest.TestCase):
             git(root, 'commit', '-qm', 'larger successor')
             report = verify(root, mode='fast', record=False)
             self.assertFalse(report['light_diff']['admitted'])
-            self.assertIn('test_review', get_active_route(root)['required_evidence'])
+            self.assertEqual(get_active_route(root)['required_evidence'], ['verification', 'code_review'])
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(next(item for item in report['checks'] if item['name'] == 'light-lane')['status'], 'fail')

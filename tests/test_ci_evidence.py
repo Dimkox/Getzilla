@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -8,6 +9,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from tests.branch_support import git
 
 class CiEvidenceTests(unittest.TestCase):
+    def test_archive_exports_exact_referenced_immutable_verification_blob(self):
+        from getzilla.ci_evidence import export_local_evidence
+        from getzilla.receipts import MAX_RECEIPT_BYTES, write_receipt
+        from getzilla.state import set_active_route
+        import zipfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git(root, 'init', '-q')
+            (root / '.gitignore').write_text('.getzilla/runtime/\n')
+            (root / 'app.py').write_text('value = 1\n')
+            git(root, 'add', '.')
+            git(root, 'commit', '-qm', 'source')
+            set_active_route(root, {'route_id': 'selected', 'required_evidence': ['verification']})
+            receipt_path = write_receipt(root, 'verification', 'pass',
+                                         details={'output': 'actual check output\n' * (MAX_RECEIPT_BYTES // 10)})
+            envelope = json.loads(receipt_path.read_bytes())
+            reference = envelope['details']['_verification_report']
+            blob = root / reference['path']
+            expected = blob.read_bytes()
+            self.assertEqual(hashlib.sha256(expected).hexdigest(), reference['sha256'])
+            unrelated = blob.parent / ('0' * 64 + '.json')
+            unrelated.write_text('unreferenced report')
+            other = root / '.getzilla/runtime/receipts/other/reports/private.json'
+            other.parent.mkdir(parents=True)
+            other.write_text('other route')
+            output = root / '.getzilla/runtime/exports/selected.zip'
+            export_local_evidence(root, output)
+            with zipfile.ZipFile(output) as archive:
+                name = f'receipts/reports/{reference["sha256"]}.json'
+                self.assertEqual(archive.read(name), expected)
+                self.assertEqual(json.loads(archive.read('receipts/verification.json')), envelope)
+                self.assertEqual(set(archive.namelist()), {'manifest.json', 'route.json', 'receipts/verification.json', name})
+                manifest = json.loads(archive.read('manifest.json'))
+                self.assertEqual(next(row['sha256'] for row in manifest['files'] if row['path'] == name), reference['sha256'])
+                self.assertEqual(manifest['head'], git(root, 'rev-parse', 'HEAD'))
+
     def test_exports_actual_ci_state_and_allowlisted_logs_only(self):
         from getzilla.ci_evidence import export_evidence
         with tempfile.TemporaryDirectory() as temporary:

@@ -23,7 +23,7 @@ CLI = ROOT / 'scripts/adopt_existing.py'
 
 def cli(*args: str, env: dict | None = None) -> tuple[int, dict]:
     proc = subprocess.run([sys.executable, str(CLI), *args], capture_output=True, timeout=300, check=False,
-                          env={**os.environ, **(env or {})})
+                          env={**os.environ, 'GETZILLA_HOME': str(ROOT), **(env or {})})
     return proc.returncode, json.loads(proc.stdout.decode('utf-8'))
 
 

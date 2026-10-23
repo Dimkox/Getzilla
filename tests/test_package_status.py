@@ -38,6 +38,7 @@ class PackageStatusTests(unittest.TestCase):
             self.git(root, 'commit', '-qm', 'fixture schema baseline')
         route = build_route(root, 'Fix interrupted local work', 'package-status').to_dict()
         route['required_evidence'] = ['verification', 'code_review', 'test_review']
+        route['explicit_review_agents'] = ['test_reviewer']
         set_active_route(root, route)
         return route
 
@@ -201,7 +202,7 @@ class PackageStatusTests(unittest.TestCase):
             result = self.inspect(root)
             self.assertEqual(result['status'], 'complete', result)
             self.assertEqual({item['status'] for item in result['obligations']}, {'not_run'})
-            self.assertEqual(len(validate_evidence(root, route)), 3)
+            self.assertEqual(len([gap for gap in validate_evidence(root, route) if ': missing receipt' in gap]), 3)
             self.assertIn('evidence_accounting', state)
 
     def test_required_obligation_cannot_disappear_or_have_empty_not_run_reason(self):
@@ -228,7 +229,7 @@ class PackageStatusTests(unittest.TestCase):
             (package / 'evidence/db.md').write_text('Command exited 1; dependency unavailable.\n', encoding='utf-8')
             self.update_state(package, evidence_accounting=state['evidence_accounting'])
             self.assertEqual(self.inspect(root)['status'], 'complete')
-            self.assertEqual(len(validate_evidence(root, route)), 3)
+            self.assertEqual(len([gap for gap in validate_evidence(root, route) if ': missing receipt' in gap]), 3)
             (package / 'evidence/db.md').unlink()
             self.assertIn('file_missing', self.codes(self.inspect(root)))
 

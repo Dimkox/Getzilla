@@ -234,7 +234,8 @@ def classify_diff(root: Path, base: str | None, head: str, *, rules: Mapping[str
     notes: list[str] = []
 
     def prose(path: str) -> bool:
-        return matches(path, trivial['allow']) and not matches(path, trivial.get('deny', []))
+        return (Path(path).suffix.lower() in {'.md', '.rst', '.txt'}
+                and matches(path, trivial['allow']) and not matches(path, trivial.get('deny', [])))
 
     def add(rule: str, path: str, risk: str) -> None:
         entry = {'rule': rule, 'path': path, 'risk': risk}
@@ -273,10 +274,13 @@ def classify_diff(root: Path, base: str | None, head: str, *, rules: Mapping[str
         system = model.system if hasattr(model, 'system') else model['system']
         arch_rules = model.rules if hasattr(model, 'rules') else model['rules']
         restricted = _restricted_nodes(system, arch_rules)
+        secret_nodes = {node['id'] for node in system.get('nodes', []) or [] if node.get('secrets')}
         for path in sorted(code_paths):
             node = _node_for(path, system)
             if node in restricted:
                 add(f'ARCHITECTURE_RESTRICTED_NODE:{node}', path, 'high')
+            if node in secret_nodes:
+                add(f'ARCHITECTURE_SECRET_NODE:{node}', path, 'high')
 
     changed_python = {c.path for c in changes if c.status != 'D' and c.path.endswith('.py') and not prose(c.path)}
     if follow_imports and changed_python:

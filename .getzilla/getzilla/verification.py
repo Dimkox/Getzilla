@@ -2364,62 +2364,30 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
 
 def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
                      fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
-    """Exact-head diff risk; a route whose evidence is below the diff's risk does not pass pr/release."""
-    from .diff_risk import ORDER, DiffRiskError, classify_diff
-    from .project_ingestion import IngestionError
-    from .router import escalate_route
-    bases = sorted({base.comparison_base_sha for base in git_ranges.bases})
-    if not bases:
-        return CheckResult('diff-risk', 'skip', 'no comparison base in this mode; diff risk not computed'), {
-            'status': 'not_run'}
+    """Rederive and persist the same source-bound plan exposed before dispatch."""
+    if not git_ranges.bases and mode not in {'pr', 'release'}:
+        return CheckResult('diff-risk', 'skip', 'no comparison base in this mode; assessment remains provisional'), {'status': 'not_run'}
+    from .review_plan import assess, reconcile_route
+    previous = list((route or {}).get('required_evidence', []))
     try:
-        risks = [classify_diff(root, base, 'HEAD') for base in bases]
-    except (DiffRiskError, IngestionError, OSError, ValueError) as exc:
-        status = 'fail' if mode in {'pr', 'release'} else 'skip'
-        return CheckResult('diff-risk', status, f'DIFF_RISK_UNAVAILABLE: {_failure_message(exc)}'), {
-            'status': 'error', 'error': _failure_message(exc)}
-    worst = max(risks, key=lambda item: ORDER[item.risk])
-    reasons = []
-    for item in risks:
-        reasons.extend(reason for reason in item.reasons if reason not in reasons)
-    gaps = sorted({gap for item in risks for gap in item.gaps})
-    profile = 'full' if worst.risk == 'high' else (
-        'trivial' if all(item.profile_candidate == 'trivial' for item in risks) else 'standard')
-    metadata: dict[str, object] = {
-        'status': 'computed', 'head': worst.head, 'tree': worst.tree, 'bases': bases, 'diff_risk': worst.risk,
-        'profile_candidate': profile, 'reasons': [dict(reason) for reason in reasons[:50]],
-        'reason_count': len(reasons), 'gaps': gaps, 'rules_digest': worst.rules_digest,
-        'route_risk': route.get('risk') if route else None, 'effective_risk': worst.risk,
-        'added_reviewers': [], 'added_evidence': [], 'missing_evidence': [],
-    }
-    summary = f'diff risk {worst.risk} ({len(reasons)} reasons, profile {profile})'
-    if not route:
-        return CheckResult('diff-risk', 'pass', f'{summary}; no active route to escalate'), metadata
-    escalation = escalate_route(route, worst.risk, root)
-    metadata.update(effective_risk=escalation['effective_risk'], added_reviewers=escalation['added_reviewers'],
-                    added_evidence=escalation['added_evidence'])
-    from .router import trivial_waiver
-    waived = trivial_waiver(route, escalation['effective_risk'], profile, root)
-    metadata['waived_evidence'] = waived
-    if waived:
-        metadata['profile_reason'] = 'TRIVIAL_PROVEN_BY_DIFF'
-        return CheckResult('diff-risk', 'pass', (
-            f"{summary}; TRIVIAL_PROVEN_BY_DIFF: prose-only change at low risk, verification and one independent "
-            f"review are enough (not required: {', '.join(waived)})")), metadata
-    if not escalation['added_evidence']:
-        return CheckResult('diff-risk', 'pass', f"{summary}; route risk {metadata['route_risk']} covers it"), metadata
-    missing = validate_evidence(root, {**route, 'required_evidence': escalation['added_evidence']},
-                                current_fingerprint=fingerprint)
-    metadata['missing_evidence'] = missing
-    details = [{'severity': 'error' if mode in {'pr', 'release'} else 'warning', 'path': reason['path'],
-                'code': reason['rule'], 'message': f"{reason['risk']} risk"} for reason in reasons[:20]]
-    if missing and mode in {'pr', 'release'}:
-        return CheckResult('diff-risk', 'fail', (
-            f"ROUTE_ESCALATED_EVIDENCE_MISSING: the change is {worst.risk} risk but the route was "
-            f"{metadata['route_risk']}; required now: {', '.join(escalation['added_evidence'])}"), details=details), metadata
-    note = 'escalated evidence present' if not missing else (
-        'escalated evidence will be required in pr/release: ' + ', '.join(escalation['added_evidence']))
-    return CheckResult('diff-risk', 'pass', f'{summary}; {note}', details=details), metadata
+        current = reconcile_route(root, selection=git_ranges, fingerprint=fingerprint) if route else assess(root, None, git_ranges, fingerprint)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return CheckResult('diff-risk', 'fail', f'DIFF_RISK_UNAVAILABLE: {_failure_message(exc)}'), {'status': 'error', 'gaps': [str(exc)]}
+    assessment = current['risk_assessment']
+    metadata = {**assessment, 'status': 'computed' if assessment['status'] == 'complete' else 'incomplete',
+                'effective_risk': current['risk'], 'diff_risk': current['risk'],
+                'route_risk': (route or {}).get('risk'), 'review_plan_digest': current['review_plan']['digest'],
+                'added_reviewers': [item for item in current['review_agents'] if item not in (route or {}).get('review_agents', [])],
+                'added_evidence': [item for item in current['required_evidence'] if item not in previous], 'waived_evidence': []}
+    if assessment['status'] != 'complete':
+        return CheckResult('diff-risk', 'fail', 'DIFF_RISK_INCOMPLETE: ' + '; '.join(assessment['gaps'])), metadata
+    summary = f"diff risk {current['risk']}; exact-source review plan {current['review_plan']['digest'][:12]}"
+    if route and mode in {'pr', 'release'} and metadata['added_evidence']:
+        missing = validate_evidence(root, current, current_fingerprint=fingerprint)
+        metadata['missing_evidence'] = missing
+        if missing:
+            return CheckResult('diff-risk', 'fail', 'ROUTE_ESCALATED_EVIDENCE_MISSING: ' + '; '.join(missing)), metadata
+    return CheckResult('diff-risk', 'pass', summary), metadata
 
 
 def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
@@ -2598,6 +2566,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
 
     # Admission precedes package checks: the prompt lane is provisional until source is measured.
     diff_check, diff_metadata = _diff_risk_check(root, route, mode, git_ranges, checked_fingerprint)
+    route = get_active_route(root) if route else None
     if route and (route.get('delivery_lane') == 'light' or route.get('light_lane_candidate') or 'light_diff' in route):
         from .light_lane import inspect_light_diff
         from .router import escalate_route
@@ -2606,7 +2575,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             complete=diff_metadata.get('status') == 'computed' and not diff_metadata.get('gaps') and not git_ranges.findings)
         if light['admitted']:
             route = {**route, 'delivery_lane': 'light', 'light_diff': light, 'light_lane_candidate': True,
-                     'review_agents': ['code_reviewer'], 'required_evidence': ['verification', 'code_review']}
+                     'review_agents': route['review_agents'], 'required_evidence': route['required_evidence']}
         else:
             full = escalate_route({**route, 'delivery_lane': 'light'}, str(diff_metadata.get('effective_risk', route.get('risk', 'low'))), root, force_full=True)
             route = {**route, 'delivery_lane': 'full', 'light_diff': light, 'light_lane_candidate': True,

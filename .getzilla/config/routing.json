@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "description": "Runtime routing floors, reasoning policy, and analysis-wave cap. Router and policy load this file; missing keys fall back to getzilla.router / policy defaults.",
+  "description": "Intent analysis and one ordinary correctness/test review. Exact committed-diff reconciliation selects category/threshold audits before dispatch.",
   "principles": [
     "parallelize read-heavy analysis and review",
     "use exactly one write owner",
     "use low reasoning by default and reserve high reasoning for architecture, task framing, security, and release decisions",
     "add Bitrix specialist whenever repository or task has Bitrix signals",
-    "add security review for auth, PII, AI, production, and external writes",
     "bind evidence to the current repository fingerprint",
-    "do not pad the analysis wave with unmatched domain specialists"
+    "do not pad the analysis wave with unmatched domain specialists",
+    "select separate audits only from complete source-diff categories and configured risk thresholds"
   ],
   "reasoning": {
     "default": "low",
@@ -68,15 +68,13 @@
   },
   "review_floors": {
     "delivery": [
-      "code_reviewer",
-      "test_reviewer"
+      "code_reviewer"
     ],
     "docs": [
       "code_reviewer"
     ],
     "review_intent": [
-      "code_reviewer",
-      "test_reviewer"
+      "code_reviewer"
     ],
     "release": [
       "release_reviewer"

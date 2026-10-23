@@ -1,6 +1,7 @@
 """Consumer policy ported from Pulse: Bitrix local modules, explicit infrastructure skips."""
 import importlib
 import importlib.util
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -105,6 +106,12 @@ class GetzillaConsumerPolicyTests(unittest.TestCase):
                 self.assertTrue(self.gates._allowed_skip(exit_check.name, exit_check.summary, None))
 
     def test_the_getzilla_source_still_runs_the_infrastructure_exit(self):
+        self._check_source_infrastructure('infrastructure', True)
+
+    def test_repository_sandbox_skips_without_starting_infrastructure_exit(self):
+        self._check_source_infrastructure('repository-sandbox', False)
+
+    def _check_source_infrastructure(self, capability, executes):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "factory/tests").mkdir(parents=True)
@@ -113,6 +120,7 @@ class GetzillaConsumerPolicyTests(unittest.TestCase):
             results = []
             ran = []
             with (
+                mock.patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': capability}),
                 mock.patch.object(self.verification, "_ruff", return_value=self.verification.CheckResult("ruff", "pass", "fixture")),
                 mock.patch.object(self.verification, "_bandit", return_value=self.verification.CheckResult("bandit", "pass", "fixture")),
                 mock.patch.object(self.verification, "_factory_unit", return_value=[]),
@@ -121,7 +129,13 @@ class GetzillaConsumerPolicyTests(unittest.TestCase):
                                   side_effect=lambda *args, **kwargs: ran.append(args[1]) or self.verification.CheckResult(args[1], "pass", "ran")),
             ):
                 self.verification._python_checks(root, "pr", None, results)
-            self.assertIn("factory-postgres-exit", ran)
+            if executes:
+                self.assertIn("factory-postgres-exit", ran)
+            else:
+                self.assertEqual(ran, [])
+                exit_check = next(item for item in results if item.name == 'factory-postgres-exit')
+                self.assertEqual(exit_check.status, 'skip')
+                self.assertIn('repository-sandbox', exit_check.summary)
 
 
 if __name__ == "__main__":

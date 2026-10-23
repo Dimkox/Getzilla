@@ -17,12 +17,22 @@ parser = argparse.ArgumentParser(description='Create or inspect an adaptive task
 parser.add_argument('task', nargs='?', help='Development task text')
 parser.add_argument('--session', default='manual')
 parser.add_argument('--show', action='store_true')
+parser.add_argument('--reconcile', action='store_true', help='Derive the review plan from the exact committed diff; no tests or receipts')
+parser.add_argument('--add-reviewer', action='append', default=[], help='With --reconcile, retain this explicitly selected reviewer in future plans')
 parser.add_argument('--complete', action='store_true')
 parser.add_argument('--cancel', action='store_true')
 parser.add_argument('--json', action='store_true')
 args = parser.parse_args()
 root = find_root()
-if args.complete:
+if args.reconcile:
+    from getzilla.review_plan import reconcile_route
+    try:
+        data = reconcile_route(root, additional_reviewers=tuple(args.add_reviewer))
+    except (ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
+elif args.add_reviewer:
+    parser.error('--add-reviewer requires --reconcile')
+elif args.complete:
     data = update_route(root, status='completed')
 elif args.cancel:
     data = update_route(root, status='cancelled')

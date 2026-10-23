@@ -1,15 +1,26 @@
-# Moved
+# Recurring mistakes and countermeasures
 
-Canonical log is /mistakes.md. Do not append here.
-## 2026-10-02 — Explicit worktree path is required for apply_patch
+This index contains repeated lessons, not a second incident log. Original wording and provenance remain in [dated incidents](incidents/README.md). A single occurrence stays an incident until recurrence is established.
 
-Root cause: apply_patch resolves repository-relative paths from the controller checkout and
-does not inherit an exec_command workdir. Two newly-created PR3d tests briefly landed in the
-root checkout; they were immediately removed and recreated under the explicit worktree prefix.
+## Resolve exact source identities
 
-## 2026-10-02 — Reused a known nonstandard help trap
+Resolve every commit through Git before using it in evidence or external actions; never extend an abbreviated SHA by hand.
 
-Root cause: I assumed `run_disposable_exit.py --help` behaved like a conventional argparse
-entrypoint instead of consulting the existing mistake record or reading its source; the script
-ignores that argument and starts the full suite. Keep the one live run, never duplicate it, and
-inspect source before probing repository harnesses whose CLI behavior was already learned.
+Distinct recorded occurrences:
+
+- [2026-08-26-root-337](incidents/2026-08-26-root-337.md)
+- [2026-08-27-root-449](incidents/2026-08-27-root-449.md)
+
+## Keep shell code separate from prose
+
+Pass Markdown and literal patterns through structured arguments or body files. Backticks in double-quoted shell strings execute commands. Check the actual result before repeating an action.
+
+Distinct recorded occurrences:
+
+- [2026-09-01-root-574](incidents/2026-09-01-root-574.md)
+- [2026-09-03-root-658](incidents/2026-09-03-root-658.md)
+- [2026-09-03-root-663](incidents/2026-09-03-root-663.md)
+- [2026-09-04-root-893](incidents/2026-09-04-root-893.md)
+- [2026-09-05-root-897](incidents/2026-09-05-root-897.md)
+
+For a new failure, record the date, concrete cause, consequence and countermeasure in a new incident. Link the actual PR when known; disclose unknown associations. Add a recurring lesson only when distinct incidents support it. Historical instructions remain observations of their dates, not current policy.

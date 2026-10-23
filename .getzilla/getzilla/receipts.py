@@ -844,6 +844,12 @@ def write_receipt(
     review_source = review_source_binding(root, reviewed_commit, report) if kind != 'verification' and status == 'pass' else None
     before_tree = tree_fingerprint(root)
     before_head = _exact_head(root)
+    plan_digest = (route.get('review_plan') or {}).get('digest')
+    if plan_digest:
+        from .review_plan import validate_review_plan
+        plan_errors = validate_review_plan(root, route)
+        if plan_errors:
+            raise RuntimeError('; '.join(plan_errors))
     if (
         expected_tree_fingerprint is not None
         and before_tree != expected_tree_fingerprint
@@ -875,6 +881,7 @@ def write_receipt(
         'created_at': now_utc(),
         'tree_fingerprint': before_tree,
         'git_head': before_head,
+        **({'review_plan_digest': plan_digest} if plan_digest else {}),
         'report': report,
         'details': details or {},
         **({'review_source': review_source} if review_source is not None else {}),
@@ -930,7 +937,8 @@ def write_receipt(
         if publication is not None:
             publication.close()
     from .route_metrics import record_receipt
-    record_receipt(root, route.get('route_id'), kind, status)
+    from .metrics_journal import digest
+    record_receipt(root, route.get('route_id'), kind, status, identity=digest(data))
     return path
 
 
@@ -962,6 +970,9 @@ def validate_evidence(
     current_fingerprint: str | None = None,
 ) -> list[str]:
     missing: list[str] = []
+    if 'risk_assessment' in route:
+        from .review_plan import validate_review_plan
+        missing.extend(validate_review_plan(root, route))
     route_id = route.get('route_id')
     required = route.get('required_evidence')
     if (
@@ -1016,6 +1027,9 @@ def validate_evidence(
             missing.append(f'{kind}: status={receipt.get("status")}')
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
+        plan_digest = (route.get('review_plan') or {}).get('digest')
+        if plan_digest and receipt.get('review_plan_digest') != plan_digest:
+            missing.append(f'{kind}: review plan binding stale')
         if receipt.get('tree_fingerprint') != current:
             missing.append(f'{kind}: stale after repository changes')
         if 'git_head' in receipt and receipt['git_head'] != _exact_head(root):

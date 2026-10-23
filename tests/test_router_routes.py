@@ -39,10 +39,8 @@ class RouterTests(unittest.TestCase):
             'write_agent': 'general_implementer',
             'workflow_skills': ['getzilla-delivery', 'bugfix-workflow',
                                 'security-sensitive-change'],
-            'review_agents': ['code_reviewer', 'test_reviewer',
-                              'security_reviewer', 'release_reviewer'],
-            'required_evidence': ['verification', 'code_review', 'test_review',
-                                  'security_review', 'release_review'],
+            'review_agents': ['code_reviewer'],
+            'required_evidence': ['verification', 'code_review'],
             'human_gates': ['scope_and_design_approval'],
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,13 +131,10 @@ class RouterTests(unittest.TestCase):
                         self.assertEqual(route.write_agent, owner)
                         self.assertIn(profile, route.quality_profiles)
                         self.assertIn('code_review', route.required_evidence)
-                        # The light lane folds the test review into the one code review.
-                        if route.delivery_lane == 'full':
-                            self.assertIn('test_review', route.required_evidence)
-                        else:
-                            self.assertNotIn(domain, ('data', 'integration', 'ai', 'api'))
-                        if evidence:
-                            self.assertIn(evidence, route.required_evidence)
+                        # Initial prompt routing selects the owner, not the audit wave.
+                        self.assertEqual(route.review_agents, ['code_reviewer'])
+                        self.assertEqual(route.required_evidence, ['verification', 'code_review'])
+                        self.assertEqual(route.risk_assessment['status'], 'provisional')
 
     def test_domain_match_evidence_preserves_phrases_stems_and_punctuation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,7 +169,8 @@ class RouterTests(unittest.TestCase):
             self.assertEqual(route.intent, 'bugfix')
             self.assertEqual(route.write_agent, 'bitrix_implementer')
             self.assertIn('bitrix_architect', route.analysis_agents)
-            self.assertIn('bitrix_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertIn('bitrix', route.quality_profiles)
 
     def test_frontend_focus_wins_inside_bitrix_repo(self) -> None:
@@ -183,7 +179,8 @@ class RouterTests(unittest.TestCase):
             (root / 'package.json').write_text('{"scripts":{"test":"echo ok"}}')
             route = build_route(root, 'Сделай React интерфейс фильтра каталога и Cypress тест', 's2')
             self.assertEqual(route.write_agent, 'frontend_implementer')
-            self.assertIn('bitrix_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertIn('frontend', route.task_domains)
 
     def test_explicit_bitrix_frontend_stays_bitrix_owned(self) -> None:
@@ -197,14 +194,16 @@ class RouterTests(unittest.TestCase):
             route = build_route(root, 'Добавить REST API и событие OrderChanged через RabbitMQ для интеграции с 1С', 's4')
             self.assertEqual(route.write_agent, 'integration_implementer')
             self.assertIn('integration_architect', route.analysis_agents)
-            self.assertIn('security_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertIn('contracts', route.quality_profiles)
 
     def test_data_migration_route(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Сделать SQL миграцию и backfill индекса Elasticsearch', 's5')
             self.assertEqual(route.write_agent, 'data_implementer')
-            self.assertIn('data_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertEqual(route.risk, 'medium')
 
     def test_ai_security_route(self) -> None:
@@ -212,7 +211,8 @@ class RouterTests(unittest.TestCase):
             route = build_route(root, 'Добавить RAG по персональным данным с vector store и защитой prompt injection', 's6')
             self.assertEqual(route.write_agent, 'ai_implementer')
             self.assertEqual(route.risk, 'high')
-            self.assertIn('security_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
 
     def test_review_has_no_write_owner(self) -> None:
         with project_copy() as root:
@@ -224,7 +224,8 @@ class RouterTests(unittest.TestCase):
         with project_copy() as root:
             route = build_route(root, 'Подготовь production release и canary rollout', 's8')
             self.assertIsNone(route.write_agent)
-            self.assertIn('release_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertIn('production_action_approval', route.human_gates)
 
     def test_docs_can_have_write_owner_without_test_reviewer(self) -> None:
@@ -278,13 +279,15 @@ class RouterTests(unittest.TestCase):
         with project_copy() as root:
             route = build_route(root, 'Добавь миграцию ClickHouse для аналитических событий и безопасный backfill', 'x')
             self.assertEqual(route.write_agent, 'data_implementer')
-            self.assertIn('data_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
 
     def test_prompt_injection_and_tenant_isolation_are_high_risk(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Добавь RAG с tenant isolation и защитой от prompt injection', 'x')
             self.assertEqual(route.risk, 'high')
-            self.assertIn('security_reviewer', route.review_agents)
+            self.assertEqual(route.review_agents, ['code_reviewer'])
+            self.assertEqual(route.risk_assessment['status'], 'provisional')
             self.assertIn('scope_and_design_approval', route.human_gates)
 
     def test_produkt_is_not_a_production_risk_signal(self) -> None:

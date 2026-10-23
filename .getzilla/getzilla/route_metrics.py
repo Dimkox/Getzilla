@@ -1,16 +1,13 @@
-"""Per-route overhead and caught-defect counters: does the ritual pay for itself? (O01)
-
-Every route, verification run and receipt appends one event to ``.getzilla/runtime/metrics.jsonl``.
-Events carry identifiers, statuses, counts, risk and profile names only: never prompts, file
-paths or command output. :func:`summarize` turns them into per-route and per-profile numbers that
-``getzilla report`` prints, together with the path-hint and parallel-guard counters.
+"""Local workflow observations with explicit provenance and missing-data coverage.
+Unknown costs stay unknown; failed check outcomes are not confirmed defects.
 """
 from __future__ import annotations
 
-import contextlib
 import json
+import os
 import statistics
 from datetime import datetime, timezone
+from .metrics_journal import deduplicate, digest, load, record, source_summary, import_observations, regular  # noqa: F401
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -34,23 +31,15 @@ def _clean(value: Any) -> Any:
     return None
 
 
-def record(root: Path, event: str, route_id: str | None, **fields: Any) -> None:
-    """Append one event; a metrics failure never affects the work it measures."""
-    item = {'at': _now(), 'event': event, 'route_id': _clean(route_id)}
-    item.update({key: _clean(value) for key, value in fields.items() if key in SAFE_FIELDS})
-    path = root / METRICS
-    with contextlib.suppress(OSError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a', encoding='utf-8', newline='\n') as handle:
-            handle.write(json.dumps(item, sort_keys=True) + '\n')
-
 
 def record_route(root: Path, route: dict[str, Any]) -> None:
-    record(root, 'route', route.get('route_id'), intent=route.get('intent'), risk=route.get('risk_level'),
+    record(root, 'route', route.get('route_id'), intent=route.get('intent'), event_id='route:' + str(route.get('route_id')), risk=route.get('risk'),
            profiles=','.join(str(item) for item in route.get('quality_profiles', [])) or None)
 
 
 def profile_of(report: dict[str, Any]) -> str:
+    if (report.get('light_diff') or {}).get('admitted') is True:
+        return 'light'
     if report.get('profile_reason') == 'TRIVIAL_PROVEN_BY_DIFF':
         return 'trivial'
     risk = (report.get('diff_risk') or {}).get('effective_risk')
@@ -60,40 +49,24 @@ def profile_of(report: dict[str, Any]) -> str:
 def record_verify(root: Path, report: dict[str, Any]) -> None:
     checks = report.get('checks') or []
     blocking = sum(1 for check in checks if isinstance(check, dict) and check.get('status') == 'fail')
-    record(root, 'verify', report.get('route_id'), mode=report.get('mode'), status=report.get('status'),
+    record(root, 'verify', report.get('route_id'), event_id='verify:' + digest(report), mode=report.get('mode'), status=report.get('status'),
            blocking=blocking, effective_risk=(report.get('diff_risk') or {}).get('effective_risk'),
-           profile=profile_of(report))
+           profile=profile_of(report), admitted=(report.get('light_diff') or {}).get('admitted'),
+           code_lines=(report.get('light_diff') or {}).get('code_lines'))
 
 
-def record_receipt(root: Path, route_id: str | None, kind: str, status: str) -> None:
-    record(root, 'receipt', route_id, kind=kind, status=status)
+def record_receipt(root: Path, route_id: str | None, kind: str, status: str, identity: str | None = None) -> None:
+    record(root, 'receipt', route_id, event_id='receipt:' + identity if identity else None, kind=kind, status=status)
 
-
-def load(root: Path, since: datetime | None = None) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    try:
-        lines = (root / METRICS).read_text(encoding='utf-8').splitlines()
-    except OSError:
-        return events
-    for line in lines:
-        try:
-            item = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(item, dict) or not item.get('at'):
-            continue
-        if since is not None and _when(item) < since:
-            continue
-        events.append(item)
-    return events
 
 
 def _when(item: dict[str, Any]) -> datetime:
     return datetime.strptime(item['at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
 
 
-def summarize(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dict[str, Any]:
     """Per route: time to the first passing verification, runs, reviews and blocking findings caught."""
+    events = deduplicate(events, getattr(events, 'gaps', []))
     routes: dict[str, dict[str, Any]] = {}
     for item in sorted(events, key=lambda event: event['at']):
         route_id = item.get('route_id')
@@ -121,29 +94,42 @@ def summarize(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
         start, done = route['created_at'], route['first_green_at']
         route['minutes_to_pass'] = (round((_when({'at': done}) - _when({'at': start})).total_seconds() / 60, 1)
                                     if start and done else None)
-        route['caught_before_merge'] = route['verify_blocking'] + route['review_blocking']
+        route.update(source_summary(events, route['route_id'], root))
+        route['failed_check_or_review_outcomes'] = route['verify_blocking'] + route['review_blocking']
     profiles: dict[str, dict[str, Any]] = {}
     for route in routes.values():
         group = profiles.setdefault(route['profile'], {'routes': 0, 'minutes': [], 'verify_runs': 0, 'reviews': 0,
-                                                       'caught_before_merge': 0})
+                                                       'failed_check_or_review_outcomes': 0})
         group['routes'] += 1
         group['verify_runs'] += route['verify_runs']
         group['reviews'] += route['reviews']
-        group['caught_before_merge'] += route['caught_before_merge']
+        group['failed_check_or_review_outcomes'] += route['failed_check_or_review_outcomes']
         if route['minutes_to_pass'] is not None:
             group['minutes'].append(route['minutes_to_pass'])
     for group in profiles.values():
         minutes = group.pop('minutes')
         group['median_minutes_to_pass'] = round(statistics.median(minutes), 1) if minutes else None
         group['verify_runs_per_route'] = round(group['verify_runs'] / group['routes'], 1)
-    return {'routes': sorted(routes.values(), key=lambda route: route['created_at'] or ''), 'profiles': profiles}
+    sessions = []
+    for session_id in sorted({item['session_id'] for item in events if item.get('session_id')}):
+        selected = [item for item in events if item.get('session_id') == session_id]
+        sessions.append({'session_id': session_id, 'route_ids': sorted({item['route_id'] for item in selected if item.get('route_id')}),
+                         'observations': len(selected), 'started_at': next((item['at'] for item in selected if item['event'] == 'session_start'), None),
+                         'ended_at': next((item['at'] for item in reversed(selected) if item['event'] == 'session_end'), None)})
+    return {'routes': sorted(routes.values(), key=lambda route: route['created_at'] or ''), 'profiles': profiles, 'sessions': sessions,
+            'coverage': {'complete': not events.gaps, 'gaps': events.gaps},
+            'interpretation': 'Grant materializations are not human interventions; check outcomes are not confirmed defects.'}
 
 
 def counters(root: Path) -> dict[str, dict[str, Any]]:
     found: dict[str, dict[str, Any]] = {}
     for name, relative in COUNTERS.items():
         try:
-            data = json.loads((root / relative).read_text(encoding='utf-8'))
+            with regular(root, relative) as descriptor:
+                raw = os.read(descriptor, 65_537)
+            if len(raw) > 65_536:
+                continue
+            data = json.loads(raw)
         except (OSError, ValueError):
             continue
         if isinstance(data, dict):

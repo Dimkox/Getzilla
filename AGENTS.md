@@ -36,6 +36,8 @@ Double writes means duplicate external mutations; check idempotency.
 Do not write long reports.
 Give findings as a short list.
 
+After committing the candidate, run `python3 scripts/getzilla_route.py --reconcile --json` before dispatch. The exact diff selects one ordinary code reviewer covering correctness and test adequacy, plus security/data/release audits only when a changed category meets its configured risk threshold. Provisional or incomplete assessments cannot justify reduced review. Explicit additional reviewers persist with `--add-reviewer test_reviewer` (repeat for other roles); legacy routes retain their selected wave. Final verification rederives the same source-bound plan. Prompt wording does not determine the final review count or risk.
+
 ## Low-severity findings
 
 Collect Low-severity findings into one issue.
@@ -87,7 +89,7 @@ Record the exact base/head, dirty inventory, selected profile/reason, checked pa
 ## Agent self-learning
 
 - If you make a decision that turns out to be correct and worth the effort, log it in decisions.md (pattern + why it worked, no more than 3 sentences).
-- If you make a mistake that leads to a problem, identify the root cause (not the symptom) and record it in mistakes.md.
+- If you make a mistake that leads to a problem, identify its root cause and record the incident in `engineering/incidents/`. Keep recurring lessons and countermeasures in `engineering/mistakes.md`; root `mistakes.md` remains the compatibility entrypoint and governance projection.
 
 ## Fresh-clone bootstrap
 
