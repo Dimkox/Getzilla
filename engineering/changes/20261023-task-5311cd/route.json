@@ -1,0 +1,129 @@
+{
+  "allowed_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect",
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer",
+    "integration_implementer"
+  ],
+  "analysis_agents": [
+    "repo_explorer",
+    "architect",
+    "docs_researcher",
+    "integration_architect"
+  ],
+  "base_commit": "8a02bab3d3e2a4e4cf8e023068a9652cbb89a5be",
+  "base_fingerprint": "dc865d185dc86936a5ba99dd1243ca3f3c83d145cce601057d28e048ffeb73c4",
+  "complexity": "standard",
+  "created_at": "2026-10-23T06:52:03+00:00",
+  "delivery_expected": true,
+  "delivery_lane": "full",
+  "domains": [
+    "integration",
+    "api"
+  ],
+  "human_gates": [],
+  "intent": "bugfix",
+  "matched_keywords": {
+    "integration": [
+      "\u0432\u043d\u0435\u0448\u043d"
+    ]
+  },
+  "primary_skill": "getzilla-delivery",
+  "quality_profiles": [
+    "base",
+    "contracts",
+    "integration"
+  ],
+  "rationale": [
+    "medium-risk integration, contract, data, AI, or modernization work",
+    "intent=bugfix",
+    "domains=integration,api",
+    "repository=generic",
+    "write-owner=integration_implementer",
+    "analysis-wave=4/10"
+  ],
+  "repo": {
+    "bitrix_modules": [],
+    "detected_languages": [
+      "python"
+    ],
+    "domains": [
+      "api"
+    ],
+    "kind": "generic",
+    "language_scan": {
+      "bytes": 269360,
+      "directories": 438,
+      "entries": 4645,
+      "files": 4000,
+      "incomplete_reasons": [
+        "files:4000"
+      ],
+      "non_regular": 0,
+      "skipped_symlinks": 0,
+      "status": "incomplete",
+      "truncated": true,
+      "unknown": true,
+      "unknown_extensions": {
+        ".cmd": 1,
+        ".html": 1,
+        ".json": 787,
+        ".jsonl": 2,
+        ".patch": 1,
+        ".psd1": 1,
+        ".sha256": 3,
+        ".toml": 1,
+        ".yaml": 153
+      },
+      "unreadable": 0
+    },
+    "languages": [],
+    "package_scripts": [],
+    "signals": [
+      "contract:engineering/contracts/openapi",
+      "undetected-language",
+      "undetected-language:python=21",
+      "undetected-source-extension:.cmd=1",
+      "undetected-source-extension:.html=1",
+      "undetected-source-extension:.json=787",
+      "undetected-source-extension:.jsonl=2",
+      "undetected-source-extension:.patch=1",
+      "undetected-source-extension:.psd1=1",
+      "undetected-source-extension:.sha256=3",
+      "undetected-source-extension:.toml=1",
+      "undetected-source-extension:.yaml=153",
+      "language-scan:incomplete=files:4000"
+    ]
+  },
+  "required_evidence": [
+    "verification",
+    "code_review",
+    "test_review",
+    "security_review"
+  ],
+  "review_agents": [
+    "code_reviewer",
+    "test_reviewer",
+    "security_reviewer"
+  ],
+  "risk": "medium",
+  "route_id": "5311cdded150",
+  "schema_version": 1,
+  "session_id": "manual",
+  "status": "routed",
+  "task": "\u042f \u0432\u043b\u0438\u043b main \u0432 \u0432\u0435\u0442\u043a\u0443 PR #127 \u0438 \u0437\u0430\u043f\u0443\u0448\u0438\u043b. \u041d\u043e\u0432\u044b\u0439 head \u2014 496c318. \u041a\u043e\u043d\u0444\u043b\u0438\u043a\u0442\u043e\u0432 \u043d\u0435 \u0431\u044b\u043b\u043e. \u042d\u0442\u043e \u043e\u0431\u044b\u0447\u043d\u044b\u0439 \u043c\u0435\u0440\u0436-\u043a\u043e\u043c\u043c\u0438\u0442, \u0438\u0441\u0442\u043e\u0440\u0438\u044f \u0432\u0435\u0442\u043a\u0438 \u043d\u0435 \u043f\u0435\u0440\u0435\u043f\u0438\u0441\u0430\u043d\u0430.\n\n\u0427\u0442\u043e \u0432\u0435\u0442\u043a\u0430 \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u0430 \u0438\u0437 main:\n\n\u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 killpg \u043d\u0430 macOS: \u0438\u0437-\u0437\u0430 \u043d\u0435\u0433\u043e \u043f\u0430\u0434\u0430\u043b test_eu_audit_attestation;\n\u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u043a\u0438 CAS \u043d\u0430 macOS;\ngetzilla update;\n\u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0438 \u0432 \u043e\u0442\u043a\u0430\u0437\u0430\u0445 \u0445\u0443\u043a\u0430.\n\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430. \u0422\u0435\u0441\u0442\u044b \u043d\u0430 \u0444\u0430\u0439\u043b\u044b, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0437\u0430\u0442\u0440\u043e\u043d\u0443\u043b\u0438 \u043e\u0431\u0435 \u0441\u0442\u043e\u0440\u043e\u043d\u044b, \u043f\u0440\u043e\u0445\u043e\u0434\u044f\u0442 \u043d\u0430 Linux. \u0421\u0440\u0435\u0434\u0438 \u043d\u0438\u0445 test_eu_audit_attestation, test_fsx, test_install_extras \u0438 test_workflow_sources. CI \u043d\u0430 \u043d\u043e\u0432\u043e\u043c head \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0441\u044f \u0441\u0430\u043c.\n\n\u0412\u0430\u0436\u043d\u043e \u0434\u043b\u044f \u0432\u0430\u0448\u0435\u0439 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0439 \u043a\u043e\u043f\u0438\u0438. \u041f\u043e \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u044e \n#127 \u0443 \u0432\u0430\u0441 \u0435\u0441\u0442\u044c \u043d\u0435\u0437\u0430\u043f\u0443\u0448\u0435\u043d\u043d\u044b\u0435 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u043a\u043e\u043c\u043c\u0438\u0442\u044b: dc3d66bc (\u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043a\u0430 wheel) \u0438 f6df5325 (checkpoint). \u041f\u0435\u0440\u0435\u0434 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u043c \u043f\u0443\u0448\u0435\u043c \u043f\u043e\u0434\u0442\u044f\u043d\u0438\u0442\u0435 \u0432\u0435\u0442\u043a\u0443 \u0442\u0430\u043a:\n\n\u0418\u043d\u0430\u0447\u0435 \u043f\u0443\u0448 \u0431\u0443\u0434\u0435\u0442 \u043e\u0442\u043a\u043b\u043e\u043d\u0451\u043d.\n\n\u0427\u0442\u043e \u0435\u0449\u0451 \u043d\u0435 \u0441\u0434\u0435\u043b\u0430\u043d\u043e \u0432 \n#127. \u0412\u0435\u0442\u043a\u0430 \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0432 \u0441\u0442\u0430\u0442\u0443\u0441\u0435 UNVERIFIED. \u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 PR \u0442\u0440\u0435\u0431\u0443\u0435\u0442:\n\nsmoke-\u043f\u0440\u043e\u0433\u043e\u043d;\n\u043d\u043e\u0432\u044b\u0435 \u043d\u0435\u0437\u0430\u0432\u0438\u0441\u0438\u043c\u044b\u0435 \u0440\u0435\u0432\u044c\u044e;\n\u043d\u043e\u0432\u044b\u0439 \u0437\u0430\u043c\u043e\u0440\u043e\u0436\u0435\u043d\u043d\u044b\u0439 head;\n\u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443\u044e \u0438 \u0432\u043d\u0435\u0448\u043d\u044e\u044e \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0443.\n\u041c\u0435\u0440\u0436 main \u044d\u0442\u0438 \u0448\u0430\u0433\u0438 \u043d\u0435 \u0437\u0430\u043c\u0435\u043d\u044f\u0435\u0442. \u0417\u0430 \n#127 \u044f \u043d\u0435 \u0441\u043b\u0435\u0436\u0443: \u044d\u0442\u043e\u0442 PR \u043d\u0435 \u043c\u043e\u0439, \u0438 \u0432\u044b \u043d\u0435 \u043f\u0440\u043e\u0441\u0438\u043b\u0438 \u0435\u0433\u043e \u0432\u0435\u0441\u0442\u0438.\n\n\u0434\u043e\u0447\u0438\u043d\u0438 \u0442\u0430\u043c \u0432\u0441\u0451",
+  "task_domains": [
+    "integration"
+  ],
+  "workflow_skills": [
+    "getzilla-delivery",
+    "bugfix-workflow",
+    "api-event-change",
+    "enterprise-integration"
+  ],
+  "write_agent": "integration_implementer"
+}

@@ -1998,3 +1998,7 @@ The runner copied GETZILLA_VERIFY_FORCE_FULL from the controller into child test
 - The coordinator wrote review observations in the canonical parent while the writer used an exact grant bound to that parent tree. The changed binding made the grant stale; the circuit breaker correctly stopped the repeated write. Write observations before grants or after the edit batch, then renew only the named exact resource when the binding changes.
 - A large batched read hid a tool denial in truncated output, and the next identical search hit the circuit breaker. Bound each output and inspect every result before retrying; use exact known files after a scan is blocked.
 - Removing a raw splitter before finding its imported consumers caused a temporary soft policy import fallback. Negative guard tests exposed the failure. Move every consumer to the shared parser before claiming a passing repair.
+
+## 2026-10-23 — Route the original task text
+
+A coordinator paraphrase added production and migration terms to a validation task. It created unrelated human gates before any implementation. Cancel the unused package and route the exact user request in the isolated worktree.

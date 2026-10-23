@@ -64,6 +64,9 @@ def _open_path(path: Path, *, directory: bool = False) -> int:
 
 
 def _host_supported(python: str = ARGV[0], *, timeout: int = 5) -> bool:
+    # Shutdown uses the controller's pidfd APIs, not the child interpreter's.
+    if not callable(getattr(os, "pidfd_open", None)) or not callable(getattr(signal, "pidfd_send_signal", None)):
+        return False
     try:
         values = {}
         for line in Path("/etc/os-release").read_text().splitlines():

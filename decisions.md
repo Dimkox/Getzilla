@@ -1186,3 +1186,7 @@ Compare old open issue claims against delivered source before treating them as p
 - Preserve legacy exec_command command-only string/list inputs while validating present native cmd and rejecting conflicts. Existing harness tests establish those legacy contracts, so this fixes native inspection without expanding permissions or breaking other callers.
 
 - 2026-10-15: Share quote and escape provenance across root, authority and shell-target parsing. This repairs quoted jq and rg arguments without a command allowlist, while the existing 184 guard tests preserve authority and root boundaries. Keep source identity and failure-stage metadata separate from command argument values.
+
+## 2026-10-23 — Check controller capabilities before process creation
+
+The child interpreter check does not establish controller pidfd support. Check both controller APIs before launch and keep identity-safe signalling unchanged. The negative regression and 21 process/inventory controls passed.

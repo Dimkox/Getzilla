@@ -1,0 +1,70 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "A controller missing either required pidfd API refuses before child creation.",
+      "evidence": [
+        {
+          "test": "factory/tests/test_linux_process_adapter.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "The committed runtime wheel inventory matches the unchanged lock.",
+      "evidence": [
+        {
+          "test": "factory/tests/test_offline_release_builder.py"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "The frozen candidate has fresh full local verification and independent code, test and security review.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261023-task-5311cd",
+  "contracts": {
+    "events": [],
+    "json_schema": [],
+    "openapi": []
+  },
+  "forbidden_outcomes": [],
+  "invariants": [],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Complete PR127 follow-up validation and reject Linux process controllers without pidfd APIs before spawn.",
+    "success_metric": "Fresh regression, smoke, independent reviews, full local PR gate and exact-head public CI",
+    "target": "All selected checks pass with no process launched by an unsupported controller"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "api",
+      "integration"
+    ],
+    "tier": "yellow"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}
