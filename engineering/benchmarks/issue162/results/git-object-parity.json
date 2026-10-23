@@ -1,0 +1,754 @@
+[
+  {
+    "corpus": "small",
+    "commit": "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd",
+    "files": [
+      {
+        "path": "src/itsdangerous/__init__.py",
+        "sha256": "e122bbe6c09edbdc5b460404d5942d3079ca52e65801fddb4a964eadf7f52006",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/_json.py",
+        "sha256": "c0f4069a07b6c99f77dbc107285ea069d19ec866022502b1b54fa22ca13a5270",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/encoding.py",
+        "sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/exc.py",
+        "sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/serializer.py",
+        "sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/signer.py",
+        "sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/timed.py",
+        "sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "src/itsdangerous/url_safe.py",
+        "sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+        "raw_gitless_git_object_equal": true
+      }
+    ]
+  },
+  {
+    "corpus": "large",
+    "commit": "8352756ccddbb7b9f13da2da689ef633d968e30f",
+    "files": [
+      {
+        "path": ".getzilla/getzilla/__init__.py",
+        "sha256": "a52c18443cac6b9d1cedc2a2fabbe54ddbc16b4b1b7677f63b9969295ee6ee08",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/_cpu_capacity.py",
+        "sha256": "30a5997a93cffa1e54496806402df4e8989467699ea2a58c11184086af42f453",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/_policy_legacy.py",
+        "sha256": "f0b474c8b8c0d29f93e0bd0cab75dcc8a477325d1b08104813f91dde5d44bb26",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/adoption_state.py",
+        "sha256": "1a6ff84fb450b9a7fa35288f2745248df52294a94cb2a332080b0cf591fbd2a9",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/agent_lifecycle.py",
+        "sha256": "4db01d289c26ea2a1ab5e14faa15c92343e27ef370b014732cc1ae9ad9c00050",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/agent_setup.py",
+        "sha256": "d4a877269948c6c98111de83a8f1c42f188ab6130737469614dd635e4d07efc4",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/architecture.py",
+        "sha256": "516fa09ccbb98d192ce1bbe0e312bf192604fdb2aeb30ebb461493ad5a5d1906",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/architecture_diagrams.py",
+        "sha256": "368bf300e37d225bee991dc07757632eedcfc75f274f43a6a68ae22cdd9098e4",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/architecture_diff.py",
+        "sha256": "03659fc78586f55461c225af9cf22c43cf32f52bde72d2f19e32d685a5ad2f4f",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/architecture_fitness.py",
+        "sha256": "c809d149b962ee8378685074780434544b0ddd21cb9a5cd8068505e164564d6f",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/baseline.py",
+        "sha256": "4ac7ce419d3985848644438ad1993f27b8602c312d37ed5dde73fe3b52d17715",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/bitrix_checks.py",
+        "sha256": "f27e2c04eda4d3f4ae59e8485fc3e353916217d8805792d207f223157a4bd609",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/branch_lifecycle.py",
+        "sha256": "90b939e132427bea9b778eaef4b1fc653aa326cc9bab76e1665309785532c3bb",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/change.py",
+        "sha256": "6b08adb9656145e654beebee40a9747cd0d2087d3f637272de109d9534adc4de",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/ci_evidence.py",
+        "sha256": "3d19f86c181678118b7c9735ab66dcc9821896bae83f4241bed2bead516c85f9",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/ci_gate.py",
+        "sha256": "95c1c2309d3421a3b88e32062dbaf9c8387f9b54e6d007cba0f6ca122634f1ea",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/claim_check.py",
+        "sha256": "60e1a313bf6917790206a7bbaa6f56b5b534f2947b478a1d576c22e564560870",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/__init__.py",
+        "sha256": "9fb7a57e5e81710000e6dcd29a2c0277253ffdb1dc0791bfe3afa78fde278f25",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/architecture_bindings.py",
+        "sha256": "2992119197c5b01969892fcb7d673c3d2cb2f6c1280f1fd98b70b91a90e499df",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/builder.py",
+        "sha256": "0ab1f86291d8287c470313b43956ecdfd141af96ed2235bde065f4177cbf3618",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/cli.py",
+        "sha256": "486e6d8db27bbbcbbbfe1a0c4ff176b5d11f898b90bd76cadff22fdadac3eeb0",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/impact.py",
+        "sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/incremental.py",
+        "sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/models.py",
+        "sha256": "764a930ab01ccb276d9c10082ec44ebd1193c8a8302d5f14fb8185efb70d4f85",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/python_calls.py",
+        "sha256": "37234b5656f98eccaf4f3a2d71756c4d3b0a0ceaae83eeeacc63cad5f2f70579",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/python_parser.py",
+        "sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/python_resolver.py",
+        "sha256": "e68d3a72c79a23c5f55321265174054cb19b3ac5f750aac1501b92b25465d1ec",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/store.py",
+        "sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/code_graph/task_bindings.py",
+        "sha256": "14f390796469611e6de682f277ec3e70a84338a4f21a4c29f528742c6040243b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/compliance_scaffold.py",
+        "sha256": "f2b0e434761ca8dfd8d061787b75b5b16158d74dee3916afdc1e8362e79502fd",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/cost_guard.py",
+        "sha256": "64f10eaacd6ad4d9ea29a5053156019aa9d3498d22ef94ed7c1ef27d40e8278a",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/demo.py",
+        "sha256": "9969e8f97d1be9128a643a1c40a998b1999b98b3ce092acad18405d4ed98d086",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/demo_http.py",
+        "sha256": "0f9e219d0863b7da457e122275e031df442e6ef17b9925d394fd6284dd202c29",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/deploy.py",
+        "sha256": "86221b3490cd3f50c91c9f178fda4b5903415a324871626c0f5d1b97ebcf5172",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/diff_risk.py",
+        "sha256": "fb5ec00b85c8e8de6d3286895de4e71a891c4d3b8f2ce42205c71967983e8b07",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/doctor.py",
+        "sha256": "f3fafaf71acb1eaae487768c1d64dce6b64ce351f505ee929a004e822bfc43cb",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/enforcement.py",
+        "sha256": "c24b148a52d0a2aab4d4c2354cce04304d9dedb878b0a2a143b79c597b0ec406",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/eu_ai_act.py",
+        "sha256": "6d544bfca6ce276dff57443feadb774fa9c3a0cafde5fea9d967334e36e3b87e",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/fsx.py",
+        "sha256": "6f73a8917412707e096351d526c54c23f12961db8c5f90ce2bb0f7ab561246ab",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/governance.py",
+        "sha256": "09d456c3ec1bf057e9b363a6561798da8beac2784a989bc9816096f06e81fe63",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/harnesses.py",
+        "sha256": "397860dda4a209f6ad51dca4300d5410057fbaafe45b41d5548a5c4afad377f6",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/history.py",
+        "sha256": "a240e426e5183ba8fcd78a23f3aa9b87b973e5d410552512656eb229406c04d2",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/hook_health.py",
+        "sha256": "f920a4cc4515d88e708975787a9e423d9986e4e23eea1d933d580d2b11614967",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/human_gates.py",
+        "sha256": "6f5306495cc19bb2e2c963a131d47dd21d3435118ba6b545722cf8f68b802038",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/interpreter.py",
+        "sha256": "4dd227a3d2d588a51cf21dde2ca844ae45708af790bb3b573cbfac827dea7379",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/known_vulns.py",
+        "sha256": "aaa4227228fa4402cfd496f70e8c8418798a855b46163d59b238bd1bbbfa5c7b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/light_lane.py",
+        "sha256": "05815fcc41fab3a5a83d89079cd16ea89d7d7cb8a5193aeb1b14da538f867380",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/manifest.py",
+        "sha256": "ab9f3c50fb47cfc14681492e4ce08863da9b90646dc50fbc48b5a6ead525dd52",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/metrics_journal.py",
+        "sha256": "06b5bd26523b64bb8c90dd8e2212bde83c1d47a0e2a6062286c36126a1dee48c",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/on_demand.py",
+        "sha256": "20cbfffe36a2c598a991fa8cbeeac831cf0eecf34416f88f56f4ac18370161c1",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/package_status.py",
+        "sha256": "46d0f00e1971cc13d8e6b553cb3b9a31b2d1dcde04c24f12d445adfabfe1b077",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/parallel.py",
+        "sha256": "6a1119d8f2b8be46d0d3669fa5c22a647062ea986953203f72d98638cd34e380",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/path_hints.py",
+        "sha256": "242c1b4a0387401aa7dd622557232d47953b9efd8988901eb7c66458ca496864",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/policy.py",
+        "sha256": "659266190d8a1ca2627254fb26bbf6a0448704af005fbd88da16525ec4053d1f",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/project_adoption.py",
+        "sha256": "267c520cce80f8bed2776dfc960e757416d1a39c8b08214c9a67802478c53373",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/project_ingestion.py",
+        "sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/protected_write.py",
+        "sha256": "84830ce22594521abde550e9239f9f0c31195cd037178dcc8ac93013589935d6",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/python_test_runner.py",
+        "sha256": "78a036c72ee143080c0b61ee307cb5533b68ea5a767921d1ac9102a133576249",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/quality_gates.py",
+        "sha256": "8e780b15d1a2448a3be8437d4a2e24aa7df35efd1f24a1209d7e4199ad859cf8",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/queue_provenance.py",
+        "sha256": "268e59aee08c337f586111ed2a3426efd1862838e6b30e1722fe7ba972e94f13",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/receipts.py",
+        "sha256": "886d63a231636fd91c545baa400f6b3a7d436ee0907a0c6dc8687dfa7ba76bc3",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/release_state.py",
+        "sha256": "68cdf04fa14f2fa2a2544126d97522503c5bf3b966e6474a522b92c70548879c",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/repo.py",
+        "sha256": "a56a7703c443ae865917e5cfb21e4c88fe578657766207828777e59c69dff87f",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/review_plan.py",
+        "sha256": "a360d8374f16f1370df610d69332a68d0d2de5609df25c5a07e5bbb185d04d29",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/review_source.py",
+        "sha256": "d9d62098128d9c48e1ad82966a88ad898e46e6c1c85250eb02c83a8d2207a8be",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/risk_terms.py",
+        "sha256": "c1fadb04811d6ac93565bb0d1ce00247bf158a94eb31ed85c7147bef80217304",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/route_metrics.py",
+        "sha256": "f17cfff59e09299f2e6ba4381021653e24a31aa98a43a32272fb5748f8c74835",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/router.py",
+        "sha256": "78199d612f0f5503b2e57cde028c2fe8d5df576175fcf20a8aa3578fabdf4544",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/shell_targets.py",
+        "sha256": "f6e75bf97877664823da51642e3878862838eff97ae72e81a6cf8b0ef9fc64ad",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_admission.py",
+        "sha256": "5112ba43e82b63983fe3d29e2624247cf45d0b0c786d147c6581f62c59770b78",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_baseline.py",
+        "sha256": "5c6d6320d9e63902cfbebb0b479fa7fa4cdb2299375979a1cd213dc8bac987e0",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_git.py",
+        "sha256": "55673dd2fb674b04a65b69ce01f6312b0b22387daed8ca31f904a5f8683a7c94",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_inventory.py",
+        "sha256": "4bdfeeb34781d5e17968519aabc7692f4462d8d015bfd88ef53999b01993ae3b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_managed_layer.py",
+        "sha256": "e659f3f58178a5599c3a4fe3c9e319742b61066d10d27cd3da888ab9f62f0f4d",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_models.py",
+        "sha256": "f7eb6157a4055318ce4eaf3f84bb9078c6bb63acecc02481ebb261f487678d31",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_paths.py",
+        "sha256": "938685c0763d0dec1f9fc2366ba2a27e76fa581dd826478a76f882377cc8e1c5",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_provenance.py",
+        "sha256": "f48b70035d282d5b697ee8162e4ac23c13a31e4a438d09f9982f7fce044fdd93",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_secrets.py",
+        "sha256": "4d7b9dff0862261aa91a1213930cddfca2af3c7171081d721973ec783fd319a8",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_shadow.py",
+        "sha256": "22c8a5e7e7b01b859b59c18ff47f3fed5e9705a72210ed9a616c2faf46438854",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_snapshot.py",
+        "sha256": "5b709446d2bf6621e6d618d10cff5e954455a55fcafc86718d8bc62abbe05ef0",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/source_verification.py",
+        "sha256": "7bf00924a38ad6f9a07d371dcecf1ab8ed37470a97e591f0f26ee526d05a3a9a",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/spec.py",
+        "sha256": "795e8e7e99d2bbdbcdf30cc90c99387bb122d5e225a01937dfa0870f4f2dec1c",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/stack_runners.py",
+        "sha256": "e4b0ae68d2be9cb85004a108008b78eb0fa0293b0c12feba8a1e2231099e4a37",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/stack_toolchains.py",
+        "sha256": "2c5186ab9df174cfad28cb3de8d6155be75f96e5ba4f5f8ca5fd027c49d98d74",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/stacks.py",
+        "sha256": "9a40b41ee4def4b600f16ca96c1294b9dc67046a73a54f80c27e91eff28bb0ad",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/startup_cpu.py",
+        "sha256": "cd7fa81f07fc77dea7004e1b7107dddf1a6e61e1e1993e11c6a4d893b1284a9e",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/state.py",
+        "sha256": "330ae6eabd657583bac5e1092f5ea6dbbdeddf4295d9ccc7d426cf061fdf2642",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/toolchain.py",
+        "sha256": "93c7b7faa73d3c25435ac382db47b31d5f75c13d9ac4457eb040b44cf3599642",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/trust_ci_setup.py",
+        "sha256": "9d5fc2da4de57acf0d905452ef5971ea7cbf9e1c96e415571d51ebd6f0c6f4db",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/updater.py",
+        "sha256": "a3f0aef98302cdb3b4cac1be88faeaf9ace20fabb2ca9dab6b0fc50a9c82d228",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/util.py",
+        "sha256": "b7c7c820fbbfcb86f4790ad647ef4fa8cabf26d9993cea523e0d6446b8ae70cc",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/verification.py",
+        "sha256": "a3dab2ba8926866763f957715d46b1b9cb1abd3353361b77f78dae37693818cf",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/verification_dispositions.py",
+        "sha256": "a60104aeece5a5f565655e7f4d74bfaf781ff4101d011f923ed851b498596c2d",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/verification_scope.py",
+        "sha256": "9e489f3124c5801b88f2fad609102492b3e6cca05f61410a0ecc01c00b1568ac",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/workflow_artifacts.py",
+        "sha256": "3f6a0508dd3ca3f7902d7d515084a099560400c0490628f855a6a886b4b65579",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": ".getzilla/getzilla/workflow_storage.py",
+        "sha256": "a4b9401d98f111d3b17df46787ad52650739d8b0014685cefbb6098086b0e51a",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/adopt_existing.py",
+        "sha256": "8b776bd027f36c717b1020a1e7962129f8032bb9bf97e4087f7c8746b3a21034",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/branch_lifecycle.py",
+        "sha256": "a8f28c00502bdbf3ec081a8db97c6ef94e114a87f3c5c4534d671fb8e1e21533",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/generate_manifest.py",
+        "sha256": "64bc0204d67fd4ecfbf0b55b74cd9d641a4993a058e06d7386cc2cd5430190fb",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_agent.py",
+        "sha256": "a355fc3047112c8e0f4432b8ae1881bbd546c0a6cce8df2c5d9c3804d37df5fb",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_approve.py",
+        "sha256": "1455ef6983074ef4262739cf57c4bd2c70e9dce4dafbc9f5036d1a74ba17fa48",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_architecture.py",
+        "sha256": "37f0193720255bf433d39d2addcced0fab3418b4a90370e488f05f66ddbae9d0",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_artifacts.py",
+        "sha256": "d0490e76b073f2ee0866c06c299d9ac0d688c57aee64299d7da0a125b267f320",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_audit_bundle.py",
+        "sha256": "30341af6ef497d98edb2da808b23869ae1116b2f7de2b5149a305492691b658b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_baseline.py",
+        "sha256": "c3d6153d4eb053505405d130a7506a81b7ed117ba235578052428e956219e7f8",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_change.py",
+        "sha256": "8efe8573af7df52d5f7ab786da84715b04dbb2b801f39c3a816b445b77a74b66",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_ci.py",
+        "sha256": "aef6f0666a3ab24f414d84a8e2e6fa8e0ee48d860af11cbbd0c8a294a68555d7",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_ci_evidence.py",
+        "sha256": "cd0219af9b61bbee97548619f7011cd47c13ca18c6244d2fc2ce3b7e6c894a93",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_cli.py",
+        "sha256": "39dbb7d9224ee0aecd17ef418ef110839f7f147b6fc33201c87477f6ac967ed6",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_compliance.py",
+        "sha256": "bc661b23137fc80ede6c1ecb023584f4d56e3c9052d1bcd9dcab739f713fd383",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_components.py",
+        "sha256": "abfb1d4fed9a53016cc828f37405561d8e9abc4a61908994902b634f14392df3",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_demo.py",
+        "sha256": "9321e3814bec4bd390e251a4fedbf319af96a894785402a830a32829a4540226",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_deploy.py",
+        "sha256": "6b7def6c0e85f0625f0ba50723e0b6e7f46b5bfd5c7e0156848df1fba7e01f6a",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_doctor.py",
+        "sha256": "53be14cbafa04c04e05c93b9706ec06485f532dd28b6bf686b1787b109248c48",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_evidence.py",
+        "sha256": "a744c69a861cc3d9bd140faac176264bd889007ce5b437826da7d748f2fbf5a4",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_gate.py",
+        "sha256": "6ee521981a577ac582a9d192a9228ab01f20d80ac5428a2f1ec792995419cf01",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_governance.py",
+        "sha256": "e0ee12c74d8602d44be970940ec39247953ea1e43552a0616471874f7e81b534",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_graph.py",
+        "sha256": "7fd643c25ac1795078006f4014c35633fc210c3be13afd247d2333475b1770dd",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_harness.py",
+        "sha256": "8340770e668df9075a8f1826a24f5230c854d0c6e966488c796561d111407005",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_history.py",
+        "sha256": "69b5ad3847f57997895ed356ff74080c37d9f183c54d69c1994af4adee718daf",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_landing_publish.py",
+        "sha256": "323ec43b09f7a6c7b590ab93f81ace01ea69e24314b1a128bb57b61e35219726",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_m8.py",
+        "sha256": "fa91c7de255309b772bb0198125ae8b6a758cbc952febe6aa80d081506ad411b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_par.py",
+        "sha256": "172a36ea1d7e2348faaa951bed795aa5f90d9c0ac6a105151c5902c0ec7fcc50",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_protected_write.py",
+        "sha256": "8b79b2dd81afdbbc8610d58d7c5d3cb6f4a2542bb3b4f56c82463bcc6651d9e0",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_report.py",
+        "sha256": "6541c32620dad8609a90f862db450280debdf835b69a4edbf2f19d8df3b7c7b3",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_review.py",
+        "sha256": "bc230c1597b8f3ad78de2a89a4d08437c5cdceeda52564d37f8e4c35fa4b988a",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_risk_terms.py",
+        "sha256": "e51887f402eeafd70f80951dc64fd96d08308d71dd9757d8b0e496d0568e4ae1",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_route.py",
+        "sha256": "4a007edf4e8cd6cc80cf90b50df3e8c9f676b413bae6a5d40a56caeee9c3386b",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_setup_agent.py",
+        "sha256": "f62d9f9e8db4d6240975b4434fdd4cf0e40566bb7bec8b239baf6e6dfc7a70a5",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_spec.py",
+        "sha256": "050c35bdb2627bf9fc88aaff8783cfba721bbe86e10d95a49fb628600ad6f7da",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_startup_cpu.py",
+        "sha256": "8e6ca968b7030bdbe1fc2ed4125903dc41dd80a74eecf89d30f939ac40a1f334",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_status.py",
+        "sha256": "892f2aca65e30d6125a758cb2a758a2d490bba189bfbf906df0ae31e49823de4",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_trust_ci.py",
+        "sha256": "aa00f8fd8fd8d1825833b0acd12781f4a68bed697cbf1c9e74feab877735de6d",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_update.py",
+        "sha256": "8b0733bcf2ae6d02f7e8cc7474b8ed5d77f394e262e178dcd3dfbf01fcaadc03",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_upgrade.py",
+        "sha256": "4351d2c62fc56832531dca780f5ddbffcf1364acfddd0538e6acc781ba069653",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_verify.py",
+        "sha256": "e697a8f01657ac2766c3898d6b98737f3842eabf9a291b722dcc5b3debe06772",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/getzilla_vulns.py",
+        "sha256": "553ae6c72d907fe37303863a7bd33419ffe4c2ed566a8d076430dd0e955b1d7d",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/install_into.py",
+        "sha256": "7566730e56912ec4e0946c726f6ebd767d9e038c8e5189945acd9b1c3f1288c5",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/package_stack.py",
+        "sha256": "33f9ab9bd23e0ebc93bc162ca89463056ed75effbb6d6570de7f1f1baf8a2e1f",
+        "raw_gitless_git_object_equal": true
+      },
+      {
+        "path": "scripts/verify_manifest.py",
+        "sha256": "905a8fef967f54b4cd73808b5fcea9af884311364181ee5d309beb51be8e4953",
+        "raw_gitless_git_object_equal": true
+      }
+    ]
+  }
+]

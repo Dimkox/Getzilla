@@ -1,0 +1,76 @@
+{
+  "chunks": 64,
+  "citations_checked": 64,
+  "cold_model_load_seconds": 0.30951658403500915,
+  "corpus": "small",
+  "encoder_tokens_untruncated": 7229,
+  "encoder_truncated_chunks": 0,
+  "external_scan_index_llm_calls": 0,
+  "external_scan_index_llm_tokens": 0,
+  "functions": 55,
+  "gitless": {
+    "bytes_and_ranges_equal": true,
+    "git_dependency": false,
+    "note": "Git object input provenance verified by pinned blob materialization; both retrieval views contain plain copied files.",
+    "rankings_equal": true
+  },
+  "index_build_seconds": 7.141579587012529,
+  "latency_summary": {
+    "all_arms_end_to_end_ms": {
+      "median": 9.397326968610287,
+      "p95": 11.140362126752734
+    },
+    "bm25": {
+      "median": 0.4205857403576374,
+      "p95": 0.5152575671672821
+    },
+    "exact_symbol": {
+      "median": 0.10604946874082088,
+      "p95": 0.12806910090148446
+    },
+    "query_embedding_ms": {
+      "median": 8.69087246246636,
+      "p95": 10.384928830899298
+    },
+    "rrf_end_to_end_ms": {
+      "median": 9.373607812449336,
+      "p95": 11.116777290590107
+    },
+    "rrf_fusion": {
+      "median": 0.0772171188145876,
+      "p95": 0.0935629243031144
+    },
+    "semantic": {
+      "median": 0.07359986193478107,
+      "p95": 0.09233229793608186
+    },
+    "semantic_end_to_end_ms": {
+      "median": 8.761550998315215,
+      "p95": 10.467892093583941
+    }
+  },
+  "orchestration_usage": null,
+  "peak_rss_kib": 819236,
+  "seal": {
+    "authorization": "parent message: Independent qrel gate PASS; no corrections; authorize seal and execute",
+    "hashes": {
+      "data/config.json": "94d5a64c26348608037772569c0a2fd794d3db47f27d8594e3df1d379935e6d4",
+      "data/inventory-summary.json": "94ea55e747aefb1f40a1c704cdf74678bc53be56f1bf1d1f521f951a8510ae02",
+      "data/large-functions.json": "7074d347cd44df604a1dab7e5dc5928ba63862685be2b97f4f49d08f70fb8e14",
+      "data/large-manifest.json": "360a69ea25e36ef6ac4f47d0fe6f4d4c959b072a1f3b6be4cd9317f08778b447",
+      "data/large-qrels.json": "3844fe8fd64495478c91a9f98db3f52c11c722c615ac99375ede23959a267ecd",
+      "data/small-functions.json": "61f5fb2065b9783ef2a372f1fdbcd65e1d5f61d5d7ccbf5e8b02d45d9fa4cb01",
+      "data/small-manifest.json": "c7728dd6d7d25f9b623def3afa301957ac4a9558dfaf200c2fa70084653206f8",
+      "data/small-qrels.json": "ae77c4d1f73f1743531ff1359878de0ddf12b3c30d82efa040ee037e77f5fb31"
+    },
+    "independent_qrel_review": "pass",
+    "lifecycle_metadata": "Native SubagentStart child ID/generation unavailable; parent instructed no invented metadata.",
+    "limitations": [
+      "curated graph/ingestion questions in bounded large source scope",
+      "registered function qrels only; other hits unjudged",
+      "no answer controls do not establish semantic abstention"
+    ],
+    "reviewer": "selected repo_explorer retrieval162_audit"
+  },
+  "vectors_bytes": 98304
+}

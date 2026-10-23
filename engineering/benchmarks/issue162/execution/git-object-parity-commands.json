@@ -1,0 +1,1815 @@
+[
+  {
+    "argv": [
+      "git",
+      "init",
+      "--bare",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git"
+    ],
+    "exit": 0,
+    "seconds": 0.009501697029918432,
+    "stderr": "hint: Using 'master' as the name for the initial branch. This default branch name\nhint: is subject to change. To configure the initial branch name to use in all\nhint: of your new repositories, which will suppress this warning, call:\nhint: \nhint: \tgit config --global init.defaultBranch <name>\nhint: \nhint: Names commonly chosen instead of 'master' are 'main', 'trunk' and\nhint: 'development'. The just-created branch can be renamed via this command:\nhint: \nhint: \tgit branch -m <name>\n"
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "fetch",
+      "--depth=1",
+      "https://github.com/pallets/itsdangerous.git",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd"
+    ],
+    "exit": 0,
+    "seconds": 1.4351373631507158,
+    "stderr": "From https://github.com/pallets/itsdangerous\n * branch            096c8d42545d3b68ea21a4f890fb2b2d8979c0bd -> FETCH_HEAD\n"
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/__init__.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031503657810389996,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/_json.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003011310938745737,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/encoding.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004443290643393993,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/exc.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003226722124963999,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/serializer.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0037284912541508675,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/signer.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0037276861257851124,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/timed.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00462262611836195,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "--git-dir",
+      "/home/pall/projects/getzilla/.getzilla/runtime/scratch/issue162-20261023T2227/upstream.git",
+      "show",
+      "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd:src/itsdangerous/url_safe.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004683989100158215,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/__init__.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004586558789014816,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/_cpu_capacity.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032542129047214985,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/_policy_legacy.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0038880640640854836,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/adoption_state.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003100279252976179,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/agent_lifecycle.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003160318359732628,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/agent_setup.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0050528948195278645,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/architecture.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0062021962366998196,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/architecture_diagrams.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0037887482903897762,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/architecture_diff.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00424918020144105,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/architecture_fitness.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004026663955301046,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/baseline.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031494228169322014,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/bitrix_checks.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004673419985920191,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/branch_lifecycle.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0030322750099003315,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/change.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0029923832044005394,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/ci_evidence.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003325114957988262,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/ci_gate.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003917298279702663,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/claim_check.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00400272011756897,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/__init__.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0034810290671885014,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/architecture_bindings.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0038568852469325066,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/builder.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004395764786750078,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/cli.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004019132815301418,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/impact.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00409901374951005,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/incremental.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003653259016573429,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/models.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004204497206956148,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/python_calls.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003082192037254572,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/python_parser.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003553896676748991,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/python_resolver.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031747734174132347,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/store.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003076612949371338,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/code_graph/task_bindings.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003067918121814728,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/compliance_scaffold.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004978572018444538,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/cost_guard.py"
+    ],
+    "exit": 0,
+    "seconds": 0.007128194905817509,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/demo.py"
+    ],
+    "exit": 0,
+    "seconds": 0.002953748218715191,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/demo_http.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0030761663801968098,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/deploy.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003164940048009157,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/diff_risk.py"
+    ],
+    "exit": 0,
+    "seconds": 0.002951249945908785,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/doctor.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036772210150957108,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/enforcement.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036386880092322826,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/eu_ai_act.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004678591154515743,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/fsx.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0043168142437934875,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/governance.py"
+    ],
+    "exit": 0,
+    "seconds": 0.006291477009654045,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/harnesses.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0035740691237151623,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/history.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004126349929720163,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/hook_health.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004039223771542311,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/human_gates.py"
+    ],
+    "exit": 0,
+    "seconds": 0.006132123991847038,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/interpreter.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005553125869482756,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/known_vulns.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004325257148593664,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/light_lane.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032966528087854385,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/manifest.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0034050140529870987,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/metrics_journal.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032037729397416115,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/on_demand.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0062788622453808784,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/package_status.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0039059948176145554,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/parallel.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003145543858408928,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/path_hints.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003256967756897211,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/policy.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003233515191823244,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/project_adoption.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004133356735110283,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/project_ingestion.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036191758699715137,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/protected_write.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0029808501712977886,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/python_test_runner.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0033890381455421448,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/quality_gates.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0033794729970395565,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/queue_provenance.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005674090702086687,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/receipts.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005699295084923506,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/release_state.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005819621961563826,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/repo.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005768285132944584,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/review_plan.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004750641994178295,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/review_source.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005479359067976475,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/risk_terms.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0054275887086987495,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/route_metrics.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004264406859874725,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/router.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003477975260466337,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/shell_targets.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00394565612077713,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_admission.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0047705997712910175,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_baseline.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004372322000563145,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_git.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004756755195558071,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_inventory.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004876408260315657,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_managed_layer.py"
+    ],
+    "exit": 0,
+    "seconds": 0.006047614850103855,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_models.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036811120808124542,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_paths.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004318812862038612,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_provenance.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003707482013851404,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_secrets.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004090290050953627,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_shadow.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004254419822245836,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_snapshot.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004410122986882925,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/source_verification.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004077560268342495,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/spec.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005252733826637268,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/stack_runners.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004686987958848476,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/stack_toolchains.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004709227941930294,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/stacks.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005466335918754339,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/startup_cpu.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005370992701500654,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/state.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032967329025268555,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/toolchain.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0030693081207573414,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/trust_ci_setup.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004464285913854837,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/updater.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004568770062178373,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/util.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0043276771903038025,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/verification.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0058718048967421055,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/verification_dispositions.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005001157056540251,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/verification_scope.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005298302974551916,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/workflow_artifacts.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003581712022423744,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:.getzilla/getzilla/workflow_storage.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031517301686108112,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/adopt_existing.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036331326700747013,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/branch_lifecycle.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031151161529123783,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/generate_manifest.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0042390041053295135,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_agent.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0038859988562762737,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_approve.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0038665090687572956,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_architecture.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004026999697089195,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_artifacts.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003185512963682413,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_audit_bundle.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005856842268258333,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_baseline.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003760268911719322,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_change.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004905413836240768,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_ci.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004113152623176575,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_ci_evidence.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004642881918698549,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_cli.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005483321845531464,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_compliance.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004616927821189165,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_components.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004573546350002289,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_demo.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004432251676917076,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_deploy.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0048290519043803215,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_doctor.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004892825148999691,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_evidence.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004292183090001345,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_gate.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0030085379257798195,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_governance.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003081012051552534,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_graph.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00300952373072505,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_harness.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005316835828125477,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_history.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032149762846529484,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_landing_publish.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0029280399903655052,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_m8.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004477967042475939,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_par.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003827238455414772,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_protected_write.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0036321282386779785,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_report.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0031421631574630737,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_review.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003025284968316555,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_risk_terms.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003594321198761463,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_route.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0050671836361289024,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_setup_agent.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004439056850969791,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_spec.py"
+    ],
+    "exit": 0,
+    "seconds": 0.004641520790755749,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_startup_cpu.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0029878937639296055,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_status.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0038680238649249077,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_trust_ci.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003853440750390291,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_update.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003630989231169224,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_upgrade.py"
+    ],
+    "exit": 0,
+    "seconds": 0.00497896084561944,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_verify.py"
+    ],
+    "exit": 0,
+    "seconds": 0.0032449900172650814,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/getzilla_vulns.py"
+    ],
+    "exit": 0,
+    "seconds": 0.003502465784549713,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/install_into.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005182373803108931,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/package_stack.py"
+    ],
+    "exit": 0,
+    "seconds": 0.006182682700455189,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:scripts/verify_manifest.py"
+    ],
+    "exit": 0,
+    "seconds": 0.005099182017147541,
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "-C",
+      "/home/pall/projects/getzilla",
+      "show",
+      "8352756ccddbb7b9f13da2da689ef633d968e30f:LICENSE"
+    ],
+    "exit": 0,
+    "seconds": 0.004986670799553394,
+    "stderr": ""
+  }
+]

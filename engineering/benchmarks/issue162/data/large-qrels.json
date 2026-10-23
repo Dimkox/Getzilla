@@ -1,0 +1,421 @@
+{
+  "judgment_scope": "Registered function spans only. Other hits remain unjudged. Tests are supporting evidence, never candidates. No answer controls have no calibrated rejection threshold.",
+  "queries": [
+    {
+      "id": "large-01",
+      "class": "exact",
+      "query": "Locate change_set in code_graph.incremental.",
+      "qrels": [
+        {
+          "end": 23,
+          "file_sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+          "id": ".getzilla/getzilla/code_graph/incremental.py:19:change_set",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/incremental.py",
+          "sha256": "f72214ce4a5d9585796a8f5cf93b561f418372c0dd09d638c68177e013ba75a7",
+          "start": 19,
+          "symbol": "change_set"
+        }
+      ],
+      "source_justification": "Computes added/deleted/modified path digests."
+    },
+    {
+      "id": "large-02",
+      "class": "exact",
+      "query": "Locate GraphStore.publish.",
+      "qrels": [
+        {
+          "end": 159,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:137:GraphStore.publish",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "14b4340bc0c1fa64419e0f835219c51327d18fee2b07ea1e7aa89dcc6b66bb5b",
+          "start": 137,
+          "symbol": "GraphStore.publish"
+        }
+      ],
+      "source_justification": "Transactionally stores generation and active pointer."
+    },
+    {
+      "id": "large-03",
+      "class": "exact",
+      "query": "Locate parse_python in code_graph.python_parser.",
+      "qrels": [
+        {
+          "end": 227,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:204:parse_python",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "33915cf56d74af80407dc0173b1f3b4c899a6be361bb60509f5f70a94be2f45d",
+          "start": 204,
+          "symbol": "parse_python"
+        }
+      ],
+      "source_justification": "Bounded AST parser entry point."
+    },
+    {
+      "id": "large-04",
+      "class": "exact",
+      "query": "Locate route_ingestion.",
+      "qrels": [
+        {
+          "end": 219,
+          "file_sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e",
+          "id": ".getzilla/getzilla/project_ingestion.py:185:route_ingestion",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/project_ingestion.py",
+          "sha256": "fd09ed429b7edad882bbf0c106a18c77f50958a4e279c9f5822fe15184ba8b12",
+          "start": 185,
+          "symbol": "route_ingestion"
+        }
+      ],
+      "source_justification": "Dispatches folder versus Git ingestion."
+    },
+    {
+      "id": "large-05",
+      "class": "behavior",
+      "query": "Where are unchanged parsed files reused while all relationships are rebuilt?",
+      "qrels": [
+        {
+          "end": 49,
+          "file_sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+          "id": ".getzilla/getzilla/code_graph/incremental.py:26:update_index",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/incremental.py",
+          "sha256": "a522e6ab58ecb772d8b9ed9a1ea3d36461e51797ad5f3e04523d8b01e8c72ad0",
+          "start": 26,
+          "symbol": "update_index"
+        }
+      ],
+      "source_justification": "Reuse dictionary passes unchanged parsed files to builder."
+    },
+    {
+      "id": "large-06",
+      "class": "behavior",
+      "query": "Where does traversal follow both old and new reverse dependencies after a deletion?",
+      "qrels": [
+        {
+          "end": 142,
+          "file_sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+          "id": ".getzilla/getzilla/code_graph/impact.py:59:calculate_impact",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/impact.py",
+          "sha256": "51e32728602b271e07d87fce5caf660db5a788b630f6fd1ac442a1c21db0270f",
+          "start": 59,
+          "symbol": "calculate_impact"
+        },
+        {
+          "end": 35,
+          "file_sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+          "id": ".getzilla/getzilla/code_graph/impact.py:21:_reverse_edges",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/impact.py",
+          "sha256": "b5434b502d4ad52c264dc6fbfa07c9708902882f528fe87f1efd189d2d40b1d4",
+          "start": 21,
+          "symbol": "_reverse_edges"
+        }
+      ],
+      "source_justification": "Generations include previous and current for reverse traversal."
+    },
+    {
+      "id": "large-07",
+      "class": "behavior",
+      "query": "Where are runtime reflection and dynamic imports recorded as gaps without running source?",
+      "qrels": [
+        {
+          "end": 195,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:180:_Visitor.visit_Call",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "3004c0b1286ed8029e02c0e38285a607b3529c8a7ac5fae17f130b62045dd8b2",
+          "start": 180,
+          "symbol": "_Visitor.visit_Call"
+        }
+      ],
+      "source_justification": "AST call visitor marks REFLECTION and DYNAMIC_IMPORT."
+    },
+    {
+      "id": "large-08",
+      "class": "behavior",
+      "query": "Where does a directory with no repository marker get a plan to adopt it?",
+      "qrels": [
+        {
+          "end": 219,
+          "file_sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e",
+          "id": ".getzilla/getzilla/project_ingestion.py:185:route_ingestion",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/project_ingestion.py",
+          "sha256": "fd09ed429b7edad882bbf0c106a18c77f50958a4e279c9f5822fe15184ba8b12",
+          "start": 185,
+          "symbol": "route_ingestion"
+        }
+      ],
+      "source_justification": "Folder branch returns zero_git_plan."
+    },
+    {
+      "id": "large-09",
+      "class": "boundary",
+      "query": "Where does an inconsistent declared change list force a complete rebuild?",
+      "qrels": [
+        {
+          "end": 49,
+          "file_sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+          "id": ".getzilla/getzilla/code_graph/incremental.py:26:update_index",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/incremental.py",
+          "sha256": "a522e6ab58ecb772d8b9ed9a1ea3d36461e51797ad5f3e04523d8b01e8c72ad0",
+          "start": 26,
+          "symbol": "update_index"
+        }
+      ],
+      "source_justification": "CHANGE_SET_INCONSISTENT selects build_generation without reuse."
+    },
+    {
+      "id": "large-10",
+      "class": "boundary",
+      "query": "Where does a competing active-generation change abort publication?",
+      "qrels": [
+        {
+          "end": 159,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:137:GraphStore.publish",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "14b4340bc0c1fa64419e0f835219c51327d18fee2b07ea1e7aa89dcc6b66bb5b",
+          "start": 137,
+          "symbol": "GraphStore.publish"
+        }
+      ],
+      "source_justification": "Expected active mismatch raises CONCURRENT_PUBLISH and rolls back."
+    },
+    {
+      "id": "large-11",
+      "class": "boundary",
+      "query": "Where are oversized files and syntax errors reported as incomplete rather than empty success?",
+      "qrels": [
+        {
+          "end": 227,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:204:parse_python",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "33915cf56d74af80407dc0173b1f3b4c899a6be361bb60509f5f70a94be2f45d",
+          "start": 204,
+          "symbol": "parse_python"
+        }
+      ],
+      "source_justification": "FILE_OVER_GRAPH_LIMIT and SYNTAX_ERROR return incomplete."
+    },
+    {
+      "id": "large-12",
+      "class": "boundary",
+      "query": "Where is a folder inside a parent repository blocked instead of treated as a standalone input?",
+      "qrels": [
+        {
+          "end": 219,
+          "file_sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e",
+          "id": ".getzilla/getzilla/project_ingestion.py:185:route_ingestion",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/project_ingestion.py",
+          "sha256": "fd09ed429b7edad882bbf0c106a18c77f50958a4e279c9f5822fe15184ba8b12",
+          "start": 185,
+          "symbol": "route_ingestion"
+        },
+        {
+          "end": 92,
+          "file_sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e",
+          "id": ".getzilla/getzilla/project_ingestion.py:86:enclosing_worktree",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/project_ingestion.py",
+          "sha256": "e86766ab84fa3477355a6c539ce9a80ab713785cf4cf990b4bac21ee669d4345",
+          "start": 86,
+          "symbol": "enclosing_worktree"
+        }
+      ],
+      "source_justification": "Parent worktree triggers INSIDE_PARENT_GIT_WORKTREE."
+    },
+    {
+      "id": "large-13",
+      "class": "multi",
+      "query": "Trace changed source digests through incremental rebuilding and transactional publication.",
+      "qrels": [
+        {
+          "end": 23,
+          "file_sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+          "id": ".getzilla/getzilla/code_graph/incremental.py:19:change_set",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/incremental.py",
+          "sha256": "f72214ce4a5d9585796a8f5cf93b561f418372c0dd09d638c68177e013ba75a7",
+          "start": 19,
+          "symbol": "change_set"
+        },
+        {
+          "end": 49,
+          "file_sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7",
+          "id": ".getzilla/getzilla/code_graph/incremental.py:26:update_index",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/incremental.py",
+          "sha256": "a522e6ab58ecb772d8b9ed9a1ea3d36461e51797ad5f3e04523d8b01e8c72ad0",
+          "start": 26,
+          "symbol": "update_index"
+        },
+        {
+          "end": 159,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:137:GraphStore.publish",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "14b4340bc0c1fa64419e0f835219c51327d18fee2b07ea1e7aa89dcc6b66bb5b",
+          "start": 137,
+          "symbol": "GraphStore.publish"
+        }
+      ],
+      "source_justification": "Change set feeds reuse choice then publication."
+    },
+    {
+      "id": "large-14",
+      "class": "multi",
+      "query": "Trace active generation reading through record reconstruction and digest verification.",
+      "qrels": [
+        {
+          "end": 172,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:170:GraphStore.read_active",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "c86ce6a6cd00cd10369ed9c537af865b161aa2f59206e86f37d805545acda623",
+          "start": 170,
+          "symbol": "GraphStore.read_active"
+        },
+        {
+          "end": 168,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:161:GraphStore.read_generation",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "ce8a2a6260d6a810fea7e0779a92ba58dc470fb46dfdb03bb6a5b69475b2ec59",
+          "start": 161,
+          "symbol": "GraphStore.read_generation"
+        },
+        {
+          "end": 70,
+          "file_sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e",
+          "id": ".getzilla/getzilla/code_graph/store.py:56:generation_from_record",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/store.py",
+          "sha256": "1c1b65b89d0f01ce9df3ca4cf4cc4744305dde991128c668d8277da8e357cfe8",
+          "start": 56,
+          "symbol": "generation_from_record"
+        }
+      ],
+      "source_justification": "Read active delegates and validates reconstructed generation."
+    },
+    {
+      "id": "large-15",
+      "class": "multi",
+      "query": "Trace Python byte decoding, syntax parsing, and symbol-span extraction.",
+      "qrels": [
+        {
+          "end": 201,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:198:_decode",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "ef9f68b695e5e3d54262264e3b96dbb8acdbe85bf78327f7bf26ca5f30ee7061",
+          "start": 198,
+          "symbol": "_decode"
+        },
+        {
+          "end": 227,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:204:parse_python",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "33915cf56d74af80407dc0173b1f3b4c899a6be361bb60509f5f70a94be2f45d",
+          "start": 204,
+          "symbol": "parse_python"
+        },
+        {
+          "end": 84,
+          "file_sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe",
+          "id": ".getzilla/getzilla/code_graph/python_parser.py:63:_Visitor._symbol",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/python_parser.py",
+          "sha256": "18f1d1a77a19ea28b2484b79eba48a8b4c1d4ac4fdc62a68ab205b91faf87837",
+          "start": 63,
+          "symbol": "_Visitor._symbol"
+        }
+      ],
+      "source_justification": "Encoding detection precedes AST visitor with spans."
+    },
+    {
+      "id": "large-16",
+      "class": "multi",
+      "query": "Trace conservative impact widening from unresolved calls through reverse dependencies and required checks.",
+      "qrels": [
+        {
+          "end": 56,
+          "file_sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+          "id": ".getzilla/getzilla/code_graph/impact.py:41:_gap_files",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/impact.py",
+          "sha256": "ae12722242fcda3ec6154f13676a12c5b5920445d716e4612dbe381a3755ca1b",
+          "start": 41,
+          "symbol": "_gap_files"
+        },
+        {
+          "end": 35,
+          "file_sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+          "id": ".getzilla/getzilla/code_graph/impact.py:21:_reverse_edges",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/impact.py",
+          "sha256": "b5434b502d4ad52c264dc6fbfa07c9708902882f528fe87f1efd189d2d40b1d4",
+          "start": 21,
+          "symbol": "_reverse_edges"
+        },
+        {
+          "end": 142,
+          "file_sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06",
+          "id": ".getzilla/getzilla/code_graph/impact.py:59:calculate_impact",
+          "overload_stub": false,
+          "path": ".getzilla/getzilla/code_graph/impact.py",
+          "sha256": "51e32728602b271e07d87fce5caf660db5a788b630f6fd1ac442a1c21db0270f",
+          "start": 59,
+          "symbol": "calculate_impact"
+        }
+      ],
+      "source_justification": "Gap files expand reverse closure; security_checks always required."
+    },
+    {
+      "id": "large-N1",
+      "class": "no_answer",
+      "query": "Which native semantic search endpoint reranks code with a cross encoder?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "large-N2",
+      "class": "no_answer",
+      "query": "Where does a native BM25 index tokenize this repository?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "large-N3",
+      "class": "no_answer",
+      "query": "Which jscpd adapter publishes clone groups into the graph?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "large-N4",
+      "class": "no_answer",
+      "query": "Which graph generation field enforces tenant isolation?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    }
+  ]
+}

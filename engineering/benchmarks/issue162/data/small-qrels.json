@@ -1,0 +1,431 @@
+{
+  "judgment_scope": "Registered function spans only. Other hits remain unjudged. Tests are supporting evidence, never candidates. No answer controls have no calibrated rejection threshold.",
+  "queries": [
+    {
+      "id": "small-01",
+      "class": "exact",
+      "query": "Locate base64_decode.",
+      "qrels": [
+        {
+          "end": 38,
+          "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+          "id": "src/itsdangerous/encoding.py:28:base64_decode",
+          "overload_stub": false,
+          "path": "src/itsdangerous/encoding.py",
+          "sha256": "f008824f6b0e7c1782efd19567baab7cf6c50803641106e0ea1196a7a2ba8db2",
+          "start": 28,
+          "symbol": "base64_decode"
+        }
+      ],
+      "source_justification": "Restores padding and wraps decoder errors."
+    },
+    {
+      "id": "small-02",
+      "class": "exact",
+      "query": "Locate Signer.derive_key.",
+      "qrels": [
+        {
+          "end": 213,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:182:Signer.derive_key",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "22982867c16046576b356621d8bbb36d3994526b38a8f72a8d6ee953091aa82e",
+          "start": 182,
+          "symbol": "Signer.derive_key"
+        }
+      ],
+      "source_justification": "Selects concat, django-concat, hmac or none."
+    },
+    {
+      "id": "small-03",
+      "class": "exact",
+      "query": "Locate Serializer.iter_unsigners.",
+      "qrels": [
+        {
+          "end": 309,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:289:Serializer.iter_unsigners",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "0bfa7d37cffafa79583c4a781de8741199d01b4b195cc645c9c382bd396a1ab4",
+          "start": 289,
+          "symbol": "Serializer.iter_unsigners"
+        }
+      ],
+      "source_justification": "Yields configured and fallback signers."
+    },
+    {
+      "id": "small-04",
+      "class": "exact",
+      "query": "Locate TimestampSigner.timestamp_to_datetime.",
+      "qrels": [
+        {
+          "end": 43,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:35:TimestampSigner.timestamp_to_datetime",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "d32b43a16ec1aba41fc74bc5a15c092be3b8670ed322c612b64db7ac5861c73f",
+          "start": 35,
+          "symbol": "TimestampSigner.timestamp_to_datetime"
+        }
+      ],
+      "source_justification": "Constructs an aware UTC datetime."
+    },
+    {
+      "id": "small-05",
+      "class": "behavior",
+      "query": "Where does verification try the newest secret first and then older secrets?",
+      "qrels": [
+        {
+          "end": 242,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:227:Signer.verify_signature",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "f0646c9b879f6a88807c9c2cbf34541de1a609ccf0ba0694193554cf50211177",
+          "start": 227,
+          "symbol": "Signer.verify_signature"
+        }
+      ],
+      "source_justification": "Reverses secret_keys before verification."
+    },
+    {
+      "id": "small-06",
+      "class": "behavior",
+      "query": "Where is a shorter compressed representation selected and marked with a leading dot?",
+      "qrels": [
+        {
+          "end": 69,
+          "file_sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+          "id": "src/itsdangerous/url_safe.py:55:URLSafeSerializerMixin.dump_payload",
+          "overload_stub": false,
+          "path": "src/itsdangerous/url_safe.py",
+          "sha256": "066539726657d1ae7404440eba5eb11dd025df362b070afea95146992eab0ff9",
+          "start": 55,
+          "symbol": "URLSafeSerializerMixin.dump_payload"
+        }
+      ],
+      "source_justification": "Compares compressed size and prefixes a dot."
+    },
+    {
+      "id": "small-07",
+      "class": "behavior",
+      "query": "Where are decoded objects recovered from a damaged signature for debugging?",
+      "qrels": [
+        {
+          "end": 397,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:369:Serializer._loads_unsafe_impl",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "6e457af8819a04189f559a04653579c0ddf2fdd780bfab7eb41ed7564357be23",
+          "start": 369,
+          "symbol": "Serializer._loads_unsafe_impl"
+        }
+      ],
+      "source_justification": "Catches BadSignature and attempts payload decoding."
+    },
+    {
+      "id": "small-08",
+      "class": "behavior",
+      "query": "Where are leading zero bytes removed from an encoded integer?",
+      "qrels": [
+        {
+          "end": 50,
+          "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+          "id": "src/itsdangerous/encoding.py:49:int_to_bytes",
+          "overload_stub": false,
+          "path": "src/itsdangerous/encoding.py",
+          "sha256": "f2c5073f88071d5ec7bba93b594867856904769e1665f0e8e9f8e8dd8ca37500",
+          "start": 49,
+          "symbol": "int_to_bytes"
+        }
+      ],
+      "source_justification": "Strips zero bytes from packed integer."
+    },
+    {
+      "id": "small-09",
+      "class": "boundary",
+      "query": "Which constructor rejects a separator that can occur in the encoded signature alphabet?",
+      "qrels": [
+        {
+          "end": 173,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:129:Signer.__init__",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "818d2314660d2ff9923557e0b978d1dacf06b782a6dc4da79479083f31f5956f",
+          "start": 129,
+          "symbol": "Signer.__init__"
+        }
+      ],
+      "source_justification": "Rejects separator membership in base64 alphabet."
+    },
+    {
+      "id": "small-10",
+      "class": "boundary",
+      "query": "Where are both expired and future-dated signed values rejected?",
+      "qrels": [
+        {
+          "end": 158,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:72:TimestampSigner.unsign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "ea497145d20f2f1d8e7288f282d0e353757860d937e5a70d43b4154e735e5e40",
+          "start": 72,
+          "symbol": "TimestampSigner.unsign"
+        }
+      ],
+      "source_justification": "Rejects age above max_age or below zero."
+    },
+    {
+      "id": "small-11",
+      "class": "boundary",
+      "query": "Where does corrupt compressed payload data become a payload error?",
+      "qrels": [
+        {
+          "end": 53,
+          "file_sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+          "id": "src/itsdangerous/url_safe.py:23:URLSafeSerializerMixin.load_payload",
+          "overload_stub": false,
+          "path": "src/itsdangerous/url_safe.py",
+          "sha256": "96eba97a2e8c57a57aab9466253ea5127ec769e3094c677420b32bc649736d9e",
+          "start": 23,
+          "symbol": "URLSafeSerializerMixin.load_payload"
+        }
+      ],
+      "source_justification": "Wraps zlib decode failures as BadPayload."
+    },
+    {
+      "id": "small-12",
+      "class": "boundary",
+      "query": "Where does a missing signature separator raise an error before verification?",
+      "qrels": [
+        {
+          "end": 256,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:244:Signer.unsign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "d6c5cbf7926f59983206f58b0b31b736106bbe05ef690e9aea7bd6abd1ada517",
+          "start": 244,
+          "symbol": "Signer.unsign"
+        }
+      ],
+      "source_justification": "Checks separator before rsplit."
+    },
+    {
+      "id": "small-13",
+      "class": "multi",
+      "query": "Trace object serialization through signing and final text conversion.",
+      "qrels": [
+        {
+          "end": 322,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:311:Serializer.dumps",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "48dff8b56976732c4846f046bc3c6d14f0b74e3de52cf45b581e47e5a4addc5f",
+          "start": 311,
+          "symbol": "Serializer.dumps"
+        },
+        {
+          "end": 278,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:273:Serializer.dump_payload",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "8f1a670996fee55c0fac336fbb9707dfcbc29a8132b97c2ca8550500f8d6322f",
+          "start": 273,
+          "symbol": "Serializer.dump_payload"
+        },
+        {
+          "end": 287,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:280:Serializer.make_signer",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "d22b44fa68920002a59d66b57e01667d80761348ca3c190e8b023622aaa5d9e6",
+          "start": 280,
+          "symbol": "Serializer.make_signer"
+        },
+        {
+          "end": 225,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:222:Signer.sign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "ae7edf52b6536371232d083bcb814df2686b799833f60c99f773d192ce46f0a1",
+          "start": 222,
+          "symbol": "Signer.sign"
+        }
+      ],
+      "source_justification": "Caller transforms object then creates signer and signs bytes."
+    },
+    {
+      "id": "small-14",
+      "class": "multi",
+      "query": "Trace timestamp attachment from integer time through byte conversion and URL encoding.",
+      "qrels": [
+        {
+          "end": 51,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:45:TimestampSigner.sign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "bce26f584e9a66f18324b643ab9999b37f445a66dc610fc6fb135eac1b7017b1",
+          "start": 45,
+          "symbol": "TimestampSigner.sign"
+        },
+        {
+          "end": 33,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:29:TimestampSigner.get_timestamp",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "0543dc3c0f93deedac2f837c2643d7c852a604c3526ac2ae7c8f548b4fbf990d",
+          "start": 29,
+          "symbol": "TimestampSigner.get_timestamp"
+        },
+        {
+          "end": 50,
+          "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+          "id": "src/itsdangerous/encoding.py:49:int_to_bytes",
+          "overload_stub": false,
+          "path": "src/itsdangerous/encoding.py",
+          "sha256": "f2c5073f88071d5ec7bba93b594867856904769e1665f0e8e9f8e8dd8ca37500",
+          "start": 49,
+          "symbol": "int_to_bytes"
+        },
+        {
+          "end": 25,
+          "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+          "id": "src/itsdangerous/encoding.py:20:base64_encode",
+          "overload_stub": false,
+          "path": "src/itsdangerous/encoding.py",
+          "sha256": "4afd948fcbb5cbe256673452fd3586434513fc567dc92dc3364827b85688876f",
+          "start": 20,
+          "symbol": "base64_encode"
+        }
+      ],
+      "source_justification": "Explicit timestamp conversion call chain."
+    },
+    {
+      "id": "small-15",
+      "class": "multi",
+      "query": "Trace signature checking from splitting a signed value through constant-time algorithm comparison.",
+      "qrels": [
+        {
+          "end": 256,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:244:Signer.unsign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "d6c5cbf7926f59983206f58b0b31b736106bbe05ef690e9aea7bd6abd1ada517",
+          "start": 244,
+          "symbol": "Signer.unsign"
+        },
+        {
+          "end": 242,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:227:Signer.verify_signature",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "f0646c9b879f6a88807c9c2cbf34541de1a609ccf0ba0694193554cf50211177",
+          "start": 227,
+          "symbol": "Signer.verify_signature"
+        },
+        {
+          "end": 28,
+          "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+          "id": "src/itsdangerous/signer.py:24:SigningAlgorithm.verify_signature",
+          "overload_stub": false,
+          "path": "src/itsdangerous/signer.py",
+          "sha256": "998351a268b304bd11991e767a420666373fe8b88653d1931883af1a027ae862",
+          "start": 24,
+          "symbol": "SigningAlgorithm.verify_signature"
+        }
+      ],
+      "source_justification": "Unsign calls verifier, which calls algorithm compare_digest."
+    },
+    {
+      "id": "small-16",
+      "class": "multi",
+      "query": "Trace timed object loading with fallback signers and immediate expiry propagation.",
+      "qrels": [
+        {
+          "end": 220,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:185:TimedSerializer.loads",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "484cac33cebfa086085a6412605b84f05c295e727d5f63400c892886b409356b",
+          "start": 185,
+          "symbol": "TimedSerializer.loads"
+        },
+        {
+          "end": 180,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:177:TimedSerializer.iter_unsigners",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "74d13f18775eea051748664b3245f940e7d06973f3847e06f5d3a8444d9ae3e3",
+          "start": 177,
+          "symbol": "TimedSerializer.iter_unsigners"
+        },
+        {
+          "end": 309,
+          "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+          "id": "src/itsdangerous/serializer.py:289:Serializer.iter_unsigners",
+          "overload_stub": false,
+          "path": "src/itsdangerous/serializer.py",
+          "sha256": "0bfa7d37cffafa79583c4a781de8741199d01b4b195cc645c9c382bd396a1ab4",
+          "start": 289,
+          "symbol": "Serializer.iter_unsigners"
+        },
+        {
+          "end": 158,
+          "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+          "id": "src/itsdangerous/timed.py:72:TimestampSigner.unsign",
+          "overload_stub": false,
+          "path": "src/itsdangerous/timed.py",
+          "sha256": "ea497145d20f2f1d8e7288f282d0e353757860d937e5a70d43b4154e735e5e40",
+          "start": 72,
+          "symbol": "TimestampSigner.unsign"
+        }
+      ],
+      "source_justification": "Timed loader forwards age and stops on expiry."
+    },
+    {
+      "id": "small-N1",
+      "class": "no_answer",
+      "query": "Where are expired tokens revoked in a PostgreSQL table?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "small-N2",
+      "class": "no_answer",
+      "query": "Which function encrypts payloads with AES-GCM?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "small-N3",
+      "class": "no_answer",
+      "query": "Where does HTTP middleware authenticate a browser cookie?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    },
+    {
+      "id": "small-N4",
+      "class": "no_answer",
+      "query": "Which asynchronous worker refreshes signing keys from a cloud secret manager?",
+      "qrels": [],
+      "source_justification": "Absent from the approved source inventory; limited closed-corpus judgment, not global absence proof."
+    }
+  ]
+}

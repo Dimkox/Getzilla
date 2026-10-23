@@ -1,0 +1,14 @@
+{
+  "seal_unchanged": true,
+  "positive_queries": 32,
+  "no_answer_controls": 8,
+  "arm_query_rows": 160,
+  "reader_controls": 12,
+  "reader_controls_exit": 0,
+  "initial_characterization": {
+    "exit": 1,
+    "observed": "ModuleNotFoundError: No module named trusted_read",
+    "source": "first test invocation before reader implementation"
+  },
+  "product_tree_changed_by_research": false
+}

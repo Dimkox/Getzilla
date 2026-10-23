@@ -1,0 +1,622 @@
+[
+  {
+    "end": 38,
+    "file_sha256": "e122bbe6c09edbdc5b460404d5942d3079ca52e65801fddb4a964eadf7f52006",
+    "id": "src/itsdangerous/__init__.py:24:__getattr__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/__init__.py",
+    "sha256": "fbe059605f94ffb1115cbbfe291e60d80c5d79dccee7eb73e6ea24bff0d66ff5",
+    "start": 24,
+    "symbol": "__getattr__"
+  },
+  {
+    "end": 12,
+    "file_sha256": "c0f4069a07b6c99f77dbc107285ea069d19ec866022502b1b54fa22ca13a5270",
+    "id": "src/itsdangerous/_json.py:10:_CompactJSON.loads",
+    "overload_stub": false,
+    "path": "src/itsdangerous/_json.py",
+    "sha256": "9af5cd8809bc7321d831b960e4a134d599a9052ec863dd4e6be2394df7ee2860",
+    "start": 10,
+    "symbol": "_CompactJSON.loads"
+  },
+  {
+    "end": 18,
+    "file_sha256": "c0f4069a07b6c99f77dbc107285ea069d19ec866022502b1b54fa22ca13a5270",
+    "id": "src/itsdangerous/_json.py:14:_CompactJSON.dumps",
+    "overload_stub": false,
+    "path": "src/itsdangerous/_json.py",
+    "sha256": "f1f1a9be8be5c544c01491a23edda78e79df729e5c43c8ce494d099120d60475",
+    "start": 14,
+    "symbol": "_CompactJSON.dumps"
+  },
+  {
+    "end": 17,
+    "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+    "id": "src/itsdangerous/encoding.py:11:want_bytes",
+    "overload_stub": false,
+    "path": "src/itsdangerous/encoding.py",
+    "sha256": "0bf2c222d78b3e9be1b583a4229ecd8459d6e1f89e49d2d65dd8504268cf1e62",
+    "start": 11,
+    "symbol": "want_bytes"
+  },
+  {
+    "end": 25,
+    "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+    "id": "src/itsdangerous/encoding.py:20:base64_encode",
+    "overload_stub": false,
+    "path": "src/itsdangerous/encoding.py",
+    "sha256": "4afd948fcbb5cbe256673452fd3586434513fc567dc92dc3364827b85688876f",
+    "start": 20,
+    "symbol": "base64_encode"
+  },
+  {
+    "end": 38,
+    "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+    "id": "src/itsdangerous/encoding.py:28:base64_decode",
+    "overload_stub": false,
+    "path": "src/itsdangerous/encoding.py",
+    "sha256": "f008824f6b0e7c1782efd19567baab7cf6c50803641106e0ea1196a7a2ba8db2",
+    "start": 28,
+    "symbol": "base64_decode"
+  },
+  {
+    "end": 50,
+    "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+    "id": "src/itsdangerous/encoding.py:49:int_to_bytes",
+    "overload_stub": false,
+    "path": "src/itsdangerous/encoding.py",
+    "sha256": "f2c5073f88071d5ec7bba93b594867856904769e1665f0e8e9f8e8dd8ca37500",
+    "start": 49,
+    "symbol": "int_to_bytes"
+  },
+  {
+    "end": 54,
+    "file_sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+    "id": "src/itsdangerous/encoding.py:53:bytes_to_int",
+    "overload_stub": false,
+    "path": "src/itsdangerous/encoding.py",
+    "sha256": "fd0c230e3017b290115c1e71688111945fdf8aee62c8ce268e68dbb0c3c315e6",
+    "start": 53,
+    "symbol": "bytes_to_int"
+  },
+  {
+    "end": 16,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:14:BadData.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "9134cf8f99b8d03cf4da79042a855a9425c3884aa298e0842727b532a6f8a941",
+    "start": 14,
+    "symbol": "BadData.__init__"
+  },
+  {
+    "end": 19,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:18:BadData.__str__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "c09fd1e5cb83c2a6122848c2958acb70ee66ca1e92cae59594f057e11f460bd6",
+    "start": 18,
+    "symbol": "BadData.__str__"
+  },
+  {
+    "end": 33,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:25:BadSignature.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "8444abf0864b0e90017845a569ad14c70f108f89713559719a27fa9518bf8b56",
+    "start": 25,
+    "symbol": "BadSignature.__init__"
+  },
+  {
+    "end": 57,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:41:BadTimeSignature.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "3115e915ac9e179df7045360fc10abfa4a33140c119a410edce97fccb1c5679e",
+    "start": 41,
+    "symbol": "BadTimeSignature.__init__"
+  },
+  {
+    "end": 89,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:74:BadHeader.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "a6aab9d7be642f808bf28d70ba7ca34995a51eee74f8546a9e16b9d0da128ea8",
+    "start": 74,
+    "symbol": "BadHeader.__init__"
+  },
+  {
+    "end": 106,
+    "file_sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+    "id": "src/itsdangerous/exc.py:101:BadPayload.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/exc.py",
+    "sha256": "242fd5b296277ebfb34c32531de596d8348ab18c15810c9724ca27f543fdf3b5",
+    "start": 101,
+    "symbol": "BadPayload.__init__"
+  },
+  {
+    "end": 27,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:27:_PDataSerializer.loads",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "44b677d46a59ea580570166a957272c12d8bb1a284efce523e932aa530010191",
+    "start": 27,
+    "symbol": "_PDataSerializer.loads"
+  },
+  {
+    "end": 31,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:31:_PDataSerializer.dumps",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "eb9b9f56921e68007cf127d4ed7ad0496203953d7c80b275c12633baff47fdf6",
+    "start": 31,
+    "symbol": "_PDataSerializer.dumps"
+  },
+  {
+    "end": 39,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:35:is_text_serializer",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "fe5b241b90cceb4efa8e9263121b431984a382d85cf1fe5e377e1284960ef4e0",
+    "start": 35,
+    "symbol": "is_text_serializer"
+  },
+  {
+    "end": 122,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "overload_stub": true,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "f976821e7ac341e1dcc71c3d24ff1ae89c06ea31ab8d485e7d5cb61eb2a7e326",
+    "start": 109,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 138,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "overload_stub": true,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "62685b0e0c9c7a6a60f59cf64f510b02d8284cd5fdf93d4f7c5d3494102f7bc2",
+    "start": 125,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 155,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "overload_stub": true,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "65b2162b18bd9529f0402c4b4e1317138ab60b03e871a6b128882ba5d74ea41b",
+    "start": 141,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 173,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "overload_stub": true,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "802a88fcabab806bab067c0559e3c9449c3eb62e96eab320c646e6ef15a08d8b",
+    "start": 160,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 190,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "overload_stub": true,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "9e82e6d22a46a142ad540e5b1fc28884adc1387b9e12bf396f2013d4155af03a",
+    "start": 176,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 236,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:192:Serializer.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "c4263bb642135bcba25c51b0820e250d2d3b64a3a2036a7b1b51c63d0c538994",
+    "start": 192,
+    "symbol": "Serializer.__init__"
+  },
+  {
+    "end": 243,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:238:Serializer.secret_key",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "375f799e14d5cd445c38bbfd4450f03e5efca26aec6d72131fcd313eb8ec2dfc",
+    "start": 238,
+    "symbol": "Serializer.secret_key"
+  },
+  {
+    "end": 271,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:245:Serializer.load_payload",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "59ed8cf2a44b6fe8f283d02b31ded8692b3378412cd6045ab889ba01504c912f",
+    "start": 245,
+    "symbol": "Serializer.load_payload"
+  },
+  {
+    "end": 278,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:273:Serializer.dump_payload",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "8f1a670996fee55c0fac336fbb9707dfcbc29a8132b97c2ca8550500f8d6322f",
+    "start": 273,
+    "symbol": "Serializer.dump_payload"
+  },
+  {
+    "end": 287,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:280:Serializer.make_signer",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "d22b44fa68920002a59d66b57e01667d80761348ca3c190e8b023622aaa5d9e6",
+    "start": 280,
+    "symbol": "Serializer.make_signer"
+  },
+  {
+    "end": 309,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:289:Serializer.iter_unsigners",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "0bfa7d37cffafa79583c4a781de8741199d01b4b195cc645c9c382bd396a1ab4",
+    "start": 289,
+    "symbol": "Serializer.iter_unsigners"
+  },
+  {
+    "end": 322,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:311:Serializer.dumps",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "48dff8b56976732c4846f046bc3c6d14f0b74e3de52cf45b581e47e5a4addc5f",
+    "start": 311,
+    "symbol": "Serializer.dumps"
+  },
+  {
+    "end": 328,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:324:Serializer.dump",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "f1d30098b375a076715ca2c04d2002b30e637ac2f3abea409866d4dc01d8acc5",
+    "start": 324,
+    "symbol": "Serializer.dump"
+  },
+  {
+    "end": 345,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:330:Serializer.loads",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "d152712b61c01f3a9e6e00c29fa4fc777c9f70a48ae38688b72a48837a3eb3a0",
+    "start": 330,
+    "symbol": "Serializer.loads"
+  },
+  {
+    "end": 349,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:347:Serializer.load",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "0818f842046cc05320e98979f8c32059b5b65f73bef84f6d1352073fb9f6aa40",
+    "start": 347,
+    "symbol": "Serializer.load"
+  },
+  {
+    "end": 367,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:351:Serializer.loads_unsafe",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "17703295bff489f3227cf68d6752cf10d150a045984e3709afa74ee6bfaadf1a",
+    "start": 351,
+    "symbol": "Serializer.loads_unsafe"
+  },
+  {
+    "end": 397,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:369:Serializer._loads_unsafe_impl",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "6e457af8819a04189f559a04653579c0ddf2fdd780bfab7eb41ed7564357be23",
+    "start": 369,
+    "symbol": "Serializer._loads_unsafe_impl"
+  },
+  {
+    "end": 406,
+    "file_sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+    "id": "src/itsdangerous/serializer.py:399:Serializer.load_unsafe",
+    "overload_stub": false,
+    "path": "src/itsdangerous/serializer.py",
+    "sha256": "b97917972cd0fbed8364d8482d14806d0f22f550a9359c28d29a8875db4ced31",
+    "start": 399,
+    "symbol": "Serializer.load_unsafe"
+  },
+  {
+    "end": 22,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:20:SigningAlgorithm.get_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "8204962b6c83a30530e2e46d09b3e24455bb3bccd2b3a4550bec1bd460ac8165",
+    "start": 20,
+    "symbol": "SigningAlgorithm.get_signature"
+  },
+  {
+    "end": 28,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:24:SigningAlgorithm.verify_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "998351a268b304bd11991e767a420666373fe8b88653d1931883af1a027ae862",
+    "start": 24,
+    "symbol": "SigningAlgorithm.verify_signature"
+  },
+  {
+    "end": 37,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:36:NoneAlgorithm.get_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "8a5ef8417bce5ec35371da42a77a172bf7fb6bb96e5b9f0987e53bb51c196f33",
+    "start": 36,
+    "symbol": "NoneAlgorithm.get_signature"
+  },
+  {
+    "end": 45,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:40:_lazy_sha1",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "63f157dcec071aa1d6ffc8cd1c0dd35859f48e2f2e40a61106e3c194fdf315fd",
+    "start": 40,
+    "symbol": "_lazy_sha1"
+  },
+  {
+    "end": 60,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:56:HMACAlgorithm.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "a8aca51232fa469d3653109ce0e0f1c77061680050ba3c0970d3e376e5ba0bbd",
+    "start": 56,
+    "symbol": "HMACAlgorithm.__init__"
+  },
+  {
+    "end": 64,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:62:HMACAlgorithm.get_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "ddfd06a80fb766588bcd0cca41fbeb58c8990b1b0b30dd12fd72ebed63ec6306",
+    "start": 62,
+    "symbol": "HMACAlgorithm.get_signature"
+  },
+  {
+    "end": 73,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:67:_make_keys_list",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "e765e0e624e579f201900a54fdc18ba8678aa18c494edfa61e2d379caf9b8df6",
+    "start": 67,
+    "symbol": "_make_keys_list"
+  },
+  {
+    "end": 173,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:129:Signer.__init__",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "818d2314660d2ff9923557e0b978d1dacf06b782a6dc4da79479083f31f5956f",
+    "start": 129,
+    "symbol": "Signer.__init__"
+  },
+  {
+    "end": 180,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:175:Signer.secret_key",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "375f799e14d5cd445c38bbfd4450f03e5efca26aec6d72131fcd313eb8ec2dfc",
+    "start": 175,
+    "symbol": "Signer.secret_key"
+  },
+  {
+    "end": 213,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:182:Signer.derive_key",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "22982867c16046576b356621d8bbb36d3994526b38a8f72a8d6ee953091aa82e",
+    "start": 182,
+    "symbol": "Signer.derive_key"
+  },
+  {
+    "end": 220,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:215:Signer.get_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "4f2a0c8240dfb5217512c85111a8dd8776c7e110570c0f84cbed05375c0ee9a2",
+    "start": 215,
+    "symbol": "Signer.get_signature"
+  },
+  {
+    "end": 225,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:222:Signer.sign",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "ae7edf52b6536371232d083bcb814df2686b799833f60c99f773d192ce46f0a1",
+    "start": 222,
+    "symbol": "Signer.sign"
+  },
+  {
+    "end": 242,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:227:Signer.verify_signature",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "f0646c9b879f6a88807c9c2cbf34541de1a609ccf0ba0694193554cf50211177",
+    "start": 227,
+    "symbol": "Signer.verify_signature"
+  },
+  {
+    "end": 256,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:244:Signer.unsign",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "d6c5cbf7926f59983206f58b0b31b736106bbe05ef690e9aea7bd6abd1ada517",
+    "start": 244,
+    "symbol": "Signer.unsign"
+  },
+  {
+    "end": 266,
+    "file_sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+    "id": "src/itsdangerous/signer.py:258:Signer.validate",
+    "overload_stub": false,
+    "path": "src/itsdangerous/signer.py",
+    "sha256": "0b6e7188ded826b13cd06f7615c5851b390894b4fabc051bac10af0dc191f335",
+    "start": 258,
+    "symbol": "Signer.validate"
+  },
+  {
+    "end": 33,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:29:TimestampSigner.get_timestamp",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "0543dc3c0f93deedac2f837c2643d7c852a604c3526ac2ae7c8f548b4fbf990d",
+    "start": 29,
+    "symbol": "TimestampSigner.get_timestamp"
+  },
+  {
+    "end": 43,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:35:TimestampSigner.timestamp_to_datetime",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "d32b43a16ec1aba41fc74bc5a15c092be3b8670ed322c612b64db7ac5861c73f",
+    "start": 35,
+    "symbol": "TimestampSigner.timestamp_to_datetime"
+  },
+  {
+    "end": 51,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:45:TimestampSigner.sign",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "bce26f584e9a66f18324b643ab9999b37f445a66dc610fc6fb135eac1b7017b1",
+    "start": 45,
+    "symbol": "TimestampSigner.sign"
+  },
+  {
+    "end": 62,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:56:TimestampSigner.unsign",
+    "overload_stub": true,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "d4515d49004920683b4405c47649dbd18df832988a63f5322f17062370a1cfff",
+    "start": 56,
+    "symbol": "TimestampSigner.unsign"
+  },
+  {
+    "end": 70,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:64:TimestampSigner.unsign",
+    "overload_stub": true,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "796c4470f53a50562c3289b38229524286b9e4a045a66141bac205f160809cb8",
+    "start": 64,
+    "symbol": "TimestampSigner.unsign"
+  },
+  {
+    "end": 158,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:72:TimestampSigner.unsign",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "ea497145d20f2f1d8e7288f282d0e353757860d937e5a70d43b4154e735e5e40",
+    "start": 72,
+    "symbol": "TimestampSigner.unsign"
+  },
+  {
+    "end": 167,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:160:TimestampSigner.validate",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "7843c97f10e1a4ebe56fad6176e27cb7cf412df20fe5d991af5c0bb10c70a407",
+    "start": 160,
+    "symbol": "TimestampSigner.validate"
+  },
+  {
+    "end": 180,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:177:TimedSerializer.iter_unsigners",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "74d13f18775eea051748664b3245f940e7d06973f3847e06f5d3a8444d9ae3e3",
+    "start": 177,
+    "symbol": "TimedSerializer.iter_unsigners"
+  },
+  {
+    "end": 220,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:185:TimedSerializer.loads",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "484cac33cebfa086085a6412605b84f05c295e727d5f63400c892886b409356b",
+    "start": 185,
+    "symbol": "TimedSerializer.loads"
+  },
+  {
+    "end": 228,
+    "file_sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+    "id": "src/itsdangerous/timed.py:222:TimedSerializer.loads_unsafe",
+    "overload_stub": false,
+    "path": "src/itsdangerous/timed.py",
+    "sha256": "fa4de6285112828cd7cf36d4a6bc310615ed511832c911bbab514ed5c0e547bf",
+    "start": 222,
+    "symbol": "TimedSerializer.loads_unsafe"
+  },
+  {
+    "end": 53,
+    "file_sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+    "id": "src/itsdangerous/url_safe.py:23:URLSafeSerializerMixin.load_payload",
+    "overload_stub": false,
+    "path": "src/itsdangerous/url_safe.py",
+    "sha256": "96eba97a2e8c57a57aab9466253ea5127ec769e3094c677420b32bc649736d9e",
+    "start": 23,
+    "symbol": "URLSafeSerializerMixin.load_payload"
+  },
+  {
+    "end": 69,
+    "file_sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+    "id": "src/itsdangerous/url_safe.py:55:URLSafeSerializerMixin.dump_payload",
+    "overload_stub": false,
+    "path": "src/itsdangerous/url_safe.py",
+    "sha256": "066539726657d1ae7404440eba5eb11dd025df362b070afea95146992eab0ff9",
+    "start": 55,
+    "symbol": "URLSafeSerializerMixin.dump_payload"
+  }
+]
