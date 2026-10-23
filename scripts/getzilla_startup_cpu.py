@@ -9,11 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 import argparse
+import os
 import json
 
 from getzilla.startup_cpu import EVIDENCE_RECORD, RUNTIME_RECORD, measure
-from getzilla.state import get_active_change
-from getzilla.util import dump_json, find_root, runtime_dir
+from getzilla.state import get_active_change, set_active_change
+from getzilla.workflow_storage import change_directory, valid_package_path
+from getzilla.util import dump_json, find_root, runtime_dir, git_head
 
 parser = argparse.ArgumentParser(description='Startup CPU step zero: measure and record effective capacity.')
 parser.add_argument('--reserve', type=int, default=2,
@@ -28,13 +30,15 @@ if args.reserve < 0:
 
 root = find_root()
 snapshot = measure(reserve=args.reserve, probe=not args.no_probe)
+snapshot.update(ci_run_id=os.environ.get('GITHUB_RUN_ID'), git_head=git_head(root))
 written = [runtime_dir(root) / RUNTIME_RECORD]
 if args.attach:
     active = get_active_change(root) or {}
     package = (root / str(active.get('path') or '')).resolve()
-    changes = (root / 'engineering/changes').resolve()
-    if not active.get('path') or not package.is_relative_to(changes) or not (package / 'state.json').is_file():
+    if not valid_package_path(active.get('path'), active.get('change_id')) or not (package / 'state.json').is_file():
         raise SystemExit('No active change package to attach to; run without --attach before routing.')
+    package = change_directory(root, str(active['change_id']), writable=True)
+    set_active_change(root, {'change_id': active['change_id'], 'path': package.relative_to(root).as_posix()})
     snapshot['change_id'] = active.get('change_id')
     written.append(package / EVIDENCE_RECORD)
 for path in written:

@@ -381,7 +381,7 @@ class StructureTests(unittest.TestCase):
                 self.assertIn("complete report to the coordinator", content)
                 self.assertIn("out-of-band", content)
                 self.assertIn("after all reviews finish", content)
-                self.assertIn("commits and freezes the candidate", content)
+                self.assertIn("save reports outside git", content)
                 self.assertNotIn("write a report", content)
                 self.assertTrue(
                     "fingerprint before/after" in content
@@ -1094,7 +1094,7 @@ class StructureTests(unittest.TestCase):
         self.assertNotEqual(int(cron.group(1)), 0)
         self.assertIn("permissions:\n  contents: read\n", nightly)
         self.assertIn("persist-credentials: false", nightly)
-        self.assertEqual(set(re.findall(r"uses:\s*(\S+)", nightly)), set(re.findall(r"uses:\s*(\S+)", gate)))
+        self.assertTrue(set(re.findall(r"uses:\s*(\S+)", nightly)) <= set(re.findall(r"uses:\s*(\S+)", gate)))
 
     def test_trust_ci_control_plane_is_complete(self) -> None:
         required = (

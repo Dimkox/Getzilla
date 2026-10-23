@@ -25,8 +25,9 @@ from .util import (
 APPROVAL_SCOPES = {'production', 'external-write', 'protected-path'}
 APPROVAL_SOURCES = {'standing-user-consent', 'explicit-user-consent'}
 # A protected-path grant authorizes writing its exact files, so their own content is not part of
-# its tree binding; every other tree or commit change still invalidates it.
+# its tree binding; legacy grants retain their original HEAD binding.
 GRANTED_RESOURCES_BINDING = 'tree-except-granted-resources'
+BRANCH_RESOURCES_BINDING = 'branch-and-exact-resources'
 SCOPE_ACTIONS = {
     'production': {
         'git-push-branch',
@@ -201,8 +202,9 @@ def open_change_binding(root: Path) -> tuple[str, str] | None:
     change_id, rel = change.get('change_id'), change.get('path')
     if not isinstance(change_id, str) or not isinstance(rel, str) or not rel:
         return None
+    from .workflow_storage import valid_package_path
     package = (root / rel).resolve()
-    if not package.is_relative_to((root / 'engineering/changes').resolve()):
+    if not valid_package_path(rel, change_id) or not package.is_relative_to(root.resolve()):
         return None
     state = load_json(package / 'state.json')
     if not isinstance(state, dict) or state.get('status') in CLOSED_CHANGE_STATUSES:
@@ -366,7 +368,7 @@ def add_approval(
     resources: list[str] | tuple[str, ...] | set[str] | None = None,
     source: str = 'standing-user-consent',
 ) -> dict[str, Any]:
-    """Materialize an explicitly delegated local grant for one exact repository tree."""
+    """Bind protected edits to a branch/file set; other actions retain exact source binding."""
     normalized_scope = scope.strip()
     normalized_reason = reason.strip()
     normalized_source = source.strip()
@@ -408,6 +410,9 @@ def add_approval(
     head = git_head(root)
     if not head:
         raise RuntimeError('an exact Git HEAD is required for delegated approval')
+    branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
+    if normalized_scope == 'protected-path' and not branch:
+        raise ValueError('a named Git branch is required for protected-path approval')
     route = get_active_route(root) or {}
     now = datetime.now(timezone.utc)
     approval = {
@@ -423,9 +428,11 @@ def add_approval(
         'route_id': route.get('route_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
-        **({'binding': GRANTED_RESOURCES_BINDING} if normalized_scope == 'protected-path' else {}),
+        **({'binding': BRANCH_RESOURCES_BINDING, 'git_branch': branch, 'anchor_commit': head}
+           if normalized_scope == 'protected-path' else {}),
         'grant_binding_digest': tree_fingerprint(
             root, normalized_resources if normalized_scope == 'protected-path' else (),
+            anchor=head if normalized_scope == 'protected-path' else None,
         ),
         'created_at': now.isoformat(timespec='seconds'),
         'expires_at': (now + timedelta(minutes=ttl_minutes)).isoformat(timespec='seconds'),
@@ -446,7 +453,7 @@ def has_valid_approval(
     action: str | None = None,
     resource: str | None = None,
 ) -> bool:
-    """Validate a delegated grant against the current route, repository, HEAD and tree."""
+    """Recheck scope-specific source binding plus repository, route, change and TTL."""
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
@@ -489,7 +496,9 @@ def has_valid_approval(
             continue
         if approval.get('scope') != scope:
             continue
-        if any(approval.get(key) != value for key, value in bindings.items()):
+        branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
+        if any(approval.get(key) != value for key, value in bindings.items()
+               if not (branch_bound and key == 'git_head')):
             continue
         grant_binding_digest = approval.get('grant_binding_digest')
         legacy_tree_fingerprint = approval.get('tree_fingerprint')
@@ -498,6 +507,18 @@ def has_valid_approval(
         binding = approval.get('binding')
         if binding is None:
             expected_digest = current_binding_digest
+        elif branch_bound:
+            anchor = approval.get('anchor_commit')
+            branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
+            if (not branch or branch != approval.get('git_branch')
+                    or not isinstance(anchor, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', anchor)
+                    or anchor != approval.get('git_head')
+                    or git_output(root, 'merge-base', '--is-ancestor', anchor, head) is None):
+                continue
+            try:
+                expected_digest = tree_fingerprint(root, approval.get('resources') or [], anchor=anchor)
+            except (OSError, ValueError):
+                continue
         elif binding == GRANTED_RESOURCES_BINDING and approval.get('scope') == 'protected-path':
             expected_digest = tree_fingerprint(root, approval.get('resources') or [])
         else:

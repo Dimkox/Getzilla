@@ -36,7 +36,7 @@ STAGES = frozenset({
 SCOPE_STAGES = frozenset({'scoped', 'approved', 'implementing', 'verifying', 'reviewing', 'ready'})
 _SHA = re.compile(r'[0-9a-f]{40}')
 _ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}')
-_CHANGE_ID = re.compile(r'[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9_-]{0,127}')
+from .workflow_storage import CHANGE_ID as _CHANGE_ID
 _TEMPLATE = re.compile(
     r'\{\{(?:CHANGE_ID|TITLE|TASK|CREATED_AT|RISK|COMPLEXITY|DOMAINS|GOVERNANCE_AUTHORITY_NOTICE)\}\}'
 )
@@ -200,8 +200,9 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
     try:
         parts = _relative(active.get('path'))
         change_id = active.get('change_id')
-        if len(parts) != 3 or parts[:2] != ['engineering', 'changes'] or parts[2] != change_id:
-            raise InspectionError('file_unsafe', 'active package must be engineering/changes/<change-id>')
+        from .workflow_storage import valid_package_path
+        if not valid_package_path('/'.join(parts), change_id):
+            raise InspectionError('file_unsafe', 'active package must use a known change namespace')
         if not isinstance(change_id, str) or not _CHANGE_ID.fullmatch(change_id):
             raise InspectionError('file_unsafe', 'active change identity is invalid')
     except InspectionError as exc:

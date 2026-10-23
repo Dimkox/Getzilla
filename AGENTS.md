@@ -78,7 +78,7 @@ An explicitly delegated push of an exact isolated branch/HEAD before verificatio
 
 ## Second mandatory startup step: select verification scope before heavy work
 
-After capacity discovery and route/dependency scheduling, record the trusted exact comparison base/HEAD and staged, unstaged and untracked inventory/statuses. Run bounded committed-HEAD controls as observations before independent reviews; they create no verification receipt or scope admission. After all selected reviews are persisted and the report-containing candidate is committed/frozen, invoke `python3 scripts/getzilla_verify.py --mode pr` once as the final qualifying local gate with the verified CPU allocation. Its merged fail-closed selector (`.getzilla/getzilla/verification_scope.py`, issue #205 / PR #207) selects scope inside that run before its heavy checks; a route label or an agent's assertion that factory is unaffected is not scope evidence. Refresh an outdated comparison base only to the actual agreed PR base, never to hide candidate changes.
+After capacity discovery and route/dependency scheduling, record the trusted exact comparison base/HEAD and staged, unstaged and untracked inventory/statuses. Run bounded committed-HEAD controls as observations before independent reviews; they create no verification receipt or scope admission. After all selected reviews are persisted and the source candidate is committed and runtime reports are saved, invoke `python3 scripts/getzilla_verify.py --mode pr` once as the final qualifying local gate with the verified CPU allocation. Its merged fail-closed selector (`.getzilla/getzilla/verification_scope.py`, issue #205 / PR #207) selects scope inside that run before its heavy checks; a route label or an agent's assertion that factory is unaffected is not scope evidence. Refresh an outdated comparison base only to the actual agreed PR base, never to hide candidate changes.
 
 The selector's closed focused inventory admits its named documentation/state paths, tracked `packages/**` release bytes, and exactly five binding test modules: `tests/test_structure.py`, `tests/test_project_state.py`, `tests/test_manifest_package.py`, `tests/test_workflow_sources.py` and `tests/test_repo_router.py`. For that admitted inventory, `docs-state-focused` skips the replaced full-discovery runner, `coverage` and `factory-postgres-exit` while retaining the other selected checks, including factory-unit checks. All other executable changes (including factory runtime/tests, database/migrations/schema/contracts and the selector itself), non-admitted paths or ambiguous inventories retain the full PR suite. The measured historical comparison is **629 s for serial Core coverage versus about 14 s for the five focused modules**, not a promise about total verifier duration or this host.
 
@@ -144,7 +144,7 @@ For every software-development task:
 5. Use only agents listed in `allowed_agents`.
 6. Use the recorded startup capacity and dependency plan to dispatch all independent route-permitted work in parallel within measured limits and prerequisite order.
 7. Use exactly one `write_agent` per isolated task/route/branch/worktree; independent isolated writers may run concurrently.
-8. After implementation and bounded committed-HEAD controls, dispatch every listed independent review agent. Persist all complete reports, commit and freeze, then run one final qualifying local PR gate.
+8. After implementation and bounded committed-HEAD controls, dispatch every listed independent review agent. Persist all complete reports outside Git, then run one final qualifying local PR gate.
 9. Record fingerprint-bound local receipts before declaring local completion.
 10. Deliver the branch through a pull request and wait for external Trust CI.
 
@@ -154,7 +154,7 @@ Do not bypass the route by using the built-in generic worker when a domain-speci
 
 1. User-approved scope, explicit operational delegation and decisions.
 2. Deployed Trust CI policy and holdout, protected-branch rules, signed human security approvals and exact-SHA external attestation.
-3. `PROJECT_STATE.json`, active pull-request design/plan, active route and durable change package under `engineering/changes/`.
+3. `PROJECT_STATE.json`, active pull-request design/plan, active route and change package under `.getzilla/runtime/changes/` (historical tracked packages remain readable).
 4. Machine-readable API/event/data contracts.
 5. ADRs and repository-local instructions.
 6. Existing implementation and tests.
@@ -170,8 +170,8 @@ When sources conflict, stop only for a named human gate or an irreversible/secur
 - Do not let an implementer approve its own work.
 - Do not spawn an agent that the active route did not select; the hook may block it.
 - Give each agent a narrow brief with route, exact repository/HEAD/base, one question, dependencies, CPU allocation and write/read-only boundary. Prefer a clean brief over repeated full-history reads.
-- Collect related failures and review findings into one repair batch for the same write owner; rerun the bounded committed-HEAD controls and all independent reviews on the repaired tree before final freeze. Named smoke uses `getzilla_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
-- Persist all complete review reports, commit, then freeze the candidate. After exact delegated UNVERIFIED branch transport, run one final qualifying local PR gate in parallel with external App-owned exact-head Trust CI; keep their outcomes separate. No preliminary full local gate is required before review. A ten-minute delivery cycle is an unconfirmed target; Core/PostgreSQL overlap is not implemented. A fetched identical merged tree with no new product changes is a no-op and requires no repeated full gate.
+- Collect related failures and review findings into one repair batch for the same write owner; rerun the bounded committed-HEAD controls and all independent reviews on the repaired tree before final verification. Named smoke uses `getzilla_verify.py --mode fast --no-record --test tests.test_module --budget 180` on clean committed HEAD; its subprocess timeout permits bounded cleanup afterward and creates no verification receipt or scope admission.
+- Persist all complete review reports under `.getzilla/runtime`; keep the reviewed source commit unchanged. After exact delegated UNVERIFIED branch transport, run one final qualifying local PR gate in parallel with external App-owned exact-head Trust CI; keep their outcomes separate. No preliminary full local gate is required before review. A ten-minute delivery cycle is an unconfirmed target; Core/PostgreSQL overlap is not implemented. A fetched identical merged tree with no new product changes is a no-op and requires no repeated full gate.
 
 ## Tool-denial circuit breaker
 
@@ -243,7 +243,7 @@ Before reviews, run bounded committed-HEAD controls as observations:
 python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
 ```
 
-Then dispatch every independent review agent listed by the active route. Keep each report lean (see Lean reviews). Store every report under the active change package or `engineering/reviews/`, commit and freeze the report-containing candidate. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
+Then dispatch every independent review agent listed by the active route. Keep each report lean (see Lean reviews). Store new reports in the runtime package evidence directory or `.getzilla/runtime/reviews/<route-id>/`. Keep the reviewed source commit unchanged. Run one final `python3 scripts/getzilla_verify.py --mode pr` with its unchanged fail-closed scope and selected checks, in parallel with external exact-head Trust CI after exact delegated UNVERIFIED branch transport. On a passing final local gate, record each review against the current candidate:
 
 ```bash
 python3 scripts/getzilla_review.py code_review --status pass --report <path> --reviewed-commit <exact-full-sha>
@@ -253,7 +253,7 @@ Use the exact local evidence kind requested by the route. A local receipt is sta
 
 For merge eligibility, open or update the pull request and require the App-owned check named by the deployed policy, currently shaped as `adaptive-trust-ci/verified@<policy-sha12>`, on the exact head SHA. Local receipts and delegated grants cannot create that check.
 
-Reviewers return their short reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, commits/freezes that tree, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze invalidates all receipts and requires the same writer's repair, fresh controls and independent reviews, a new frozen candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
+Reviewers return their short reports to the coordinator out-of-band and do not write into the candidate worktree. After all reviews finish, the coordinator persists reports under the change evidence directory, keeps that source commit unchanged, then runs the single final qualifying verification and records fresh fingerprint-bound receipts. A source change after freeze invalidates all receipts and requires the same writer's repair, fresh controls and independent reviews, a new source candidate and fresh exact-head gates; an older or historical PASS never substitutes for that run.
 
 ### Reviewer mutation evidence
 
@@ -268,7 +268,7 @@ For each report with probes, list the claims probed, exact commands and concise 
 ## Local delegated grants
 
 - `scripts/getzilla_approve.py` does not originate authority. It materializes explicit or standing user consent already present in the working context.
-- Every grant must name explicit actions and, for protected/external writes, explicit resources. It is bound to the current repository, route, change, Git HEAD, tree digest and TTL; any tree or commit change invalidates it, except that a protected-path grant ignores changes to its own exact granted files so one test-first edit cycle needs one grant. Current grants serialize that binding as `grant_binding_digest`; readers retain compatibility with legacy `tree_fingerprint` records.
+- Every grant names explicit actions and exact resources. Protected-path grants bind repository, route, change, full branch ref, anchor ancestry, unchanged files outside the exact grant set and TTL. Commits within the approved file set retain the grant. A branch change or out-of-scope edit invalidates it. Production/external grants retain exact HEAD/tree binding. Legacy records retain their original validation.
 - An agent may invoke `getzilla_approve.py` only when the user has explicitly delegated the named operation. The wildcard scope is forbidden.
 - Under L5 autonomy, the owner's standing consent is that explicit delegation for merge, tag and release of the project's own repository. It applies only with green required checks on the exact head SHA, resolved review threads and a passed independent review. The agent still records an exact action and resource for each operation.
 - Trust CI security approvals use Ed25519 envelopes generated by `adaptive-trust-ci approval-create` on a human-controlled machine and submitted to the external API. Local grants are never accepted by Trust CI.
@@ -285,11 +285,15 @@ For each report with probes, list the claims probed, exact commands and concise 
 - Editing Bitrix core instead of implementing an extension under `local/`.
 - Adding a GitHub Actions workflow to a private repository, adding Dependabot or another CI vendor, referencing an action by tag or branch instead of a full commit SHA, granting a workflow write permissions or secrets, or dispatching a workflow.
 
-Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
+New workflow state is ignored runtime data and may transition to `ready` without changing reviewed source. Fresh receipts, zero status gaps and exact-head external PR results record completion. No report-only or workflow freeze commit is required. Preserve historical tracked packages unchanged.
 
-Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+Legacy tracked report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. New routes store conventional reports in `.getzilla/runtime/reviews/<route-id>/` or the runtime package evidence directory. They require exact reviewed HEAD/tree and content hashes without a report commit. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
 
 
 ## Task workspace
 
-Use one canonical project root for the task. Put task-owned worktrees, private scratch, reports, archives and temporary outputs only under that root's `.getzilla/runtime`. Do not use home-level defaults or sibling project directories. Keep reviewer private scratch outside the reviewed candidate as a sibling beneath that runtime root. Use a trusted non-sticky parent and mode `0700`. Do not treat a nested worktree as a new canonical project root. Durable specs and final evidence remain in the tracked change package. This rule is workflow discipline, not OS isolation.
+Use one canonical project root for the task. Put task-owned worktrees, private scratch, reports, archives and temporary outputs only under that root's `.getzilla/runtime`. Do not use home-level defaults or sibling project directories. Keep reviewer private scratch outside the reviewed candidate as a sibling beneath that runtime root. Use a trusted non-sticky parent and mode `0700`. Do not treat a nested worktree as a new canonical project root. New specs and workflow evidence stay in the runtime package; keep product contracts and at most one concise change summary in Git. Export local evidence with `scripts/getzilla_evidence.py` for separate PR attachment. CI retains its own actual run artifacts for 30 days and labels workstation reviews unavailable. This rule is workflow discipline, not OS isolation.
+
+## Measured small-change delivery
+
+The light lane requires a complete clean Git diff with at most 50 added plus deleted code lines, excluding ordinary tests and non-executable prose. Check sensitive paths before exclusions. Control files, runtime, hooks, Trust CI, migrations, dependencies, locks and workflows always retain the full lane. Binary, rename, submodule, unknown or incomplete inventories fail closed. Medium/high risk or a larger diff restores full reviews. The admitted lane needs one independent review, focused local checks, no change package and no freeze commits. Full CI and external exact-head merge checks remain unchanged.

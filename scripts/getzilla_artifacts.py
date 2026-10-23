@@ -62,9 +62,13 @@ def main() -> int:
         root = find_root(ROOT)
         route = load_runtime_authority(root, "route")
         active = load_runtime_authority(root, "change")
-        expected_path = f"engineering/changes/{args.change_id}"
-        if active.get("change_id") != args.change_id or active.get("path") != expected_path:
+        from getzilla.workflow_storage import change_directory, valid_package_path
+        if active.get("change_id") != args.change_id or not valid_package_path(active.get("path"), args.change_id):
             raise WorkflowArtifactError("requested change is not the active change", code="change")
+        if getattr(args, "write", False):
+            from getzilla.state import set_active_change
+            package = change_directory(root, args.change_id, writable=True)
+            set_active_change(root, {"change_id": args.change_id, "path": package.relative_to(root).as_posix()})
         paths = workflow_paths(root, args.change_id)
         bundle = load_source_manifest(root, paths["manifest"])
         if args.command == "validate":

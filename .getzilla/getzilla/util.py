@@ -404,18 +404,55 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def tree_fingerprint(root: Path, exclude: Iterable[str] = ()) -> str:
-    """HEAD plus the content of every changed path, except the exact repository paths in ``exclude``."""
+def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
+    """Bind staged blobs separately: worktree bytes can conceal a different index."""
+    try:
+        proc = subprocess.run(['git', 'ls-files', '--stage', '-z'], cwd=root,
+                              capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError('cannot establish grant index inventory') from exc
+    if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
+        raise ValueError('cannot establish grant index inventory')
+    entries = []
+    for entry in proc.stdout.split(b'\0'):
+        if not entry:
+            continue
+        metadata, separator, path = entry.partition(b'\t')
+        if (not separator or not path
+                or not re.fullmatch(rb'(100644|100755|120000|160000) ([0-9a-f]{40}|[0-9a-f]{64}) 0', metadata)):
+            raise ValueError('grant index inventory is malformed or unmerged')
+        if os.fsdecode(path) not in excluded:
+            entries.append(entry)
+    return b'\0'.join(entries)
+
+
+def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None) -> str:
+    """Legacy HEAD/worktree binding, or independent committed/index/worktree edit binding."""
     skipped = {str(item).replace('\\', '/') for item in exclude}
     digest = hashlib.sha256()
-    head = git_head(root) or 'NO_HEAD'
+    head = anchor or git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
-    for rel in changed_files(root):
-        if rel.replace('\\', '/') in skipped:
+    inventory = changed_file_statuses(root, anchor, rename_detection=False) if anchor else None
+    if anchor and inventory is None:
+        raise ValueError('cannot establish complete grant file inventory')
+    if anchor:
+        # HEAD outside the grant must still equal its anchor, even when initial
+        # dirty bytes have been restored over a different committed version.
+        if any(item['source'] == f'range:{anchor}'
+               and item['path'] not in skipped for item in inventory):
+            raise ValueError('committed source changed outside granted files')
+        digest.update(b'\0index\0' + _grant_index_entries(root, skipped) + b'\0worktree\0')
+    paths = sorted({item['path'] for item in inventory}) if inventory is not None else changed_files(root)
+    for rel in paths:
+        # Git -z paths already use slash separators; POSIX backslashes are data.
+        # Retain normalization only for legacy, non-anchored digest compatibility.
+        if (rel if anchor else rel.replace('\\', '/')) in skipped:
             continue
         digest.update(os.fsencode(rel))
         path = root / rel
         try:
+            if anchor and path.exists():
+                digest.update(str(path.lstat().st_mode).encode())
             if path.is_symlink():
                 digest.update(os.fsencode(os.readlink(path)))
             elif path.is_file():

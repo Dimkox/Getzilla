@@ -16,6 +16,7 @@ from typing import Any
 
 try:
     from . import fsx
+    from .workflow_storage import change_directory, valid_package_path
 except ImportError:  # loaded standalone by file path: bind the sibling platform layer the same way
     import importlib.util as _importlib_util
 
@@ -25,6 +26,13 @@ except ImportError:  # loaded standalone by file path: bind the sibling platform
     assert _FSX_SPEC is not None and _FSX_SPEC.loader is not None
     fsx = _importlib_util.module_from_spec(_FSX_SPEC)
     _FSX_SPEC.loader.exec_module(fsx)
+    _STORAGE_SPEC = _importlib_util.spec_from_file_location(
+        "_getzilla_workflow_storage", Path(__file__).with_name("workflow_storage.py"))
+    assert _STORAGE_SPEC is not None and _STORAGE_SPEC.loader is not None
+    _storage = _importlib_util.module_from_spec(_STORAGE_SPEC)
+    _STORAGE_SPEC.loader.exec_module(_storage)
+    change_directory, valid_package_path = _storage.change_directory, _storage.valid_package_path
+
 
 MAX_MANIFEST_BYTES = 262_144
 MAX_SOURCE_BYTES = 1_000_000
@@ -69,6 +77,8 @@ RUNTIME_ROUTE_KEYS = {
     "created_at",
     "delivery_expected",
     "delivery_lane",
+    "light_diff",
+    "light_lane_candidate",
     "domains",
     "human_gates",
     "intent",
@@ -592,7 +602,7 @@ def load_runtime_authority(root: Path, kind: str) -> dict[str, Any]:
         set(data) != {"change_id", "path"}
         or not isinstance(data.get("change_id"), str)
         or not re.fullmatch(r"[A-Za-z0-9._:-]{3,128}", data["change_id"])
-        or data.get("path") != f"engineering/changes/{data['change_id']}"
+        or not valid_package_path(data.get("path"), data["change_id"])
     ):
         raise WorkflowArtifactError("active change has an invalid closed shape", code="change")
     return data
@@ -623,7 +633,7 @@ def adapt_sources(bundle: SourceBundle) -> list[dict[str, Any]]:
 
 
 def _load_native_spec(root: Path, change_id: str) -> dict[str, Any]:
-    relative = f"engineering/changes/{change_id}/change-spec.yaml"
+    relative = (change_directory(root, change_id) / "change-spec.yaml").relative_to(root).as_posix()
     data = _strict_json(_read_regular(root, relative, limit=MAX_SOURCE_BYTES), limit=MAX_SOURCE_BYTES)
     if not isinstance(data, dict) or data.get("change_id") != change_id:
         raise WorkflowArtifactError("native change specification is missing or mismatched", code="native")
@@ -1240,7 +1250,7 @@ def _explicit_claims(bundle: SourceBundle | None) -> list[dict[str, str]]:
 
 
 def _native_task_statuses(root: Path, change_id: str) -> dict[str, str]:
-    relative = f"engineering/changes/{change_id}/tasks.md"
+    relative = (change_directory(root, change_id) / "tasks.md").relative_to(root).as_posix()
     try:
         raw = _read_regular(root, relative, limit=MAX_SOURCE_BYTES)
     except WorkflowArtifactError as exc:
@@ -1472,7 +1482,7 @@ def converge(
 def workflow_paths(root: Path, change_id: str) -> dict[str, Path]:
     if not re.fullmatch(r"[A-Za-z0-9._:-]{3,128}", change_id):
         raise WorkflowArtifactError("invalid active change id", code="change")
-    base = root / "engineering" / "changes" / change_id / "workflow"
+    base = change_directory(root, change_id) / "workflow"
     return {
         "base": base,
         "manifest": base / "manifest.json",
@@ -1718,6 +1728,7 @@ def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, exp
         if canonical_json(derived) != data:
             raise WorkflowArtifactError("derived workflow artifact is not canonical JSON", code="cas")
 
+    package = change_directory(root, change_id, writable=True)
     lock_fd, recovery_dir_fd = _acquire_cas_lock(root, change_id, relative_target)
     _, root_fd = _open_root(root)
     directory_fd: fsx.DirHandle | None = root_fd
@@ -1783,7 +1794,7 @@ def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, exp
         return artifact
 
     try:
-        for component in ("engineering", "changes", change_id, "workflow"):
+        for component in (*package.relative_to(root).parts, "workflow"):
             next_fd = fsx.open_dir_at(directory_fd, component, flags=fsx.O_CLOEXEC)
             fsx.close_dir(directory_fd)
             directory_fd = next_fd

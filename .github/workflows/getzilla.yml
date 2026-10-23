@@ -40,6 +40,8 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - name: Record startup capacity
+        run: python scripts/getzilla_startup_cpu.py --no-probe
       - name: Install test requirements
         shell: bash
         run: |
@@ -102,6 +104,18 @@ jobs:
                   title = lines[0][:200]
                   detail = " | ".join(line.strip() for line in lines[-25:])[:6000]
                   print(f"::error title={log}::{title} -- {detail}".replace("\n", " "))
+      - name: Export CI evidence
+        id: export_evidence
+        if: always()
+        run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job linux --status "${{ job.status }}"
+      - name: Retain CI evidence for 30 days
+        if: always() && steps.export_evidence.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-linux-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getzilla-evidence/
+          retention-days: 30
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -123,6 +137,8 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - name: Record startup capacity
+        run: python scripts/getzilla_startup_cpu.py --no-probe
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
@@ -171,6 +187,18 @@ jobs:
           if path.is_file():
               lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
               print("::error title=windows-smoke::" + " | ".join(line.strip() for line in lines[-40:])[:8000])
+      - name: Export CI evidence
+        id: export_evidence
+        if: always()
+        run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job windows --status "${{ job.status }}"
+      - name: Retain CI evidence for 30 days
+        if: always() && steps.export_evidence.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getzilla-evidence/
+          retention-days: 30
+          if-no-files-found: error
 
   macos:
     runs-on: macos-latest
@@ -222,6 +250,8 @@ jobs:
           python3 scripts/getzilla_doctor.py
           python3 scripts/getzilla_route.py --show
           python3 scripts/getzilla_status.py > /dev/null
+      - name: Record startup capacity
+        run: python scripts/getzilla_startup_cpu.py --no-probe
       - name: Install test requirements
         if: success() || failure()
         run: |
@@ -254,3 +284,15 @@ jobs:
                   lines = [line for line in block.splitlines() if line.strip() and not line.startswith("=")]
                   if lines:
                       print("::error title=macos-test::" + " | ".join(line.strip() for line in lines[:2] + lines[-12:])[:4000])
+      - name: Export CI evidence
+        id: export_evidence
+        if: always()
+        run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job macos --status "${{ job.status }}"
+      - name: Retain CI evidence for 30 days
+        if: always() && steps.export_evidence.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-macos-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getzilla-evidence/
+          retention-days: 30
+          if-no-files-found: error

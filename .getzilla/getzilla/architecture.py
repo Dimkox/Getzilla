@@ -1064,6 +1064,29 @@ def _tracked_dot_venv_paths(root: Path) -> tuple[PurePosixPath, ...]:
     return tuple(sorted(tracked, key=PurePosixPath.as_posix))
 
 
+def _ignored_runtime_paths(root: Path) -> frozenset[str]:
+    """Only Git-proven ignored, untracked local workflow data leaves source inventory."""
+    if not (root / ".git").exists():
+        return frozenset()
+    result = run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z", "--", ".getzilla/runtime/"],
+        cwd=root, timeout=30,
+        env={"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"},
+    )
+    if result.returncode != 0:
+        raise ArchitectureError("runtime ignore inventory could not be established", code="git")
+    if len(os.fsencode(result.stdout)) > MAX_DRIFT_BYTES:
+        raise ArchitectureError("runtime ignore inventory exceeds limit", code="limit")
+    ignored = frozenset(item.rstrip("/") for item in result.stdout.split("\0") if item)
+    if len(ignored) > MAX_DRIFT_ENTRIES or any(
+            (path != ".getzilla/runtime" and not path.startswith(".getzilla/runtime/"))
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            for path in ignored):
+        raise ArchitectureError("runtime ignore inventory is invalid", code="git")
+    return ignored
+
+
 def _inventory_identity(info: os.stat_result) -> tuple[int, int, int]:
     return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
 
@@ -1077,6 +1100,7 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
         label="repository drift"
     )
     tracked_dot_venv_paths = _tracked_dot_venv_paths(root)
+    ignored_runtime_paths = _ignored_runtime_paths(root)
 
     def record_file(
         directory_fd: fsx.DirHandle,
@@ -1132,6 +1156,8 @@ def _bounded_repository_inventory(root: Path) -> tuple[_RepositoryArtifact, ...]
                     )
                 relative = relative_parent / entry.name
                 relative_text = relative.as_posix()
+                if relative_text in ignored_runtime_paths:
+                    continue
                 if fsx.WINDOWS:
                     # Scandir entries there carry no inode identity and report
                     # junctions as directories: classify from a real lstat.

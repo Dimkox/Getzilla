@@ -276,13 +276,13 @@ class WorkflowTemplateTests(unittest.TestCase):
         self.assertIn('run: python scripts/getzilla_verify.py --mode pr', text)
         self.assertIn(f'  {ci_gate.CHECK_NAME}:\n', text)
         uses = [line for line in text.splitlines() if 'uses:' in line]
-        self.assertEqual(len(uses), 2)
+        self.assertEqual(len(uses), 3)
         for line in uses:
             with self.subTest(line=line):
                 self.assertRegex(line, PINNED_USES)
         self.assertEqual(
             sorted(PINNED_USES.match(line).group(1) for line in uses),
-            ['actions/checkout', 'actions/setup-python'],
+            ['actions/checkout', 'actions/setup-python', 'actions/upload-artifact'],
         )
 
     def test_rendering_fills_the_push_branch_and_normalizes_newlines(self) -> None:
@@ -316,7 +316,9 @@ class WorkflowTemplateTests(unittest.TestCase):
         self.assertIn('pull_request', triggers)
         self.assertEqual(document['permissions'], {'contents': 'read'})
         steps = document['jobs'][ci_gate.CHECK_NAME]['steps']
-        self.assertEqual(steps[-1]['run'], 'python scripts/getzilla_verify.py --mode pr')
+        self.assertIn('python scripts/getzilla_verify.py --mode pr', [step.get('run') for step in steps])
+        self.assertEqual(steps[-1]['with']['retention-days'], 30)
+        self.assertNotIn('.getzilla/runtime', steps[-1]['with']['path'])
 
 
 class CliTests(unittest.TestCase):

@@ -6,6 +6,7 @@ from typing import Any
 from .receipts import validate_evidence, write_receipt
 from .state import get_active_change, get_active_route, has_valid_approval
 from .util import git_output, load_json
+from .workflow_storage import change_directory, valid_package_path
 
 ALLOWED_STATUSES = {'ready', 'released'}
 
@@ -41,8 +42,8 @@ def _change_state(root: Path) -> tuple[dict[str, Any] | None, str | None]:
     if not active:
         return None, None
     change_id = str(active.get('change_id') or '')
-    rel = active.get('path') or (f'engineering/changes/{change_id}' if change_id else '')
-    if not rel:
+    rel = active.get('path') or (change_directory(root, change_id).relative_to(root).as_posix() if change_id else '')
+    if not valid_package_path(rel, change_id):
         return None, change_id or None
     state = load_json(root / str(rel) / 'state.json')
     if not isinstance(state, dict):

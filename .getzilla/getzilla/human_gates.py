@@ -70,7 +70,8 @@ def _context(root: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, 
         relative = package.relative_to(root.resolve()).as_posix()
     except (ValueError, OSError):
         return route, change, None, "active change package escapes repository"
-    if not relative.startswith("engineering/changes/") or not package.is_dir():
+    from .workflow_storage import valid_package_path
+    if not valid_package_path(relative, change.get("change_id")) or not package.is_dir():
         return route, change, None, "active change package path is invalid"
     state = _read_json(package / "state.json")
     if not isinstance(state, dict) or state.get("change_id") != change.get("change_id"):
@@ -398,6 +399,11 @@ def record_gate_decision(
     if len(decisions) > 200:
         raise ValueError("decision artifact reached its 200-entry bound")
     artifact = {"schema_version": 1, "change_id": change["change_id"], "route_id": route["route_id"], "decisions": decisions}
+    from .state import set_active_change
+    from .workflow_storage import change_directory
+    package = change_directory(root, change["change_id"], writable=True)
+    path = package / ARTIFACT_NAME
+    set_active_change(root, {"change_id": change["change_id"], "path": package.relative_to(root).as_posix()})
     atomic_write_text(path, json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return {**entry, "evidence_path": _repository_relative(root, path), "notice": ARTIFACT_NOTICE}
 

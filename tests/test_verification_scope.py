@@ -1072,6 +1072,10 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         route['base_commit'] = base
         route['quality_profiles'] = ['base']
         route['delivery_expected'] = False
+        # This fixture tests runner selection after admission; light-lane
+        # promotion/refusal has its own integration coverage.
+        route.update(delivery_lane='full', review_agents=['code_reviewer', 'test_reviewer'],
+                     required_evidence=['verification', 'code_review', 'test_review'])
         set_active_route(root, route)
         from getzilla.state import set_active_change
         set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})

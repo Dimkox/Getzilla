@@ -28,6 +28,12 @@ class EscalateRouteTests(unittest.TestCase):
         self.assertEqual(result['added_evidence'], ['security_review', 'release_review'])
         self.assertEqual(result['required_evidence'][:3], LOW_ROUTE['required_evidence'])
 
+    def test_light_route_restores_full_floor_for_medium_or_large_diff(self) -> None:
+        light = {**LOW_ROUTE, 'delivery_lane': 'light', 'review_agents': ['code_reviewer'],
+                 'required_evidence': ['verification', 'code_review']}
+        self.assertIn('test_review', escalate_route(light, 'medium', ROOT)['required_evidence'])
+        self.assertIn('test_review', escalate_route(light, 'low', ROOT, force_full=True)['required_evidence'])
+
     def test_never_lowers_and_medium_adds_nothing(self) -> None:
         high = {**LOW_ROUTE, 'risk': 'high', 'review_agents': [*LOW_ROUTE['review_agents'], 'security_reviewer'],
                 'required_evidence': [*LOW_ROUTE['required_evidence'], 'security_review']}

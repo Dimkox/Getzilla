@@ -37,6 +37,7 @@ def project_copy(*, git: bool = False):
 def routed_fixture():
     with project_copy(git=True) as root:
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
+        route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
         set_active_route(root, route)
         # Tool availability is unrelated to these deterministic boundary faults.
         previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}

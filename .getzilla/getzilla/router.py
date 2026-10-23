@@ -705,7 +705,7 @@ REVIEW_EVIDENCE = {
 }
 
 
-def escalate_route(route: dict[str, object], risk: str, root: Path) -> dict[str, object]:
+def escalate_route(route: dict[str, object], risk: str, root: Path, *, force_full: bool = False) -> dict[str, object]:
     """Reviewers and evidence a route needs at `risk`; only ever adds to the route, never removes.
 
     The prompt decided the route's risk; the exact-head diff may show more. At high risk the route
@@ -716,6 +716,10 @@ def escalate_route(route: dict[str, object], risk: str, root: Path) -> dict[str,
     reviewers = [str(item) for item in route.get('review_agents') or []]
     evidence = [str(item) for item in route.get('required_evidence') or []]
     added_reviewers: list[str] = []
+    if route.get('delivery_lane') == 'light' and (force_full or effective != 'low'):
+        cfg = load_routing_config(root)
+        floors = cfg.get('review_floors') or {}
+        added_reviewers.extend(agent for agent in _string_list(floors.get('delivery')) if agent not in reviewers)
     if effective == 'high' and route_risk != 'high':
         cfg = load_routing_config(root)
         risk_agents = cfg.get('review_risk_agents') if isinstance(cfg.get('review_risk_agents'), dict) else {}
