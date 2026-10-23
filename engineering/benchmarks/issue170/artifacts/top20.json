@@ -1,0 +1,142 @@
+[
+  {
+    "a": "src/itsdangerous/serializer.py:238:Serializer.secret_key",
+    "b": "src/itsdangerous/signer.py:175:Signer.secret_key",
+    "cosine": 1.0000001192092896,
+    "same_file": false,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "cosine": 0.9952751994132996,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_url_safe.py:12:TestURLSafeSerializer.serializer_factory",
+    "b": "tests/test_itsdangerous/test_url_safe.py:22:TestURLSafeTimedSerializer.serializer_factory",
+    "cosine": 0.9904924631118774,
+    "same_file": true,
+    "kinds": "test/test"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "cosine": 0.9865446090698242,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9847107529640198,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "cosine": 0.9794905185699463,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9778594970703125,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9748015999794006,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9704720973968506,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9697661399841309,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9572429656982422,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9558669328689575,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+    "b": "tests/test_itsdangerous/test_timed.py:69:TestTimestampSigner.test_malformed_future_timestamp",
+    "cosine": 0.9461004137992859,
+    "same_file": true,
+    "kinds": "test/test"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+    "b": "tests/test_itsdangerous/test_timed.py:30:TestTimestampSigner.signer_factory",
+    "cosine": 0.9348466396331787,
+    "same_file": false,
+    "kinds": "test/test"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_serializer.py:131:TestSerializer.test_signer_cls",
+    "b": "tests/test_itsdangerous/test_serializer.py:139:TestSerializer.test_signer_kwargs",
+    "cosine": 0.9341742396354675,
+    "same_file": true,
+    "kinds": "test/test"
+  },
+  {
+    "a": "src/itsdangerous/signer.py:258:Signer.validate",
+    "b": "src/itsdangerous/timed.py:160:TimestampSigner.validate",
+    "cosine": 0.9302794933319092,
+    "same_file": false,
+    "kinds": "production/production"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_serializer.py:72:TestSerializer.test_bad_signature_exception",
+    "b": "tests/test_itsdangerous/test_serializer.py:81:TestSerializer.test_bad_payload_exception",
+    "cosine": 0.927420973777771,
+    "same_file": true,
+    "kinds": "test/test"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_timed.py:49:TestTimestampSigner.test_timestamp_missing",
+    "b": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+    "cosine": 0.9264658689498901,
+    "same_file": true,
+    "kinds": "test/test"
+  },
+  {
+    "a": "src/itsdangerous/timed.py:56:TimestampSigner.unsign",
+    "b": "src/itsdangerous/timed.py:64:TimestampSigner.unsign",
+    "cosine": 0.9240380525588989,
+    "same_file": true,
+    "kinds": "production/production"
+  },
+  {
+    "a": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+    "b": "tests/test_itsdangerous/test_signer.py:23:TestSigner.signer",
+    "cosine": 0.9233790040016174,
+    "same_file": true,
+    "kinds": "test/test"
+  }
+]

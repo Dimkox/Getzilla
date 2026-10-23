@@ -1,0 +1,505 @@
+{
+  "10": {
+    "status": "observed",
+    "raw_pairs": 4,
+    "within_file_pairs": 4,
+    "cross_file_pairs": 0,
+    "connected_clusters": 3,
+    "cluster_identity": "raw exact file/start/end spans; overlapping but unequal spans are distinct nodes; reversed raw spans retained, not validated source ranges",
+    "reversed_raw_spans": 2,
+    "min_tokens": 50,
+    "parser": "python",
+    "mode": "mild",
+    "pairs": [
+      {
+        "a": "../input/src/itsdangerous/serializer.py:114:124",
+        "b": "../input/src/itsdangerous/serializer.py:130:140",
+        "same_file": true,
+        "lines": 11,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:129:124",
+        "b": "../input/src/itsdangerous/serializer.py:146:157",
+        "same_file": true,
+        "lines": 12,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:114:124",
+        "b": "../input/src/itsdangerous/serializer.py:165:175",
+        "same_file": true,
+        "lines": 11,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:164:124",
+        "b": "../input/src/itsdangerous/serializer.py:181:192",
+        "same_file": true,
+        "lines": 12,
+        "tokens": 0
+      }
+    ],
+    "clusters": [
+      [
+        "../input/src/itsdangerous/serializer.py:114:124",
+        "../input/src/itsdangerous/serializer.py:130:140",
+        "../input/src/itsdangerous/serializer.py:165:175"
+      ],
+      [
+        "../input/src/itsdangerous/serializer.py:129:124",
+        "../input/src/itsdangerous/serializer.py:146:157"
+      ],
+      [
+        "../input/src/itsdangerous/serializer.py:164:124",
+        "../input/src/itsdangerous/serializer.py:181:192"
+      ]
+    ],
+    "statistics": {
+      "detectionDate": "2026-10-23T22:13:17.170Z",
+      "formats": {
+        "python": {
+          "sources": {
+            "/input/tests/test_itsdangerous/test_url_safe.py": {
+              "lines": 23,
+              "tokens": 187,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_timed.py": {
+              "lines": 114,
+              "tokens": 1053,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_signer.py": {
+              "lines": 108,
+              "tokens": 965,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_serializer.py": {
+              "lines": 196,
+              "tokens": 1976,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_encoding.py": {
+              "lines": 36,
+              "tokens": 310,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/url_safe.py": {
+              "lines": 82,
+              "tokens": 509,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/timed.py": {
+              "lines": 227,
+              "tokens": 1537,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/signer.py": {
+              "lines": 265,
+              "tokens": 1655,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/serializer.py": {
+              "lines": 405,
+              "tokens": 3289,
+              "sources": 1,
+              "clones": 8,
+              "duplicatedLines": 84,
+              "duplicatedTokens": 1118,
+              "percentage": 20.74,
+              "percentageTokens": 33.99,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/exc.py": {
+              "lines": 105,
+              "tokens": 530,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/encoding.py": {
+              "lines": 53,
+              "tokens": 397,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/_json.py": {
+              "lines": 17,
+              "tokens": 145,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/__init__.py": {
+              "lines": 37,
+              "tokens": 330,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            }
+          },
+          "total": {
+            "lines": 1668,
+            "tokens": 12883,
+            "sources": 13,
+            "clones": 4,
+            "duplicatedLines": 42,
+            "duplicatedTokens": 559,
+            "percentage": 2.52,
+            "percentageTokens": 4.34,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          }
+        }
+      },
+      "total": {
+        "lines": 1668,
+        "tokens": 12883,
+        "sources": 13,
+        "clones": 4,
+        "duplicatedLines": 42,
+        "duplicatedTokens": 559,
+        "percentage": 2.52,
+        "percentageTokens": 4.34,
+        "newDuplicatedLines": 0,
+        "newClones": 0
+      }
+    }
+  },
+  "5": {
+    "status": "observed",
+    "raw_pairs": 5,
+    "within_file_pairs": 5,
+    "cross_file_pairs": 0,
+    "connected_clusters": 4,
+    "cluster_identity": "raw exact file/start/end spans; overlapping but unequal spans are distinct nodes; reversed raw spans retained, not validated source ranges",
+    "reversed_raw_spans": 2,
+    "min_tokens": 50,
+    "parser": "python",
+    "mode": "mild",
+    "pairs": [
+      {
+        "a": "../input/src/itsdangerous/serializer.py:114:124",
+        "b": "../input/src/itsdangerous/serializer.py:130:140",
+        "same_file": true,
+        "lines": 11,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:129:124",
+        "b": "../input/src/itsdangerous/serializer.py:146:157",
+        "same_file": true,
+        "lines": 12,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:114:124",
+        "b": "../input/src/itsdangerous/serializer.py:165:175",
+        "same_file": true,
+        "lines": 11,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:164:124",
+        "b": "../input/src/itsdangerous/serializer.py:181:192",
+        "same_file": true,
+        "lines": 12,
+        "tokens": 0
+      },
+      {
+        "a": "../input/src/itsdangerous/serializer.py:114:122",
+        "b": "../input/src/itsdangerous/serializer.py:196:205",
+        "same_file": true,
+        "lines": 10,
+        "tokens": 0
+      }
+    ],
+    "clusters": [
+      [
+        "../input/src/itsdangerous/serializer.py:114:122",
+        "../input/src/itsdangerous/serializer.py:196:205"
+      ],
+      [
+        "../input/src/itsdangerous/serializer.py:114:124",
+        "../input/src/itsdangerous/serializer.py:130:140",
+        "../input/src/itsdangerous/serializer.py:165:175"
+      ],
+      [
+        "../input/src/itsdangerous/serializer.py:129:124",
+        "../input/src/itsdangerous/serializer.py:146:157"
+      ],
+      [
+        "../input/src/itsdangerous/serializer.py:164:124",
+        "../input/src/itsdangerous/serializer.py:181:192"
+      ]
+    ],
+    "statistics": {
+      "detectionDate": "2026-10-23T22:13:17.100Z",
+      "formats": {
+        "python": {
+          "sources": {
+            "/input/tests/test_itsdangerous/test_url_safe.py": {
+              "lines": 23,
+              "tokens": 187,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_timed.py": {
+              "lines": 114,
+              "tokens": 1053,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_signer.py": {
+              "lines": 108,
+              "tokens": 965,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_serializer.py": {
+              "lines": 196,
+              "tokens": 1976,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/tests/test_itsdangerous/test_encoding.py": {
+              "lines": 36,
+              "tokens": 310,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/url_safe.py": {
+              "lines": 82,
+              "tokens": 509,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/timed.py": {
+              "lines": 227,
+              "tokens": 1537,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/signer.py": {
+              "lines": 265,
+              "tokens": 1655,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/serializer.py": {
+              "lines": 405,
+              "tokens": 3289,
+              "sources": 1,
+              "clones": 10,
+              "duplicatedLines": 102,
+              "duplicatedTokens": 1384,
+              "percentage": 25.19,
+              "percentageTokens": 42.08,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/exc.py": {
+              "lines": 105,
+              "tokens": 530,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/encoding.py": {
+              "lines": 53,
+              "tokens": 397,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/_json.py": {
+              "lines": 17,
+              "tokens": 145,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            },
+            "/input/src/itsdangerous/__init__.py": {
+              "lines": 37,
+              "tokens": 330,
+              "sources": 1,
+              "clones": 0,
+              "duplicatedLines": 0,
+              "duplicatedTokens": 0,
+              "percentage": 0,
+              "percentageTokens": 0,
+              "newDuplicatedLines": 0,
+              "newClones": 0
+            }
+          },
+          "total": {
+            "lines": 1668,
+            "tokens": 12883,
+            "sources": 13,
+            "clones": 5,
+            "duplicatedLines": 51,
+            "duplicatedTokens": 692,
+            "percentage": 3.06,
+            "percentageTokens": 5.37,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          }
+        }
+      },
+      "total": {
+        "lines": 1668,
+        "tokens": 12883,
+        "sources": 13,
+        "clones": 5,
+        "duplicatedLines": 51,
+        "duplicatedTokens": 692,
+        "percentage": 3.06,
+        "percentageTokens": 5.37,
+        "newDuplicatedLines": 0,
+        "newClones": 0
+      }
+    }
+  }
+}

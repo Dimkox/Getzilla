@@ -1,0 +1,30 @@
+{
+  "python": "3.12.15",
+  "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.36",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19
+  ],
+  "logical_cpu_count": 28,
+  "cpu.max": "2000000 100000",
+  "cpuset.cpus.effective": "0-19",
+  "memory.max": "4294967296"
+}

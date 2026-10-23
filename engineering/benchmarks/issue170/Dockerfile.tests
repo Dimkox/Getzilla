@@ -1,0 +1,2 @@
+FROM getzilla-issue170:20261023
+RUN pip download --dest /wheels freezegun==1.4.0 python-dateutil==2.9.0.post0 six==1.16.0 && pip install --no-index --find-links /wheels freezegun==1.4.0 python-dateutil==2.9.0.post0 six==1.16.0

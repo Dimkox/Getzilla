@@ -1,0 +1,317 @@
+[
+  {
+    "stage": "versions",
+    "argv": [
+      "sh",
+      "-c",
+      "python --version; git --version; node --version; /tools/node_modules/.bin/jscpd --version; pip freeze; dpkg-query -W; sha256sum /wheels/*"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 1.618801445234567,
+    "user_seconds": 1.64,
+    "system_seconds": 0.17,
+    "peak_rss_kib": 81956.0,
+    "retained_stage_log_bytes": 19560
+  },
+  {
+    "stage": "jscpd-help",
+    "argv": [
+      "/tools/node_modules/.bin/jscpd",
+      "--help"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 0.7168798879720271,
+    "user_seconds": 0.81,
+    "system_seconds": 0.07,
+    "peak_rss_kib": 80484.0,
+    "retained_stage_log_bytes": 3763
+  },
+  {
+    "stage": "core-plan",
+    "argv": [
+      "python",
+      "/core/scripts/adopt_existing.py",
+      "plan",
+      "--source",
+      "/input",
+      "--target",
+      "/work/candidate",
+      "--output",
+      "/work/artifacts/plan.json",
+      "--state-root",
+      "/work/adoption-state"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 0.2654023212380707,
+    "user_seconds": 0.2,
+    "system_seconds": 0.01,
+    "peak_rss_kib": 21728.0,
+    "retained_stage_log_bytes": 16871
+  },
+  {
+    "stage": "core-apply",
+    "argv": [
+      "python",
+      "/core/scripts/adopt_existing.py",
+      "apply",
+      "--plan",
+      "/work/artifacts/plan.json",
+      "--plan-digest",
+      "147352572271bb655faf00a142932b6ce1e2d3a471c71f93ab20ea8f0e118eee",
+      "--writers-stopped",
+      "--state-root",
+      "/work/adoption-state"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 3.7245842637494206,
+    "user_seconds": 1.98,
+    "system_seconds": 1.71,
+    "peak_rss_kib": 39200.0,
+    "retained_stage_log_bytes": 2077
+  },
+  {
+    "stage": "candidate-git",
+    "argv": [
+      "git",
+      "log",
+      "--format=fuller",
+      "--stat"
+    ],
+    "cwd": "/work/candidate",
+    "exit_code": 0,
+    "wall_seconds": 0.16520741069689393,
+    "user_seconds": 0.07,
+    "system_seconds": 0.03,
+    "peak_rss_kib": 6416.0,
+    "retained_stage_log_bytes": 48663
+  },
+  {
+    "stage": "candidate-verify",
+    "argv": [
+      "python",
+      "/core/scripts/getzilla_verify.py",
+      "--mode",
+      "fast",
+      "--no-record",
+      "--json"
+    ],
+    "cwd": "/work/candidate",
+    "exit_code": 1,
+    "wall_seconds": 8.588179734069854,
+    "user_seconds": 1.89,
+    "system_seconds": 0.4,
+    "peak_rss_kib": 47700.0,
+    "retained_stage_log_bytes": 11585
+  },
+  {
+    "stage": "graph-build",
+    "argv": [
+      "python",
+      "/core/scripts/getzilla_graph.py",
+      "build",
+      "--root",
+      "/input",
+      "--cache",
+      "/work/artifacts/source-graph.sqlite"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 0.5180883551947773,
+    "user_seconds": 0.24,
+    "system_seconds": 0.02,
+    "peak_rss_kib": 24580.0,
+    "retained_stage_log_bytes": 2837
+  },
+  {
+    "stage": "upstream-tests",
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "-o",
+      "addopts=",
+      "/input/tests"
+    ],
+    "cwd": "/work",
+    "exit_code": 2,
+    "wall_seconds": 1.0683545600622892,
+    "user_seconds": 0.96,
+    "system_seconds": 0.05,
+    "peak_rss_kib": 47896.0,
+    "retained_stage_log_bytes": 2493
+  },
+  {
+    "stage": "jscpd-10",
+    "argv": [
+      "/tools/node_modules/.bin/jscpd",
+      "--min-lines",
+      "10",
+      "--min-tokens",
+      "50",
+      "--format",
+      "python",
+      "--mode",
+      "mild",
+      "--reporters",
+      "json",
+      "--output",
+      "/work/artifacts/jscpd-10",
+      "/input/src",
+      "/input/tests"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 1.2181664849631488,
+    "user_seconds": 1.58,
+    "system_seconds": 0.1,
+    "peak_rss_kib": 115108.0,
+    "retained_stage_log_bytes": 1640
+  },
+  {
+    "stage": "jscpd-5",
+    "argv": [
+      "/tools/node_modules/.bin/jscpd",
+      "--min-lines",
+      "5",
+      "--min-tokens",
+      "50",
+      "--format",
+      "python",
+      "--mode",
+      "mild",
+      "--reporters",
+      "json",
+      "--output",
+      "/work/artifacts/jscpd-5",
+      "/input/src",
+      "/input/tests"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 1.218292857054621,
+    "user_seconds": 1.53,
+    "system_seconds": 0.13,
+    "peak_rss_kib": 116548.0,
+    "retained_stage_log_bytes": 1801
+  },
+  {
+    "stage": "index",
+    "argv": [
+      "python",
+      "/scripts/analyze.py"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 12.30241793114692,
+    "user_seconds": 11.8,
+    "system_seconds": 0.4,
+    "peak_rss_kib": 482608.0,
+    "retained_stage_log_bytes": 1914
+  },
+  {
+    "stage": "graph-export",
+    "argv": [
+      "python",
+      "/core/scripts/getzilla_graph.py",
+      "export",
+      "--root",
+      "/input",
+      "--cache",
+      "/work/artifacts/source-graph.sqlite"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 0.2149052657186985,
+    "user_seconds": 0.18,
+    "system_seconds": 0.01,
+    "peak_rss_kib": 23968.0,
+    "retained_stage_log_bytes": 247314
+  },
+  {
+    "stage": "versions-final",
+    "argv": [
+      "sh",
+      "-c",
+      "pip freeze; sha256sum /wheels/*"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 0.8165846061892807,
+    "user_seconds": 0.69,
+    "system_seconds": 0.07,
+    "peak_rss_kib": 36288.0,
+    "retained_stage_log_bytes": 5105
+  },
+  {
+    "stage": "index-corrected",
+    "argv": [
+      "python",
+      "/scripts/analyze.py"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 11.999315103050321,
+    "user_seconds": 11.55,
+    "system_seconds": 0.3,
+    "peak_rss_kib": 459616.0,
+    "retained_stage_log_bytes": 2060
+  },
+  {
+    "stage": "upstream-tests-final",
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "-o",
+      "addopts=",
+      "/input/tests"
+    ],
+    "cwd": "/work",
+    "exit_code": 0,
+    "wall_seconds": 1.7189680626615882,
+    "user_seconds": 1.6,
+    "system_seconds": 0.07,
+    "peak_rss_kib": 44732.0,
+    "retained_stage_log_bytes": 1182
+  },
+  {
+    "stage": "candidate-verify-final",
+    "argv": [
+      "python",
+      "/core/scripts/getzilla_verify.py",
+      "--mode",
+      "fast",
+      "--no-record",
+      "--json"
+    ],
+    "cwd": "/work/candidate",
+    "exit_code": 0,
+    "wall_seconds": 2.9221037114039063,
+    "user_seconds": 2.54,
+    "system_seconds": 0.31,
+    "peak_rss_kib": 44884.0,
+    "retained_stage_log_bytes": 10271
+  },
+  {
+    "stage": "candidate-final-git",
+    "argv": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all"
+    ],
+    "cwd": "/work/candidate",
+    "exit_code": 0,
+    "wall_seconds": 0.016535187140107155,
+    "user_seconds": 0.0,
+    "system_seconds": 0.01,
+    "peak_rss_kib": 4704.0,
+    "retained_stage_log_bytes": 761
+  }
+]

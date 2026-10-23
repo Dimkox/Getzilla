@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-23T22:13:14+00:00",
+  "mode": "fast",
+  "profiles": [
+    "base"
+  ],
+  "route_id": null,
+  "tree_fingerprint": "98abc247bccd6a9a6a605859925cd89038273d31901425c9ffa73f7a6995074f",
+  "changed_files": [],
+  "changed_file_inventory": {
+    "mode": "route-base",
+    "bases": [],
+    "worktree_count": 0,
+    "union_count": 0
+  },
+  "checks": [
+    {
+      "name": "architecture-inputs",
+      "status": "skip",
+      "summary": "architecture authority inputs are absent; not executed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "git-diff-check",
+      "status": "pass",
+      "summary": "2/2 commands clean; 0 findings disposed; 0 unresolved; bases=none",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "worktree",
+          "message": "exit=0: git diff --check",
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "index",
+          "message": "exit=0: git diff --cached --check",
+          "command": [
+            "git",
+            "diff",
+            "--cached",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "docs-state-scope",
+      "status": "pass",
+      "summary": "profile=full-pr-suite; evidence=verification:full-pr-suite; reason=mode-not-gated; paths=0; skipped=none",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "mode-not-gated",
+          "path": "",
+          "message": "full PR suite is required: mode 'fast' is not a gated PR/release run"
+        }
+      ]
+    },
+    {
+      "name": "change-spec",
+      "status": "pass",
+      "summary": "0 specs checked; exempt=False",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "architecture",
+      "status": "skip",
+      "summary": "architecture is not configured",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "governance",
+      "status": "skip",
+      "summary": "governance is not configured",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "workflow-artifacts",
+      "status": "skip",
+      "summary": "no active change",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "diff-risk",
+      "status": "skip",
+      "summary": "no comparison base in this mode; assessment remains provisional",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "cost-guard",
+      "status": "skip",
+      "summary": "no comparison base and no paid-operation signal",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "eu-ai-act",
+      "status": "skip",
+      "summary": "EU AI Act component not installed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "hook-health",
+      "status": "pass",
+      "summary": "no hook failed open during this route",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "workflow-baseline",
+      "status": "skip",
+      "summary": "not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "secret-scan",
+      "status": "pass",
+      "summary": "0 potential secrets; 0 disposed; 0 unresolved",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "contract-structure",
+      "status": "pass",
+      "summary": "0 contracts checked",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "sql-safety",
+      "status": "pass",
+      "summary": "0 unsafe SQL findings",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "known-vulnerabilities",
+      "status": "skip",
+      "summary": "34 pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "opengrep",
+      "status": "skip",
+      "summary": "opengrep not available",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "ruff",
+      "status": "skip",
+      "summary": "ruff not available",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "bandit",
+      "status": "skip",
+      "summary": "bandit not available",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "pytest",
+      "status": "fail",
+      "summary": "exit=2",
+      "command": [
+        "pytest",
+        "-q"
+      ],
+      "stdout": "\n==================================== ERRORS ====================================\n____________ ERROR collecting tests/test_itsdangerous/test_timed.py ____________\nImportError while importing test module '/work/candidate/tests/test_itsdangerous/test_timed.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_itsdangerous/test_timed.py:7: in <module>\n    from freezegun import freeze_time\nE   ModuleNotFoundError: No module named 'freezegun'\n__________ ERROR collecting tests/test_itsdangerous/test_url_safe.py ___________\nImportError while importing test module '/work/candidate/tests/test_itsdangerous/test_url_safe.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_itsdangerous/test_url_safe.py:8: in <module>\n    from test_itsdangerous.test_timed import TestTimedSerializer\ntests/test_itsdangerous/test_timed.py:7: in <module>\n    from freezegun import freeze_time\nE   ModuleNotFoundError: No module named 'freezegun'\n=========================== short test summary info ============================\nERROR tests/test_itsdangerous/test_timed.py\nERROR tests/test_itsdangerous/test_url_safe.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!\n2 errors in 0.26s\n",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "source-stability",
+      "status": "pass",
+      "summary": "repository fingerprint remained stable",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "quality-gate",
+      "status": "pass",
+      "summary": "QG-01 admission checks passed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    }
+  ],
+  "spec": {
+    "exempt": false,
+    "specs": [],
+    "historical_migrations": []
+  },
+  "architecture": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "governance": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "workflow_artifacts": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "status": "fail",
+  "terminal_state": "completed",
+  "evidence_status": "not_recorded",
+  "docs_state_scope": {
+    "eligible": false,
+    "profile": "full-pr-suite",
+    "mode": "fast",
+    "reason": "mode 'fast' is not a gated PR/release run",
+    "reason_code": "mode-not-gated",
+    "documentation_files": [],
+    "state_files": [],
+    "artifact_files": [],
+    "changed_lockstep_tests": [],
+    "focused_tests": [],
+    "rejected_files": [],
+    "skipped_checks": [],
+    "changed_paths_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "evidence_kind": "verification:full-pr-suite",
+    "rejection": null
+  },
+  "diff_risk": {
+    "status": "not_run"
+  },
+  "cost_guard": {
+    "status": "not_run"
+  },
+  "eu_ai_act": {
+    "status": "not_installed"
+  },
+  "hook_health": {
+    "degraded_events": 0,
+    "by_hook": {},
+    "last": []
+  },
+  "workflow_baseline": {
+    "status": "not_run",
+    "reason": "source"
+  },
+  "stacks": {
+    "detected": [
+      "python"
+    ],
+    "checked": [],
+    "builtin": [
+      "python"
+    ],
+    "not_verified": [],
+    "untouched": [],
+    "details": {}
+  },
+  "check_status": "fail",
+  "git_head": "81eadf1d28792d79e49c0c538080ba5b9c8799e9",
+  "ci_run_id": null
+}

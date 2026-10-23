@@ -1,0 +1,1 @@
+The tokenizer JSON carries active padding/truncation settings; counting raw ids without clearing them produced false token totals. Disable both before raw length measurement, then apply the requested 256-token policy. Initial tool preparation omitted declared freezegun; read the upstream test requirements before the first test run.

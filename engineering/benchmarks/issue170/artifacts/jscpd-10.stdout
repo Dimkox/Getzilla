@@ -1,0 +1,18 @@
+Clone found (python):
+ - ../input/src/itsdangerous/serializer.py [130:2 - 140:67] (10 lines, 135 tokens)
+   ../input/src/itsdangerous/serializer.py [114:5 - 124:70]
+
+Clone found (python):
+ - ../input/src/itsdangerous/serializer.py [146:2 - 157:67] (11 lines, 145 tokens)
+   ../input/src/itsdangerous/serializer.py [129:5 - 124:70]
+
+Clone found (python):
+ - ../input/src/itsdangerous/serializer.py [165:4 - 175:37] (10 lines, 135 tokens)
+   ../input/src/itsdangerous/serializer.py [114:5 - 124:70]
+
+Clone found (python):
+ - ../input/src/itsdangerous/serializer.py [181:2 - 192:4] (11 lines, 144 tokens)
+   ../input/src/itsdangerous/serializer.py [164:5 - 124:70]
+
+JSON report saved to /work/artifacts/jscpd-10/jscpd-report.json
+Detection time:: 372.949ms

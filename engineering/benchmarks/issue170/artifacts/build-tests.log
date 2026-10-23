@@ -1,0 +1,54 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.tests
+#1 transferring dockerfile: 272B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/getzilla-issue170:20261023
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 54B done
+#3 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/getzilla-issue170:20261023@sha256:e171d370fbeac6c084a9e7af864e86ab6eca1fe2bff1cec99bb59fc6e82f28dc
+#4 resolve docker.io/library/getzilla-issue170:20261023@sha256:e171d370fbeac6c084a9e7af864e86ab6eca1fe2bff1cec99bb59fc6e82f28dc 0.0s done
+#4 DONE 0.1s
+
+#5 [2/2] RUN pip download --dest /wheels freezegun==1.4.0 python-dateutil==2.9.0.post0 six==1.16.0 && pip install --no-index --find-links /wheels freezegun==1.4.0 python-dateutil==2.9.0.post0 six==1.16.0
+#5 1.305 Collecting freezegun==1.4.0
+#5 6.686   Downloading freezegun-1.4.0-py3-none-any.whl.metadata (11 kB)
+#5 7.090 Collecting python-dateutil==2.9.0.post0
+#5 7.162   Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+#5 7.280 Collecting six==1.16.0
+#5 7.352   Downloading six-1.16.0-py2.py3-none-any.whl.metadata (1.8 kB)
+#5 7.447 Downloading freezegun-1.4.0-py3-none-any.whl (17 kB)
+#5 7.539 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+#5 8.060 Downloading six-1.16.0-py2.py3-none-any.whl (11 kB)
+#5 8.083 Saved /wheels/freezegun-1.4.0-py3-none-any.whl
+#5 8.083 Saved /wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl
+#5 8.084 Saved /wheels/six-1.16.0-py2.py3-none-any.whl
+#5 8.084 Successfully downloaded freezegun python-dateutil six
+#5 8.150 
+#5 8.150 [notice] A new release of pip is available: 25.0.1 -> 26.2.2
+#5 8.150 [notice] To update, run: pip install --upgrade pip
+#5 8.741 Looking in links: /wheels
+#5 8.754 Processing /wheels/freezegun-1.4.0-py3-none-any.whl
+#5 8.759 Processing /wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl
+#5 8.763 Processing /wheels/six-1.16.0-py2.py3-none-any.whl
+#5 8.840 Installing collected packages: six, python-dateutil, freezegun
+#5 8.960 Successfully installed freezegun-1.4.0 python-dateutil-2.9.0.post0 six-1.16.0
+#5 8.960 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#5 DONE 9.9s
+
+#6 exporting to image
+#6 exporting layers
+#6 exporting layers 0.5s done
+#6 exporting manifest sha256:267eae9744d21c1d911a3f564a98a9aa768035ffa6dee8136248742db64a1d31 0.0s done
+#6 exporting config sha256:afef61a27808a609750e3867827e01b93fed03f3b8ac3fe51b23a882edbf857d 0.0s done
+#6 exporting attestation manifest sha256:98ea7932df35bcbfd19c26ef97baf838ccaacecfbe5c98999786d664af5765bb
+#6 exporting attestation manifest sha256:98ea7932df35bcbfd19c26ef97baf838ccaacecfbe5c98999786d664af5765bb 0.0s done
+#6 exporting manifest list sha256:d8c58e200f4eaac596beb74789bc95270c3da34eabffc2b9e44e28c3744763a7 0.0s done
+#6 naming to docker.io/library/getzilla-issue170-tests:20261023 done
+#6 unpacking to docker.io/library/getzilla-issue170-tests:20261023 0.1s done
+#6 DONE 1.1s
