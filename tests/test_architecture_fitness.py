@@ -3340,6 +3340,112 @@ class ArchitectureFitnessTests(unittest.TestCase):
         result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
         self.assertEqual(result.status, 'not_applicable', result)
 
+    def test_return_demands_do_not_cross_sibling_method_locals(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
+        for index in range(40):
+            repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+        values = ', '.join(f'part{i}()' for i in range(40))
+        repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
+        imported = 'from runtime import report\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('ordinary report for methods')
+        repo.write_text('src/use.py', imported + 'class Consumer:\n    def collect(self):\n        result = report()\n        return result\n    def dispatch(self, result):\n        result.enqueue(job)\n')
+        head = repo.commit('distinct sibling method locals')
+        result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+        self.assertEqual(result.status, 'not_applicable', result)
+
+    def test_scalar_method_projection_does_not_expand_ordinary_report_returns(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
+        for index in range(40):
+            repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+        values = ', '.join(f'part{i}()' for i in range(40))
+        repo.write_text('src/runtime.py', imports + f'def report():\n    return {{"checks": [{values}]}}\n')
+        imported = 'from runtime import report\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('ordinary projected report')
+        repo.write_text('src/use.py', imported + 'class Consumer:\n    def checks(self, report):\n        return {str(item["name"]): str(item["status"]) for item in report["checks"]}\n    def run(self):\n        result = report()\n        checks = self.checks(result)\n        checks.get("unit")\n')
+        head = repo.commit('scalar projection of report fields')
+        result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+        self.assertEqual(result.status, 'not_applicable', result)
+
+    def test_scalar_projection_shadowing_aliases_and_overloads_remain_conservative(self) -> None:
+        variants = (
+            ('shadowed str', '    def checks(self, report, str=unknown):\n        return str(report)\n', 'checks = self.checks(result)'),
+            ('aliased method', '    def checks(self, report):\n        return str(report)\n', 'project = self.checks\n        checks = project(result)'),
+            ('overloaded value', '    def checks(self, report):\n        return report + 1\n', 'checks = self.checks(result)'),
+            ('rebound method', '    def checks(self, report):\n        return str(report)\n', 'self.checks = replacement\n        checks = self.checks(result)'),
+            ('escaped method mutation', '    def checks(self, report):\n        return str(report)\n', 'alias = self.checks\n        alias.__code__ = replacement\n        checks = self.checks(result)'),
+            ('effectful helper', '    def checks(self, report):\n        report.enqueue(job)\n        return str(report)\n', 'checks = self.checks(result)'),
+            ('class rebinding', '    def checks(self, report):\n        return str(report)\n    checks = replacement\n', 'checks = self.checks(result)'),
+            ('escaped class method', '    def checks(self, report):\n        return str(report)\n    alias = checks\n    alias.__code__ = replacement\n', 'checks = self.checks(result)'),
+        )
+        for label, helper, assignment in variants:
+            with self.subTest(case=label):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
+                for index in range(40):
+                    repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+                values = ', '.join(f'part{i}()' for i in range(40))
+                repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
+                imported = 'from runtime import report\n'
+                repo.write_text('src/use.py', imported)
+                base = repo.commit('unproven scalar projection baseline')
+                body = 'class Consumer:\n' + helper + '    def run(self):\n        result = report()\n        ' + assignment + '\n        checks.get("unit")\n'
+                repo.write_text('src/use.py', imported + body)
+                head = repo.commit('unproven helper return remains demanded')
+                result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+                self.assertEqual(result.status, 'unsupported', result)
+                self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+
+    def test_module_return_demands_are_specific_to_each_member(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
+        for index in range(40):
+            repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+        values = ', '.join(f'part{i}()' for i in range(40))
+        repo.write_text('src/runtime.py', imports + f'class Record: pass\ndef report():\n    return [{values}]\n')
+        imported = 'import runtime\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('module callable and value members')
+        repo.write_text('src/use.py', imported + 'class Consumer:\n    def collect(self):\n        report = runtime.report()\n        return report\n    def dispatch(self):\n        checks = []\n        checks.append(runtime.Record())\n        checks.pop()\n')
+        head = repo.commit('only Record return is demanded')
+        result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+        self.assertEqual(result.status, 'not_applicable', result)
+
+    def test_scalar_projection_does_not_hide_queue_containers_or_call_effects(self) -> None:
+        for body in (
+            'class Consumer:\n    def checks(self, report):\n        return {"worker": report["worker"]}\n    def run(self):\n        result = report()\n        checks = self.checks(result)\n        checks["worker"].enqueue(job)\n',
+            'class Consumer:\n    def checks(self, report):\n        return str(report)\n    def run(self):\n        self.checks(queue.enqueue(job))\n',
+            'class Consumer:\n    def checks(self, report):\n        return []\n    def run(self):\n        checks = self.checks(None)\n        checks.append(report())\n        checks[0]["worker"].enqueue(job)\n',
+        ):
+            with self.subTest(body=body):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/runtime.py', 'from rq import Queue\nqueue = Queue()\ndef report():\n    return {"worker": Queue()}\n')
+                imported = 'from runtime import report, queue\n'
+                repo.write_text('src/use.py', imported)
+                base = repo.commit('queue report and scalar projection effects')
+                repo.write_text('src/use.py', imported + body)
+                head = repo.commit('queue value remains observable')
+                result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+                self.assertNotEqual(result.status, 'not_applicable', result)
+
     def test_local_return_demand_preserves_alias_closure_and_global_queue_receivers(self) -> None:
         bodies = (
             'def dispatch():\n    result = make()\n    alias = result\n    alias.enqueue(job)\n',

@@ -37,7 +37,7 @@ from .architecture_diff import (
     read_diff_file,
     read_diff_files,
 )
-from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members
+from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members, _CONTAINER_MUTATORS
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -1976,11 +1976,123 @@ def _code_budget(
     )
 
 
+def _scalar_projection_calls(tree: ast.AST) -> frozenset[int]:
+    """Prove scalar results without erasing the calls that compute them."""
+    nodes = tuple(ast.walk(tree))
+    parents = {id(child): node for node in nodes for child in ast.iter_child_nodes(node)}
+
+    def direct_callee(node: ast.AST) -> bool:
+        parent = parents.get(id(node))
+        return isinstance(parent, ast.Call) and parent.func is node
+    if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+           and node.func.id in {'exec', 'eval', 'globals', 'locals', 'vars', 'setattr', 'delattr'} for node in nodes):
+        return frozenset()
+    bound = {node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    bound.update(node.arg for node in nodes if isinstance(node, ast.arg))
+    bound.update(node.name for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    bound.update(alias.asname or alias.name.split('.')[0] for node in nodes
+                 if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names)
+    scalar_names = {'str', 'bytes', 'int', 'float', 'bool', 'len'} - bound
+
+    def ordinary(value: ast.AST | None) -> bool:
+        if value is None or isinstance(value, ast.Constant):
+            return True
+        if isinstance(value, ast.Call):
+            return (isinstance(value.func, ast.Name) and value.func.id in scalar_names
+                    and not any(isinstance(node, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom,
+                        ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare))
+                        for argument in (*value.args, *(item.value for item in value.keywords)) for node in ast.walk(argument)))
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            return all(ordinary(item) for item in value.elts)
+        if isinstance(value, ast.Dict):
+            return all(key is not None and ordinary(key) and ordinary(item) for key, item in zip(value.keys, value.values))
+        if isinstance(value, ast.DictComp):
+            return ordinary(value.key) and ordinary(value.value) and inert_comprehension(value)
+        if isinstance(value, (ast.ListComp, ast.SetComp)):
+            return ordinary(value.elt) and inert_comprehension(value)
+        return False
+
+    def inert_comprehension(value: ast.DictComp | ast.ListComp | ast.SetComp) -> bool:
+        return not any(isinstance(node, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom))
+                       for generator in value.generators for expression in (generator.iter, *generator.ifs)
+                       for node in ast.walk(expression))
+
+    def stable(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        if function.decorator_list or isinstance(function, ast.AsyncFunctionDef):
+            return False
+        body = [node for node in function.body if not (isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str))]
+        return len(body) == 1 and isinstance(body[0], ast.Return) and ordinary(body[0].value)
+
+    mutated_members = {node.attr for node in nodes if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    mutated_members.update(node.attr for node in nodes if isinstance(node, ast.Attribute)
+                           and isinstance(node.ctx, ast.Load) and not direct_callee(node))
+    mutated_members.update(member for _target, member, _replacement, _factory in literal_patch_members(tree).values())
+    module_functions = {}
+    if isinstance(tree, ast.Module):
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                module_functions.setdefault(node.name, []).append(node)
+    proven_functions = {name for name, definitions in module_functions.items()
+                        if len(definitions) == 1 and stable(definitions[0])
+                        and not any(isinstance(node, ast.Name) and node.id == name and
+                            (isinstance(node.ctx, (ast.Store, ast.Del)) or not direct_callee(node)) for node in nodes)}
+    calls = {id(node) for node in nodes if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id in scalar_names and ordinary(node)}
+    for function in (node for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        body = tuple(ast.walk(ast.Module(body=function.body, type_ignores=[])))
+        local_bindings = {node.id for node in body if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+        local_bindings.update(node.arg for node in ast.walk(function.args) if isinstance(node, ast.arg))
+        local_bindings.update(node.arg for node in body if isinstance(node, ast.arg))
+        local_bindings.update(node.name for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+        calls.update(id(node) for node in body if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                     and node.func.id in proven_functions - local_bindings)
+    for owner in (node for node in nodes if isinstance(node, ast.ClassDef)):
+        if owner.decorator_list or owner.keywords or any(isinstance(node, ast.FunctionDef)
+                and node.name in {'__getattribute__', '__getattr__', '__setattr__', '__delattr__'} for node in owner.body):
+            continue
+        class_bindings = set()
+        for statement in owner.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            class_bindings.update(node.id for node in ast.walk(statement) if isinstance(node, ast.Name))
+        definitions = {}
+        for node in owner.body:
+            if isinstance(node, ast.FunctionDef):
+                definitions.setdefault(node.name, []).append(node)
+        methods = {name for name, values in definitions.items() if len(values) == 1
+                   and name not in mutated_members | class_bindings and stable(values[0])}
+        for function in (node for node in owner.body if isinstance(node, ast.FunctionDef)):
+            arguments = [*function.args.posonlyargs, *function.args.args]
+            if not arguments:
+                continue
+            receiver = arguments[0].arg
+            body = tuple(ast.walk(ast.Module(body=function.body, type_ignores=[])))
+            if any(isinstance(node, ast.Name) and node.id == receiver and isinstance(node.ctx, (ast.Store, ast.Del)) for node in body):
+                continue
+            if any(isinstance(node, ast.arg) and node.arg == receiver for node in body):
+                continue
+            calls.update(id(node) for node in body if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                         and isinstance(node.func.value, ast.Name) and node.func.value.id == receiver and node.func.attr in methods)
+    return frozenset(calls)
+
+
+def _return_value_nodes(value: ast.AST, scalar_calls: frozenset[int]):
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if id(node) in scalar_calls:
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
 def _operation_dependencies(
     tree: ast.AST,
     *,
     work_limit: int = MAX_QUEUE_DEPENDENCY_WORK,
     requested: frozenset[str] = frozenset(),
+    scalar_calls: frozenset[int] = frozenset(),
 ) -> _OperationDependencies:
     """Return names that can feed a changed callable/decorator expression."""
     dependencies: set[str] = set(requested)
@@ -1992,7 +2104,7 @@ def _operation_dependencies(
             values.extend(node.decorator_list)
         for value in values:
             dependencies.update(
-                child.id for child in ast.walk(value) if isinstance(child, ast.Name)
+                child.id for child in _return_value_nodes(value, scalar_calls) if isinstance(child, ast.Name)
             )
     assignments: dict[str, set[str]] = {}
     imported_names = {
@@ -2015,14 +2127,14 @@ def _operation_dependencies(
                 for name in target_names(target):
                     assignments.setdefault(name, set()).update(
                         child.id
-                        for child in ast.walk(node.value)
+                        for child in _return_value_nodes(node.value, scalar_calls)
                         if isinstance(child, ast.Name)
                     )
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             for name in target_names(node.target):
                 assignments.setdefault(name, set()).update(
                     child.id
-                    for child in ast.walk(node.value)
+                    for child in _return_value_nodes(node.value, scalar_calls)
                     if isinstance(child, ast.Name)
                 )
         elif (
@@ -2035,7 +2147,7 @@ def _operation_dependencies(
             assignments.setdefault(node.value.func.value.id, set()).update(
                 child.id
                 for argument in node.value.args
-                for child in ast.walk(argument)
+                for child in _return_value_nodes(argument, scalar_calls)
                 if isinstance(child, ast.Name)
             )
     pending = deque(sorted(dependencies))
@@ -2428,12 +2540,13 @@ def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None
     return frozenset(members) or None
 
 
-def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, returns: bool = False) -> frozenset[str]:
+def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, returns: bool = False,
+                           scalar_calls: frozenset[int] = frozenset()) -> frozenset[str]:
     """Distinguish a callable object from a value returned into an operation."""
     demanded: set[str] = set()
     local_dependencies: dict[int, frozenset[str]] = {}
     if not returns and isinstance(tree, ast.Module):
-        for function in tree.body:
+        for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             body = ast.Module(body=function.body, type_ignores=[])
@@ -2442,15 +2555,20 @@ def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, retur
             # for global/nonlocal writes and selected-export return projections.
             if any(isinstance(node, (ast.Global, ast.Nonlocal)) for node in ast.walk(body)):
                 continue
-            scoped = _operation_dependencies(body)
+            scoped = _operation_dependencies(body, scalar_calls=scalar_calls)
             if scoped.exhausted:
                 continue
             local_dependencies.update((id(node), scoped.names) for node in ast.walk(body)
-                                      if isinstance(node, (ast.Assign, ast.AnnAssign)))
+                                      if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Call)))
     for node in ast.walk(tree):
         values = []
         if isinstance(node, ast.Call):
             values.extend(child for child in ast.walk(node.func) if isinstance(child, ast.Call))
+            if (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                    and node.func.attr in {'append', 'extend'} | _CONTAINER_MUTATORS
+                    and node.func.value.id in local_dependencies.get(id(node), dependencies)):
+                values.extend(node.args)
+                values.extend(item.value for item in node.keywords)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = local_dependencies.get(id(node), dependencies)
@@ -2460,9 +2578,24 @@ def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, retur
             values.append(node.value)
         for value in values:
             if value is not None:
-                for call in ast.walk(value):
+                for call in _return_value_nodes(value, scalar_calls):
                     if isinstance(call, ast.Call):
-                        demanded.update(child.id for child in ast.walk(call.func) if isinstance(child, ast.Name))
+                        parts = []
+                        function = call.func
+                        while isinstance(function, ast.Attribute):
+                            parts.append(function.attr)
+                            function = function.value
+                        if isinstance(function, ast.Name):
+                            demanded.add('.'.join((function.id, *reversed(parts))))
+                        else:
+                            pending = [call.func]
+                            while pending:
+                                child = pending.pop()
+                                if isinstance(child, ast.Call):
+                                    continue  # its own return demand is collected separately
+                                if isinstance(child, ast.Name):
+                                    demanded.add(child.id)
+                                pending.extend(ast.iter_child_nodes(child))
     return frozenset(demanded)
 
 
@@ -2668,9 +2801,10 @@ def _queue_adapter_names(
     height = 0
     active = resolving if resolving is not None else set()
     seen = visited if visited is not None else set()
-    dependency_result = _operation_dependencies(tree, requested=requested)
+    scalar_calls = _scalar_projection_calls(tree)
+    dependency_result = _operation_dependencies(tree, requested=requested, scalar_calls=scalar_calls)
     dependencies = set(dependency_result.names)
-    return_demands = _returned_call_demands(tree, dependency_result.names, returns=bool(requested))
+    return_demands = _returned_call_demands(tree, dependency_result.names, returns=bool(requested), scalar_calls=scalar_calls)
     patches = literal_patch_members(tree)
     member_demands: dict[str, frozenset[str] | None] = {}
 
@@ -2678,6 +2812,31 @@ def _queue_adapter_names(
         if access_name not in member_demands:
             member_demands[access_name] = _module_member_demands(tree, access_name, patches)
         return member_demands[access_name]
+
+    def resolve_import(module: str, members: frozenset[str] | None, *, split: bool) -> _QueueAdapterResolution:
+        if not split or not members:
+            return _local_queue_resolution(root, diff, module, side, cache, active, seen,
+                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=members,
+                callable_only=local_name not in requested and local_name not in return_demands)
+        results = []
+        for member in sorted(members):
+            prefix = access_name + '.' + member
+            returned = local_name in requested or local_name in return_demands or any(
+                value == prefix or value.startswith(prefix + '.') for value in return_demands)
+            results.append(_local_queue_resolution(root, diff, module, side, cache, active, seen,
+                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=frozenset({member}), callable_only=not returned))
+        if len(results) == 1:
+            return results[0]
+        state = ('unsupported' if any(item.state == 'unsupported' for item in results)
+                 else 'resolved' if any(item.state == 'resolved' for item in results) else 'not_queue')
+        missing = all(item.reason == 'local_module_missing' for item in results)
+        return _QueueAdapterResolution(state, 'local_module_missing' if missing else
+            'local_queue_provenance_resolved' if state != 'not_queue' else 'local_module_not_queue',
+            tuple(sorted({name for item in results for name in item.exports})),
+            tuple(sorted({signal for item in results for signal in item.signals})),
+            tuple(sorted({name for item in results for name in item.declared_exports})),
+            modules=frozenset(name for item in results for name in item.modules),
+            height=max(item.height for item in results))
 
     for _target, _member, replacement, factory in patches.values():
         names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
@@ -2713,27 +2872,16 @@ def _queue_adapter_names(
                 unsupported = True
                 continue
             bounded_source_roots = source_roots[:MAX_QUEUE_SOURCE_ROOTS]
-            resolution = _local_queue_resolution(
-                root,
-                diff,
-                target_module,
-                side,
-                cache,
-                active,
-                seen,
-                bounded_source_roots,
-                requested=(frozenset({target_name}) if target_name and not wildcard else
-                           frozenset(reachable) if wildcard else demanded_members(access_name)),
-                callable_only=local_name not in requested and local_name not in return_demands,
-            )
+            resolution = resolve_import(target_module,
+                (frozenset({target_name}) if target_name and not wildcard else
+                 frozenset(reachable) if wildcard else demanded_members(access_name)),
+                split=whole_module and not wildcard)
             modules.update(resolution.modules)
             height = max(height, resolution.height if resolution.modules else 0)
             if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
                 _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen))
-                resolution = _local_queue_resolution(root, diff, target_module, side, cache, active, seen, bounded_source_roots,
-                                                     requested=demanded_members(access_name),
-                                                     callable_only=local_name not in requested and local_name not in return_demands)
+                resolution = resolve_import(target_module, demanded_members(access_name), split=True)
                 modules.update(resolution.modules)
                 height = max(height, resolution.height if resolution.modules else 0)
                 queue_adjacent = _queue_adjacent_module(target_module)

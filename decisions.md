@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-10-23 — Bind return demand to scopes and imported members
+
+Bind queue return demand to its lexical scope and imported member, rather than the whole verifier module. Prove only inert scalar projections of stable helpers, while keeping call effects, escaped or rebound helpers, and unknown containers conservative. Paired regressions and both actual verifier-consumer probes avoided unrelated dependency expansion without changing the 32-module bound.
+
 ## 2026-10-21 — Select the interpreter by verified runtime capabilities
 
 Use system Python 3.12 with explicit UV_PYTHON, disabled managed Python/downloads and UV_LOCKED for the Factory gate. The uv-managed 3.11 build lacks pidfd, while the system interpreter passed all 20 inventory/process controls, including failed-update recovery. Keep production capability checks and the security-pinned lock unchanged.
