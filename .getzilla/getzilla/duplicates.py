@@ -171,7 +171,7 @@ def scan(root: Path, *, include_tests: bool = False, min_tokens: int = 50,
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             config = work / 'controlled.json'
-            config.write_text('{}', encoding='utf-8')
+            config.write_text('{}', encoding='utf-8', newline='\n')
             code, version = _execute([binary, '--version'], work, timeout=10)
             result['version'] = version.strip()
             if code or version.strip() != VERSION:
