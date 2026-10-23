@@ -307,7 +307,27 @@ def _docs_is_object(text: str, build: re.Match[str]) -> bool:
     return any(word in head for word in INTENT_KEYWORDS['docs'])
 
 
-def _best_intent(text: str, *, operational_intent: bool) -> str:
+PASTED_MATERIAL_MIN_CHARS = 1500
+_PASTED_MARKERS = (
+    re.compile(r'^\s{0,3}#{1,6}\s+\S', re.MULTILINE),           # Markdown heading
+    re.compile(r'^\s*(?:```|~~~)', re.MULTILINE),              # fenced code block
+    re.compile(r'^\s*\|.*\|\s*$(?:\n^\s*\|.*\|\s*$)+', re.MULTILINE),  # table: two or more rows
+)
+_LIST_ITEM = re.compile(r'^\s*(?:[-*+]|\d+[.)])\s+\S', re.MULTILINE)
+
+
+def _is_pasted_material(text: str) -> bool:
+    """A long message shaped like a document (a CVE list, a review, a report), not a task.
+
+    Words in such a message describe its subject, so they say little about what the task changes.
+    Short task prompts never match, whatever they mention.
+    """
+    if len(text) < PASTED_MATERIAL_MIN_CHARS:
+        return False
+    return any(marker.search(text) for marker in _PASTED_MARKERS) or len(_LIST_ITEM.findall(text)) > 10
+
+
+def _best_intent(text: str, *, operational_intent: bool, pasted: bool = False) -> str:
     scores = _score(text, INTENT_KEYWORDS)
     scores.pop('release', None)
     if operational_intent:
@@ -323,6 +343,8 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
     build = LEADING_BUILD.match(text)
     for intent in ('incident', 'release', 'bugfix', 'review', 'refactor', 'architecture', 'research', 'docs'):
         if scores.get(intent):
+            if pasted and intent == 'incident':
+                continue  # pasted material that discusses incidents is not an active incident
             if build and intent in PROCESS_INTENTS:
                 continue
             if build and intent == 'docs' and not _docs_is_object(text, build):
@@ -345,7 +367,9 @@ def _best_intent(text: str, *, operational_intent: bool) -> str:
         return 'feature'
     if scores.get('test'):
         return 'test'
-    return next(iter(scores))
+    if pasted:
+        scores.pop('incident', None)
+    return next(iter(scores), 'feature')
 
 
 def _matched_domain_keywords(text: str) -> dict[str, list[str]]:
@@ -454,11 +478,17 @@ def build_route(
 ) -> Route:
     repo = detect_repo(root)
     operational_intent = _has_operational_intent(prompt)
-    intent = _best_intent(prompt, operational_intent=operational_intent)
+    pasted = _is_pasted_material(prompt)
+    intent = _best_intent(prompt, operational_intent=operational_intent, pasted=pasted)
     domains, task_domains, matched_keywords = _domains(prompt, repo)
     # Risk and size come from what the task is about; a repository that also contains API, data or
     # security code does not make every prompt in it medium. The diff escalates the route later.
     risk, rationale = _risk(prompt, intent, task_domains)
+    if pasted and risk == 'high' and not operational_intent:
+        # Pasted material names risky subjects without asking to change them; the diff, not its
+        # words, decides high risk (verification escalates the route on the exact-head diff).
+        risk = 'medium'
+        rationale.append('PASTED_MATERIAL: risk words in a pasted document cap at medium; the diff escalates')
     try:
         cost_signal = prompt_cost_signals(prompt)
     except (OSError, ValueError):
@@ -534,7 +564,8 @@ def build_route(
     # Low-risk micro and standard work takes the light lane: one analysis agent, one reviewer
     # who also reads the tests, no durable change package. High risk, sensitive task domains,
     # paid or production work keep the full controller; verification still escalates on the diff.
-    production = operational_intent or any(_has_term(prompt, word) for word in ('production', 'прод', 'deploy', 'деплой'))
+    production = operational_intent or (not pasted and any(
+        _has_term(prompt, word) for word in ('production', 'прод', 'deploy', 'деплой')))
     light = (
         risk == 'low' and complexity in {'micro', 'standard'} and write_agent is not None
         and intent not in {'release', 'architecture', 'incident'} and cost_signal is None and not production
