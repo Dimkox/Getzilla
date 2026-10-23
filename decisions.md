@@ -2,7 +2,7 @@
 
 ## 2026-10-23 — Bind return demand to scopes and imported members
 
-Bind queue return demand to its lexical scope and imported member, rather than the whole verifier module. Prove only inert scalar projections of stable helpers, while keeping call effects, escaped or rebound helpers, and unknown containers conservative. Paired regressions and both actual verifier-consumer probes avoided unrelated dependency expansion without changing the 32-module bound.
+Bind queue return demand to its lexical scope and imported member, rather than the whole verifier module. Remove scalar-helper pruning because static syntax does not prove runtime receiver or import binding. Calibrate the finite module limit to 48 for the measured 35-module closure, with tighter per-importer limits of 2 MiB source, 400,000 AST nodes and 4,096 shared work units; cache reuse must preserve every charge.
 
 ## 2026-10-21 — Select the interpreter by verified runtime capabilities
 

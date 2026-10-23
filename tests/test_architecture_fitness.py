@@ -3161,8 +3161,8 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo = GitArchitectureRepo(self)
         repo.model(system, _rules())
         repo.write_text('.stack/runtime/__init__.py', 'from pathlib import Path\nSTACK_DIR = Path(__file__).parent\n')
-        unrelated = ''.join(f'from .unused{i} import helper as unused{i}\n' for i in range(40))
-        for i in range(40):
+        unrelated = ''.join(f'from .unused{i} import helper as unused{i}\n' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
+        for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8):
             repo.write_text(f'.stack/runtime/unused{i}.py', 'def helper():\n    return 1\n')
         repo.write_text('.stack/runtime/state.py', unrelated + 'from . import STACK_DIR\ndef folder():\n    return STACK_DIR / "state"\n')
         repo.write_text('.stack/runtime/receipts.py', 'from .state import folder\ndef receipt():\n    return folder() / "receipt.json"\n')
@@ -3328,10 +3328,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
         system = _system()
         system['nodes'][0]['repository_paths'] = ['src']
         repo.model(system, _rules())
-        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
-        for index in range(40):
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
+        for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8):
             repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
-        values = ', '.join(f'part{i}()' for i in range(40))
+        values = ', '.join(f'part{i}()' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
         repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
         repo.write_text('src/use.py', 'from runtime import report\n')
         base = repo.commit('ordinary report dependencies')
@@ -3345,10 +3345,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
         system = _system()
         system['nodes'][0]['repository_paths'] = ['src']
         repo.model(system, _rules())
-        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
-        for index in range(40):
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
+        for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8):
             repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
-        values = ', '.join(f'part{i}()' for i in range(40))
+        values = ', '.join(f'part{i}()' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
         repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
         imported = 'from runtime import report\n'
         repo.write_text('src/use.py', imported)
@@ -3358,7 +3358,224 @@ class ArchitectureFitnessTests(unittest.TestCase):
         result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
         self.assertEqual(result.status, 'not_applicable', result)
 
-    def test_scalar_method_projection_does_not_expand_ordinary_report_returns(self) -> None:
+    def test_dynamic_scalar_helper_bindings_never_hide_queue_results(self) -> None:
+        method = '    def checks(self, value):\n        return str(value)\n'
+        operation = '        result = report()\n        checks = self.checks(result)\n        checks["worker"].enqueue(job)\n'
+        cases = (
+            'class Base:\n' + method + '    def run(self):\n' + operation
+                + 'class Child(Base):\n    def checks(self, value):\n        return value\nChild().run()\n',
+            'class Consumer:\n' + method + '    @staticmethod\n    def run(self):\n' + operation
+                + 'class Identity:\n    def checks(self, value):\n        return value\nConsumer.run(Identity())\n',
+            'class Consumer:\n' + method + '    def run(self):\n' + operation
+                + 'class Identity:\n    def checks(self, value):\n        return value\nConsumer.run(Identity())\n',
+            'def project(value):\n    return str(value)\nfrom passthrough import project\ndef run():\n'
+                + '    result = report()\n    checks = project(result)\n    checks["worker"].enqueue(job)\n',
+            'class Base:\n    def __getattribute__(self, name):\n        if name == "checks":\n            return lambda value: value\n        return object.__getattribute__(self, name)\n'
+                + 'class Consumer(Base):\n' + method + '    def run(self):\n' + operation,
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/runtime.py', 'from rq import Queue\ndef report():\n    return {"worker": Queue()}\n')
+                repo.write_text('src/passthrough.py', 'def project(value):\n    return value\n')
+                imported = 'from runtime import report\n'
+                repo.write_text('src/use.py', imported)
+                base = repo.commit('dynamic dispatch baseline')
+                repo.write_text('src/use.py', imported + body)
+                head = repo.commit('dynamic receiver or helper binding')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                result = self._results(report)['background_job']
+                self.assertNotEqual(result.status, 'not_applicable', result)
+                self.assertIn('new_queue', report.triggers, report)
+
+    def test_queue_aggregate_resource_exhaustion_is_not_a_queue_trigger(self) -> None:
+        for name in ('MAX_QUEUE_ANALYSIS_BYTES', 'MAX_QUEUE_ANALYSIS_AST_NODES', 'MAX_QUEUE_ANALYSIS_WORK'):
+            with self.subTest(budget=name):
+                repo = GitArchitectureRepo(self)
+                repo.model(_system(), _rules())
+                repo.write_text('src/use.py', 'value = 1\n')
+                base = repo.commit('root resource baseline')
+                repo.write_text('src/use.py', 'value = 1\nvalue.enqueue(job)\n')
+                head = repo.commit('ordinary root operation')
+                with patch.object(FIT, name, 0, create=True):
+                    report = self._evaluate(repo, base, head, pre_risk='yellow')
+                result = self._results(report)['background_job']
+                self.assertEqual(result.status, 'unsupported', result)
+                self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+                self.assertNotIn('new_queue', report.triggers)
+
+    def test_queue_budget_boundaries_charge_cold_warm_and_transitive_cache(self) -> None:
+        for reexport in (False, True):
+            with self.subTest(reexport=reexport):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                sources = {'src/runtime.py': 'def ordinary():\n    return 1\n'}
+                if reexport:
+                    sources = {'src/runtime.py': 'from leaf import ordinary\n',
+                               'src/leaf.py': 'def ordinary():\n    return 1\n'}
+                for path, source in sources.items():
+                    repo.write_text(path, source)
+                imported = 'from runtime import ordinary\n'
+                repo.write_text('src/use.py', imported)
+                base = repo.commit('resource cache baseline')
+                source = imported + 'ordinary()\n'
+                repo.write_text('src/use.py', source)
+                head = repo.commit('ordinary declaration use')
+                snapshot = ARCHITECTURE.load_architecture(repo.root)
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                roots = FIT._queue_source_roots(snapshot)
+                expected_bytes = len(source.encode()) + sum(len(value.encode()) for value in sources.values())
+                expected_nodes = sum(sum(1 for _ in ast.walk(ast.parse(value))) for value in [source, *sources.values()])
+                expected_work = 3 if reexport else 2
+
+                def run(cache):
+                    budget = FIT._QueueBudget('head')
+                    result = FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
+                        source_path='src/use.py', source=source.encode(), budget=budget)
+                    self.assertEqual(result.state, 'not_queue')
+                    self.assertEqual((budget.source_bytes, budget.ast_nodes, budget.logical_work),
+                                     (expected_bytes, expected_nodes, expected_work))
+                    return budget
+
+                warm = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                run(warm)
+                summary = warm.demands[('runtime', frozenset({'ordinary'}), True)]
+                self.assertEqual(len(summary.modules), 2 if reexport else 0)
+                self.assertTrue(summary.footprint.sources)
+                self.assertTrue(all(item.nodes > 0 for item in summary.footprint.sources))
+                inventory = FIT._queue_module_inventory
+                for name, boundary in [('MAX_QUEUE_ANALYSIS_BYTES', expected_bytes),
+                                       ('MAX_QUEUE_ANALYSIS_AST_NODES', expected_nodes),
+                                       ('MAX_QUEUE_ANALYSIS_WORK', expected_work)]:
+                    for warmed in (False, True):
+                        with self.subTest(budget=name, warmed=warmed):
+                            cache = warm if warmed else inventory(repo.root, diff, 'head', roots)
+                            with patch.object(FIT, name, boundary):
+                                run(cache)
+                            def selected(project, comparison, side, source_roots):
+                                return cache if side == 'head' else inventory(project, comparison, side, source_roots)
+                            with patch.object(FIT, name, boundary - 1), \
+                                 patch.object(FIT, '_queue_module_inventory', side_effect=selected):
+                                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                            result = self._results(report)['background_job']
+                            self.assertEqual(result.status, 'unsupported', result)
+                            self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+                            self.assertNotIn('new_queue', report.triggers)
+
+    def test_queue_budget_deduplicates_overlap_and_preserves_importer_order(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        sources = {'src/left.py': 'from shared import value\n', 'src/right.py': 'from shared import value\n',
+                   'src/shared.py': 'value = 1\n'}
+        for path, source in sources.items():
+            repo.write_text(path, source)
+        forward = 'from left import value as left\nfrom right import value as right\nleft.enqueue(job)\nright.enqueue(job)\n'
+        reverse = 'from right import value as right\nfrom left import value as left\nright.enqueue(job)\nleft.enqueue(job)\n'
+        repo.write_text('src/a.py', '')
+        repo.write_text('src/z.py', '')
+        base = repo.commit('overlap baseline')
+        repo.write_text('src/a.py', forward)
+        repo.write_text('src/z.py', reverse)
+        head = repo.commit('two importer orders')
+        snapshot = ARCHITECTURE.load_architecture(repo.root)
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        roots = FIT._queue_source_roots(snapshot)
+        expected_bytes = len(forward.encode()) + sum(len(value.encode()) for value in sources.values())
+        expected_nodes = sum(sum(1 for _ in ast.walk(ast.parse(value))) for value in [forward, *sources.values()])
+        for order in ([('src/a.py', forward), ('src/z.py', reverse)], [('src/z.py', reverse), ('src/a.py', forward)]):
+            cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+            for path, source in order * 2:
+                with self.subTest(order=order[0][0], importer=path):
+                    budget = FIT._QueueBudget('head')
+                    with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_BYTES', expected_bytes), \
+                         patch.object(FIT, 'MAX_QUEUE_ANALYSIS_AST_NODES', expected_nodes), \
+                         patch.object(FIT, 'MAX_QUEUE_ANALYSIS_WORK', 4):
+                        result = FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
+                            source_path=path, source=source.encode(), budget=budget)
+                    self.assertEqual(result.state, 'not_queue')
+                    self.assertEqual((budget.source_bytes, budget.ast_nodes, budget.logical_work),
+                                     (expected_bytes, expected_nodes, 4))
+
+    def test_queue_cached_summary_cannot_omit_its_resource_footprint(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        repo.write_text('src/runtime.py', 'def ordinary():\n    return 1\n')
+        imported = 'from runtime import ordinary\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('missing footprint baseline')
+        source = imported + 'ordinary()\n'
+        repo.write_text('src/use.py', source)
+        head = repo.commit('cached declaration use')
+        snapshot = ARCHITECTURE.load_architecture(repo.root)
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        roots = FIT._queue_source_roots(snapshot)
+        cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+        FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots, source_path='src/use.py', source=source.encode())
+        key = ('runtime', frozenset({'ordinary'}), True)
+        cache.demands[key] = cache.demands[key]._replace(footprint=None)
+        inventory = FIT._queue_module_inventory
+        def selected(project, comparison, side, source_roots):
+            return cache if side == 'head' else inventory(project, comparison, side, source_roots)
+        with patch.object(FIT, '_queue_module_inventory', side_effect=selected):
+            report = self._evaluate(repo, base, head, pre_risk='yellow')
+        result = self._results(report)['background_job']
+        self.assertEqual(result.status, 'unsupported')
+        self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+        self.assertNotIn('new_queue', report.triggers)
+
+    def test_nested_return_summaries_share_and_replay_the_work_budget(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        repo.write_text('src/runtime.py', 'from rq import Queue\ndef ordinary():\n    def inner():\n        local = Queue()\n        return bytes(local.get())\n    return inner()\n')
+        imported = 'from runtime import ordinary\n'
+        repo.write_text('src/use.py', imported)
+        base = repo.commit('nested return budget baseline')
+        source = imported + 'value = ordinary()\nvalue.enqueue(job)\n'
+        repo.write_text('src/use.py', source)
+        head = repo.commit('ordinary nested scalar return')
+        snapshot = ARCHITECTURE.load_architecture(repo.root)
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        roots = FIT._queue_source_roots(snapshot)
+        cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+        for _ in range(2):
+            budget = FIT._QueueBudget('head')
+            with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_WORK', 6):
+                result = FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
+                    source_path='src/use.py', source=source.encode(), budget=budget)
+            self.assertEqual(result.state, 'not_queue')
+            self.assertEqual(budget.logical_work, 6)
+        inventory = FIT._queue_module_inventory
+        def selected(project, comparison, side, source_roots):
+            return cache if side == 'head' else inventory(project, comparison, side, source_roots)
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_WORK', 5), \
+             patch.object(FIT, '_queue_module_inventory', side_effect=selected):
+            report = self._evaluate(repo, base, head, pre_risk='yellow')
+        result = self._results(report)['background_job']
+        self.assertEqual(result.status, 'unsupported')
+        self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+        self.assertNotIn('new_queue', report.triggers)
+
+    def test_queue_projection_preparation_is_charged_before_copying(self) -> None:
+        tree = ast.parse('padding = 0\n' * 64 + 'def make():\n    return 1\n')
+        budget = FIT._QueueBudget('head')
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_WORK', 1), \
+             patch.object(FIT, '_queue_export_slice', wraps=FIT._queue_export_slice) as copied, \
+             self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'aggregate work limit'):
+            FIT._queue_return_exports_scoped(tree, frozenset(), None, 0, budget)
+        self.assertEqual(copied.call_count, 0)
+
+    def test_ordinary_method_projection_is_analyzed_within_resource_budget(self) -> None:
         repo = GitArchitectureRepo(self)
         system = _system()
         system['nodes'][0]['repository_paths'] = ['src']
@@ -3393,10 +3610,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 system = _system()
                 system['nodes'][0]['repository_paths'] = ['src']
                 repo.model(system, _rules())
-                imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
-                for index in range(40):
+                imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
+                for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8):
                     repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
-                values = ', '.join(f'part{i}()' for i in range(40))
+                values = ', '.join(f'part{i}()' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
                 repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
                 imported = 'from runtime import report\n'
                 repo.write_text('src/use.py', imported)
@@ -3413,10 +3630,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
         system = _system()
         system['nodes'][0]['repository_paths'] = ['src']
         repo.model(system, _rules())
-        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
-        for index in range(40):
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
+        for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8):
             repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
-        values = ', '.join(f'part{i}()' for i in range(40))
+        values = ', '.join(f'part{i}()' for i in range(FIT.MAX_QUEUE_ADAPTER_MODULES + 8))
         repo.write_text('src/runtime.py', imports + f'class Record: pass\ndef report():\n    return [{values}]\n')
         imported = 'import runtime\n'
         repo.write_text('src/use.py', imported)
