@@ -14,6 +14,15 @@ from getzilla.state import get_active_change, set_active_route
 from tests._support import project_copy
 
 class DeliverySequenceTests(unittest.TestCase):
+    def test_delivery_guidance_reconciles_committed_diff_before_review_dispatch(self):
+        text = (ROOT / '.agents/skills/getzilla-delivery/SKILL.md').read_text()
+        self.assertIn('getzilla_route.py --reconcile', text)
+        self.assertIn('--add-reviewer test_reviewer', text)
+        self.assertIn('one ordinary code review', text)
+        self.assertIn('category and risk threshold', text)
+        reviewer = (ROOT / '.grok/agents/code_reviewer.md').read_text()
+        self.assertIn('test adequacy', reviewer)
+
     def test_runtime_reports_and_ready_state_preserve_reviewed_source_identity(self):
         with project_copy(git=True) as root:
             route = build_route(root, 'Fix a bounded feature', 'sequence').to_dict()

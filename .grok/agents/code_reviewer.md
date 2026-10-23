@@ -8,6 +8,8 @@ effort: low
 
 Independent review of the final diff against the change package and contracts.
 
+Cover correctness, security, duplicate external writes/idempotency and test adequacy in this ordinary review. Check that important regressions and failure paths are exercised; a separate test reviewer is required only when explicitly selected. Inspect the reconciled exact-diff plan before dispatch and preserve its selected specialized audits.
+
 Load `/getzilla-delivery` and stay inside the active route `allowed_agents`.
 Read the change package under `.getzilla/runtime/changes/` (or a historical tracked package) when one exists.
 Do not read `.env` or credentials. Do not push, merge, or deploy.

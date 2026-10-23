@@ -2209,7 +2209,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(FIT.MAX_QUEUE_ADAPTER_DEPTH, 8)
         resolving = {f'adapters.m{index}' for index in range(FIT.MAX_QUEUE_ADAPTER_DEPTH)}
         ninth = f'adapters.m{FIT.MAX_QUEUE_ADAPTER_DEPTH}'
-        cache = FIT._QueueResolutionCache(tuple(sorted(resolving | {ninth})), (), {})
+        cache = FIT._QueueResolutionCache(tuple(sorted(resolving | {ninth})), (), {}, {})
         cycle = FIT._local_queue_resolution(ROOT, None, 'adapters.m0', 'head', cache, set(resolving), set(resolving), ())
         self.assertEqual(cycle.state, 'unsupported')
         self.assertEqual(cycle.reason, 'cyclic_local_queue_adapter')
@@ -3154,6 +3154,187 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertGreaterEqual(
                     FIT.RISK_ORDER[report.post_risk], FIT.RISK_ORDER[report.pre_risk]
                 )
+
+    def test_demanded_exports_do_not_inherit_unrelated_import_budget(self) -> None:
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['.stack/runtime', 'src']
+        repo = GitArchitectureRepo(self)
+        repo.model(system, _rules())
+        repo.write_text('.stack/runtime/__init__.py', 'from pathlib import Path\nSTACK_DIR = Path(__file__).parent\n')
+        unrelated = ''.join(f'from .unused{i} import helper as unused{i}\n' for i in range(40))
+        for i in range(40):
+            repo.write_text(f'.stack/runtime/unused{i}.py', 'def helper():\n    return 1\n')
+        repo.write_text('.stack/runtime/state.py', unrelated + 'from . import STACK_DIR\ndef folder():\n    return STACK_DIR / "state"\n')
+        repo.write_text('.stack/runtime/receipts.py', 'from .state import folder\ndef receipt():\n    return folder() / "receipt.json"\n')
+        repo.write_text('src/use.py', 'from runtime.receipts import receipt\n')
+        base = repo.commit('runtime shaped dependency baseline')
+        repo.write_text('src/use.py', 'from runtime.receipts import receipt\npath = receipt()\n')
+        head = repo.commit('ordinary runtime helper')
+        report = self._evaluate(repo, base, head, pre_risk='yellow')
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+        self.assertNotIn('new_queue', report.triggers)
+
+    def test_demanded_queue_exports_survive_alias_factory_rebinding_and_cache_order(self) -> None:
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['.stack/runtime', 'src']
+        cases = [
+            ('literal', 'value = 1\n', False),
+            ('path constant', 'from pathlib import Path\nvalue = Path(__file__).parent\n', False),
+            ('queue', 'from rq import Queue\nvalue = Queue()\n', True),
+            ('rebound literal', 'from rq import Queue\nvalue = 1\nvalue = Queue()\n', True),
+            ('factory', 'from rq import Queue\ndef value():\n    return Queue()\n', True),
+            ('else factory', 'from rq import Queue\ndef value(flag):\n    if flag:\n        return None\n    else:\n        return Queue()\n', True),
+            ('shadowed scalar', 'from rq import Queue\ndef value(str=Queue):\n    return str()\n', True),
+            ('internal queue scalar', 'from rq import Queue\ndef value():\n    local = Queue()\n    return bytes(local.get())\n', False),
+            ('scalar mutation', 'from rq import Queue\ndef value():\n    items = []\n    str(items.append(Queue()))\n    return items\n', True),
+            ('factory instance', 'from rq import Queue\ndef make():\n    return Queue()\nvalue = make()\n', True),
+            ('private reexport', 'from rq import Queue\n_private = Queue()\nvalue = _private\n', True),
+            ('conditional rebound', 'from rq import Queue\nvalue = 1\nif enabled:\n    value = Queue()\n', True),
+            ('rebound function', 'from rq import Queue\ndef value():\n    return 1\nvalue = Queue()\n', True),
+            ('decorated function', 'import celery\napp = celery.Celery("jobs")\n@app.task\ndef value():\n    return 1\n', True),
+            ('attribute mutation', 'from rq import Queue\nclass Box: pass\nvalue = Box()\nvalue.queue = Queue()\n', True),
+        ]
+        for label, value, queued in cases:
+            for queue_first in (False, True):
+                for style in ('alias', 'reexport', 'member'):
+                    with self.subTest(case=label, queue_first=queue_first, style=style):
+                        repo = GitArchitectureRepo(self)
+                        repo.model(system, _rules())
+                        repo.write_text('.stack/runtime/__init__.py', 'from .values import value as exported\n')
+                        repo.write_text('.stack/runtime/values.py', 'ordinary = 1\n' + value)
+                        imported, receiver = {
+                            'alias': ('from runtime.values import value as chosen\n', 'chosen'),
+                            'reexport': ('from runtime import exported as chosen\n', 'chosen'),
+                            'member': ('import runtime.values as chosen\n', 'chosen.value'),
+                        }[style]
+                        paths = ('src/a.py', 'src/z.py') if queue_first else ('src/z.py', 'src/a.py')
+                        repo.write_text(paths[0], imported)
+                        repo.write_text(paths[1], 'from runtime.values import ordinary\n')
+                        base = repo.commit('paired exports')
+                        operation = f'{receiver}().enqueue(task)\n' if label in {'factory', 'else factory', 'shadowed scalar', 'internal queue scalar', 'scalar mutation'} else f'{receiver}.delay(task)\n'
+                        if label == 'attribute mutation':
+                            operation = f'{receiver}.queue.enqueue(task)\n'
+                        if label == 'scalar mutation':
+                            operation = f'{receiver}()[0].enqueue(task)\n'
+                        repo.write_text(paths[0], imported + operation)
+                        repo.write_text(paths[1], 'from runtime.values import ordinary\nordinary.delay(task)\n')
+                        head = repo.commit('paired consumers')
+                        report = self._evaluate(repo, base, head, pre_risk='yellow')
+                        self.assertEqual('new_queue' in report.triggers, queued, report)
+                        result = self._results(report)['background_job']
+                        self.assertEqual(result.status == 'not_applicable', not queued, result)
+                        if queued:
+                            self.assertIn(paths[0], result.applicability.scanned_scope)
+                        self.assertNotIn(paths[1], result.applicability.scanned_scope)
+
+    def test_queue_object_fields_do_not_taint_ordinary_sibling_field(self) -> None:
+        for field, queued in [('queue', True), ('form', False)]:
+            with self.subTest(field=field):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/runtime.py', 'from rq import Queue\nclass Box: pass\nvalue = Box()\nvalue.queue = Queue()\nvalue.form = Box()\n')
+                repo.write_text('src/use.py', 'from runtime import value\n')
+                base = repo.commit('mixed object fields')
+                repo.write_text('src/use.py', f'from runtime import value\nvalue.{field}.enqueue(task)\n')
+                head = repo.commit('one selected field')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                self.assertEqual('new_queue' in report.triggers, queued, report)
+
+    def test_same_factory_callable_and_return_demands_never_share_negative_cache(self) -> None:
+        for reversed_paths in (False, True):
+            for assignment in (False, True):
+                with self.subTest(reversed_paths=reversed_paths, assignment=assignment):
+                    repo = GitArchitectureRepo(self)
+                    system = _system()
+                    system['nodes'][0]['repository_paths'] = ['src']
+                    repo.model(system, _rules())
+                    repo.write_text('src/runtime.py', 'from rq import Queue\ndef _factory():\n    return Queue()\n')
+                    repo.write_text('src/exports.py', 'from runtime import _factory as factory\n')
+                    first, second = ('src/a.py', 'src/z.py') if not reversed_paths else ('src/z.py', 'src/a.py')
+                    for path in (first, second):
+                        repo.write_text(path, 'from exports import factory as make\n')
+                    base = repo.commit('private factory reexport')
+                    repo.write_text(first, 'from exports import factory as make\nmake()\n')
+                    operation = 'app = make()\nalias = app\nalias.enqueue(task)\n' if assignment else 'make().enqueue(task)\n'
+                    repo.write_text(second, 'from exports import factory as make\n' + operation)
+                    head = repo.commit('both demand kinds')
+                    report = self._evaluate(repo, base, head, pre_risk='yellow')
+                    self.assertIn('new_queue', report.triggers, report)
+                    self.assertIn(second, self._results(report)['background_job'].applicability.scanned_scope)
+
+    def test_return_demands_do_not_cross_unrelated_function_locals(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        imports = ''.join(f'from part{i} import ordinary as part{i}\n' for i in range(40))
+        for index in range(40):
+            repo.write_text(f'src/part{index}.py', 'def ordinary():\n    return 1\n')
+        values = ', '.join(f'part{i}()' for i in range(40))
+        repo.write_text('src/runtime.py', imports + f'def report():\n    return [{values}]\n')
+        repo.write_text('src/use.py', 'from runtime import report\n')
+        base = repo.commit('ordinary report dependencies')
+        repo.write_text('src/use.py', 'from runtime import report\ndef collect():\n    result = report()\n    return result\ndef dispatch(result):\n    result.enqueue(job)\n')
+        head = repo.commit('unrelated local result bindings')
+        result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+        self.assertEqual(result.status, 'not_applicable', result)
+
+    def test_local_return_demand_preserves_alias_closure_and_global_queue_receivers(self) -> None:
+        bodies = (
+            'def dispatch():\n    result = make()\n    alias = result\n    alias.enqueue(job)\n',
+            'def dispatch():\n    result = make()\n    def inner():\n        result.enqueue(job)\n    inner()\n',
+            'result = make()\ndef dispatch():\n    result.enqueue(job)\n',
+            'def prepare():\n    global result\n    result = make()\ndef dispatch():\n    result.enqueue(job)\n',
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/runtime.py', 'from rq import Queue\ndef factory():\n    return Queue()\n')
+                imported = 'from runtime import factory as make\n'
+                repo.write_text('src/use.py', imported)
+                base = repo.commit('queue factory baseline')
+                repo.write_text('src/use.py', imported + body)
+                head = repo.commit('queue receiver in lexical scope')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                self.assertIn('new_queue', report.triggers, report)
+
+    def test_literal_stdlib_patch_keeps_member_and_replacement_queue_provenance(self) -> None:
+        for target, replacement, shadowed, queued in [('ordinary', '1', False, False), ('queue', '1', False, True),
+                                                       ('ordinary', 'runtime.queue', False, True), ('queue', '1', True, True)]:
+            with self.subTest(target=target, replacement=replacement, shadowed=shadowed):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/runtime.py', 'from rq import Queue\nqueue = Queue()\nordinary = 1\n')
+                imports = 'from unittest import mock\nimport runtime\n'
+                repo.write_text('src/use.py', imports)
+                base = repo.commit('literal patch baseline')
+                body = f"with mock.patch.object(runtime, '{target}', {replacement}):\n    runtime.{target}.enqueue(job)\n"
+                if shadowed:
+                    body = 'def run(mock):\n' + ''.join('    ' + line + '\n' for line in body.splitlines())
+                repo.write_text('src/use.py', imports + body)
+                head = repo.commit('literal patched field')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                self.assertEqual('new_queue' in report.triggers, queued, report)
+
+    def test_callable_alias_attribute_mutation_cannot_be_certified_ordinary(self) -> None:
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system['nodes'][0]['repository_paths'] = ['src']
+        repo.model(system, _rules())
+        repo.write_text('src/runtime.py', 'from rq import Queue\ndef task():\n    return 1\nalias = task\nalias.delay = Queue().enqueue\n')
+        repo.write_text('src/use.py', 'from runtime import task\n')
+        base = repo.commit('mutated callable alias')
+        repo.write_text('src/use.py', 'from runtime import task\ntask.delay(job)\n')
+        head = repo.commit('invoke alias mutation')
+        result = self._results(self._evaluate(repo, base, head, pre_risk='yellow'))['background_job']
+        self.assertNotEqual(result.status, 'not_applicable', result)
 
     def test_completed_queue_cache_is_charged_per_importer_before_reuse(self) -> None:
         system = _system()

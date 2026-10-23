@@ -234,7 +234,8 @@ def classify_diff(root: Path, base: str | None, head: str, *, rules: Mapping[str
     notes: list[str] = []
 
     def prose(path: str) -> bool:
-        return matches(path, trivial['allow']) and not matches(path, trivial.get('deny', []))
+        return (Path(path).suffix.lower() in {'.md', '.rst', '.txt'}
+                and matches(path, trivial['allow']) and not matches(path, trivial.get('deny', [])))
 
     def add(rule: str, path: str, risk: str) -> None:
         entry = {'rule': rule, 'path': path, 'risk': risk}

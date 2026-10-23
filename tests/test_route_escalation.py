@@ -25,14 +25,14 @@ class EscalateRouteTests(unittest.TestCase):
     def test_low_route_with_high_diff_gets_security_and_release_review(self) -> None:
         result = escalate_route(LOW_ROUTE, 'high', ROOT)
         self.assertEqual(result['effective_risk'], 'high')
-        self.assertEqual(result['added_evidence'], ['security_review', 'release_review'])
+        self.assertEqual(result['added_evidence'], [])  # category-free risk never selects audits
         self.assertEqual(result['required_evidence'][:3], LOW_ROUTE['required_evidence'])
 
     def test_light_route_restores_full_floor_for_medium_or_large_diff(self) -> None:
         light = {**LOW_ROUTE, 'delivery_lane': 'light', 'review_agents': ['code_reviewer'],
                  'required_evidence': ['verification', 'code_review']}
-        self.assertIn('test_review', escalate_route(light, 'medium', ROOT)['required_evidence'])
-        self.assertIn('test_review', escalate_route(light, 'low', ROOT, force_full=True)['required_evidence'])
+        self.assertEqual(escalate_route(light, 'medium', ROOT)['required_evidence'], ['verification', 'code_review'])
+        self.assertEqual(escalate_route(light, 'low', ROOT, force_full=True)['required_evidence'], ['verification', 'code_review'])
 
     def test_never_lowers_and_medium_adds_nothing(self) -> None:
         high = {**LOW_ROUTE, 'risk': 'high', 'review_agents': [*LOW_ROUTE['review_agents'], 'security_reviewer'],
@@ -48,6 +48,7 @@ class DiffRiskCheckTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
         git(self.repo, 'init', '-q', '-b', 'main')
+        (self.repo / '.gitignore').write_text('.getzilla/runtime/\n')
         (self.repo / 'README.md').write_text('# x\n', encoding='utf-8')
         git(self.repo, 'add', '-A')
         git(self.repo, 'commit', '-q', '-m', 'base')
@@ -66,6 +67,9 @@ class DiffRiskCheckTests(unittest.TestCase):
         return verification.GitRangeSelection(bases=[verification.GitRangeBase('route', 'test', head, self.base)])
 
     def run_check(self, mode: str, route=LOW_ROUTE):
+        if route:
+            from getzilla.state import set_active_route
+            set_active_route(self.repo, {**route, 'base_commit': self.base})
         return verification._diff_risk_check(self.repo, route, mode, self.ranges(), tree_fingerprint(self.repo))
 
     def test_payment_change_on_low_route_fails_pr_without_escalated_evidence(self) -> None:
@@ -74,13 +78,13 @@ class DiffRiskCheckTests(unittest.TestCase):
         self.assertEqual(check.status, 'fail')
         self.assertIn('ROUTE_ESCALATED_EVIDENCE_MISSING', check.summary)
         self.assertEqual((metadata['route_risk'], metadata['diff_risk'], metadata['effective_risk']), ('low', 'high', 'high'))
-        self.assertEqual(metadata['added_evidence'], ['security_review', 'release_review'])
+        self.assertEqual(metadata['added_evidence'], ['security_review'])
 
     def test_fast_mode_warns_without_failing(self) -> None:
         self.commit('app/payments.py', 'def pay():\n    return 1\n')
         check, metadata = self.run_check('fast')
         self.assertEqual(check.status, 'pass')
-        self.assertIn('will be required in pr/release', check.summary)
+        self.assertIn('exact-source review plan', check.summary)
         self.assertTrue(all(detail['severity'] == 'warning' for detail in check.details))
 
     def test_present_escalated_evidence_passes(self) -> None:

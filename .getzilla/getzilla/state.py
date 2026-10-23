@@ -231,11 +231,13 @@ def set_active_route(root: Path, route: dict[str, Any]) -> None:
         record_route(root, route)
 
 
-def update_route(root: Path, **updates: Any) -> dict[str, Any] | None:
+def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **updates: Any) -> dict[str, Any] | None:
     with runtime_lock(root, 'route'):
         route = get_active_route(root)
         if not route:
             return None
+        if expected_route is not None and route != expected_route:
+            raise ValueError('route changed before atomic update')
         route.update(updates)
         route['updated_at'] = now_utc()
         shared = load_json(active_route_path(root))
@@ -443,6 +445,8 @@ def add_approval(
             approvals = []
         approvals.append(approval)
         dump_json(approvals_path(root), approvals[-200:])
+    from .route_metrics import record
+    record(root, 'grant', approval.get('route_id'), event_id='grant:' + approval['id'], scope=approval['scope'])
     return approval
 
 

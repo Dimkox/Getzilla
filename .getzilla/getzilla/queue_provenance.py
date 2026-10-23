@@ -46,6 +46,42 @@ _CONTAINER_MUTATORS = {
 MAX_DOTTED_IMPORT_DEPTH = 256
 
 
+def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
+    """Resolve only unshadowed stdlib mock.patch.object with a literal member."""
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'unittest':
+            aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'mock')
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock':
+            aliases.update((alias.asname or alias.name) + '.object' for alias in node.names if alias.name == 'patch')
+        elif isinstance(node, ast.Import):
+            aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'unittest.mock')
+    shadowed = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    shadowed.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
+    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    aliases = {name for name in aliases if name.split('.')[0] not in shadowed}
+    result = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or len(node.args) < 2 or any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
+            continue
+        parts = []
+        value = node.func
+        while isinstance(value, ast.Attribute):
+            parts.append(value.attr)
+            value = value.value
+        if not isinstance(value, ast.Name) or '.'.join((value.id, *reversed(parts))) not in aliases:
+            continue
+        target, member = node.args[:2]
+        if not isinstance(target, ast.Name) or not isinstance(member, ast.Constant) or not isinstance(member.value, str) or not member.value.isidentifier():
+            continue
+        keywords = {item.arg: item.value for item in node.keywords}
+        replacement = node.args[2] if len(node.args) == 3 else keywords.get('new', keywords.get('return_value', keywords.get('side_effect')))
+        if len(node.args) > 3:
+            continue
+        result[id(node)] = (target.id, member.value, replacement, 'side_effect' in keywords)
+    return result
+
+
 class QueueAnalysisLimit(RuntimeError):
     """Raised when bounded queue analysis cannot safely continue."""
 
@@ -60,6 +96,7 @@ class QueueTreeAnalysis(NamedTuple):
     signals: tuple[str, ...]
     derived_names: frozenset[str]
     uncertain: bool
+    export_paths: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -367,6 +404,7 @@ class _Interpreter:
         if min(statement_limit, value_limit, loop_limit) < 1:
             raise QueueAnalysisLimit("queue analysis limits must be positive")
         self.tree = tree
+        self.literal_patches = literal_patch_members(tree)
         self.statement_limit = statement_limit
         self.value_limit = value_limit
         self.loop_limit = loop_limit
@@ -378,12 +416,21 @@ class _Interpreter:
         self.uncertain = False
         self.lexical_depth = 0
         self.class_depth = 0
-        module_names = {name.rsplit(".", 1)[0] for name in adapter_names if "." in name}
-        self.module_values = {
-            name: _structured("object", {("string", value.rsplit(".", 1)[1]): QUEUE for value in adapter_names if value.startswith(name + ".")})
-            for name in module_names
-        }
-        self.module_values.update({name: QUEUE for name in adapter_names if "." not in name})
+        self.module_values: dict[str, AbstractValue] = {}
+        def insert(value: AbstractValue, parts: list[str]) -> AbstractValue:
+            if not parts or value == QUEUE:
+                return QUEUE
+            entries = _entry_map(value) if value.state == 'object' else {}
+            key = ('string', parts[0])
+            entries[key] = insert(entries.get(key, NON_QUEUE), parts[1:])
+            return _structured('object', entries)
+        for name in sorted(adapter_names):
+            parts = name.split('.')
+            # The existing bound counts module suffix components, excluding
+            # the top-level module and the final exported member.
+            if len(parts) - 2 > MAX_DOTTED_IMPORT_DEPTH:
+                raise QueueAnalysisLimit('queue dotted import depth limit exceeded')
+            self.module_values[parts[0]] = insert(self.module_values.get(parts[0], NON_QUEUE), parts[1:])
         self.pending_functions: list[
             tuple[ast.FunctionDef | ast.AsyncFunctionDef, _Environment]
         ] = []
@@ -646,6 +693,16 @@ class _Interpreter:
                     )
                 self._bind(item, selected, environment, record_scope=record_scope)
             return
+        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+            name = target.value.id
+            container = environment.values.get(name, NON_QUEUE)
+            if container.state in {'non_queue', 'object'}:
+                entries = _entry_map(container)
+                entries[('string', target.attr)] = value
+                self._set_alias_value(name, self._value(_structured('object', entries)), environment)
+            else:
+                self._set_alias_value(name, UNKNOWN_QUEUE, environment)
+            return
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             container_name = target.value.id
             container = environment.values.get(container_name, UNKNOWN_QUEUE)
@@ -777,6 +834,10 @@ class _Interpreter:
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
                 self._record_operation("call", child, child.func, environment)
+                if child is not node:
+                    # Nested mutators still execute when the outer call returns
+                    # an ordinary scalar (for example str(items.append(queue))).
+                    self._mutate_call(child, environment)
 
     def _function_body(
         self,
@@ -1064,15 +1125,27 @@ class _Interpreter:
             joined = self._join_envs(alternatives)
             return self._block(statement.finalbody, joined)
         if isinstance(statement, (ast.With, ast.AsyncWith)):
+            restored = []
             for item in statement.items:
                 self._record_expression(item.context_expr, environment)
+                patch = self.literal_patches.get(id(item.context_expr))
+                if patch:
+                    name, member, replacement, _factory = patch
+                    target = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr=member, ctx=ast.Store())
+                    original = self._evaluate(target, environment)
+                    restored.append((target, original))
+                    replacement_value = self._evaluate(replacement, environment) if replacement is not None else NON_QUEUE
+                    self._bind(target, self._join(original, replacement_value), environment)
                 if item.optional_vars is not None:
                     self._bind(
                         item.optional_vars,
                         self._evaluate(item.context_expr, environment),
                         environment,
                     )
-            return self._block(statement.body, environment)
+            result = self._block(statement.body, environment)
+            for target, original in reversed(restored):
+                self._bind(target, original, result)
+            return result
         if isinstance(statement, ast.Match):
             self._record_expression(statement.subject, environment)
             alternatives = [
@@ -1123,7 +1196,19 @@ class _Interpreter:
             for name, value in environment.values.items()
             if _aggregate(value).state in {"queue", "unknown_queue"}
         )
-        return QueueTreeAnalysis(tuple(sorted(self.signals)), derived_names, self.uncertain)
+        export_paths: set[str] = set()
+        def exported(name: str, value: AbstractValue, depth: int = 0) -> None:
+            if depth > MAX_DOTTED_IMPORT_DEPTH + 1:
+                raise QueueAnalysisLimit('queue exported field depth limit exceeded')
+            if value.state == 'object' and value.default in {None, NON_QUEUE}:
+                for key, item in value.entries:
+                    if key[0] == 'string':
+                        exported(name + '.' + str(key[1]), item, depth + 1)
+            elif _aggregate(value).state in {'queue', 'unknown_queue'}:
+                export_paths.add(name)
+        for name, value in environment.values.items():
+            exported(name, value)
+        return QueueTreeAnalysis(tuple(sorted(self.signals)), derived_names, self.uncertain, frozenset(export_paths))
 
 
 def analyze_queue_tree(

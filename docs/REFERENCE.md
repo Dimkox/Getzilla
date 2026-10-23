@@ -6,6 +6,14 @@ MIT-licensed tooling for task-routed AI-assisted development, external verificat
 
 ## What it does in five minutes
 
+The initial route is provisional. Commit source, then run `python3 scripts/getzilla_route.py --reconcile --json` before dispatching reviewers. A complete assessment binds the trusted base, exact HEAD/tree, policy digest and plan. One ordinary code reviewer covers correctness and test adequacy; security/data/release audits require both a changed sensitivity category and its configured risk threshold. Prompt words and background repository domains do not select audits. Add and retain an explicitly requested reviewer with `--add-reviewer test_reviewer` (repeat for other roles). Existing legacy selections remain. Dirty, unknown, binary or otherwise incomplete source inventory cannot qualify; final verification rederives the plan and receipts bind its digest.
+
+`python3 scripts/getzilla_report.py --since all --json` reports bounded local observations by route and session. Successful grant materializations are counts of persisted grants, not counts of human interventions. Fast-lane coverage uses measured admission with an explicit known/unknown denominator. Failed check/review outcomes are not confirmed defects. Exact commit/line denominators require a complete Git inventory. Costs, CI minutes, confirmed before-merge findings and introduced tracked evidence at the actual merged head remain null when their evidence is unavailable; session end is not merge evidence.
+
+Import provider facts explicitly with `python3 scripts/getzilla_report.py --import-observations .getzilla/runtime/scratch/observations.json --json`. The bounded JSON list uses schema_version 2, stable event_id, UTC at, event (`ci`, `merge`, `cost`, `finding`), route_id, session_id, exact head/base/tree, source (`github`, `codex`, `bandit`, `review`) and source_ref (a stable provider ID). CI uses seconds; cost uses amount and currency USD; a finding uses finding_id and confirmed. No automatic provider call or authority is created. Unknown costs remain null; an observed zero is zero. Malformed rows, conflicting replays and unsafe files are disclosed as coverage gaps. The journal is ignored runtime evidence; these observations do not establish savings or the issue's empirical targets by themselves.
+
+Historical mistakes are preserved byte-for-byte in [dated incidents](../engineering/incidents/README.md), with source ranges and hashes. [Recurring lessons](../engineering/mistakes.md) link distinct occurrences and countermeasures. Root [mistakes.md](../mistakes.md) retains the compatibility entrypoint and exact governance projection.
+
 Getzilla installs a local Grok/Codex-style agent workflow into another repository. The short path is:
 
 1. inspect a target repository without changing it;

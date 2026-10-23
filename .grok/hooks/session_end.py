@@ -20,6 +20,10 @@ except Exception:
 def main() -> None:
     payload = read_payload()
     root = root_from(payload)
+    from getzilla.state import get_active_route
+    from getzilla.route_metrics import record
+    route = get_active_route(root) or {}
+    record(root, 'session_end', route.get('route_id'))
     dump_json(runtime_dir(root) / 'last-session-end.json', {
         'ended_at': now_utc(),
         'reason': payload.get('reason'),

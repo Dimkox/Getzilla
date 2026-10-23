@@ -977,6 +977,10 @@ class InstallerTests(unittest.TestCase):
                 root = Path(tmp)
                 anchor = root / "anchor"
                 anchor.mkdir()
+                # A root-owned, non-writable ancestor is intentionally trusted
+                # as a system link. This fixture models untrusted ancestry even
+                # when the test runner itself is UID 0.
+                anchor.chmod(0o777)
                 outside = root / "outside"
                 outside.mkdir()
                 if boundary == "intermediate ancestor":

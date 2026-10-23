@@ -40,6 +40,8 @@ def main() -> None:
     payload = read_payload()
     root = root_from(payload)
     route = get_active_route(root)
+    from getzilla.route_metrics import record
+    record(root, 'session_start', (route or {}).get('route_id'))
     change = get_active_change(root)
     if route:
         extra = f' Active route {route.get("route_id")}. Change: {(change or {}).get("change_id", "none")}.'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Does the ritual pay for itself? Per-profile overhead and defects caught before merge.
+"""Does the ritual pay for itself? Per-profile observations and disclosed coverage gaps.
 
   getzilla report [--since 7d|24h|all] [--json]
 
@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.route_metrics import counters, load, summarize  # noqa: E402
+from getzilla.route_metrics import counters, load, summarize, import_observations  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 
 
@@ -40,21 +40,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog='getzilla report', description=__doc__.split('\n')[0])
     parser.add_argument('--since', default='7d', help='period: Nd, Nh or all (default 7d)')
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--import-observations', help='Bounded repository-relative JSON offline observation file')
     args = parser.parse_args(argv)
     root = find_root()
-    summary = summarize(load(root, _since(args.since)))
+    if args.import_observations:
+        import_observations(root, args.import_observations)
+    summary = summarize(load(root, _since(args.since)), root)
     summary['counters'] = counters(root)
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
     print(f'Getzilla report, last {args.since}: {len(summary["routes"])} route(s)')
     if summary['profiles']:
-        print(f'{"profile":<10} {"routes":>6} {"median min to pass":>19} {"verify runs/route":>18} {"reviews":>8} {"caught before merge":>20}')
+        print(f'{"profile":<10} {"routes":>6} {"median min to pass":>19} {"verify runs/route":>18} {"reviews":>8} {"failed outcomes":>20}')
         for name, group in sorted(summary['profiles'].items()):
             print(f'{name:<10} {group["routes"]:>6} {_cell(group["median_minutes_to_pass"]):>19} '
-                  f'{group["verify_runs_per_route"]:>18} {group["reviews"]:>8} {group["caught_before_merge"]:>20}')
+                  f'{group["verify_runs_per_route"]:>18} {group["reviews"]:>8} {group["failed_check_or_review_outcomes"]:>20}')
     else:
         print('No routes recorded yet: metrics start with the next route and verification run.')
+    print(summary['interpretation'])
+    if summary['coverage']['gaps']:
+        print('Coverage gaps: ' + '; '.join(summary['coverage']['gaps']))
     hints = summary['counters'].get('path_hints', {})
     guard = summary['counters'].get('parallel_guard', {})
     if hints or guard:
