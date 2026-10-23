@@ -421,7 +421,7 @@ def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
         if (not separator or not path
                 or not re.fullmatch(rb'(100644|100755|120000|160000) ([0-9a-f]{40}|[0-9a-f]{64}) 0', metadata)):
             raise ValueError('grant index inventory is malformed or unmerged')
-        if os.fsdecode(path).replace('\\', '/') not in excluded:
+        if os.fsdecode(path) not in excluded:
             entries.append(entry)
     return b'\0'.join(entries)
 
@@ -439,12 +439,14 @@ def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | N
         # HEAD outside the grant must still equal its anchor, even when initial
         # dirty bytes have been restored over a different committed version.
         if any(item['source'] == f'range:{anchor}'
-               and item['path'].replace('\\', '/') not in skipped for item in inventory):
+               and item['path'] not in skipped for item in inventory):
             raise ValueError('committed source changed outside granted files')
         digest.update(b'\0index\0' + _grant_index_entries(root, skipped) + b'\0worktree\0')
     paths = sorted({item['path'] for item in inventory}) if inventory is not None else changed_files(root)
     for rel in paths:
-        if rel.replace('\\', '/') in skipped:
+        # Git -z paths already use slash separators; POSIX backslashes are data.
+        # Retain normalization only for legacy, non-anchored digest compatibility.
+        if (rel if anchor else rel.replace('\\', '/')) in skipped:
             continue
         digest.update(os.fsencode(rel))
         path = root / rel

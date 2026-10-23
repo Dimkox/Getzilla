@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -103,6 +104,36 @@ class GrantLifecycleTests(unittest.TestCase):
             git(root, 'add', 'outside.py')
             outside.write_text('initial dirty bytes\n')
             self.assertFalse(valid(root), 'worktree must not mask different index bytes')
+
+    @unittest.skipIf(os.name == 'nt', 'Windows treats backslashes as path separators')
+    def test_literal_git_backslash_names_are_outside_exact_resources_in_every_layer(self) -> None:
+        from tests.branch_support import git
+        for layer in ('untracked', 'index', 'committed'):
+            with self.subTest(layer=layer), github_project() as root:
+                literal = TARGET.replace('/', '\\')
+                outside = root / literal
+                if layer != 'untracked':
+                    outside.write_text('initial dirty bytes\n')
+                anchor = git(root, 'rev-parse', 'HEAD')
+                add_approval(root, 'protected-path', 'one exact file', 15,
+                             actions=['protected-path-write'], resources=[TARGET])
+                target = root / TARGET
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('# approved file\n')
+                self.assertTrue(valid(root))
+                git(root, 'add', '--', TARGET)
+                git(root, 'commit', '-qm', 'approved file')
+                self.assertTrue(valid(root))
+                outside.write_text('outside exact resource\n')
+                if layer != 'untracked':
+                    git(root, 'add', '--', literal)
+                if layer == 'committed':
+                    git(root, 'commit', '-qm', 'outside literal filename')
+                    # Isolate HEAD identity from the index and worktree layers.
+                    git(root, 'restore', '--source', anchor, '--staged', '--', literal)
+                if layer != 'untracked':
+                    outside.write_text('initial dirty bytes\n')
+                self.assertFalse(valid(root), f'{layer} Git names must retain literal backslashes')
 
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:
