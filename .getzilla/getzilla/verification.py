@@ -47,6 +47,7 @@ from .util import (
     run,
     tree_fingerprint,
     resolve_command,
+    unique_ordered,
 )
 from .workflow_artifacts import WorkflowArtifactError, validate_stored_workflow
 from . import verification_dispositions as reviewed_dispositions
@@ -2609,8 +2610,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         else:
             full = escalate_route({**route, 'delivery_lane': 'light'}, str(diff_metadata.get('effective_risk', route.get('risk', 'low'))), root, force_full=True)
             route = {**route, 'delivery_lane': 'full', 'light_diff': light, 'light_lane_candidate': True,
-                     'review_agents': full['review_agents'], 'required_evidence': full['required_evidence']}
-        update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence')})
+                     'review_agents': full['review_agents'], 'required_evidence': full['required_evidence'],
+                     'allowed_agents': unique_ordered([*(route.get('allowed_agents') or []), *full['review_agents']])}
+        update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence', 'allowed_agents')})
         report['light_diff'] = light
     spec_check, spec_metadata = _change_specs(root, files, route, mode)
     report['spec'] = spec_metadata

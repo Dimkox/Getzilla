@@ -61,6 +61,49 @@ class GrantLifecycleTests(unittest.TestCase):
             subprocess.run(['git', 'commit', '-qm', 'test'], cwd=root, check=True)
             self.assertTrue(valid(root))
 
+    def test_initial_dirty_bytes_cannot_mask_a_new_outside_scope_commit(self) -> None:
+        from tests.branch_support import git
+        with github_project() as root:
+            outside = root / 'outside.py'
+            outside.write_text('base\n')
+            git(root, 'add', 'outside.py')
+            git(root, 'commit', '-qm', 'outside baseline')
+            outside.write_text('initial dirty bytes\n')
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            outside.write_text('unapproved committed bytes\n')
+            git(root, 'add', 'outside.py')
+            git(root, 'commit', '-qm', 'outside change')
+            outside.write_text('initial dirty bytes\n')
+            self.assertFalse(valid(root), 'worktree must not mask different HEAD bytes')
+
+    def test_initial_dirty_bytes_cannot_mask_a_new_outside_scope_index_blob(self) -> None:
+        from tests.branch_support import git
+        with github_project() as root:
+            outside = root / 'outside.py'
+            outside.write_text('base\n')
+            git(root, 'add', 'outside.py')
+            git(root, 'commit', '-qm', 'outside baseline')
+            outside.write_text('initial staged bytes\n')
+            git(root, 'add', 'outside.py')
+            outside.write_text('initial dirty bytes\n')
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            # Unchanged pre-existing index and worktree dirt survives approved commits.
+            target = root / TARGET
+            target.parent.mkdir(parents=True, exist_ok=True)
+            for number in range(2):
+                target.write_text(f'# approved {number}\n')
+                git(root, 'add', TARGET)
+                git(root, 'commit', '-qm', 'approved change', '--only', TARGET)
+                self.assertTrue(valid(root))
+            outside.write_text('unapproved staged bytes\n')
+            git(root, 'add', 'outside.py')
+            outside.write_text('initial dirty bytes\n')
+            self.assertFalse(valid(root), 'worktree must not mask different index bytes')
+
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:
             approval = add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
@@ -83,6 +126,10 @@ class GrantLifecycleTests(unittest.TestCase):
             approval = add_approval(root, 'protected-path', 'one file', 15,
                                     actions=['protected-path-write'], resources=[TARGET])
             approval.pop('binding')
+            approval.pop('git_branch')
+            approval.pop('anchor_commit')
+            from getzilla.util import tree_fingerprint
+            approval['grant_binding_digest'] = tree_fingerprint(root)
             approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
             self.assertTrue(valid(root))
             (root / TARGET).parent.mkdir(parents=True, exist_ok=True)

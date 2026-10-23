@@ -15,7 +15,7 @@ python3 scripts/getzilla_approve.py protected-path \
   --reason 'Apply reviewed agent reasoning policy'
 ```
 
-The grant is bound to the current repository, route/change, full branch ref, anchor ancestry, unchanged files outside the exact target set, and TTL. Name every file the manifest writes with its own `--resource`; wildcard patterns, absolute paths, `..` and drive letters are refused. Create the manifest only after the grant, under ignored `.getzilla/runtime`, so it does not change source outside the grant set.
+The grant is bound to the current repository, route/change, full branch ref, anchor ancestry, unchanged files outside the exact target set, and TTL. Name every file the manifest writes with its own `--resource`; wildcard patterns, absolute paths, `..` and drive letters are refused. Create the manifest only after the grant, under ignored `.getzilla/runtime`, so it does not change source outside the grant set. Pre-existing staged and unstaged work outside the target set may remain, but its index entries and worktree bytes are bound independently. Outside-target committed source must still match the anchor; restoring old worktree bytes cannot hide a different HEAD or index.
 
 ## 2. Build a manifest outside the repository
 

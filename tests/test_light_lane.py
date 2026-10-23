@@ -79,6 +79,40 @@ class LightLaneTests(unittest.TestCase):
         self.assertFalse(inspect_light_diff(self.root, [self.base], risk='low', complete=True)['admitted'])
 
 class LightLaneVerificationTests(unittest.TestCase):
+    def test_escalation_authorizes_the_required_reviewers_without_changing_writer(self):
+        from getzilla.agent_lifecycle import start_agent
+        from getzilla.policy import evaluate_pre_tool
+        from getzilla.router import build_route
+        from getzilla.state import get_active_route, set_active_route
+        from getzilla.verification import verify
+        from tests._support import project_copy
+        for path, content, reason in [('app.py', 'value = 1\n' * 51, 'code_line_limit_exceeded'),
+                                      ('.getzilla/getzilla/service.py', 'value = 1\n', 'risk_requires_full_lane')]:
+            with self.subTest(path=path), project_copy(git=True) as root:
+                base = git(root, 'rev-parse', 'HEAD')
+                git(root, 'update-ref', 'refs/remotes/origin/main', base)
+                original = build_route(root, 'Fix the greeting text', 'escalation-e2e').to_dict()
+                original.update(base_commit=base, quality_profiles=['base'])
+                self.assertEqual(original['review_agents'], ['code_reviewer'])
+                set_active_route(root, original)
+                source = root / path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(content)
+                git(root, 'add', '.')
+                git(root, 'commit', '-qm', 'change requiring full review')
+                report = verify(root, mode='fast', record=False)
+                self.assertEqual(report['light_diff']['reason'], reason)
+                self.assertFalse(report['light_diff']['admitted'])
+                current = get_active_route(root)
+                self.assertEqual(current['write_agent'], original['write_agent'])
+                self.assertEqual(current['analysis_agents'], original['analysis_agents'])
+                self.assertTrue(set(original['allowed_agents']) <= set(current['allowed_agents']))
+                self.assertIn('test_reviewer', current['review_agents'])
+                allowed, refusal = evaluate_pre_tool(root, {'tool_name': 'Agent',
+                    'tool_input': {'agent_type': 'test_reviewer'}})
+                self.assertTrue(allowed, refusal)
+                self.assertEqual(start_agent(root, 'test-review', 'test_reviewer')['lifecycle'], 'running')
+
     def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
         from getzilla.router import build_route
         from getzilla.state import get_active_route, set_active_route
