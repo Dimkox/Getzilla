@@ -133,13 +133,13 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla harness [--write]` | Checks or regenerates the agent files in `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/` and `.cursor/` |
 | Update | `getzilla update [--no-self] [--no-tools] [--accept-local]` | Updates Getzilla, writes the new files into the project on a new branch, then updates third-party tools |
 | A task | `getzilla cpu` | Measures and records the usable CPUs (startup step zero) |
-| | `getzilla route "<task>"` | Creates the task route; `--show` prints it, `--reconcile` binds it to the committed diff, `--add-reviewer <role>` adds a reviewer |
+| | `getzilla route "<task>"` | Creates the task route; `--show` prints it, `--reconcile` binds it to the committed diff, `--reconcile --add-reviewer <role>` keeps an extra reviewer |
 | | `getzilla status` | Shows the route, the change package, open evidence gaps and agents |
 | | `getzilla change start\|transition\|show` | Manages the change package of the task |
 | | `getzilla spec validate\|summary\|coverage\|map\|generate` | Checks typed change specifications |
 | | `getzilla agent start\|heartbeat\|progress\|watchdog\|watch\|...` | Records agent heartbeats and checkpoints, and finds stuck agents |
 | | `getzilla par -j <n> -- "cmd1" "cmd2"` | Runs independent commands in parallel on the measured CPUs |
-| Check | `getzilla test` | Runs the test suite on the measured CPUs |
+| Check | `getzilla test` | Runs the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | | `getzilla verify --mode fast\|pr\|release` | Runs the checks the route selects and records a receipt |
 | | `getzilla review <kind> --status pass\|fail --report <file> --reviewed-commit <sha>` | Records an independent review |
 | | `getzilla gate status`, `gate decide <gate> approved\|rejected` | Shows or records a human-gate decision |
@@ -151,7 +151,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla artifacts import\|compile\|converge\|validate\|export` | Reads Spec Kit, BMAD and Superpowers files as advisory input |
 | | `getzilla risk-terms check\|languages\|scaffold` | Checks the risk vocabulary language packs |
 | | `getzilla compliance scaffold` | Creates an EU AI Act adapter for a registered AI system (optional layer) |
-| Deliver | `getzilla approve <scope> --action <action> --resource <exact>` | Records a delegated local grant for one exact operation; no wildcard |
+| Deliver | `getzilla approve <scope> --reason "<why>" --action <action> --resource <exact>` | Records a delegated local grant for one exact operation; no wildcard |
 | | `getzilla protected-write --manifest <file>` | Applies an approved write to a protected path |
 | | `getzilla ci --plan\|--write` | Selects the CI gate by repository visibility and writes the pinned public workflow |
 | | `getzilla trust-ci init\|status\|github-app\|trust-key` | Sets up and checks a self-hosted Trust CI host |
@@ -160,8 +160,8 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla cleanup worktrees [--remove]` | Lists worktrees and the reasons to keep them; `--remove` removes only those with no unique work |
 | | `getzilla cleanup snapshot <commit>`, `snapshot --remove <path>` | Makes a review copy of one commit and removes it after the review |
 | | `getzilla branches report\|apply` | Reports old branches; `apply` deletes only from a reviewed plan ([branch lifecycle](docs/branch-lifecycle.md)) |
-| Look back | `getzilla report [--since all]` | Shows per-route overhead and the defects caught before merge |
-| | `getzilla history snapshot` | Offline accounting of historical evidence |
+| Look back | `getzilla report [--since all]` | Shows per-profile overhead and the defects caught before merge |
+| | `getzilla history <snapshot.json>` | Offline accounting of historical evidence from a snapshot file |
 | | `getzilla demo --open` | Opens the read-only local demo in your browser |
 
 ## What is inside

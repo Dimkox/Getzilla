@@ -540,12 +540,12 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |
 | `cpu` | `scripts/getzilla_startup_cpu.py` | Startup step zero: measure and record usable CPUs (`--reserve`, `--attach`) |
 | `par` | `scripts/getzilla_par.py` | Run independent commands in parallel on the measured CPUs (`-j`, `--each`) |
-| `route` | `scripts/getzilla_route.py` | Classify, show, reconcile, complete or cancel the task route; `--add-reviewer` adds a reviewer |
+| `route` | `scripts/getzilla_route.py` | Classify, show, reconcile, complete or cancel the task route; `--reconcile --add-reviewer <role>` keeps an extra reviewer |
 | `status` | `scripts/getzilla_status.py` | Local runtime status: route, change package, evidence gaps, agents |
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
 | `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, progress, bounded watchdog and acknowledged same-task recovery |
-| `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest on the measured CPUs |
+| `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
 | `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` |
 | `gate` | `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
@@ -566,8 +566,8 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | — | `scripts/getzilla_evidence.py` | Export bounded local workflow evidence, without approvals or secrets, with `--output <file>` |
 | `cleanup` | `scripts/getzilla_cleanup.py` | `inventory` (read-only disk report with repository copies), `worktrees [--remove]` (guarded removal), `snapshot <commit>` / `snapshot --remove <path>` (review copies) |
 | `branches` | `scripts/branch_lifecycle.py` | Branch retention `report`; `apply` deletes only from a reviewed plan with `--allow-delete` |
-| `report` | `scripts/getzilla_report.py` | Per-route overhead, observation gaps and defects caught before merge |
-| `history` | `scripts/getzilla_history.py` | Offline historical evidence accounting |
+| `report` | `scripts/getzilla_report.py` | Per-profile overhead, observation gaps and defects caught before merge |
+| `history` | `scripts/getzilla_history.py` | Offline historical evidence accounting from a snapshot file (`getzilla history <snapshot.json>`) |
 | — | `scripts/getzilla_m8.py` | Bounded local M8 owner policy: `status`, `activate`, `admit --action <action>`, `revoke` |
 | `demo` | `scripts/getzilla_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
 | — | `scripts/package_stack.py` | Build the release ZIP and its checksum sidecar |
