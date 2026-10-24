@@ -20,6 +20,16 @@
   - a new v2 signed-result contract accepts optional argv; v1 remains unchanged; upgrade verifiers and closed-schema consumers before the separate Trust CI producer rollout;
   - the project-authored ISO/IEC 42001 clause map is informational and never gates.
 - Lean install: Bitrix and SEO-landing skills come only with their domain (`extra:bitrix`, `extra:seo-landing`, `--extras`), cursor rules belong to `agent:cursor`, and a fresh install puts no hook shims in the repository root (332 → 283 entries on a plain Python repository).
+- Install (#128, #129): the plan shows the real footprint, the engine ships as one archive on fresh installs, and Bitrix agents and Grok briefs travel with their component.
+- `getzilla update` (#132, #135): one command updates Getzilla, writes the new files into the project on a new `getzilla-update-<version>` branch and updates third-party tools; `--accept-local` keeps a changed kept file.
+- Delivery cost (#121, #142, #144): a light lane for small low-risk diffs, scoped grants, runtime evidence instead of report commits, and review plans from the exact diff.
+- Router (#125, #139): risk and complexity come from the task, and pasted material no longer sets high risk, incident or the production gate.
+- `getzilla duplicates` (#171): source-only duplication analysis with optional jscpd.
+- `getzilla report` shows route observation gaps (#173).
+- Disk cleanup, issue #168 (#174–#178): `getzilla cleanup inventory` (read-only, with repository copies), `cleanup worktrees [--remove]` (removes only worktrees with no unique work), `cleanup snapshot <commit>` / `--remove <path>` for review copies; test runs keep child temporary files in their own run folder.
+- Grants (#179): a branch-bound protected-path grant follows the caller's session across its later routes; another session, a `manual` caller or an unknown session still needs the exact route. Production and external-write grants keep their exact route, HEAD and tree binding.
+- Fixes: factory controller pidfd check (#137), CAS lock retry on a transient macOS ENOENT (#133), clearer ambiguous-root hook denials (#131), `pypdf` 6.21.2 (#130), and `setuptools` 84.1.0 in the factory, delivery and Trust CI builds (#173).
+- Docs: README lists every `getzilla` command; QUICKSTART describes runtime evidence and disk cleanup; the handoff points at the current continuation.
 
 ## Observed v2.3.0 publication — 2026-10-21
 

@@ -245,13 +245,15 @@ class ProjectStateTests(unittest.TestCase):
         self.assertIsNone(prior['artifact'])
         self.assertFalse(published['operational_activation'])
         continuation = state['current_continuation']
-        self.assertEqual(continuation['issue'], 72)
-        self.assertEqual(continuation['branch'], 'fix/codex-cmd-hooks-20261011')
-        self.assertEqual(continuation['route_id'], '43786cadd549')
-        self.assertTrue((ROOT / continuation['change_package'] / 'brief.md').is_file())
+        self.assertEqual(continuation['issue'], 134)
+        self.assertEqual(continuation['source_base'], state['observed_main_sha'])
         self.assertEqual(continuation['target_version'], state['product_version'])
         self.assertIn('one final PR verifier', continuation['next_action'])
         self.assertIn('Native harness', continuation['next_action'])
+        self.assertIn('Keep v2.3.0 immutable', continuation['next_action'])
+        finished = state['historical_pr79_continuation']
+        self.assertEqual((finished['issue'], finished['pull_request'], finished['route_id']), (72, 79, '43786cadd549'))
+        self.assertTrue((ROOT / finished['change_package'] / 'brief.md').is_file())
         self.assertIn('scripts/getzilla_m8.py', state['operational_qualification']['m8_scope'])
 
     def test_release_handoff_keeps_history_and_production_authority_separate(self) -> None:
