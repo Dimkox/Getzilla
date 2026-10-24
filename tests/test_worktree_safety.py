@@ -180,6 +180,32 @@ class WorktreeSafetyTests(unittest.TestCase):
         git_dir = Path(git(path, 'rev-parse', '--absolute-git-dir'))
         (git_dir / 'MERGE_HEAD').write_text(git(path, 'rev-parse', 'HEAD') + '\n')
         self.assertIn('operation in progress: MERGE_HEAD', self.report(path)['reasons'])
+        (git_dir / 'MERGE_HEAD').unlink()
+        (git_dir / 'sequencer').mkdir()  # a multi-commit cherry-pick between steps
+        self.assertIn('operation in progress: sequencer', self.report(path)['reasons'])
+
+    def test_a_bisect_ref_and_a_long_reflog_keep_the_worktree(self) -> None:
+        bisect = self.add('bisect', '--detach')
+        commit(bisect, 'app.py', 'value = 7\n', 'only in refs/bisect')
+        git(bisect, 'update-ref', 'refs/bisect/bad', 'HEAD')
+        git(bisect, 'checkout', '-q', '--detach', 'origin/main')
+        git(bisect, 'reflog', 'expire', '--expire=now', '--all')
+        self.assertIn('commits not on any remote-tracking ref', self.report(bisect)['reasons'])
+        long_log = self.add('long-log', '-b', 'long-log')
+        git(long_log, 'checkout', '-q', '--detach', 'origin/main')
+        with patch('getzilla.worktree_safety.MAX_REFLOG', 1):
+            self.assertIn('commits not on any remote-tracking ref', self.report(long_log)['reasons'])
+
+    def test_a_folder_named_like_bytecode_is_not_disposable(self) -> None:
+        path = self.add('pyc-folder', '-b', 'pyc-folder')
+        exclude = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')) / 'info' / 'exclude'
+        exclude.parent.mkdir(exist_ok=True)
+        exclude.write_text('*.pyc\n')
+        (path / 'notes.pyc').mkdir()
+        (path / 'notes.pyc' / 'draft.txt').write_text('unique')
+        report = self.report(path)
+        self.assertEqual(report['hidden_from_status'], [])
+        self.assertIn('notes.pyc/draft.txt', report['valuable_ignored'])
 
     def test_a_linked_worktrees_folder_keeps_everything_under_it(self) -> None:
         real = self.base / 'real-worktrees'

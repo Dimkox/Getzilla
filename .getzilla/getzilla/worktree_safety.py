@@ -25,7 +25,7 @@ from .resource_inventory import RUNTIME, classify
 
 WORKTREES = RUNTIME + '/worktrees'
 DISPOSABLE_PARTS = frozenset({'__pycache__', '.pytest_cache', '.ruff_cache', '.mypy_cache'})
-IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG')
+IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'sequencer')
 MAX_IGNORED_FILES = 10_000
 MAX_REFLOG = 2_000
 MAX_LISTED = 20
@@ -70,7 +70,8 @@ def list_worktrees(root: Path) -> list[dict[str, Any]]:
 
 
 def _disposable(worktree: Path, relative: str) -> bool:
-    if DISPOSABLE_PARTS & set(Path(relative).parts) or relative.endswith('.pyc'):
+    is_file = not relative.endswith('/') and not os.path.isdir(worktree / relative)
+    if DISPOSABLE_PARTS & set(Path(relative).parts) or (is_file and relative.endswith('.pyc')):
         return True
     return classify(worktree, worktree / relative) == 'ephemeral'
 
@@ -80,7 +81,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
     found: list[str] = []
     seen = 0
     for relative in ignored:
-        if _disposable(worktree, relative.rstrip('/')):
+        if _disposable(worktree, relative):
             continue
         folder = worktree / relative
         if not (relative.endswith('/') and folder.is_dir() and not folder.is_symlink()):
@@ -149,10 +150,10 @@ def _local_only(worktree: Path) -> bool:
     tips = {'HEAD'}
     refs = _git(worktree, 'for-each-ref', '--format=%(objectname)', 'refs/worktree', 'refs/bisect')
     tips.update(refs.decode().split())
-    reflog = subprocess.run(['git', '-C', str(worktree), 'reflog', 'show', '--format=%H', f'-n{MAX_REFLOG}', 'HEAD', '--'],
-                            capture_output=True, timeout=TIMEOUT, check=False)
-    if reflog.returncode == 0:  # a worktree without a reflog has nothing to add
-        tips.update(reflog.stdout.decode().split())
+    reflog = _git(worktree, 'reflog', 'show', '--format=%H', f'-n{MAX_REFLOG + 1}', 'HEAD', '--').decode().split()
+    if len(reflog) > MAX_REFLOG:
+        return True  # not every entry can be checked; keep the worktree
+    tips.update(reflog)
     return bool(_git(worktree, 'rev-list', '--max-count=1', *sorted(tips), '--not', '--remotes').strip())
 
 
@@ -171,13 +172,15 @@ def _in_use(path: Path) -> bool | None:
     unknown = False
     uid = os.getuid()
     for entry in processes.iterdir():
-        if entry.name.isdigit() and entry.name != '1':  # PID 1 is the system or container init, not task work
+        if entry.name.isdigit():
             try:
                 if inside(os.readlink(entry / 'cwd')):
                     return True
             except (FileNotFoundError, ProcessLookupError):
                 continue  # the process ended
             except OSError:
+                if entry.name == '1':
+                    continue  # a container init hides its folder even from root; it does not run task work
                 try:
                     unknown = unknown or entry.stat().st_uid == uid  # a hidden process of ours may work there
                 except OSError:
