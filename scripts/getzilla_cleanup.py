@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""What Getzilla leaves on disk: a read-only inventory of runtime state and temp directories.
+"""What Getzilla leaves on disk, and guarded removal of worktrees that hold no unique work.
 
   getzilla cleanup inventory [--json] [--temp DIR]
+  getzilla cleanup worktrees [--json] [--remove]
 
-Classes: protected (state, receipts, evidence, worktrees), ephemeral (reproducible output) and
-unknown (never deleted without an owner record). This command deletes nothing.
+`inventory` classes: protected (state, receipts, evidence, worktrees), ephemeral (reproducible
+output) and unknown (never deleted without an owner record). It deletes nothing.
+`worktrees` lists every Git worktree with the reasons it must stay. Only with --remove does it
+remove the ones under .getzilla/runtime/worktrees that keep no changes, no unique ignored files
+and no commits missing from remote-tracking refs. Branches are never deleted.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.resource_inventory import inventory  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
+from getzilla.worktree_safety import WorktreeError, plan, remove  # noqa: E402
 
 
 def _size(value: int) -> str:
@@ -28,12 +33,7 @@ def _size(value: int) -> str:
     return f'{value} B'  # pragma: no cover
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog='getzilla cleanup', description=__doc__.split('\n')[0])
-    parser.add_argument('command', choices=['inventory'])
-    parser.add_argument('--json', action='store_true')
-    parser.add_argument('--temp', help='temp directory to scan (default: the system temp directory)')
-    args = parser.parse_args(argv)
+def _inventory(args: argparse.Namespace) -> int:
     report = inventory(find_root(), Path(args.temp) if args.temp else None)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -51,6 +51,38 @@ def main(argv: list[str] | None = None) -> int:
     if not report['complete']:
         print('Some sizes are incomplete: unreadable entries or the entry budget was reached.')
     return 0
+
+
+def _worktrees(args: argparse.Namespace) -> int:
+    root = find_root()
+    try:
+        report = plan(root)
+        if args.remove:
+            report['results'] = [remove(root, item['path']) for item in report['worktrees'] if item['removable']]
+    except WorktreeError as exc:
+        print(f'getzilla cleanup: {exc}', file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    print(f'Worktrees: {report["removable"]} removable, {report["kept"]} kept'
+          + ('' if args.remove else ' (dry run; add --remove to remove)'))
+    for item in report['worktrees']:
+        state = 'removable' if item['removable'] else 'keep'
+        print(f'  {state:<9} {item["path"]}' + ('' if item['removable'] else ': ' + '; '.join(item['reasons'])))
+    for result in report.get('results', []):
+        print(f'  {result["result"]:<9} {result["path"]}' + (f': {result["error"]}' if result.get('error') else ''))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog='getzilla cleanup', description=__doc__.split('\n')[0])
+    parser.add_argument('command', choices=['inventory', 'worktrees'])
+    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--temp', help='inventory: temp directory to scan (default: the system temp directory)')
+    parser.add_argument('--remove', action='store_true', help='worktrees: remove the removable ones')
+    args = parser.parse_args(argv)
+    return _worktrees(args) if args.command == 'worktrees' else _inventory(args)
 
 
 if __name__ == '__main__':
