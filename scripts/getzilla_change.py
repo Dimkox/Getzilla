@@ -9,9 +9,10 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 import argparse
 import json
 
-from getzilla.change import start_change, transition
+from getzilla.change import TRANSITIONS, start_change, transition
 from getzilla.state import get_active_change
 from getzilla.util import find_root
+from getzilla.workflow_storage import change_directory
 
 parser = argparse.ArgumentParser(description='Manage durable engineering change packages.')
 sub = parser.add_subparsers(dest='command', required=True)
@@ -27,7 +28,18 @@ root = find_root()
 if args.command == 'start':
     result = start_change(root, args.title)
 elif args.command == 'transition':
-    result = transition(root, args.change_id, args.target, args.reason)
+    try:
+        result = transition(root, args.change_id, args.target, args.reason)
+    except (ValueError, FileNotFoundError) as exc:
+        # A refused transition is a usage answer, not a crash (#186): name the allowed next states.
+        try:
+            state = json.loads((change_directory(root, args.change_id) / 'state.json').read_text(encoding='utf-8'))['status']
+        except (OSError, ValueError, KeyError, TypeError):
+            state = None
+        allowed = ', '.join(sorted(TRANSITIONS.get(state, ()))) if state else ''
+        print(f'getzilla change: {exc}' + (f'; allowed from {state}: {allowed or "none"}' if state else ''),
+              file=sys.stderr)
+        raise SystemExit(2)
 else:
     result = get_active_change(root)
 print(json.dumps(result, ensure_ascii=False, indent=2))

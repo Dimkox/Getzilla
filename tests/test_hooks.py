@@ -89,6 +89,25 @@ class HookTests(unittest.TestCase):
             self.assertIn('ADAPTIVE GROK ROUTE', data['hookSpecificOutput']['additionalContext'])
             self.assertEqual(get_active_route(root)['route_id'], original['route_id'])
 
+    def test_a_harness_notice_keeps_the_route_and_never_creates_one(self) -> None:
+        notice = ('<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n'
+                  '<summary>Background command "deploy release" completed</summary>\n</task-notification>')
+        with project_copy(git=True) as root:
+            original = build_route(root, 'Добавить REST API', 'session-1').to_dict()
+            set_active_route(root, original)
+            _, data, _ = run_hook(root, 'user_prompt_submit.py', {
+                'cwd': str(root), 'prompt': notice, 'session_id': 'session-1'
+            })
+            self.assertEqual(get_active_route(root)['route_id'], original['route_id'])
+            self.assertIn('ADAPTIVE GROK ROUTE', data['hookSpecificOutput']['additionalContext'])
+        with project_copy(git=True) as root:
+            code, data, err = run_hook(root, 'user_prompt_submit.py', {
+                'cwd': str(root), 'prompt': notice, 'session_id': 'session-1'
+            })
+            self.assertEqual(code, 0, err)
+            self.assertIsNone(get_active_route(root))
+            self.assertEqual(data['hookSpecificOutput']['additionalContext'], '')
+
     def test_followup_rematches_when_session_differs(self) -> None:
         with project_copy(git=True) as root:
             leftover = build_route(root, 'Добавить REST API', 'session-A').to_dict()

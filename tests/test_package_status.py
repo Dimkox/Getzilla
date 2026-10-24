@@ -106,6 +106,21 @@ class PackageStatusTests(unittest.TestCase):
             cwd=root, env=env, capture_output=True, text=True, timeout=120, check=False,
         )
 
+    def test_a_refused_transition_names_the_allowed_states_and_spec_stays_in_the_package(self):
+        with project_copy(git=True) as root:
+            self.install_cli(root)
+            shutil.copy2(ROOT / 'scripts' / 'getzilla_spec.py', root / 'scripts' / 'getzilla_spec.py')
+            _, _, state, package = self.prepare(root)
+            refused = self.cli(root, 'getzilla_change.py', 'transition', state['change_id'], 'done', '--reason', 'x')
+            self.assertEqual(refused.returncode, 2, refused.stderr)
+            self.assertNotIn('Traceback', refused.stderr)
+            self.assertIn('allowed from draft: cancelled, scoped', refused.stderr)
+            generated = self.cli(root, 'getzilla_spec.py', 'generate', '--json')
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            self.assertEqual(json.loads(generated.stdout)['path'],
+                             (package / 'change-spec.yaml').relative_to(root).as_posix())
+            self.assertFalse((root / 'engineering' / 'changes' / state['change_id']).exists())
+
     def test_fresh_status_never_creates_runtime_bytecode_or_changes_index(self):
         with project_copy(git=True) as root:
             self.install_cli(root)

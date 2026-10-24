@@ -6,7 +6,7 @@ import sys
 
 try:
     from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
-    from getzilla.router import build_route, can_reuse_active_route, route_context
+    from getzilla.router import build_route, can_reuse_active_route, is_system_notice, route_context
     from getzilla.state import ActiveChangeConflict, get_active_route, set_active_route
 except Exception:
     if os.name != 'nt':
@@ -25,6 +25,9 @@ def main() -> None:
     existing = get_active_route(root)
     if existing and (is_child_payload(payload) or can_reuse_active_route(prompt, existing, session_id(payload))):
         context = route_context(existing)
+    elif is_system_notice(prompt):
+        # A harness notice is not a task (#185): no new route, and an existing one of another session stays.
+        context = ''
     else:
         route = build_route(root, prompt or 'development task', session_id(payload))
         try:

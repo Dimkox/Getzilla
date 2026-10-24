@@ -23,6 +23,7 @@ from getzilla.spec import (  # noqa: E402
 )
 from getzilla.state import get_active_change, get_active_route  # noqa: E402
 from getzilla.util import atomic_write_text, find_root  # noqa: E402
+from getzilla.workflow_storage import change_directory  # noqa: E402
 
 
 def _change_id(root: Path, explicit: str | None) -> str:
@@ -41,7 +42,11 @@ def _spec_path(root: Path, explicit_path: str | None, change_id: str | None) -> 
         candidate = Path(explicit_path)
         candidate = candidate if candidate.is_absolute() else root / candidate
     else:
-        candidate = root / "engineering" / "changes" / _change_id(root, change_id) / "change-spec.yaml"
+        # The same package folder `getzilla change start` uses: the runtime one, or a legacy tracked one (#186).
+        try:
+            candidate = change_directory(root, _change_id(root, change_id)) / "change-spec.yaml"
+        except ValueError as exc:
+            raise SpecError(str(exc), code="usage") from exc
     try:
         candidate.resolve(strict=False).relative_to(root.resolve())
     except ValueError as exc:
