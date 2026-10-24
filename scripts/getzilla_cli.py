@@ -17,6 +17,7 @@ sys.path.insert(0, str(HOME / '.getzilla'))
 from getzilla.interpreter import project_python  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),
     'par': ('getzilla_par.py', 'run independent commands in parallel on the verified CPUs'),

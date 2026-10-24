@@ -35,6 +35,7 @@ MANAGED_DIRS = (
     "factory/src",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_duplicates.py",
     "factory/.env.example",
     "factory/.gitignore",
     "factory/actors.example.json",

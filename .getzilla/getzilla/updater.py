@@ -44,6 +44,7 @@ SOURCES = {
     'spec-kit': 'https://github.com/github/spec-kit.git',
     'vibevm': 'https://github.com/vibevm/vibevm.git',
 }
+JSCPD_VERSION = '4.0.5'
 NPM_AGENTS = {
     'qwen': '@qwen-code/qwen-code@latest',
     'codex': '@openai/codex@latest',
@@ -196,6 +197,25 @@ def update_agents(run: Runner, which: Callable[[str], str | None] = shutil.which
                        f'git+{SOURCES["spec-kit"]}'], None)
         results.append(Result('tool:specify', 'ok' if process.returncode == 0 else 'fail', _tail(process)))
     return results
+
+
+def update_jscpd(run: Runner, which: Callable[[str], str | None] = shutil.which) -> list[Result]:
+    """Install the supported optional adapter version only on explicit updater runs."""
+    npm = which('npm')
+    if not npm:
+        return [Result('tool:jscpd', 'skip', 'npm not found; install Node.js/npm first')]
+    process = run([npm, 'install', '-g', '--ignore-scripts', '--no-audit', '--no-fund',
+                   f'jscpd@{JSCPD_VERSION}'], None)
+    if process.returncode:
+        return [Result('tool:jscpd', 'fail', _tail(process))]
+    binary = which('jscpd')
+    if not binary:
+        return [Result('tool:jscpd', 'fail', 'installed but jscpd is not on PATH')]
+    checked = run([binary, '--version'], None)
+    version = (checked.stdout or '').strip()
+    if checked.returncode or version != JSCPD_VERSION:
+        return [Result('tool:jscpd', 'fail', f'version check failed; require {JSCPD_VERSION}')]
+    return [Result('tool:jscpd', 'ok', f'jscpd@{JSCPD_VERSION}; installed version {version}')]
 
 
 def update_sources(run: Runner, root: Path, sources: dict[str, str] | None = None) -> list[Result]:
@@ -368,7 +388,7 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
             mirror: Mirror | None = None) -> list[Result]:
     if mirror is not None:
         return _run_from_mirror(root, mirror, run=run, which=which, components=components)
-    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep'))
+    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd'))
     results: list[Result] = []
     if 'agents' in wanted:
         results += update_agents(run, which)
@@ -378,6 +398,8 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
         results += update_osv(fetch, root)
     if 'opengrep' in wanted:
         results += update_opengrep(fetch, root)
+    if 'jscpd' in wanted:
+        results += update_jscpd(run, which)
     if 'baseline' in wanted:
         from .baseline import install_user
         results += [Result(step.component, step.status, step.detail)
@@ -388,7 +410,7 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
 def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable[[str], str | None],
                      components: tuple[str, ...] | None) -> list[Result]:
     """Every component from the offline mirror; nothing here reaches the network."""
-    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep'))
+    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd'))
     results: list[Result] = []
     if 'agents' in wanted:
         results.append(Result('agents', 'skip', f'{MIRROR_ENV} is set: agent CLIs update only from the network'))
@@ -403,6 +425,8 @@ def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable
         pinned = assets.get(_platform_key(), ('',))[0] in mirror.opengrep
         results += [Result(item.component, item.status, item.detail + mirror.note(pinned))
                     for item in update_opengrep(mirror.fetch, root, assets=assets)]
+    if 'jscpd' in wanted:
+        results.append(Result('tool:jscpd', 'skip', f'{MIRROR_ENV} is set: npm updates require the network'))
     if 'baseline' in wanted:
         from .baseline import components as baseline_components, install_user
         config = {component_id: {**item, 'pinned_commit': mirror.baseline.get(component_id, item['pinned_commit'])}
@@ -483,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--now', action='store_true', help='update now (the default)')
     parser.add_argument('--if-due', action='store_true',
                         help='update only when GETZILLA_UPDATE_INTERVAL_HOURS (default 1) has passed since the last run')
-    parser.add_argument('--only', action='append', choices=('agents', 'sources', 'osv', 'opengrep', 'baseline'),
+    parser.add_argument('--only', action='append', choices=('agents', 'sources', 'osv', 'opengrep', 'jscpd', 'baseline'),
                         help='limit to one component (repeatable); baseline installs the pinned Superpowers, BMAD '
                              'and Spec Kit (never part of the default latest-version update)')
     parser.add_argument('--quiet', action='store_true')
