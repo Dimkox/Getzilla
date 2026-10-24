@@ -144,6 +144,24 @@ class GrantLifecycleTests(unittest.TestCase):
             self.assertTrue(valid(root))
             self.assertFalse(valid(root, 'production', None))
 
+    def test_a_new_change_package_still_voids_a_branch_bound_grant(self) -> None:
+        from getzilla.state import set_active_change
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            set_active_change(root, {'change_id': 'another-change'})
+            self.assertFalse(valid(root))
+
+    def test_a_forged_branch_binding_on_a_production_grant_keeps_the_route_check(self) -> None:
+        with github_project() as root:
+            # A complete branch-bound record relabelled as production, from another route.
+            approval = add_approval(root, 'protected-path', 'one file', 15,
+                                    actions=['protected-path-write'], resources=[TARGET])
+            approval.update(scope='production', actions=['git-push-branch'], route_id='some-other-route')
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
+            self.assertFalse(valid(root, 'production', None))
+
     def test_a_branch_change_still_voids_the_grant_after_a_new_route(self) -> None:
         from tests.branch_support import git
         with github_project() as root:

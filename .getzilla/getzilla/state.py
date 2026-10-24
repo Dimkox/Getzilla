@@ -457,7 +457,8 @@ def has_valid_approval(
     action: str | None = None,
     resource: str | None = None,
 ) -> bool:
-    """Recheck scope-specific source binding plus repository, route, change and TTL."""
+    """Recheck scope-specific source binding plus repository, change and TTL, and the route for
+    every grant except a branch-bound protected-path grant."""
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
