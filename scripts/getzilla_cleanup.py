@@ -3,6 +3,7 @@
 
   getzilla cleanup inventory [--json] [--temp DIR]
   getzilla cleanup worktrees [--json] [--remove]
+  getzilla cleanup snapshot <commit> | snapshot --remove <path>
 
 `inventory` classes: protected (state, receipts, evidence, worktrees), ephemeral (reproducible
 output) and unknown (never deleted without an owner record). It deletes nothing.
@@ -22,6 +23,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.resource_inventory import inventory  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
+from getzilla import review_snapshot  # noqa: E402
 from getzilla.worktree_safety import WorktreeError, plan, remove  # noqa: E402
 
 
@@ -85,13 +87,35 @@ def _worktrees(args: argparse.Namespace) -> int:
     return failed
 
 
+def _snapshot(args: argparse.Namespace) -> int:
+    if not args.target:
+        print('getzilla cleanup snapshot: give a commit, or --remove with a snapshot path', file=sys.stderr)
+        return 2
+    root = find_root()
+    try:
+        if args.remove:
+            result = review_snapshot.remove(root, args.target)
+        else:
+            result = {'path': str(review_snapshot.create(root, args.target)), 'result': 'created'}
+    except WorktreeError as exc:
+        print(f'getzilla cleanup: {exc}', file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True) if args.json else
+          f'{result["result"]}: {result["path"]}' + (f' ({result["reason"]})' if result.get('reason') else ''))
+    return 0 if result['result'] in {'created', 'removed', 'absent'} else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog='getzilla cleanup', description=__doc__.split('\n')[0])
-    parser.add_argument('command', choices=['inventory', 'worktrees'])
+    parser.add_argument('command', choices=['inventory', 'worktrees', 'snapshot'])
+    parser.add_argument('target', nargs='?', help='snapshot: the commit to copy, or with --remove the snapshot path')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--temp', help='inventory: temp directory to scan (default: the system temp directory)')
-    parser.add_argument('--remove', action='store_true', help='worktrees: remove the removable ones')
+    parser.add_argument('--remove', action='store_true',
+                        help='worktrees: remove the removable ones; snapshot: remove the given snapshot')
     args = parser.parse_args(argv)
+    if args.command == 'snapshot':
+        return _snapshot(args)
     return _worktrees(args) if args.command == 'worktrees' else _inventory(args)
 
 
