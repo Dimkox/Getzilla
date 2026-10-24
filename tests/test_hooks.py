@@ -108,6 +108,20 @@ class HookTests(unittest.TestCase):
             self.assertIsNone(get_active_route(root))
             self.assertEqual(data['hookSpecificOutput']['additionalContext'], '')
 
+    def test_a_notice_never_lets_another_session_or_a_closed_route_stay_in_force(self) -> None:
+        notice = '<system-reminder>\nCheck finished.\n</system-reminder>'
+        for owner, status in (('session-A', 'routed'), ('session-1', 'ready')):
+            with self.subTest(owner=owner, status=status), project_copy(git=True) as root:
+                leftover = build_route(root, 'Добавить REST API', owner).to_dict()
+                leftover['status'] = status
+                set_active_route(root, leftover)
+                run_hook(root, 'user_prompt_submit.py', {
+                    'cwd': str(root), 'prompt': notice, 'session_id': 'session-1'
+                })
+                current = get_active_route(root)
+                self.assertIsNotNone(current)
+                self.assertNotEqual(current['route_id'], leftover['route_id'])
+
     def test_followup_rematches_when_session_differs(self) -> None:
         with project_copy(git=True) as root:
             leftover = build_route(root, 'Добавить REST API', 'session-A').to_dict()

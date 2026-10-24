@@ -272,7 +272,9 @@ class RouterTests(unittest.TestCase):
                 self.assertTrue(should_reuse_active_route(prompt))
                 self.assertTrue(can_reuse_active_route(prompt, {'session_id': 's', 'status': 'routed'}, 's'))
         for prompt in (notice + '\nFix the release script', 'Fix it <task-notification>x</task-notification>',
-                       '<task-notification>unclosed', '', 'plain task'):
+                       '<task-notification>unclosed', '', 'plain task', notice + '​',
+                       '<system-reminder data="x">a</system-reminder>', '<TASK-NOTIFICATION>a</TASK-NOTIFICATION>',
+                       '<task-notification>a</system-reminder>'):
             with self.subTest(prompt=prompt[:30]):
                 self.assertFalse(is_system_notice(prompt))
         with project_copy() as root:

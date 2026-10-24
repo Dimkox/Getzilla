@@ -25,8 +25,9 @@ def main() -> None:
     existing = get_active_route(root)
     if existing and (is_child_payload(payload) or can_reuse_active_route(prompt, existing, session_id(payload))):
         context = route_context(existing)
-    elif is_system_notice(prompt):
-        # A harness notice is not a task (#185): no new route, and an existing one of another session stays.
+    elif existing is None and is_system_notice(prompt):
+        # A harness notice is not a task (#185). With no route at all it creates none. A route that this
+        # session cannot reuse (another session's, or closed) is replaced as before, so no fallback to it.
         context = ''
     else:
         route = build_route(root, prompt or 'development task', session_id(payload))

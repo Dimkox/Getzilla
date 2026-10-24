@@ -36,9 +36,10 @@ elif args.command == 'transition':
             state = json.loads((change_directory(root, args.change_id) / 'state.json').read_text(encoding='utf-8'))['status']
         except (OSError, ValueError, KeyError, TypeError):
             state = None
-        allowed = ', '.join(sorted(TRANSITIONS.get(state, ()))) if state else ''
-        print(f'getzilla change: {exc}' + (f'; allowed from {state}: {allowed or "none"}' if state else ''),
-              file=sys.stderr)
+        moves = TRANSITIONS.get(state, set()) if state else set()
+        # Name the allowed states only for an invalid move, not when a gate refused an allowed one.
+        hint = f'; allowed from {state}: {", ".join(sorted(moves)) or "none"}' if state and args.target not in moves else ''
+        print(f'getzilla change: {exc}{hint}', file=sys.stderr)
         raise SystemExit(2)
 else:
     result = get_active_change(root)
