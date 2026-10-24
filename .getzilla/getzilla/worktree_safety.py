@@ -168,14 +168,22 @@ def _in_use(path: Path) -> bool | None:
     processes = Path('/proc')
     if not (processes / 'self' / 'cwd').exists():
         return None
+    unknown = False
+    uid = os.getuid()
     for entry in processes.iterdir():
-        if entry.name.isdigit():
+        if entry.name.isdigit() and entry.name != '1':  # PID 1 is the system or container init, not task work
             try:
                 if inside(os.readlink(entry / 'cwd')):
                     return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # the process ended
             except OSError:
-                continue  # another user's process; only the working folder is checked, not open files
-    return False
+                try:
+                    unknown = unknown or entry.stat().st_uid == uid  # a hidden process of ours may work there
+                except OSError:
+                    continue
+    # Only the working folder is checked, not open files; other users' hidden processes are skipped.
+    return None if unknown else False
 
 
 def inspect(root: Path, entry: dict[str, Any], main: str) -> dict[str, Any]:

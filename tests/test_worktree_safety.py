@@ -215,6 +215,21 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.addCleanup(child.kill)
         self.assertIn('a process works in it', self.report(path)['reasons'])
 
+    @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
+    def test_a_process_of_ours_whose_folder_cannot_be_read_keeps_the_worktree(self) -> None:
+        from getzilla import worktree_safety
+        path = self.add('hidden-process', '-b', 'hidden-process')
+        real_readlink = os.readlink
+
+        def denied(target, *args, **kwargs):
+            if str(target).endswith(f'/{os.getpid()}/cwd'):
+                raise PermissionError('not dumpable')
+            return real_readlink(target, *args, **kwargs)
+
+        with patch('getzilla.worktree_safety.os.readlink', side_effect=denied):
+            self.assertIsNone(worktree_safety._in_use(path))
+            self.assertIn('cannot check for running processes on this platform', self.report(path)['reasons'])
+
     def test_a_worktree_a_process_works_in_is_kept(self) -> None:
         path = self.add('busy', '-b', 'busy')
         previous = os.getcwd()
