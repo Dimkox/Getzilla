@@ -1212,10 +1212,11 @@ class CommunicationRuleTests(unittest.TestCase):
         self.assertIn("## Getzilla defects go to issues", agents)
         self.assertIn("Every defect in Getzilla itself goes to a GitHub issue in `Dimkox/Getzilla`.", agents)
         self.assertIn("and creating, updating, commenting on and closing its own GitHub issues.", agents)
+        self.assertIn("- Never put secrets, private data or copy-paste exploit commands into an issue.", agents)
         consumer = (ROOT / ".getzilla/templates/consumer-AGENTS.md.tmpl").read_text(encoding="utf-8")
         self.assertIn("## Getzilla defects", consumer)
         self.assertIn("file it only when the owner explicitly allows that", consumer)
-        self.assertIn("proprietary code of this repository", consumer)
+        self.assertIn("Never include secrets, customer data, proprietary code of this repository", consumer)
         skill = (ROOT / ".agents/skills/getzilla-delivery/SKILL.md").read_text(encoding="utf-8")
         self.assertIn('Follow the "Getzilla defects" rule in `AGENTS.md`', skill)
 

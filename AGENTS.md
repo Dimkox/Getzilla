@@ -55,7 +55,7 @@ A defect is a bug, a wrong or confusing refusal, a missing or broken check, a do
 - Put a Low-severity finding into the open issue that collects Low findings.
 - Put a real finding that is outside the current task into an issue, not into the current pull request.
 - Never put secrets, private data or copy-paste exploit commands into an issue. Describe the hole, not the weapon.
-- Filing, updating or commenting on an issue in this repository is a process call under the L5 standing consent above. Record one exact external-write grant per GitHub tool before its first call, for example `python3 scripts/getzilla_approve.py external-write --reason "<defect>" --action external-write --resource mcp__github__issue_write` (or `mcp__github__add_issue_comment`). The grant covers that tool until its TTL ends.
+- Filing, updating or commenting on an issue in this repository is a process call under the L5 standing consent above. Record one exact external-write grant per GitHub tool before its first call, for example `python3 scripts/getzilla_approve.py external-write --reason "<defect>" --action external-write --resource mcp__github__issue_write` (or `mcp__github__add_issue_comment`). Like every external-write grant, it stays bound to the route, change, exact HEAD and tree, so a new commit or a new route needs a fresh grant.
 
 ## Merge discipline
 
