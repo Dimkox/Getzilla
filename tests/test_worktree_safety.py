@@ -242,19 +242,31 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertIn('a process works in it', self.report(path)['reasons'])
 
     @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
-    def test_a_process_of_ours_whose_folder_cannot_be_read_keeps_the_worktree(self) -> None:
+    def test_a_hidden_process_of_ours_counts_only_when_newer_than_the_worktree(self) -> None:
         from getzilla import worktree_safety
         path = self.add('hidden-process', '-b', 'hidden-process')
+        created = worktree_safety._created_at(path)
+        self.assertIsNotNone(created)
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        hidden = {str(child.pid)}
         real_readlink = os.readlink
 
         def denied(target, *args, **kwargs):
-            if str(target).endswith(f'/{os.getpid()}/cwd'):
+            if Path(target).parent.name in hidden:
                 raise PermissionError('not dumpable')
             return real_readlink(target, *args, **kwargs)
 
         with patch('getzilla.worktree_safety.os.readlink', side_effect=denied):
-            self.assertIsNone(worktree_safety._in_use(path))
+            self.assertIsNone(worktree_safety._in_use(path, created))
             self.assertIn('cannot check for running processes on this platform', self.report(path)['reasons'])
+            self.assertIsNone(worktree_safety._in_use(path, None), 'an unknown creation time fails closed')
+            hidden.clear()
+            hidden.add(str(os.getpid()))  # this test process started before the worktree below
+            older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
+            self.assertIsNotNone(older)
+            self.assertFalse(worktree_safety._in_use(path, older + 60))
 
     def test_a_worktree_a_process_works_in_is_kept(self) -> None:
         path = self.add('busy', '-b', 'busy')

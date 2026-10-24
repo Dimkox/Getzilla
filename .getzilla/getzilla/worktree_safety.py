@@ -157,8 +157,34 @@ def _local_only(worktree: Path) -> bool:
     return bool(_git(worktree, 'rev-list', '--max-count=1', *sorted(tips), '--not', '--remotes').strip())
 
 
-def _in_use(path: Path) -> bool | None:
-    """True when this or another process works inside `path`; None when that cannot be checked."""
+def _started_at(entry: Path) -> float | None:
+    """Process start time in epoch seconds from the world-readable /proc stat files."""
+    try:
+        fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+                    if line.startswith('btime '))
+        return boot + int(fields[19]) / os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _created_at(worktree: Path) -> float | None:
+    """When Git registered the worktree: the mtime of its `gitdir` file in the repository."""
+    try:
+        git_dir = _git(worktree, 'rev-parse', '--absolute-git-dir').decode('utf-8', errors='surrogateescape').strip()
+        return os.stat(Path(git_dir) / 'gitdir').st_mtime
+    except (WorktreeError, OSError):
+        return None
+
+
+def _in_use(path: Path, created: float | None = None) -> bool | None:
+    """True when this or another process works inside `path`; None when that cannot be checked.
+
+    A process of ours that hides its working folder (ssh-agent, a CI runner, a container init) counts
+    as unknown only when it started after the worktree was created; an older process cannot have been
+    started for it. Only the working folder is checked, not open files; other users' hidden processes
+    are skipped.
+    """
     target = os.path.realpath(path)
 
     def inside(value: str) -> bool:
@@ -179,13 +205,14 @@ def _in_use(path: Path) -> bool | None:
             except (FileNotFoundError, ProcessLookupError):
                 continue  # the process ended
             except OSError:
-                if entry.name == '1':
-                    continue  # a container init hides its folder even from root; it does not run task work
                 try:
-                    unknown = unknown or entry.stat().st_uid == uid  # a hidden process of ours may work there
+                    if entry.stat().st_uid != uid:
+                        continue
                 except OSError:
                     continue
-    # Only the working folder is checked, not open files; other users' hidden processes are skipped.
+                started = _started_at(entry)
+                if created is None or started is None or started >= created - 2:  # 2 s for clock tick rounding
+                    unknown = True
     return None if unknown else False
 
 
@@ -232,7 +259,7 @@ def inspect(root: Path, entry: dict[str, Any], main: str) -> dict[str, Any]:
         reasons.append('ignored files that are not reproducible: ' + ', '.join(valuable[:5]))
     if local_only:
         reasons.append('commits not on any remote-tracking ref')
-    busy = _in_use(path)
+    busy = _in_use(path, _created_at(path))
     if busy is None:
         reasons.append('cannot check for running processes on this platform')
     elif busy:
