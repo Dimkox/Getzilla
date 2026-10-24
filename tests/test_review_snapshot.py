@@ -83,6 +83,34 @@ class ReviewSnapshotTests(unittest.TestCase):
         for path in (task, moved, unmarked, locked, on_branch):
             self.assertTrue(path.is_dir(), path)
 
+    def test_a_snapshot_replaced_by_a_link_never_deletes_the_target(self) -> None:
+        path = review_snapshot.create(self.root, self.first)
+        victim = self.base / 'victim'
+        victim.mkdir()
+        (victim / 'data.txt').write_text('unique')
+        (victim / '.git').write_text((path / '.git').read_text())  # a forged worktree link
+        git(self.root, 'worktree', 'remove', '--force', str(path))
+        git(self.root, 'worktree', 'add', '-q', '--detach', str(path), self.first)
+        (self.snapshots / f'{path.name}.json').write_text(json.dumps({'schema_version': review_snapshot.SCHEMA,
+                                                                      'commit': self.first}))
+        moved = self.base / 'moved-snapshot'
+        path.rename(moved)
+        try:
+            path.symlink_to(victim, target_is_directory=True)
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'kept')
+        self.assertEqual((victim / 'data.txt').read_text(), 'unique')
+
+    def test_a_task_worktree_with_a_forged_marker_is_kept(self) -> None:
+        task = self.root / '.getzilla' / 'runtime' / 'worktrees' / 'detached'
+        git(self.root, 'worktree', 'add', '-q', '--detach', str(task), self.first)
+        self.snapshots.mkdir(parents=True)
+        (self.snapshots / 'detached.json').write_text(json.dumps({'schema_version': review_snapshot.SCHEMA,
+                                                                  'commit': self.first}))
+        self.assertEqual(review_snapshot.remove(self.root, str(task))['result'], 'kept')
+        self.assertTrue((task / 'app.py').is_file())
+
     def test_a_linked_snapshots_folder_is_refused(self) -> None:
         outside = self.base / 'outside'
         outside.mkdir()

@@ -68,6 +68,8 @@ def remove(root: Path, path: str) -> dict[str, Any]:
     target = Path(os.path.abspath(path))
     if target.parent != Path(os.path.abspath(base)) or target.name.endswith('.json'):
         return {'path': path, 'result': 'kept', 'reason': 'not a direct child of .getzilla/runtime/snapshots'}
+    if target.is_symlink() or Path(os.path.realpath(target)).parent != Path(os.path.realpath(base)):
+        return {'path': path, 'result': 'kept', 'reason': 'the snapshot path is a symlink'}  # remove would follow it
     marker = _marker(base, target.name)
     entry = next((item for item in list_worktrees(root)
                   if os.path.abspath(item['path']) == str(target)), None)
