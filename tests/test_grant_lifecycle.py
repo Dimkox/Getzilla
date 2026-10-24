@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, has_valid_approval, set_active_route
+from getzilla.state import add_approval, approvals_path, bind_session, has_valid_approval, set_active_route
 from tests._support import project_copy
 
 TARGET = 'tests/test_cpu_capacity.py'
@@ -26,7 +26,11 @@ def github_project() -> Iterator[Path]:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=root, check=True)
         set_active_route(root, build_route(root, 'Fix startup CPU regression test', 's1').to_dict())
-        yield root
+        bind_session('s1')
+        try:
+            yield root
+        finally:
+            bind_session(None)
 
 
 def valid(root: Path, scope: str = 'protected-path', resource: str | None = TARGET) -> bool:
@@ -149,7 +153,45 @@ class GrantLifecycleTests(unittest.TestCase):
             add_approval(root, 'protected-path', 'one file', 15,
                          actions=['protected-path-write'], resources=[TARGET])
             set_active_route(root, build_route(root, 'Another session prompt', 's2').to_dict())
+            self.assertTrue(valid(root), 's1 still reads its own route')
+            bind_session('s2')
             self.assertFalse(valid(root))
+
+    def test_another_caller_session_cannot_use_the_shared_route_of_the_grant_session(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            bind_session('s2')  # no route pointer of its own
+            self.assertFalse(valid(root))
+            # Its own grant made over the shared route of s1 does not follow s1's next route either.
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            set_active_route(root, build_route(root, 'Third prompt', 's1').to_dict())
+            self.assertFalse(valid(root))
+
+    def test_a_manual_or_unbound_caller_needs_the_exact_route(self) -> None:
+        for caller in ('manual', None):
+            with self.subTest(caller=caller), github_project() as root:
+                bind_session(caller)
+                approval = add_approval(root, 'protected-path', 'one file', 15,
+                                        actions=['protected-path-write'], resources=[TARGET])
+                self.assertIsNone(approval['session_id'])
+                self.assertTrue(valid(root))
+                set_active_route(root, build_route(root, 'Next prompt', 'manual').to_dict())
+                self.assertFalse(valid(root))
+
+    def test_the_cli_records_the_caller_session(self) -> None:
+        with github_project() as root:
+            env = {**os.environ, 'CLAUDE_CODE_SESSION_ID': 's1'}
+            env.pop('GETZILLA_SESSION_ID', None)
+            subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_approve.py'), 'protected-path',
+                            '--reason', 'one file', '--action', 'protected-path-write', '--resource', TARGET],
+                           cwd=root, env=env, check=True, capture_output=True)
+            self.assertEqual(json.loads(approvals_path(root).read_text(encoding='utf-8'))[-1]['session_id'], 's1')
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            self.assertTrue(valid(root))
 
     def test_without_a_known_session_the_exact_route_is_still_required(self) -> None:
         with github_project() as root:
