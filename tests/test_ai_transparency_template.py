@@ -99,8 +99,9 @@ for (outcome of ['success', 'failure', 'timeout']) {
   if (outcome !== 'success' && (result.c2pa !== null || !result.c2pa_error)) throw Error('false success');
 }
 ''', encoding='utf-8')
+            # Behavior, not speed: leave room for Node startup on a loaded CI runner (#187).
             proc = subprocess.run([shutil.which('node'), str(runner), str(source)], cwd=tmp,
-                                  capture_output=True, text=True, timeout=10, check=False)
+                                  capture_output=True, text=True, timeout=60, check=False)
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is required for the Node TypeScript adapter')
@@ -159,7 +160,7 @@ console.log(JSON.stringify({type:result.provenance.digitalSourceType, generator:
             runner = Path(tmp) / 'run.mjs'
             runner.write_text(program, encoding='utf-8')
             proc = subprocess.run([shutil.which('node'), str(runner), str(source)], cwd=tmp,
-                                  env={'PATH': ''}, capture_output=True, text=True, timeout=10, check=False)
+                                  env={'PATH': ''}, capture_output=True, text=True, timeout=60, check=False)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(json.loads(proc.stdout)['generator'], 'public app')
             self.assertIn('trainedAlgorithmicMedia', json.loads(proc.stdout)['type'])
