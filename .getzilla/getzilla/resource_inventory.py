@@ -32,6 +32,10 @@ EPHEMERAL = frozenset({'par'})  # parallel-runner logs; `getzilla par` recreates
 TEMP_PREFIXES = ('grok-core-parallel-', 'grok-named-smoke-', 'grok-trust-tests-', 'grok-legacy-coverage-',
                  'getzilla-', 'adaptive-architecture-object-', 'adaptive-line-stat-')
 MAX_ENTRIES = 200_000
+# A folder that holds all three is a copy of a Getzilla repository, most often a review snapshot.
+COPY_MARKERS = frozenset({'AGENTS.md', 'scripts', 'engineering'})
+COPY_ROOTS = ('archive', 'scratch', 'reviews')
+MAX_COPY_DEPTH = 4
 
 
 def classify(root: Path, path: Path) -> str:
@@ -99,6 +103,31 @@ def measure(path: Path, budget: int = MAX_ENTRIES) -> dict[str, Any]:
     return {'bytes': size, 'entries': entries, 'complete': complete}
 
 
+def repository_copies(root: Path, depth: int = MAX_COPY_DEPTH) -> list[dict[str, Any]]:
+    """Repository copies under the runtime folders agents write snapshots to. Links are not followed,
+    and a copy is not searched for nested copies. The copies stay `unknown`: nothing proves them disposable."""
+    runtime = root / RUNTIME
+    found: list[dict[str, Any]] = []
+    for top in COPY_ROOTS:
+        if os.path.islink(runtime) or os.path.islink(runtime / top) or not (runtime / top).is_dir():
+            continue
+        pending = [(runtime / top, 0)]
+        while pending:
+            folder, level = pending.pop()
+            try:
+                with os.scandir(folder) as listing:
+                    entries = list(listing)
+            except OSError:
+                continue
+            if COPY_MARKERS <= {entry.name for entry in entries}:
+                found.append({'path': folder.relative_to(root).as_posix(), **measure(folder)})
+                continue
+            if level < depth:
+                pending.extend((Path(entry.path), level + 1) for entry in entries
+                               if entry.is_dir(follow_symlinks=False))
+    return sorted(found, key=lambda item: item['path'])
+
+
 def _disk(path: Path) -> dict[str, int] | None:
     try:
         usage = shutil.disk_usage(path)
@@ -130,8 +159,9 @@ def inventory(root: Path, temp_dir: Path | None = None) -> dict[str, Any]:
         group = totals.setdefault(item['class'], {'resources': 0, 'bytes': 0})
         group['resources'] += 1
         group['bytes'] += item['bytes']
+    copies = repository_copies(root)
     return {'schema_version': 'getzilla-resource-inventory-v1', 'runtime': str(runtime), 'temp': str(temp),
-            'resources': resources, 'totals': totals,
+            'resources': resources, 'totals': totals, 'repository_copies': copies,
             'complete': all(item['complete'] for item in resources),
             'disk': {'runtime': _disk(runtime if runtime.exists() else root), 'temp': _disk(temp)},
             'deleted': 0}

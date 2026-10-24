@@ -121,9 +121,45 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(report['complete'])
         self.assertIn('free', report['disk']['temp'])
 
+    def make_copy(self, folder: Path) -> Path:
+        (folder / 'scripts').mkdir(parents=True)
+        (folder / 'engineering').mkdir()
+        (folder / 'AGENTS.md').write_text('# copy\n' * 100)
+        return folder
+
+    def test_repository_copies_are_found_counted_once_and_never_followed_through_links(self) -> None:
+        self.make_copy(self.runtime / 'scratch' / 'review-1' / 'candidate')
+        nested = self.make_copy(self.runtime / 'mystery-root' / 'unrelated')  # not a snapshot folder
+        outer = self.make_copy(self.runtime / 'scratch' / 'review-2')
+        self.make_copy(outer / 'tests' / 'fixture')  # a copy inside a copy is part of it
+        (self.runtime / 'reviews').mkdir()
+        self.make_copy(self.runtime / 'reviews' / 'route' / 'code' / 'repo')
+        self.make_copy(self.runtime / 'scratch' / 'a' / 'b' / 'c' / 'd' / 'too-deep')
+        outside = self.make_copy(self.base / 'outside-copy')
+        self.link(self.runtime / 'scratch' / 'link', outside)
+        before = snapshot(self.base)
+        report = inventory(self.root, self.temp)
+        self.assertEqual(snapshot(self.base), before)
+        paths = [item['path'] for item in report['repository_copies']]
+        self.assertEqual(paths, ['.getzilla/runtime/reviews/route/code/repo',
+                                 '.getzilla/runtime/scratch/review-1/candidate',
+                                 '.getzilla/runtime/scratch/review-2'])
+        self.assertNotIn(str(nested), paths)
+        self.assertTrue(all(item['bytes'] > 0 for item in report['repository_copies']))
+        self.assertFalse(any(disposable(self.root, self.root / path) for path in paths))
+
+    def test_cli_lists_repository_copies(self) -> None:
+        (self.root / '.git').mkdir()
+        self.make_copy(self.runtime / 'scratch' / 'review-9')
+        cli = [sys.executable, str(ROOT / 'scripts' / 'getzilla_cleanup.py'), 'inventory', '--temp', str(self.temp)]
+        text = subprocess.run(cli, cwd=self.root, capture_output=True, text=True, check=True).stdout
+        self.assertIn('Repository copies (review snapshots and the like, kept until you decide): 1,', text)
+        self.assertIn('.getzilla/runtime/scratch/review-9', text)
+
     def test_inventory_of_a_fresh_clone_without_runtime_is_empty(self) -> None:
         report = inventory(self.base / 'fresh', self.base / 'no-temp')
-        self.assertEqual((report['resources'], report['totals'], report['complete']), ([], {}, True))
+        self.assertEqual((report['resources'], report['totals'], report['complete'], report['repository_copies']),
+                         ([], {}, True, []))
 
     def test_cli_prints_classes_and_json_without_deleting(self) -> None:
         (self.root / '.git').mkdir()
