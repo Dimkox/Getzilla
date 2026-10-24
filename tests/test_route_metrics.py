@@ -148,6 +148,14 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(route['ci_minutes'], 1)
         self.assertIsNone(route['unique_defects_before_merge'])
         self.assertEqual(result['sessions'][0]['session_id'], 's1')
+        self.assertEqual(route['gaps'], ['confirmed before-merge findings not observed'])
+        finding = {**event(10, 'finding', 'r1', finding_id='f1', confirmed=True), **identity, 'schema_version': 2,
+                   'event_id': 'finding:1', 'source': 'github', 'source_ref': 'run123'}
+        path.write_text(json.dumps([finding]))
+        import_observations(self.root, '.getzilla/runtime/import.json')
+        result = summarize(load(self.root), self.root)
+        self.assertEqual((result['routes'][0]['gaps'], result['routes'][0]['unique_defects_before_merge']), ([], 1))
+        self.assertEqual(result['route_observations'], {'complete': True, 'routes_with_gaps': 0, 'routes': 1})
         (self.root / 'binary').write_bytes(b'\0value')
         git(self.root, 'add', '.')
         git(self.root, 'commit', '-qm', 'binary')
@@ -216,6 +224,24 @@ class RecordingTests(unittest.TestCase):
                                          text=True, check=True).stdout)
         self.assertEqual(data['profiles']['standard']['failed_check_or_review_outcomes'], 2)
         self.assertEqual(data['routes'][0]['minutes_to_pass'], 20.0)
+        # Journal coverage and route observations are separate: the route never observed merge or cost.
+        self.assertNotIn('cost not observed', data['coverage']['gaps'])
+        self.assertEqual(data['route_observations'], {'complete': False, 'routes_with_gaps': 1, 'routes': 1})
+        self.assertIsNone(data['routes'][0]['observed_cost'])
+        self.assertIn('Route observation gaps (1 of 1 routes; unknown is not zero):', text)
+        self.assertIn('r1: exact commit inventory unavailable; merge not observed', text)
+        self.assertIn('cost not observed', text)
+
+    def test_report_cli_bounds_the_route_gap_list(self) -> None:
+        stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        (self.root / '.getzilla' / 'runtime').mkdir()
+        (self.root / METRICS).write_text('\n'.join(json.dumps({'at': stamp, 'event': 'route', 'route_id': f'r{index}'})
+                                                   for index in range(12)) + '\n', encoding='utf-8')
+        text = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py'), '--since', '1d'], cwd=self.root,
+                              capture_output=True, text=True, check=True).stdout
+        self.assertIn('(12 of 12 routes', text)
+        self.assertEqual(sum(line.startswith('  r') for line in text.splitlines()), 10)
+        self.assertIn('2 more; use --json for all.', text)
 
 
 if __name__ == '__main__':

@@ -65,7 +65,11 @@ def _when(item: dict[str, Any]) -> datetime:
 
 
 def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dict[str, Any]:
-    """Per route: time to the first passing verification, runs, reviews and blocking findings caught."""
+    """Per route: time to the first passing verification, runs, reviews and blocking findings caught.
+
+    `coverage` covers the journal only (unreadable or skipped lines). `route_observations` covers
+    what each route did not observe (merge, cost, commits); unknown values stay None, never zero.
+    """
     events = deduplicate(events, getattr(events, 'gaps', []))
     routes: dict[str, dict[str, Any]] = {}
     for item in sorted(events, key=lambda event: event['at']):
@@ -116,8 +120,10 @@ def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dic
         sessions.append({'session_id': session_id, 'route_ids': sorted({item['route_id'] for item in selected if item.get('route_id')}),
                          'observations': len(selected), 'started_at': next((item['at'] for item in selected if item['event'] == 'session_start'), None),
                          'ended_at': next((item['at'] for item in reversed(selected) if item['event'] == 'session_end'), None)})
+    with_gaps = [route['route_id'] for route in routes.values() if route.get('gaps')]
     return {'routes': sorted(routes.values(), key=lambda route: route['created_at'] or ''), 'profiles': profiles, 'sessions': sessions,
             'coverage': {'complete': not events.gaps, 'gaps': events.gaps},
+            'route_observations': {'complete': not with_gaps, 'routes_with_gaps': len(with_gaps), 'routes': len(routes)},
             'interpretation': 'Grant materializations are not human interventions; check outcomes are not confirmed defects.'}
 
 
