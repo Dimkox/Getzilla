@@ -180,6 +180,32 @@ class WorktreeSafetyTests(unittest.TestCase):
         git_dir = Path(git(path, 'rev-parse', '--absolute-git-dir'))
         (git_dir / 'MERGE_HEAD').write_text(git(path, 'rev-parse', 'HEAD') + '\n')
         self.assertIn('operation in progress: MERGE_HEAD', self.report(path)['reasons'])
+        (git_dir / 'MERGE_HEAD').unlink()
+        (git_dir / 'sequencer').mkdir()  # a multi-commit cherry-pick between steps
+        self.assertIn('operation in progress: sequencer', self.report(path)['reasons'])
+
+    def test_a_bisect_ref_and_a_long_reflog_keep_the_worktree(self) -> None:
+        bisect = self.add('bisect', '--detach')
+        commit(bisect, 'app.py', 'value = 7\n', 'only in refs/bisect')
+        git(bisect, 'update-ref', 'refs/bisect/bad', 'HEAD')
+        git(bisect, 'checkout', '-q', '--detach', 'origin/main')
+        git(bisect, 'reflog', 'expire', '--expire=now', '--all')
+        self.assertIn('commits not on any remote-tracking ref', self.report(bisect)['reasons'])
+        long_log = self.add('long-log', '-b', 'long-log')
+        git(long_log, 'checkout', '-q', '--detach', 'origin/main')
+        with patch('getzilla.worktree_safety.MAX_REFLOG', 1):
+            self.assertIn('commits not on any remote-tracking ref', self.report(long_log)['reasons'])
+
+    def test_a_folder_named_like_bytecode_is_not_disposable(self) -> None:
+        path = self.add('pyc-folder', '-b', 'pyc-folder')
+        exclude = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')) / 'info' / 'exclude'
+        exclude.parent.mkdir(exist_ok=True)
+        exclude.write_text('*.pyc\n')
+        (path / 'notes.pyc').mkdir()
+        (path / 'notes.pyc' / 'draft.txt').write_text('unique')
+        report = self.report(path)
+        self.assertEqual(report['hidden_from_status'], [])
+        self.assertIn('notes.pyc/draft.txt', report['valuable_ignored'])
 
     def test_a_linked_worktrees_folder_keeps_everything_under_it(self) -> None:
         real = self.base / 'real-worktrees'
@@ -216,19 +242,59 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertIn('a process works in it', self.report(path)['reasons'])
 
     @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
-    def test_a_process_of_ours_whose_folder_cannot_be_read_keeps_the_worktree(self) -> None:
+    def test_a_hidden_process_of_ours_counts_only_when_newer_than_the_worktree(self) -> None:
         from getzilla import worktree_safety
         path = self.add('hidden-process', '-b', 'hidden-process')
+        created = worktree_safety._created_at(path)
+        self.assertIsNotNone(created)
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        hidden = {str(child.pid)}
         real_readlink = os.readlink
 
         def denied(target, *args, **kwargs):
-            if str(target).endswith(f'/{os.getpid()}/cwd'):
+            if Path(target).parent.name in hidden:
                 raise PermissionError('not dumpable')
             return real_readlink(target, *args, **kwargs)
 
         with patch('getzilla.worktree_safety.os.readlink', side_effect=denied):
-            self.assertIsNone(worktree_safety._in_use(path))
+            self.assertIsNone(worktree_safety._in_use(path, created))
             self.assertIn('cannot check for running processes on this platform', self.report(path)['reasons'])
+            self.assertIsNone(worktree_safety._in_use(path, None), 'an unknown creation time fails closed')
+            hidden.clear()
+            hidden.add(str(os.getpid()))  # this test process started before the worktree below
+            older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
+            self.assertIsNotNone(older)
+            self.assertFalse(worktree_safety._in_use(path, older + 60))
+            self.assertFalse(worktree_safety._in_use(path, older + 10), 'a 2 s margin, not more')
+            with patch('getzilla.worktree_safety._started_at', return_value=None):
+                self.assertIsNone(worktree_safety._in_use(path, older + 60), 'an unknown start fails closed')
+
+    @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
+    def test_a_process_name_with_brackets_does_not_shift_the_start_field(self) -> None:
+        from getzilla import worktree_safety
+        entry = self.base / 'fake-proc'
+        entry.mkdir()
+        (entry / 'stat').write_text('123 (x) y (z) w) S ' + ' '.join(['0'] * 18 + ['500', '7']) + '\n')
+        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+                    if line.startswith('btime '))
+        self.assertEqual(worktree_safety._started_at(entry), boot + 500 / os.sysconf('SC_CLK_TCK'))
+
+    def test_the_creation_time_survives_move_and_repair_and_a_clock_step(self) -> None:
+        from getzilla import worktree_safety
+        path = self.add('moved', '-b', 'moved')
+        git_dir = Path(git(path, 'rev-parse', '--absolute-git-dir'))
+        os.utime(git_dir / 'commondir', (1_000_000, 1_000_000))
+        os.utime(path, (2_000_000, 2_000_000))
+        self.assertEqual(worktree_safety._created_at(path), 1_000_000)  # gitdir rewritten later by a move
+        (git_dir / 'commondir').rename(git_dir / 'commondir.saved')
+        self.assertIsNone(worktree_safety._created_at(path))
+        (git_dir / 'commondir.saved').rename(git_dir / 'commondir')
+        future = os.path.getmtime(git_dir / 'gitdir') + 3600
+        os.utime(git_dir / 'commondir', (future, future))
+        os.utime(git_dir / 'gitdir', (future, future))
+        self.assertIsNone(worktree_safety._created_at(path))
 
     def test_a_worktree_a_process_works_in_is_kept(self) -> None:
         path = self.add('busy', '-b', 'busy')

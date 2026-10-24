@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from .resource_inventory import RUNTIME, classify
 
 WORKTREES = RUNTIME + '/worktrees'
 DISPOSABLE_PARTS = frozenset({'__pycache__', '.pytest_cache', '.ruff_cache', '.mypy_cache'})
-IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG')
+IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'sequencer')
 MAX_IGNORED_FILES = 10_000
 MAX_REFLOG = 2_000
 MAX_LISTED = 20
@@ -70,7 +71,8 @@ def list_worktrees(root: Path) -> list[dict[str, Any]]:
 
 
 def _disposable(worktree: Path, relative: str) -> bool:
-    if DISPOSABLE_PARTS & set(Path(relative).parts) or relative.endswith('.pyc'):
+    is_file = not relative.endswith('/') and not os.path.isdir(worktree / relative)
+    if DISPOSABLE_PARTS & set(Path(relative).parts) or (is_file and relative.endswith('.pyc')):
         return True
     return classify(worktree, worktree / relative) == 'ephemeral'
 
@@ -80,7 +82,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
     found: list[str] = []
     seen = 0
     for relative in ignored:
-        if _disposable(worktree, relative.rstrip('/')):
+        if _disposable(worktree, relative):
             continue
         folder = worktree / relative
         if not (relative.endswith('/') and folder.is_dir() and not folder.is_symlink()):
@@ -149,15 +151,46 @@ def _local_only(worktree: Path) -> bool:
     tips = {'HEAD'}
     refs = _git(worktree, 'for-each-ref', '--format=%(objectname)', 'refs/worktree', 'refs/bisect')
     tips.update(refs.decode().split())
-    reflog = subprocess.run(['git', '-C', str(worktree), 'reflog', 'show', '--format=%H', f'-n{MAX_REFLOG}', 'HEAD', '--'],
-                            capture_output=True, timeout=TIMEOUT, check=False)
-    if reflog.returncode == 0:  # a worktree without a reflog has nothing to add
-        tips.update(reflog.stdout.decode().split())
+    reflog = _git(worktree, 'reflog', 'show', '--format=%H', f'-n{MAX_REFLOG + 1}', 'HEAD', '--').decode().split()
+    if len(reflog) > MAX_REFLOG:
+        return True  # not every entry can be checked; keep the worktree
+    tips.update(reflog)
     return bool(_git(worktree, 'rev-list', '--max-count=1', *sorted(tips), '--not', '--remotes').strip())
 
 
-def _in_use(path: Path) -> bool | None:
-    """True when this or another process works inside `path`; None when that cannot be checked."""
+def _started_at(entry: Path) -> float | None:
+    """Process start time in epoch seconds from the world-readable /proc stat files."""
+    try:
+        fields = (entry / 'stat').read_text(encoding='utf-8', errors='surrogateescape').rsplit(')', 1)[1].split()
+        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text(encoding='ascii').splitlines()
+                    if line.startswith('btime '))
+        return boot + int(fields[19]) / os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _created_at(worktree: Path) -> float | None:
+    """When Git registered the worktree, or None when that is not known.
+
+    `git worktree add` writes `commondir` and `gitdir`; move and repair rewrite only `gitdir`, so the
+    earlier of the two mtimes is used. A time in the future (the clock stepped back) is not trusted.
+    """
+    try:
+        git_dir = Path(_git(worktree, 'rev-parse', '--absolute-git-dir').decode('utf-8', errors='surrogateescape').strip())
+        created = min(os.stat(git_dir / 'gitdir').st_mtime, os.stat(git_dir / 'commondir').st_mtime)
+    except (WorktreeError, OSError):
+        return None
+    return None if created > time.time() + 2 else created
+
+
+def _in_use(path: Path, created: float | None = None) -> bool | None:
+    """True when this or another process works inside `path`; None when that cannot be checked.
+
+    A process of ours that hides its working folder (ssh-agent, a CI runner, a container init) counts
+    as unknown only when it started after the worktree was created; an older process cannot have been
+    started for it. Only the working folder is checked, not open files; other users' hidden processes
+    are skipped.
+    """
     target = os.path.realpath(path)
 
     def inside(value: str) -> bool:
@@ -171,7 +204,7 @@ def _in_use(path: Path) -> bool | None:
     unknown = False
     uid = os.getuid()
     for entry in processes.iterdir():
-        if entry.name.isdigit() and entry.name != '1':  # PID 1 is the system or container init, not task work
+        if entry.name.isdigit():
             try:
                 if inside(os.readlink(entry / 'cwd')):
                     return True
@@ -179,10 +212,13 @@ def _in_use(path: Path) -> bool | None:
                 continue  # the process ended
             except OSError:
                 try:
-                    unknown = unknown or entry.stat().st_uid == uid  # a hidden process of ours may work there
+                    if entry.stat().st_uid != uid:
+                        continue
                 except OSError:
                     continue
-    # Only the working folder is checked, not open files; other users' hidden processes are skipped.
+                started = _started_at(entry)
+                if created is None or started is None or started >= created - 2:  # 2 s for clock tick rounding
+                    unknown = True
     return None if unknown else False
 
 
@@ -229,7 +265,7 @@ def inspect(root: Path, entry: dict[str, Any], main: str) -> dict[str, Any]:
         reasons.append('ignored files that are not reproducible: ' + ', '.join(valuable[:5]))
     if local_only:
         reasons.append('commits not on any remote-tracking ref')
-    busy = _in_use(path)
+    busy = _in_use(path, _created_at(path))
     if busy is None:
         reasons.append('cannot check for running processes on this platform')
     elif busy:
