@@ -190,12 +190,21 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(all(item['entries'] <= 8 for item in copies))
         self.assertFalse(repository_copies(self.root, budget=1)[1])
 
+    def test_a_search_that_uses_exactly_the_budget_is_complete(self) -> None:
+        (self.runtime / 'scratch' / 'empty').mkdir()
+        self.assertEqual(repository_copies(self.root, budget=1), ([], True))
+        self.assertEqual(repository_copies(self.root, budget=0), ([], False))
+
     def test_the_budget_left_after_the_search_bounds_the_copy_size(self) -> None:
         big = self.make_copy(self.runtime / 'scratch' / 'big')
         for index in range(10):
             (big / 'scripts' / f'file-{index}.py').write_text('x\n')
-        self.assertEqual(repository_copies(self.root, budget=100)[1], True)
-        copies, complete = repository_copies(self.root, budget=6)  # the search needs 4 entries, the size 15
+        copies, complete = repository_copies(self.root, budget=100)
+        self.assertTrue(complete)
+        # The scratch listing has 1 entry; the copy counts its own 14 entries once, through its size.
+        self.assertEqual(copies[0]['entries'], 14)
+        self.assertTrue(repository_copies(self.root, budget=15)[1], 'the exact budget is enough')
+        copies, complete = repository_copies(self.root, budget=14)
         self.assertEqual(([item['path'] for item in copies], complete), (['.getzilla/runtime/scratch/big'], False))
         self.assertFalse(copies[0]['complete'])
 

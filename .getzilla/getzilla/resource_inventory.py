@@ -137,15 +137,15 @@ def repository_copies(root: Path, depth: int = MAX_COPY_DEPTH,
             except OSError:
                 complete = False
                 continue
-            budget -= len(entries)
-            if budget <= 0:
-                return sorted(found, key=lambda item: item['path']), False
-            if COPY_MARKERS <= names:
+            if COPY_MARKERS <= names:  # its own entries are counted once, by its size
                 size = measure(folder, budget)
                 budget -= size['entries']
                 complete = complete and size['complete']
                 found.append({'path': folder.relative_to(root).as_posix(), **size})
                 continue
+            budget -= len(entries)
+            if budget < 0:
+                return sorted(found, key=lambda item: item['path']), False
             if level < depth:
                 pending.extend((child, level + 1) for child in children)
     return sorted(found, key=lambda item: item['path']), complete
