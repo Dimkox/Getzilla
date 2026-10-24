@@ -93,7 +93,7 @@ Known weak seams this line is closing:
 - A timeout or interrupted verifier is incomplete, not a pass.
 - A restarted attempt cannot reuse an old model/config/profile identity without requalification.
 
-The price is deliberate. For a small personal patch this can feel too heavy. For an autonomous agent touching someone else's repository, the route, change package, fitness checks, receipts, external holdout and human merge gate are the safety boundary. The published release is `v2.1.1`. Liqvera is a completed owner-accepted factory-built product; empirical autonomy qualification and production authority remain separate.
+The price is deliberate. For a small personal patch this can feel too heavy. For an autonomous agent touching someone else's repository, the route, change package, fitness checks, receipts, external holdout and human merge gate are the safety boundary. The latest published release is `v2.3.0`. Liqvera is a completed owner-accepted factory-built product; empirical autonomy qualification and production authority remain separate.
 
 ## Advanced startup baseline
 
@@ -105,11 +105,11 @@ The observed **controller + 12 child-agent slots**, routing cap `max_parallel_an
 
 ## Current state
 
-Identity: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0) is immutable: published 2026-10-21T11:01:37Z, annotated tag `815aeabc5d215d65e72651692a6457920de9fa71`, commit `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, tree `81076df2cd7db8713f7178ead66ebaa2728f861e`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
+Identity: **2.3.1 source candidate**: everything merged to `main` since v2.3.0, up to PR #179. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0) is immutable: published 2026-10-21T11:01:37Z, annotated tag `815aeabc5d215d65e72651692a6457920de9fa71`, commit `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, tree `81076df2cd7db8713f7178ead66ebaa2728f861e`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
 
-Observed main on 2026-10-12: `540c12f93e798c2f483455a5086ab0018ac3216e`. This is the release contour comparison base. PR #79 contains the command-policy and routing repairs plus this release candidate. It remains unmerged; current source checks must qualify this exact candidate.
+Observed main on 2026-10-24: `a45fbdd90e4f98e05c2f45c43afb28a63b3e448c`, the PR #179 merge. Since v2.3.0, `main` gained `getzilla update` (#132, #135), the light lane for small changes (#121, #142), exact-diff review plans (#144), disk cleanup for issue #168 (#174–#178) and session-bound protected-path grants (#179). Continue from `PROJECT_STATE.json.current_continuation`: the Low batch in issue #134, then the 2.3.1 release.
 
-Continue `fix/codex-cmd-hooks-20261011`, route `43786cadd549`, through the [2.2.2 source package](../engineering/changes/20261012-task-43786c/brief.md) and `PROJECT_STATE.json.current_continuation`. This record is historical. Today, reports and receipts live in ignored runtime storage under `.getzilla/runtime` and in portable evidence exports, not in committed Markdown. PASS receipts require `--reviewed-commit <exact-full-sha>`; consumers recheck the reviewed tree and ancestry. Public Actions linux/windows provide the required exact-head checks. The historical private Trust CI identity is `adaptive-trust-ci/verified@06ecf1c875bc`, App ID `<redacted-app-id>`; this record is not fresh verification. Conditional AGENTS L5 covers exact-grant merge/tag/release after checks, independent review and resolved threads; production mutation, deploy, external writes and human security approvals remain separate.
+The finished PR #79 contour (`fix/codex-cmd-hooks-20261011`, route `43786cadd549`, [source package](../engineering/changes/20261012-task-43786c/brief.md)) is kept in `historical_pr79_continuation`. Today, reports and receipts live in ignored runtime storage under `.getzilla/runtime` and in portable evidence exports, not in committed Markdown. PASS receipts require `--reviewed-commit <exact-full-sha>`; consumers recheck the reviewed tree and ancestry. Public Actions linux/windows provide the required exact-head checks. The historical private Trust CI identity is `adaptive-trust-ci/verified@06ecf1c875bc`, App ID `<redacted-app-id>`; this record is not fresh verification. Conditional AGENTS L5 covers exact-grant merge/tag/release after checks, independent review and resolved threads; production mutation, deploy, external writes and human security approvals remain separate.
 
 The native harness executes local tasks. Do not add a daemon or enable providers to complete this source repair. The [historical M8 package](../engineering/changes/20261004-task-b25860/brief.md) and predecessor release records remain dated provenance.
 
@@ -222,7 +222,7 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
    python3 scripts/getzilla_status.py
    ```
 
-   `getzilla_route.py` создаёт маршрут, а `getzilla_change.py start` — пакет новой задачи; если пакет уже существует, повторный `start` пропустите. Создание маршрута/пакета пишет локальное состояние .getzilla/runtime/active-route.json и engineering/changes/<id>/. Не перезаписывайте уже активную задачу новым маршрутом. Используйте `/getzilla-delivery`: только выбранные allowed_agents, один write_agent на изолированную ветку/worktree, проверки и независимые reviewers. Если route.human_gates содержит scope_and_design_approval, человек сначала утверждает конкретный scope/design; `getzilla_gate.py decide` лишь фиксирует уже принятое решение, не выдаёт внешнее разрешение. Production/external actions требуют собственного точного делегирования и применимых внешних approvals.
+   `getzilla_route.py` создаёт маршрут, а `getzilla_change.py start` — пакет новой задачи; если пакет уже существует, повторный `start` пропустите. Создание маршрута/пакета пишет локальное состояние .getzilla/runtime/active-route.json и .getzilla/runtime/changes/<id>/ (старые пакеты в engineering/changes/ — история). Не перезаписывайте уже активную задачу новым маршрутом. Используйте `/getzilla-delivery`: только выбранные allowed_agents, один write_agent на изолированную ветку/worktree, проверки и независимые reviewers. Если route.human_gates содержит scope_and_design_approval, человек сначала утверждает конкретный scope/design; `getzilla_gate.py decide` лишь фиксирует уже принятое решение, не выдаёт внешнее разрешение. Production/external actions требуют собственного точного делегирования и применимых внешних approvals.
 
 5. Для уже реально созданного дочернего агента heartbeat/watchdog дают наблюдаемость. Hook SubagentStart регистрирует его автоматически; при отсутствии hook:
 
@@ -253,11 +253,11 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
 
    PR/release по умолчанию останавливают последующие проверки при первом отказе, неизвестном статусе или недопустимом skip. Отчёт сохраняет реальный результат и явно помечает незапущенные проверки; source-stability и финальный QG остаются обязательными. `--keep-going` собирает диагностику, сохраняя архитектурный preflight и правила admission. Именованный fast smoke требует чистый committed HEAD, `--no-record` и явные unittest-имена; бюджет subprocess — 1–180 секунд (по умолчанию 180), после таймаута добавляется ограниченная очистка процесса и проверка идентичности. Он не создаёт и не заменяет receipt. Полный успешный PR gate может занять больше 180 секунд; smoke или таймаут не заменяют его.
 
-   После CPU-снимка и маршрутизации зафиксируйте trusted base/HEAD и staged/unstaged/untracked inventory. Именованные controls выше — observation, без receipt и scope admission. Затем все независимые route-selected reviewers проверяют кандидат; полные отчёты сохраняются в engineering/changes/<id>/evidence/. Закоммитьте отчёты и заморозьте дерево. Единственный финальный qualifying local gate — `python3 scripts/getzilla_verify.py --mode pr`: его fail-closed selector выбирает scope по действительному base..HEAD и dirty inventory до тяжёлых checks. Зафиксируйте profile/reason, проверенные пути и skips; skipped не означает passed. Этот gate пишет локальный receipt в .getzilla/runtime/receipts/<route-id>/ и может идти параллельно с внешним App-owned exact-head Trust CI после точного delegated UNVERIFIED branch transport. Полный local gate до review не требуется. Status показывает evidence_gaps, package_incomplete и agent_diagnostics; изменение дерева делает прежние receipts устаревшими.
+   После CPU-снимка и маршрутизации зафиксируйте trusted base/HEAD и staged/unstaged/untracked inventory. Именованные controls выше — observation, без receipt и scope admission. Затем все независимые route-selected reviewers проверяют кандидат; полные отчёты сохраняются вне Git: в папке evidence пакета `.getzilla/runtime/changes/<id>/` или в `.getzilla/runtime/reviews/<route-id>/`. Коммит отчётов и заморозка дерева не нужны. Единственный финальный qualifying local gate — `python3 scripts/getzilla_verify.py --mode pr`: его fail-closed selector выбирает scope по действительному base..HEAD и dirty inventory до тяжёлых checks. Зафиксируйте profile/reason, проверенные пути и skips; skipped не означает passed. Этот gate пишет локальный receipt в .getzilla/runtime/receipts/<route-id>/ и может идти параллельно с внешним App-owned exact-head Trust CI после точного delegated UNVERIFIED branch transport. Полный local gate до review не требуется. Status показывает evidence_gaps, package_incomplete и agent_diagnostics; изменение дерева делает прежние receipts устаревшими.
 
 7. Доставка — отдельная ветка и PR. Условное AGENTS L5 разрешает merge/tag/release своего репозитория после зелёных exact-head checks, независимого review и закрытых threads, с точными action/resource grants. Прямой push в main запрещён. Public Getzilla требует Actions linux/windows; private consumer требует настроенный App-owned Trust CI и применимые подписанные approvals. Локальный PASS не заменяет внешнюю проверку. Production, deploy и external writes требуют отдельного точного разрешения.
 
-   При отказе verifier изучите конкретный failed check, соберите связанные замечания в один ремонт тому же writer и повторите затронутые короткие controls. После независимого review сохраните полные отчёты, закоммитьте и заморозьте кандидат; финальные локальная проверка и внешний exact-head check могут идти параллельно после явно делегированного UNVERIFIED branch transport. Identical merged tree без новых product changes — no-op, без нового полного прогона. При отказе установщика сохраните указанный stage для ручной инспекции, если сообщено `manual cleanup required`; не удаляйте неизвестную цель. При неоднозначном runtime/provider результате сохраните состояние и audit, выполните документированное reconcile, не повторяйте публикацию/inference вслепую. Для реального factory control plane и L5 нужны отдельные операторские конфигурация, зависимости, authority и rollout/recovery runbooks; установка локального стека сама их не активирует и не выдаёт live URL.
+   При отказе verifier изучите конкретный failed check, соберите связанные замечания в один ремонт тому же writer и повторите затронутые короткие controls. После независимого review сохраните полные отчёты вне Git, не меняя проверенный коммит; финальные локальная проверка и внешний exact-head check могут идти параллельно после явно делегированного UNVERIFIED branch transport. Identical merged tree без новых product changes — no-op, без нового полного прогона. При отказе установщика сохраните указанный stage для ручной инспекции, если сообщено `manual cleanup required`; не удаляйте неизвестную цель. При неоднозначном runtime/provider результате сохраните состояние и audit, выполните документированное reconcile, не повторяйте публикацию/inference вслепую. Для реального factory control plane и L5 нужны отдельные операторские конфигурация, зависимости, authority и rollout/recovery runbooks; установка локального стека сама их не активирует и не выдаёт live URL.
 
 ## Verification scope selection
 
@@ -323,7 +323,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [`.grok/skills/`](../.grok/skills/)
 - [`.grok/agents/`](../.grok/agents/)
 - [`.grok/hooks/`](../.grok/hooks/)
-- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — the installer generates nine root aliases in consumer projects; canonical source hooks live in `.grok/hooks/`.
+- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.grok/hooks/`, the canonical source.
 - [`scripts/getzilla_route.py`](../scripts/getzilla_route.py)
 - [`scripts/getzilla_change.py`](../scripts/getzilla_change.py)
 - [`scripts/getzilla_agent.py`](../scripts/getzilla_agent.py) — local heartbeat, progress, bounded watchdog and acknowledged same-task recovery; [operator runbook](../engineering/runbooks/local-agent-watchdog.md)
@@ -525,22 +525,53 @@ Local loop: measured route → change → bounded committed-HEAD observations �
 
 Declared route `human_gates` are flags: their decisions are recorded in the active change package and their open state is shown (gate status and the `open_human_gates` entry in the change history), but they never block a change transition or an action. The one exception is `paid_run_approval`: the first live paid run stays blocked until an approved decision names its exact resource, and a missing or changed declaration of that gate fails closed. Inspect gate status with `python3 scripts/getzilla_gate.py status`; record only an explicit operator decision with `python3 scripts/getzilla_gate.py decide <gate> <approved|rejected> --reason "..." --actor "..."` (production decisions also require `--action`; approve the migration plan with `--action migration-plan`; external-write decisions require exact `--action external-write --resource ...`). Decisions are bound to the active route, change, gate and scope digest. They are mutable local workflow evidence, not authenticated human identity, delegated grants, Trust CI signed approvals or merge authority. Production and external-write operations still require their exact delegated grants.
 
-| Script | Role |
-|--------|------|
-| `scripts/getzilla_route.py` | Classify / show route |
-| `scripts/getzilla_change.py` | Start durable local change package |
-| `scripts/getzilla_governance.py` | Validate/summarize target-owned governance, check read-only projections, and emit an exact clean-state handoff |
-| `scripts/getzilla_status.py` | Local runtime status |
-| `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
-| `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
-| `scripts/getzilla_vulns.py` | Known vulnerabilities in pinned dependencies from OSV (`--online`, `--db DIR`, `--download-db DIR`) |
-| `scripts/getzilla_review.py` | Record local review receipt |
-| `scripts/getzilla_approve.py` | Delegated local action/resource grant bound to repository, route, change, exact HEAD and tree fingerprint; not accepted by Trust CI |
-| `scripts/getzilla_deploy.py` | Prepare-only delivery commands |
-| `scripts/getzilla_doctor.py` | Local health check |
-| `scripts/getzilla_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
-| `scripts/install_into.py` | Plan an existing repository read-only or atomically materialize an absent new target |
-| `adaptive-trust-ci` | External API, worker, migration, signed approvals, holdout verification, attestation verification and app-bound branch protection |
+Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla.cmd` on Windows), or as `python3 scripts/getzilla_cli.py <command>`. `getzilla <command> --help` shows its options. The [README command table](../README.md#commands) groups them by task.
+
+| Command | Script | Role |
+|--------|------|------|
+| `doctor` | `scripts/getzilla_doctor.py` | Local health check; `--offer-install` offers missing tools |
+| `setup-agent` | `scripts/getzilla_setup_agent.py` | Coding agent and model provider setup; `--forget-key` removes the stored key |
+| `install-into` | `scripts/install_into.py` | Plan an existing repository read-only, or atomically materialize an absent new target |
+| `adopt` | `scripts/adopt_existing.py` | Adopt a folder without Git into a new local workspace (`plan`, `apply`, `status`, `resume`, `abort`) |
+| `components` | `scripts/getzilla_components.py` | Show and add optional components (`agent:<name>`, `extra:bitrix`, `extra:seo-landing`, `compliance:eu-ai-act`, `factory`) |
+| `baseline` | `scripts/getzilla_baseline.py` | Mandatory pinned baseline: `status`, `apply` |
+| `harness` | `scripts/getzilla_harness.py` | Check, or with `--write` regenerate, the generated agent harness copies |
+| `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, write the new files into the project on a `getzilla-update-<version>` branch, then update third-party tools (`--no-self`, `--no-tools`, `--accept-local`) |
+| — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |
+| `cpu` | `scripts/getzilla_startup_cpu.py` | Startup step zero: measure and record usable CPUs (`--reserve`, `--attach`) |
+| `par` | `scripts/getzilla_par.py` | Run independent commands in parallel on the measured CPUs (`-j`, `--each`) |
+| `route` | `scripts/getzilla_route.py` | Classify, show, reconcile, complete or cancel the task route; `--reconcile --add-reviewer <role>` keeps an extra reviewer |
+| `status` | `scripts/getzilla_status.py` | Local runtime status: route, change package, evidence gaps, agents |
+| `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
+| `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
+| `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, progress, bounded watchdog and acknowledged same-task recovery |
+| `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
+| `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
+| `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` |
+| `gate` | `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
+| `vulns` | `scripts/getzilla_vulns.py` | Known vulnerabilities in pinned dependencies from OSV (`--online`, `--db DIR`, `--download-db DIR`) |
+| `duplicates` | `scripts/getzilla_duplicates.py` | Read-only source duplication analysis; uses jscpd when it is installed |
+| `graph` | `scripts/getzilla_graph.py` | Read-only Python code graph: `build`, `status`, `impact`, `export` |
+| `architecture` | `scripts/getzilla_architecture.py` | Validate, diff and draw the architecture model |
+| `governance` | `scripts/getzilla_governance.py` | Validate/summarize target-owned governance, check read-only projections, and emit an exact clean-state handoff |
+| `artifacts` | `scripts/getzilla_artifacts.py` | Import, compile and converge Spec Kit, BMAD and Superpowers artifacts |
+| `risk-terms` | `scripts/getzilla_risk_terms.py` | Risk vocabulary language packs: `check`, `languages`, `scaffold` |
+| `compliance` | `scripts/getzilla_compliance.py` | Scaffold an EU AI Act adapter for a registered AI system (optional layer) |
+| — | `scripts/getzilla_audit_bundle.py` | EU AI Act release audit bundle (optional layer) |
+| `approve` | `scripts/getzilla_approve.py` | Delegated local grant for exact actions and resources. Protected-path grants bind repository, caller session, change, branch, anchor and file set; other scopes bind route, exact HEAD and tree. Not accepted by Trust CI |
+| `protected-write` | `scripts/getzilla_protected_write.py` | Apply an approved protected-path write from a manifest (`--dry-run` first) |
+| `ci` | `scripts/getzilla_ci.py` | Select the CI gate by visibility; `--write` renders the pinned public workflow; `--protect-plan` shows branch protection |
+| `trust-ci` | `scripts/getzilla_trust_ci.py` | Trust CI host: `init`, `status`, `github-app`, `trust-key` |
+| `deploy` | `scripts/getzilla_deploy.py` | Prepare-only delivery commands |
+| — | `scripts/getzilla_evidence.py` | Export bounded local workflow evidence, without approvals or secrets, with `--output <file>` |
+| `cleanup` | `scripts/getzilla_cleanup.py` | `inventory` (read-only disk report with repository copies), `worktrees [--remove]` (guarded removal), `snapshot <commit>` / `snapshot --remove <path>` (review copies) |
+| `branches` | `scripts/branch_lifecycle.py` | Branch retention `report`; `apply` deletes only from a reviewed plan with `--allow-delete` |
+| `report` | `scripts/getzilla_report.py` | Per-profile overhead, observation gaps and defects caught before merge |
+| `history` | `scripts/getzilla_history.py` | Offline historical evidence accounting from a snapshot file (`getzilla history <snapshot.json>`) |
+| — | `scripts/getzilla_m8.py` | Bounded local M8 owner policy: `status`, `activate`, `admit --action <action>`, `revoke` |
+| `demo` | `scripts/getzilla_demo.py` | Start the loopback-only read-only product tour using bundled sample and checkout-derived evidence |
+| — | `scripts/package_stack.py` | Build the release ZIP and its checksum sidecar |
+| — | `adaptive-trust-ci` | External API, worker, migration, signed approvals, holdout verification, attestation verification and app-bound branch protection |
 
 ## Reviewed verification dispositions
 

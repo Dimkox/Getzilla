@@ -11,7 +11,7 @@
 
 # Getzilla
 
-Current source: **2.3.1 source candidate**, including the verifier child-test scope fix. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.3.1 source candidate** (unpublished): all work merged to `main` since v2.3.0, up to PR #179. It adds `getzilla update`, disk cleanup (`getzilla cleanup`), session-bound grants and the light lane for small changes. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
@@ -96,7 +96,7 @@ echo "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807  getzilla
 
 The installer is verified before it runs: the commands download it from the `v2.3.0` release tag, compare its SHA-256 with the digest published here (the test suite binds this digest to the installer bytes at the published tag), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
 
-To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder.
+To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `getzilla setup-agent --agent codex` (or `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder).
 
 To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this at the end of every run.
 
@@ -118,6 +118,52 @@ python3 scripts/install_into.py --plan /absolute/path/to/your/repo
 
 Then follow [QUICKSTART.md](QUICKSTART.md).
 
+## Commands
+
+All commands go through one launcher, `getzilla <command>`. The Linux and macOS installer links it to `~/.local/bin/getzilla`; add `~/.local/bin` to `PATH` if the shell does not find it. On Windows, use `bin\getzilla.cmd`. Without the launcher, run `python3 scripts/getzilla_cli.py <command>` from the Getzilla folder. `getzilla --help` lists the commands, and `getzilla <command> --help` shows the options of one command.
+
+| Area | Command | What it does |
+| --- | --- | --- |
+| Set up | `getzilla doctor [--offer-install]` | Checks this machine and the repository, and offers to install missing tools |
+| | `getzilla setup-agent --agent <name>` | Sets the coding agent (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`) and where its models come from |
+| | `getzilla install-into --plan <repo>` | Shows, read-only, what Getzilla would add to a project; `--materialize-new <path>` creates a new project |
+| | `getzilla adopt plan\|apply\|status\|resume\|abort` | Adopts a folder without Git into a new local workspace |
+| | `getzilla components status`, `components add <name>` | Shows and adds optional parts, for example `agent:cursor`, `extra:bitrix`, `compliance:eu-ai-act`, `factory` |
+| | `getzilla baseline status\|apply` | Shows or applies the mandatory pinned baseline |
+| | `getzilla harness [--write]` | Checks or regenerates the agent files in `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/` and `.cursor/` |
+| Update | `getzilla update [--no-self] [--no-tools] [--accept-local]` | Updates Getzilla, writes the new files into the project on a new branch, then updates third-party tools |
+| A task | `getzilla cpu` | Measures and records the usable CPUs (startup step zero) |
+| | `getzilla route "<task>"` | Creates the task route; `--show` prints it, `--reconcile` binds it to the committed diff, `--reconcile --add-reviewer <role>` keeps an extra reviewer |
+| | `getzilla status` | Shows the route, the change package, open evidence gaps and agents |
+| | `getzilla change start\|transition\|show` | Manages the change package of the task |
+| | `getzilla spec validate\|summary\|coverage\|map\|generate` | Checks typed change specifications |
+| | `getzilla agent start\|heartbeat\|progress\|watchdog\|watch\|...` | Records agent heartbeats and checkpoints, and finds stuck agents |
+| | `getzilla par -j <n> -- "cmd1" "cmd2"` | Runs independent commands in parallel on the measured CPUs |
+| Check | `getzilla test` | Runs the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
+| | `getzilla verify --mode fast\|pr\|release` | Runs the checks the route selects and records a receipt |
+| | `getzilla review <kind> --status pass\|fail --report <file> --reviewed-commit <sha>` | Records an independent review |
+| | `getzilla gate status`, `gate decide <gate> approved\|rejected` | Shows or records a human-gate decision |
+| | `getzilla vulns [--online]` | Checks pinned dependencies against known vulnerabilities (OSV) |
+| | `getzilla duplicates` | Finds duplicated source code (read-only; jscpd is optional) |
+| | `getzilla graph build\|status\|impact\|export --root <dir>` | Builds a Python code graph and shows the impact of a change (read-only) |
+| | `getzilla architecture validate\|summary\|drift\|diagram\|diff\|fitness` | Checks the architecture model and draws its diagrams |
+| | `getzilla governance validate\|summary\|handoff\|project\|check-projections` | Checks governance rules and evidence |
+| | `getzilla artifacts import\|compile\|converge\|validate\|export` | Reads Spec Kit, BMAD and Superpowers files as advisory input |
+| | `getzilla risk-terms check\|languages\|scaffold` | Checks the risk vocabulary language packs |
+| | `getzilla compliance scaffold` | Creates an EU AI Act adapter for a registered AI system (optional layer) |
+| Deliver | `getzilla approve <scope> --reason "<why>" --action <action> --resource <exact>` | Records a delegated local grant for one exact operation; no wildcard |
+| | `getzilla protected-write --manifest <file>` | Applies an approved write to a protected path |
+| | `getzilla ci --plan\|--write` | Selects the CI gate by repository visibility and writes the pinned public workflow |
+| | `getzilla trust-ci init\|status\|github-app\|trust-key` | Sets up and checks a self-hosted Trust CI host |
+| | `getzilla deploy` | Prints, never runs, the publish commands a person runs |
+| Keep clean | `getzilla cleanup inventory` | Lists what Getzilla keeps on disk, with sizes and repository copies; deletes nothing |
+| | `getzilla cleanup worktrees [--remove]` | Lists worktrees and the reasons to keep them; `--remove` removes only those with no unique work |
+| | `getzilla cleanup snapshot <commit>`, `snapshot --remove <path>` | Makes a review copy of one commit and removes it after the review |
+| | `getzilla branches report\|apply` | Reports old branches; `apply` deletes only from a reviewed plan ([branch lifecycle](docs/branch-lifecycle.md)) |
+| Look back | `getzilla report [--since all]` | Shows per-profile overhead and the defects caught before merge |
+| | `getzilla history <snapshot.json>` | Offline accounting of historical evidence from a snapshot file |
+| | `getzilla demo --open` | Opens the read-only local demo in your browser |
+
 ## What is inside
 
 - `scripts/`: the commands you run, such as `getzilla_route.py` and `getzilla_verify.py`
@@ -128,6 +174,7 @@ Then follow [QUICKSTART.md](QUICKSTART.md).
 - `.getzilla/runtime/`: ignored task state, plans, analyses and reviews; `engineering/changes/` retains historical packages. Change packages are created on demand at `.getzilla/runtime/changes/<id>/`.
 - Small low-risk diffs of at most 50 code lines use one review without a package or report-only commits. Full CI remains required.
 - `scripts/getzilla_evidence.py`: portable local evidence archive; CI keeps its own actual run artifacts for 30 days.
+- Disk use: review copies go to the runtime `snapshots` folder (created on first use) and are removed with `getzilla cleanup snapshot --remove`; test runs keep their temporary files inside their own run folder. `getzilla cleanup inventory` shows what is left.
 - `architecture/`: a map of the system ([system.yaml](architecture/system.yaml), [rules.yaml](architecture/rules.yaml), [diagrams](architecture/generated/))
 - `trust-ci/`: the optional outside checker, run as its own service
 - `factory/`, `delivery/`, `pilot/`: bigger automation pieces, switched off by default

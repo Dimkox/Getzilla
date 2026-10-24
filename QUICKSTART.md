@@ -31,6 +31,8 @@ At the end of every run, first install or re-run, the installer offers to update
 
 With the installer done, continue at step 3. The manual steps below are the same path by hand.
 
+Every `python3 scripts/...` command below also runs through the launcher, for example `getzilla verify --mode pr` or `getzilla install-into --plan <repo>` (the installer links it to `~/.local/bin/getzilla`; on Windows use `bin\getzilla.cmd`). The [command table in README.md](README.md#commands) lists all commands.
+
 0. Check tools (minimum or newer; doctor offers a fallback install if something is missing):
    ```bash
    python3 scripts/getzilla_doctor.py --offer-install
@@ -127,17 +129,23 @@ python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40
    python3 scripts/getzilla_status.py
    ```
 
+   `getzilla change start` writes the change package to `.getzilla/runtime/changes/<id>/`. This is ignored runtime state, not Git content; older tracked packages under `engineering/changes/` are history.
+
 5. Complete delivery checks once:
 
-   Run bounded controls on a clean committed candidate. Independent route-selected reviewers inspect that exact commit. Save their reports as regular non-executable Markdown under the active change evidence directory. Commit and freeze the report-containing tree.
+   Commit the candidate. Bind the route to the committed diff, run a bounded control, then let the independent route-selected reviewers inspect that exact commit. A reviewer that needs its own copy makes one with `getzilla cleanup snapshot <commit>` and removes it with `getzilla cleanup snapshot --remove <path>` when the report is returned. Save the reports outside Git, in the runtime package evidence folder or `.getzilla/runtime/reviews/<route-id>/`. No report commit or freeze commit is needed.
 
    ```bash
+   python3 scripts/getzilla_route.py --reconcile --json
+   python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
    python3 scripts/getzilla_verify.py --mode pr
-   python3 scripts/getzilla_review.py code_review --status pass --report engineering/changes/<id>/evidence/code-review.md --reviewed-commit <exact-full-sha>
+   python3 scripts/getzilla_review.py code_review --status pass --report .getzilla/runtime/reviews/<route-id>/code-review.md --reviewed-commit <exact-full-sha>
    python3 scripts/getzilla_status.py
    ```
 
    Repeat the receipt command for every selected review kind. A source change requires new independent reviews and a new final gate. Local receipts are preflight evidence. Public repositories use pinned Actions checks; private ones use the external Trust CI gate. Require green exact-head checks before merge.
+
+   Small low-risk changes (at most 50 changed code lines, no control files) take the light lane: one independent review and focused checks, no change package. Full CI still runs.
 
 6. Follow `/getzilla-delivery` and `/release-readiness`. Conditional AGENTS L5 covers merge, tag and release of the project's own repository after required checks, independent review and resolved threads. Record exact action/resource grants. Production writes, deployment and external writes need separate scoped authority. `getzilla_deploy.py` prepares commands.
 
@@ -156,6 +164,22 @@ python3 scripts/getzilla_artifacts.py converge --change-id <active-id>
 Persist the exact derived `workflow/task-graph.json` / `workflow/convergence-report.json` files or marked framework projections/exports only with `--write --expected-digest <sha256>`; use 64 zeroes only to create a missing target. The graph stores source-status hints, while current canonical receipts derive ephemeral effective status without a tracked rewrite. Per-target runtime locks serialize cooperating writers. Missing targets use atomic no-clobber creation; existing targets require platform atomic exchange. Any post-exchange mismatch rolls back before displaced content is read, and a second racing entry is retained under a bounded recovery/temp name for manual forward recovery rather than deleted. Imported documents and their tightly allowlisted RED/GREEN argv are never executed and never become route, governance, approval, receipt, or merge authority. `getzilla_verify` checks stored graph/report read-only when the manifest exists and skips this check for historical packages. The `workflow_sources` currency observation is valid for 90 days after `observed_at`: before the freshness test fails, re-observe upstream latest releases, refresh `.getzilla/config/toolchain.json` and the README table, and re-point any renamed shape test.
 
 7. Trust project hooks in the TUI: `/hooks-trust`
+
+## Keep the disk clean
+
+Getzilla never deletes work on its own. These commands show what it keeps and remove only what holds no unique work:
+
+```bash
+getzilla cleanup inventory            # what is on disk, by class, with repository copies; deletes nothing
+getzilla cleanup worktrees            # every worktree and the reasons to keep it (dry run)
+getzilla cleanup worktrees --remove   # removes only worktrees with no changes, no unique files and no unpushed commits
+getzilla cleanup snapshot --remove <path>   # removes one review copy made by `cleanup snapshot <commit>`
+getzilla branches report --repo . --policy <policy.json> --output <plan.json>   # old branches; deletes nothing
+```
+
+`getzilla branches apply` deletes branches only from a reviewed plan, with `--plan`, `--plan-id` and `--allow-delete`. See [docs/branch-lifecycle.md](docs/branch-lifecycle.md).
+
+`inventory` lists repository copies under `.getzilla/runtime/` (old review copies, for example) with their sizes. It keeps them until you decide: delete one only after you have checked it holds nothing you need.
 
 ## Try the local browser demo
 
@@ -352,6 +376,6 @@ curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-li
 sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 ```
 
-Freeze tracked workflow state at `reviewing` before independent review. Do not transition tracked state to `ready` after freeze: that changes reviewed source and stales the reports. Fresh final receipts, zero status gaps and exact-head external PR results record completion. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations. A full lifecycle-state redesign is a later task.
+New workflow state is ignored runtime data and may move to `ready` without changing reviewed source. Fresh final receipts, zero status gaps and exact-head external PR results record completion. No report-only or freeze commit is needed. The old prepare-only command printer's ready prerequisite grants no authority and does not restrict separately authorized exact L5 operations.
 
-Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+Legacy tracked report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
