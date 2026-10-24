@@ -171,7 +171,7 @@ class OperationsTests(unittest.TestCase):
         self.assertRegex(runner, r'ARG OPENGREP_SHA256=[0-9a-f]{64}\n')
         self.assertIn('sha256sum -c -', runner)
         pyproject = (ROOT / 'trust-ci/pyproject.toml').read_text(encoding='utf-8')
-        self.assertIn('setuptools==84.0.0', pyproject)
+        self.assertIn('setuptools==84.1.0', pyproject)
         self.assertNotIn('setuptools>=', pyproject)
 
     def test_example_catalog_profiles_have_bound_holdouts(self) -> None:

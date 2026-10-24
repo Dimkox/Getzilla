@@ -21,6 +21,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.route_metrics import counters, load, summarize, import_observations  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 
+MAX_GAP_ROUTES = 10
+
 
 def _since(value: str) -> datetime | None:
     if value == 'all':
@@ -61,6 +63,14 @@ def main(argv: list[str] | None = None) -> int:
     print(summary['interpretation'])
     if summary['coverage']['gaps']:
         print('Coverage gaps: ' + '; '.join(summary['coverage']['gaps']))
+    observed = summary['route_observations']
+    if not observed['complete']:
+        print(f'Route observation gaps ({observed["routes_with_gaps"]} of {observed["routes"]} routes; unknown is not zero):')
+        gapped = [route for route in summary['routes'] if route.get('gaps')]
+        for route in gapped[:MAX_GAP_ROUTES]:
+            print(f'  {route["route_id"]}: ' + '; '.join(route['gaps']))
+        if len(gapped) > MAX_GAP_ROUTES:
+            print(f'  ... {len(gapped) - MAX_GAP_ROUTES} more; use --json for all.')
     hints = summary['counters'].get('path_hints', {})
     guard = summary['counters'].get('parallel_guard', {})
     if hints or guard:
