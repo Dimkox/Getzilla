@@ -1,11 +1,18 @@
 """Which Getzilla worktrees can go, and a guarded removal that keeps unique work (#168, story 4).
 
-A worktree is removable only when all of these hold: it sits under `.getzilla/runtime/worktrees`,
-Git has it unlocked, it has no tracked, staged or untracked change, every ignored file in it is
-reproducible output, its HEAD is reachable from a remote-tracking ref, and no process works in it.
-Any check that cannot run keeps the worktree. Removal inspects again right before it acts and uses
-`git worktree remove` without --force, which itself refuses a tree with changes or untracked files.
-Remote-tracking refs are read as they are; nothing here fetches, pushes or deletes a branch.
+A worktree is removable only when all of these hold: it sits under the main worktree's
+`.getzilla/runtime/worktrees` (no folder on that path is a symlink), Git has it unlocked, no rebase,
+merge, cherry-pick, revert or bisect is in progress, it has no tracked, staged or untracked change,
+no file carries an assume-unchanged bit and no file that exists carries a skip-worktree bit (Git
+hides edits to both), every ignored file in it is reproducible output, every commit its HEAD,
+per-worktree refs and HEAD reflog reach is also reachable from a remote-tracking ref, and no
+process has its working folder inside it. Any check that cannot run keeps the worktree.
+
+Removal inspects again right before it acts and uses `git worktree remove` without --force. Git
+deletes ignored files without asking, so a file written after that last inspection is lost; the
+window is one process scan plus one Git call. Remote-tracking refs are read as they are: after a
+`fetch --prune` drops a ref, commits that only it reached count as local and the worktree stays.
+Nothing here fetches, pushes or deletes a branch.
 """
 from __future__ import annotations
 
@@ -18,7 +25,9 @@ from .resource_inventory import RUNTIME, classify
 
 WORKTREES = RUNTIME + '/worktrees'
 DISPOSABLE_PARTS = frozenset({'__pycache__', '.pytest_cache', '.ruff_cache', '.mypy_cache'})
+IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG')
 MAX_IGNORED_FILES = 10_000
+MAX_REFLOG = 2_000
 MAX_LISTED = 20
 TIMEOUT = 60
 
@@ -83,7 +92,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
                 for name in [*files, *links]:
                     seen += 1
                     if seen > MAX_IGNORED_FILES:
-                        return [*found, f'(more than {MAX_IGNORED_FILES} ignored files; not all checked)']
+                        return [*found[:MAX_LISTED - 1], f'(more than {MAX_IGNORED_FILES} ignored files; not all checked)']
                     inner = os.path.relpath(os.path.join(base, name), worktree).replace(os.sep, '/')
                     if not _disposable(worktree, inner):
                         found.append(inner)
@@ -115,6 +124,38 @@ def _status(worktree: Path) -> tuple[int, int, list[str]]:
     return changed, untracked, ignored
 
 
+def _hidden_from_status(worktree: Path) -> list[str]:
+    """Tracked files whose edits `git status` cannot see: assume-unchanged, or skip-worktree on disk."""
+    hidden: list[str] = []
+    for field in _git(worktree, 'ls-files', '-v', '-z').split(b'\0'):
+        if len(field) < 3:
+            continue
+        tag, path = chr(field[0]), field[2:].decode('utf-8', errors='surrogateescape')
+        # A sparse checkout marks files it leaves out with S; only a skip-worktree file on disk can hold edits.
+        if tag.islower() or (tag == 'S' and os.path.lexists(worktree / path)):
+            hidden.append(path)
+            if len(hidden) >= MAX_LISTED:
+                break
+    return hidden
+
+
+def _in_progress(worktree: Path) -> list[str]:
+    git_dir = Path(_git(worktree, 'rev-parse', '--absolute-git-dir').decode('utf-8', errors='surrogateescape').strip())
+    return [name for name in IN_PROGRESS if os.path.lexists(git_dir / name)]
+
+
+def _local_only(worktree: Path) -> bool:
+    """True when HEAD, a per-worktree ref or the HEAD reflog reaches a commit no remote-tracking ref has."""
+    tips = {'HEAD'}
+    refs = _git(worktree, 'for-each-ref', '--format=%(objectname)', 'refs/worktree', 'refs/bisect')
+    tips.update(refs.decode().split())
+    reflog = subprocess.run(['git', '-C', str(worktree), 'reflog', 'show', '--format=%H', f'-n{MAX_REFLOG}', 'HEAD', '--'],
+                            capture_output=True, timeout=TIMEOUT, check=False)
+    if reflog.returncode == 0:  # a worktree without a reflog has nothing to add
+        tips.update(reflog.stdout.decode().split())
+    return bool(_git(worktree, 'rev-list', '--max-count=1', *sorted(tips), '--not', '--remotes').strip())
+
+
 def _in_use(path: Path) -> bool | None:
     """True when this or another process works inside `path`; None when that cannot be checked."""
     target = os.path.realpath(path)
@@ -133,7 +174,7 @@ def _in_use(path: Path) -> bool | None:
                 if inside(os.readlink(entry / 'cwd')):
                     return True
             except OSError:
-                continue
+                continue  # another user's process; only the working folder is checked, not open files
     return False
 
 
@@ -143,6 +184,8 @@ def inspect(root: Path, entry: dict[str, Any], main: str) -> dict[str, Any]:
     report: dict[str, Any] = {'path': str(path), 'branch': entry.get('branch'), 'head': entry.get('head'),
                               'detached': bool(entry.get('detached')), 'removable': False, 'reasons': []}
     reasons: list[str] = report['reasons']
+    if classify(Path(main), Path(main) / WORKTREES) != 'protected':
+        reasons.append('the worktrees folder or a folder above it is a symlink')
     base = Path(os.path.realpath(Path(main) / WORKTREES))
     real = Path(os.path.realpath(path))
     if base not in real.parents:
@@ -156,17 +199,24 @@ def inspect(root: Path, entry: dict[str, Any], main: str) -> dict[str, Any]:
     if reasons:
         return report
     try:
+        operations = _in_progress(path)
         changed, untracked, ignored = _status(path)
+        hidden = _hidden_from_status(path)
         valuable = _valuable_ignored(path, ignored)
-        local_only = bool(_git(path, 'rev-list', '--max-count=1', 'HEAD', '--not', '--remotes').strip())
-    except (WorktreeError, OSError) as exc:
+        local_only = _local_only(path)
+    except (WorktreeError, OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
         reasons.append(f'check failed: {exc}')
         return report
-    report.update(changed=changed, untracked=untracked, valuable_ignored=valuable, local_only_commits=local_only)
+    report.update(changed=changed, untracked=untracked, hidden_from_status=hidden, valuable_ignored=valuable,
+                  local_only_commits=local_only, in_progress=operations)
+    if operations:
+        reasons.append('operation in progress: ' + ', '.join(operations))
     if changed:
         reasons.append(f'{changed} tracked or staged change(s)')
     if untracked:
         reasons.append(f'{untracked} untracked file(s)')
+    if hidden:
+        reasons.append('files with assume-unchanged or skip-worktree bits: ' + ', '.join(hidden[:5]))
     if valuable:
         reasons.append('ignored files that are not reproducible: ' + ', '.join(valuable[:5]))
     if local_only:

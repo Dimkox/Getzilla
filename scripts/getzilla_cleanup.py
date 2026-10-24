@@ -62,9 +62,10 @@ def _worktrees(args: argparse.Namespace) -> int:
     except WorktreeError as exc:
         print(f'getzilla cleanup: {exc}', file=sys.stderr)
         return 2
+    failed = int(any(result['result'] == 'error' for result in report.get('results', [])))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
-        return 0
+        return failed
     print(f'Worktrees: {report["removable"]} removable, {report["kept"]} kept'
           + ('' if args.remove else ' (dry run; add --remove to remove)'))
     for item in report['worktrees']:
@@ -72,7 +73,7 @@ def _worktrees(args: argparse.Namespace) -> int:
         print(f'  {state:<9} {item["path"]}' + ('' if item['removable'] else ': ' + '; '.join(item['reasons'])))
     for result in report.get('results', []):
         print(f'  {result["result"]:<9} {result["path"]}' + (f': {result["error"]}' if result.get('error') else ''))
-    return 0
+    return failed
 
 
 def main(argv: list[str] | None = None) -> int:
