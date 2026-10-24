@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -169,12 +170,17 @@ def _started_at(entry: Path) -> float | None:
 
 
 def _created_at(worktree: Path) -> float | None:
-    """When Git registered the worktree: the mtime of its `gitdir` file in the repository."""
+    """When Git registered the worktree, or None when that is not known.
+
+    `git worktree add` writes `commondir` and `gitdir`; move and repair rewrite only `gitdir`, so the
+    earlier of the two mtimes is used. A time in the future (the clock stepped back) is not trusted.
+    """
     try:
-        git_dir = _git(worktree, 'rev-parse', '--absolute-git-dir').decode('utf-8', errors='surrogateescape').strip()
-        return os.stat(Path(git_dir) / 'gitdir').st_mtime
+        git_dir = Path(_git(worktree, 'rev-parse', '--absolute-git-dir').decode('utf-8', errors='surrogateescape').strip())
+        created = min(os.stat(git_dir / 'gitdir').st_mtime, os.stat(git_dir / 'commondir').st_mtime)
     except (WorktreeError, OSError):
         return None
+    return None if created > time.time() + 2 else created
 
 
 def _in_use(path: Path, created: float | None = None) -> bool | None:

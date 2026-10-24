@@ -267,6 +267,34 @@ class WorktreeSafetyTests(unittest.TestCase):
             older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
             self.assertIsNotNone(older)
             self.assertFalse(worktree_safety._in_use(path, older + 60))
+            self.assertFalse(worktree_safety._in_use(path, older + 10), 'a 2 s margin, not more')
+            with patch('getzilla.worktree_safety._started_at', return_value=None):
+                self.assertIsNone(worktree_safety._in_use(path, older + 60), 'an unknown start fails closed')
+
+    @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
+    def test_a_process_name_with_brackets_does_not_shift_the_start_field(self) -> None:
+        from getzilla import worktree_safety
+        entry = self.base / 'fake-proc'
+        entry.mkdir()
+        (entry / 'stat').write_text('123 (x) y (z) w) S ' + ' '.join(['0'] * 18 + ['500', '7']) + '\n')
+        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+                    if line.startswith('btime '))
+        self.assertEqual(worktree_safety._started_at(entry), boot + 500 / os.sysconf('SC_CLK_TCK'))
+
+    def test_the_creation_time_survives_move_and_repair_and_a_clock_step(self) -> None:
+        from getzilla import worktree_safety
+        path = self.add('moved', '-b', 'moved')
+        git_dir = Path(git(path, 'rev-parse', '--absolute-git-dir'))
+        os.utime(git_dir / 'commondir', (1_000_000, 1_000_000))
+        os.utime(path, (2_000_000, 2_000_000))
+        self.assertEqual(worktree_safety._created_at(path), 1_000_000)  # gitdir rewritten later by a move
+        (git_dir / 'commondir').rename(git_dir / 'commondir.saved')
+        self.assertIsNone(worktree_safety._created_at(path))
+        (git_dir / 'commondir.saved').rename(git_dir / 'commondir')
+        future = os.path.getmtime(git_dir / 'gitdir') + 3600
+        os.utime(git_dir / 'commondir', (future, future))
+        os.utime(git_dir / 'gitdir', (future, future))
+        self.assertIsNone(worktree_safety._created_at(path))
 
     def test_a_worktree_a_process_works_in_is_kept(self) -> None:
         path = self.add('busy', '-b', 'busy')
