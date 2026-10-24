@@ -144,6 +144,23 @@ class GrantLifecycleTests(unittest.TestCase):
             self.assertTrue(valid(root))
             self.assertFalse(valid(root, 'production', None))
 
+    def test_a_route_of_another_session_voids_the_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Another session prompt', 's2').to_dict())
+            self.assertFalse(valid(root))
+
+    def test_without_a_known_session_the_exact_route_is_still_required(self) -> None:
+        with github_project() as root:
+            approval = add_approval(root, 'protected-path', 'one file', 15,
+                                    actions=['protected-path-write'], resources=[TARGET])
+            approval.pop('session_id')
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
+            self.assertTrue(valid(root))
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            self.assertFalse(valid(root))
+
     def test_a_new_change_package_still_voids_a_branch_bound_grant(self) -> None:
         from getzilla.state import set_active_change
         with github_project() as root:
