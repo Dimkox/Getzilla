@@ -1207,6 +1207,18 @@ class CommunicationRuleTests(unittest.TestCase):
         ):
             self.assertIn(sentence, text)
 
+    def test_getzilla_defects_go_to_issues_here_and_in_consumers(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Getzilla defects go to issues", agents)
+        self.assertIn("Every defect in Getzilla itself goes to a GitHub issue in `Dimkox/Getzilla`.", agents)
+        self.assertIn("and creating, updating, commenting on and closing its own GitHub issues.", agents)
+        consumer = (ROOT / ".getzilla/templates/consumer-AGENTS.md.tmpl").read_text(encoding="utf-8")
+        self.assertIn("## Getzilla defects", consumer)
+        self.assertIn("file it only when the owner explicitly allows that", consumer)
+        self.assertIn("proprietary code of this repository", consumer)
+        skill = (ROOT / ".agents/skills/getzilla-delivery/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn('Follow the "Getzilla defects" rule in `AGENTS.md`', skill)
+
     def test_agent_pool_scales_to_one_worker_per_logical_cpu(self) -> None:
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("up to one per verified effective logical CPU", text)
@@ -1220,7 +1232,7 @@ class CommunicationRuleTests(unittest.TestCase):
             "standing consent covers merge, tag and release of the project's own repository",
             "green on the exact head SHA",
             "The wildcard scope stays forbidden.",
-            "Production mutation, deploy, external writes and security approvals still need an explicit human decision.",
+            "Production mutation, deploy, other external writes and security approvals still need an explicit human decision.",
             "## Local delegated grants",
         ):
             self.assertIn(phrase, text)
