@@ -20,10 +20,10 @@ Process calls include merging a PR that improves the repository, deferring revie
 The agent asks the human only for real risk decisions or for steps that only a human can do.
 Real risk decisions are production writes, secrets, security exposure and human security approvals.
 Steps that only a human can do include authentication and 2FA.
-Under L5, the owner's standing consent covers merge, tag and release of the project's own repository.
-That consent applies only when required checks are green on the exact head SHA, all review threads are resolved, and an independent review passed.
+Under L5, the owner's standing consent covers merge, tag and release of the project's own repository, and creating, updating, commenting on and closing its own GitHub issues.
+For merge, tag and release, that consent applies only when required checks are green on the exact head SHA, all review threads are resolved, and an independent review passed.
 The agent records that standing consent with `scripts/getzilla_approve.py` as an exact action and resource. The wildcard scope stays forbidden.
-Production mutation, deploy, external writes and security approvals still need an explicit human decision.
+Production mutation, deploy, other external writes and security approvals still need an explicit human decision.
 
 ## Manual override
 
@@ -43,6 +43,19 @@ After committing the candidate, run `python3 scripts/getzilla_route.py --reconci
 Collect Low-severity findings into one issue.
 Fix them together in one later PR.
 Low-severity findings do not block a merge.
+
+## Getzilla defects go to issues
+
+Every defect in Getzilla itself goes to a GitHub issue in `Dimkox/Getzilla`.
+A defect is a bug, a wrong or confusing refusal, a missing or broken check, a doc that does not match the code, or workflow friction that costs more than the change it guards.
+
+- Record the defect when you find it. A workaround is not a fix, so record it also when you work around it.
+- Search the open and closed issues first. Add to a matching open issue, or reopen or link a closed one; do not open a duplicate.
+- State what you observed, what you expected, what triggers it and the exact command or path.
+- Put a Low-severity finding into the open issue that collects Low findings.
+- Put a real finding that is outside the current task into an issue, not into the current pull request.
+- Never put secrets, private data or copy-paste exploit commands into an issue. Describe the hole, not the weapon.
+- Filing, updating or commenting on an issue in this repository is a process call under the L5 standing consent above. Record one exact external-write grant per GitHub tool before its first call, for example `python3 scripts/getzilla_approve.py external-write --reason "<defect>" --action external-write --resource mcp__github__issue_write` (or `mcp__github__add_issue_comment`). Like every external-write grant, it stays bound to the route, change, exact HEAD and tree, so a new commit or a new route needs a fresh grant.
 
 ## Merge discipline
 
@@ -272,13 +285,13 @@ For each report with probes, list the claims probed, exact commands and concise 
 - `scripts/getzilla_approve.py` does not originate authority. It materializes explicit or standing user consent already present in the working context.
 - Every grant names explicit actions and exact resources. Protected-path grants bind repository, session, change, full branch ref, anchor ancestry, unchanged files outside the exact grant set and TTL; a new route of the same session (every prompt starts one) keeps them, and another session never gets them. The session is the caller's own (hook payload, or `CLAUDE_CODE_SESSION_ID` for `getzilla_approve.py`); unless the caller, its route and the grant name the same session, they bind the exact route. Commits within the approved file set retain the grant. A branch change or out-of-scope edit invalidates it. Production/external grants retain exact HEAD/tree binding. Legacy records retain their original validation.
 - An agent may invoke `getzilla_approve.py` only when the user has explicitly delegated the named operation. The wildcard scope is forbidden.
-- Under L5 autonomy, the owner's standing consent is that explicit delegation for merge, tag and release of the project's own repository. It applies only with green required checks on the exact head SHA, resolved review threads and a passed independent review. The agent still records an exact action and resource for each operation.
+- Under L5 autonomy, the owner's standing consent is that explicit delegation for merge, tag and release of the project's own repository, and for its own GitHub issues (create, update, comment, close). For merge, tag and release it applies only with green required checks on the exact head SHA, resolved review threads and a passed independent review. The agent still records an exact action and resource for each operation.
 - Trust CI security approvals use Ed25519 envelopes generated by `adaptive-trust-ci approval-create` on a human-controlled machine and submitted to the external API. Local grants are never accepted by Trust CI.
 
 ## Prohibited routine actions
 
 - Direct push to a protected/shared branch.
-- Merge, publish, tag, deploy, production mutation or external write without an exact delegated local grant naming that operation and resource. Under L5 autonomy, the owner's standing consent supplies that grant only for merge, tag and release of the project's own repository; production mutation, deploy, external writes and security approvals still need an explicit human decision.
+- Merge, publish, tag, deploy, production mutation or external write without an exact delegated local grant naming that operation and resource. Under L5 autonomy, the owner's standing consent supplies that grant only for merge, tag and release of the project's own repository and for its own GitHub issues; production mutation, deploy, other external writes and security approvals still need an explicit human decision.
 - `gh pr merge --admin`, a merge without `--match-head-commit`, or any bypass of branch protection.
 - Copy-paste exploit commands in a public issue or PR.
 - Creating or submitting a human security approval, using a human private key, or editing the deployed trust store/policy/holdout/GitHub App configuration.

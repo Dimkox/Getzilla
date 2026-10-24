@@ -67,6 +67,10 @@ New runtime workflow state can move to `ready` without changing source. Reports 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under `engineering/reviews/` or the valid active change evidence directory. Low-risk micro routes may use `engineering/reviews/` without a durable package; other routes require their selected package. Malformed or unsafe selected package metadata fails closed. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
 
 
+## Getzilla defects
+
+A defect in the installed Getzilla workflow (hooks, scripts, routing, verification, its documentation) belongs in an issue of the upstream repository https://github.com/Dimkox/Getzilla. A defect is a bug, a wrong or confusing refusal, a missing or broken check, a doc that does not match the code, or workflow friction that costs more than the change it guards. Record it when you find it, also when you work around it. Filing there is an external write to another repository: file it only when the owner explicitly allows that, and record the consent as an exact external-write grant with `scripts/getzilla_approve.py` before the call. Otherwise give the owner a ready issue text (observed, expected, trigger, command or path) in your final report. Search the open and closed issues first; add to a matching issue instead of opening a duplicate. Never include secrets, customer data, proprietary code of this repository or copy-paste exploit commands.
+
 ## Task workspace
 
 Put agent working files (bundles, drafts, intermediate output) in `.getzilla/runtime/scratch/`; it needs no grant. A shell command that runs inline interpreter code (`python3 -c`, `php -r`, `node -e`, a heredoc into `python3`) is denied, because the hook cannot see which paths it touches. Write the program to `.getzilla/runtime/scratch/<name>.py` and run it as a file.
