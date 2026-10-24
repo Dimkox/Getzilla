@@ -430,7 +430,8 @@ def add_approval(
         'route_id': route.get('route_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
-        **({'binding': BRANCH_RESOURCES_BINDING, 'git_branch': branch, 'anchor_commit': head}
+        **({'binding': BRANCH_RESOURCES_BINDING, 'git_branch': branch, 'anchor_commit': head,
+            'session_id': _SESSION.get()}
            if normalized_scope == 'protected-path' else {}),
         'grant_binding_digest': tree_fingerprint(
             root, normalized_resources if normalized_scope == 'protected-path' else (),
@@ -457,7 +458,9 @@ def has_valid_approval(
     action: str | None = None,
     resource: str | None = None,
 ) -> bool:
-    """Recheck scope-specific source binding plus repository, route, change and TTL."""
+    """Recheck scope-specific source binding plus repository, change and TTL, and the route; a
+    branch-bound protected-path grant checks the caller's bound session instead of the route when the
+    route and the grant name that same session."""
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
@@ -501,8 +504,14 @@ def has_valid_approval(
         if approval.get('scope') != scope:
             continue
         branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
+        # Every new prompt starts a new route, so a branch-bound grant follows its session instead:
+        # later prompts of the same session keep it, another session never gets it. The session is the
+        # caller's bound one; unless caller, route and grant all name it the exact route is required.
+        session = _SESSION.get()
+        session_bound = (branch_bound and bool(session) and route.get('session_id') == session
+                         and approval.get('session_id') == session)
         if any(approval.get(key) != value for key, value in bindings.items()
-               if not (branch_bound and key == 'git_head')):
+               if not (branch_bound and key == 'git_head') and not (session_bound and key == 'route_id')):
             continue
         grant_binding_digest = approval.get('grant_binding_digest')
         legacy_tree_fingerprint = approval.get('tree_fingerprint')

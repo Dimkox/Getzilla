@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.state import add_approval
+from getzilla.state import add_approval, bind_session
 from getzilla.util import find_root
 
 RELEASE_ACTIONS = ['git-push-branch', 'git-push-tag', 'github-release']
@@ -68,6 +69,8 @@ if args.profile == 'release':
 if not actions:
     parser.error('at least one --action or --profile is required')
 
+# A grant follows the caller's session across its later routes; an unknown session keeps the exact route.
+bind_session(os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('GETZILLA_SESSION_ID'))
 try:
     result = add_approval(
         find_root(),

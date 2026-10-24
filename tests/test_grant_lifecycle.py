@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, has_valid_approval, set_active_route
+from getzilla.state import add_approval, approvals_path, bind_session, has_valid_approval, set_active_route
 from tests._support import project_copy
 
 TARGET = 'tests/test_cpu_capacity.py'
@@ -26,7 +26,11 @@ def github_project() -> Iterator[Path]:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=root, check=True)
         set_active_route(root, build_route(root, 'Fix startup CPU regression test', 's1').to_dict())
-        yield root
+        bind_session('s1')
+        try:
+            yield root
+        finally:
+            bind_session(None)
 
 
 def valid(root: Path, scope: str = 'protected-path', resource: str | None = TARGET) -> bool:
@@ -134,6 +138,97 @@ class GrantLifecycleTests(unittest.TestCase):
                 if layer != 'untracked':
                     outside.write_text('initial dirty bytes\n')
                 self.assertFalse(valid(root), f'{layer} Git names must retain literal backslashes')
+
+    def test_a_new_route_keeps_a_branch_bound_grant_but_not_a_production_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
+            set_active_route(root, build_route(root, 'Next prompt about something else', 's1').to_dict())
+            self.assertTrue(valid(root))
+            self.assertFalse(valid(root, 'production', None))
+
+    def test_a_route_of_another_session_voids_the_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Another session prompt', 's2').to_dict())
+            self.assertTrue(valid(root), 's1 still reads its own route')
+            bind_session('s2')
+            self.assertFalse(valid(root))
+
+    def test_another_caller_session_cannot_use_the_shared_route_of_the_grant_session(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            bind_session('s2')  # no route pointer of its own
+            self.assertFalse(valid(root))
+            # Its own grant made over the shared route of s1 does not follow s1's next route either.
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            set_active_route(root, build_route(root, 'Third prompt', 's1').to_dict())
+            self.assertFalse(valid(root))
+
+    def test_a_manual_or_unbound_caller_needs_the_exact_route(self) -> None:
+        for caller in ('manual', None):
+            with self.subTest(caller=caller), github_project() as root:
+                bind_session(caller)
+                approval = add_approval(root, 'protected-path', 'one file', 15,
+                                        actions=['protected-path-write'], resources=[TARGET])
+                self.assertIsNone(approval['session_id'])
+                self.assertTrue(valid(root))
+                set_active_route(root, build_route(root, 'Next prompt', 'manual').to_dict())
+                self.assertFalse(valid(root))
+
+    def test_the_cli_records_the_caller_session(self) -> None:
+        with github_project() as root:
+            env = {**os.environ, 'CLAUDE_CODE_SESSION_ID': 's1'}
+            env.pop('GETZILLA_SESSION_ID', None)
+            subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_approve.py'), 'protected-path',
+                            '--reason', 'one file', '--action', 'protected-path-write', '--resource', TARGET],
+                           cwd=root, env=env, check=True, capture_output=True)
+            self.assertEqual(json.loads(approvals_path(root).read_text(encoding='utf-8'))[-1]['session_id'], 's1')
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            self.assertTrue(valid(root))
+
+    def test_without_a_known_session_the_exact_route_is_still_required(self) -> None:
+        with github_project() as root:
+            approval = add_approval(root, 'protected-path', 'one file', 15,
+                                    actions=['protected-path-write'], resources=[TARGET])
+            approval.pop('session_id')
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
+            self.assertTrue(valid(root))
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            self.assertFalse(valid(root))
+
+    def test_a_new_change_package_still_voids_a_branch_bound_grant(self) -> None:
+        from getzilla.state import set_active_change
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            self.assertTrue(valid(root))
+            set_active_change(root, {'change_id': 'another-change'})
+            self.assertFalse(valid(root))
+
+    def test_a_forged_branch_binding_on_a_production_grant_keeps_the_route_check(self) -> None:
+        with github_project() as root:
+            # A complete branch-bound record relabelled as production, from another route.
+            approval = add_approval(root, 'protected-path', 'one file', 15,
+                                    actions=['protected-path-write'], resources=[TARGET])
+            approval.update(scope='production', actions=['git-push-branch'], route_id='some-other-route')
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
+            self.assertFalse(valid(root, 'production', None))
+
+    def test_a_branch_change_still_voids_the_grant_after_a_new_route(self) -> None:
+        from tests.branch_support import git
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            git(root, 'checkout', '-q', '-b', 'other-branch')
+            self.assertFalse(valid(root))
 
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:
