@@ -122,7 +122,7 @@ class CollectTests(unittest.TestCase):
     def test_current_backend_pins_are_in_the_audit_inventory(self) -> None:
         dependencies, _ = KV.collect_dependencies(ROOT)
         for manifest in ('factory/pyproject.toml', 'delivery/pyproject.toml', 'trust-ci/pyproject.toml'):
-            self.assertIn(KV.Dependency('PyPI', 'setuptools', '84.0.0', manifest), dependencies)
+            self.assertIn(KV.Dependency('PyPI', 'setuptools', '84.1.0', manifest), dependencies)
 
     def test_malformed_build_requirements_fail_closed(self) -> None:
         for value in ('"setuptools==84.0.0"', '7', 'true', '["setuptools==84.0.0", 7]'):
