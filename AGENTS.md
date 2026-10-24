@@ -44,6 +44,19 @@ Collect Low-severity findings into one issue.
 Fix them together in one later PR.
 Low-severity findings do not block a merge.
 
+## Getzilla defects go to issues
+
+Every defect in Getzilla itself goes to a GitHub issue in `Dimkox/Getzilla`.
+A defect is a bug, a wrong or confusing refusal, a missing or broken check, a doc that does not match the code, or workflow friction that costs more than the change it guards.
+
+- Record the defect when you find it. A workaround is not a fix, so record it also when you work around it.
+- Search the open issues first. Add to a matching issue; do not open a duplicate.
+- State what you observed, what you expected, what triggers it and the exact command or path.
+- Put a Low-severity finding into the open issue that collects Low findings.
+- Put a real finding that is outside the current task into an issue, not into the current pull request.
+- Never put secrets, private data or copy-paste exploit commands into an issue. Describe the hole, not the weapon.
+- Filing or updating an issue in this repository is a process call under L5. Record the exact external-write grant first.
+
 ## Merge discipline
 
 Merge only through required checks on the exact head SHA, with `gh pr merge --match-head-commit`.

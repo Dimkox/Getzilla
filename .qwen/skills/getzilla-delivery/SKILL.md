@@ -26,6 +26,7 @@ For an admitted small change, keep scope and acceptance in the task or PR. Do no
 5. Run one final `python3 scripts/getzilla_verify.py --mode pr`, or the existing focused landing mode when its closed inventory qualifies. Do not shorten the comparison range. Record skips as skips. No report-only or workflow-state freeze commit is needed.
 6. After the gate passes, record each passing report with `python3 scripts/getzilla_review.py <kind> --status pass --report <runtime-report> --reviewed-commit <exact-full-sha>`. Runtime reports must be ignored, regular, non-executable UTF-8 Markdown using the conventional review names. The receipt binds route/change, exact reviewed HEAD/tree and content hash; consumption rechecks them. Any source commit or report-content change stales the receipt.
 7. Run `python3 scripts/getzilla_status.py`; completion requires zero evidence gaps. Runtime state may transition to ready without changing source. Deliver through a PR with the required external exact-head checks. Local evidence never replaces merge authority, branch protection or human security approvals.
+8. Before you end the task, record every Getzilla defect you met (a bug, a wrong refusal, a broken check, a doc that does not match the code, costly friction), also the ones you worked around. Follow the "Getzilla defects" rule in `AGENTS.md`: an issue in `Dimkox/Getzilla` when that is allowed, otherwise a ready issue text for the owner.
 
 ## Evidence and handoff
 
