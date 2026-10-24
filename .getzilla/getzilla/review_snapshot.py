@@ -4,7 +4,8 @@ A reviewer probes a private copy of the exact candidate commit. `create` makes t
 detached Git worktree under the main worktree's `.getzilla/runtime/snapshots` (mode 0700), so it
 shares the object store instead of copying it, and writes an owner marker next to it. `remove`
 deletes it again once the report is returned. Edits inside a snapshot are reviewer probes and are
-discarded on purpose; reports never live in a snapshot.
+discarded on purpose; reports never live in a snapshot. A snapshot holds committed content only:
+commit the candidate before review, because staged, unstaged and untracked changes are not copied.
 
 `remove` acts only on a direct child of that folder (no symlink on the way) whose marker names the
 commit the worktree is still detached at. Anything else is kept.
@@ -68,8 +69,10 @@ def remove(root: Path, path: str) -> dict[str, Any]:
     target = Path(os.path.abspath(path))
     if target.parent != Path(os.path.abspath(base)) or target.name.endswith('.json'):
         return {'path': path, 'result': 'kept', 'reason': 'not a direct child of .getzilla/runtime/snapshots'}
-    if target.is_symlink() or Path(os.path.realpath(target)).parent != Path(os.path.realpath(base)):
+    if target.is_symlink():
         return {'path': path, 'result': 'kept', 'reason': 'the snapshot path is a symlink'}  # remove would follow it
+    if Path(os.path.realpath(target)).parent != Path(os.path.realpath(base)):  # a Windows junction, for example
+        return {'path': path, 'result': 'kept', 'reason': 'the snapshot path resolves outside the snapshots folder'}
     marker = _marker(base, target.name)
     entry = next((item for item in list_worktrees(root)
                   if os.path.abspath(item['path']) == str(target)), None)

@@ -66,6 +66,13 @@ class GetzillaCliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('scaffold', proc.stdout)
 
+    def test_every_command_answers_help_with_usage(self) -> None:
+        for name in cli.COMMANDS:
+            with self.subTest(command=name):
+                proc = run(name, '--help')
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn('usage:', proc.stdout.lower())
+
     def test_project_scripts_take_precedence_inside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / 'project'

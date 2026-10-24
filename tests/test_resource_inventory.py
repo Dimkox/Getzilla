@@ -7,11 +7,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.resource_inventory import EPHEMERAL, PROTECTED, classify, disposable, inventory, measure  # noqa: E402
+from getzilla.resource_inventory import (  # noqa: E402
+    EPHEMERAL, PROTECTED, classify, disposable, inventory, measure, repository_copies,
+)
 
 
 def snapshot(base: Path) -> dict[str, bytes]:
@@ -95,6 +98,16 @@ class InventoryTests(unittest.TestCase):
         (self.runtime / 'par' / 'file').write_text('not a directory')
         self.assertEqual(classify(self.root, self.runtime / 'par' / 'file' / 'child'), 'unknown')
 
+    def test_a_missing_runtime_folder_fails_closed(self) -> None:
+        fresh = self.base / 'fresh'
+        fresh.mkdir()
+        self.assertEqual(classify(fresh, fresh / '.getzilla' / 'runtime' / 'par' / 'run-1'), 'unknown')
+        (fresh / '.getzilla').mkdir()
+        self.assertEqual(classify(fresh, fresh / '.getzilla' / 'runtime' / 'par' / 'run-1'), 'unknown')
+
+    def test_a_dot_dot_part_alone_is_unknown(self) -> None:
+        self.assertEqual(classify(self.root, self.runtime / 'par' / '..' / 'par' / 'run-1'), 'unknown')
+
     def test_measure_does_not_follow_links_and_discloses_the_budget(self) -> None:
         big = self.base / 'big'
         big.mkdir()
@@ -147,6 +160,65 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn(str(nested), paths)
         self.assertTrue(all(item['bytes'] > 0 for item in report['repository_copies']))
         self.assertFalse(any(disposable(self.root, self.root / path) for path in paths))
+
+    def test_a_linked_getzilla_runtime_or_copy_folder_is_not_read_and_is_incomplete(self) -> None:
+        self.make_copy(self.runtime / 'scratch' / 'review-1')
+        linked = self.base / 'linked'
+        linked.mkdir()
+        self.link(linked / '.getzilla', self.root / '.getzilla')
+        report = inventory(linked, self.temp)
+        runtime_entries = [item for item in report['resources'] if item['location'] == 'runtime']
+        self.assertEqual((runtime_entries, report['repository_copies'], report['complete']), ([], [], False))
+        runtime_link = self.base / 'runtime-link'
+        (runtime_link / '.getzilla').mkdir(parents=True)
+        self.link(runtime_link / '.getzilla' / 'runtime', self.runtime)
+        self.assertEqual(repository_copies(runtime_link), ([], False))
+        outside = self.make_copy(self.base / 'outside-scratch' / 'copy')
+        self.link(self.runtime / 'archive', outside.parent)
+        copies, complete = repository_copies(self.root)
+        self.assertEqual([item['path'] for item in copies], ['.getzilla/runtime/scratch/review-1'])
+        self.assertFalse(complete)
+        self.assertFalse(inventory(self.root, self.temp)['complete'])
+
+    def test_one_entry_budget_covers_the_search_and_every_copy_size(self) -> None:
+        self.make_copy(self.runtime / 'scratch' / 'review-1')
+        self.make_copy(self.runtime / 'scratch' / 'review-2')
+        copies, complete = repository_copies(self.root)
+        self.assertEqual((len(copies), complete), (2, True))
+        copies, complete = repository_copies(self.root, budget=8)
+        self.assertFalse(complete)
+        self.assertTrue(all(item['entries'] <= 8 for item in copies))
+        self.assertFalse(repository_copies(self.root, budget=1)[1])
+
+    def test_a_search_that_uses_exactly_the_budget_is_complete(self) -> None:
+        (self.runtime / 'scratch' / 'empty').mkdir()
+        self.assertEqual(repository_copies(self.root, budget=1), ([], True))
+        self.assertEqual(repository_copies(self.root, budget=0), ([], False))
+
+    def test_the_budget_left_after_the_search_bounds_the_copy_size(self) -> None:
+        big = self.make_copy(self.runtime / 'scratch' / 'big')
+        for index in range(10):
+            (big / 'scripts' / f'file-{index}.py').write_text('x\n')
+        copies, complete = repository_copies(self.root, budget=100)
+        self.assertTrue(complete)
+        # The scratch listing has 1 entry; the copy counts its own 14 entries once, through its size.
+        self.assertEqual(copies[0]['entries'], 14)
+        self.assertTrue(repository_copies(self.root, budget=15)[1], 'the exact budget is enough')
+        copies, complete = repository_copies(self.root, budget=14)
+        self.assertEqual(([item['path'] for item in copies], complete), (['.getzilla/runtime/scratch/big'], False))
+        self.assertFalse(copies[0]['complete'])
+
+    def test_an_unreadable_copy_folder_marks_the_report_incomplete(self) -> None:
+        (self.runtime / 'scratch' / 'locked').mkdir()
+        real_scandir = os.scandir
+
+        def denied(path):
+            if Path(path).name == 'locked':
+                raise PermissionError('denied')
+            return real_scandir(path)
+
+        with patch('getzilla.resource_inventory.os.scandir', side_effect=denied):
+            self.assertEqual(repository_copies(self.root), ([], False))
 
     def test_cli_lists_repository_copies(self) -> None:
         (self.root / '.git').mkdir()

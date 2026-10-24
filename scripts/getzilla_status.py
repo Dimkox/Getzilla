@@ -8,8 +8,14 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+import argparse
 import json
 import os
+
+argparse.ArgumentParser(
+    prog='getzilla status',
+    description='Print the active route, change package, agents, human gates and evidence gaps as JSON.',
+).parse_args()
 
 from getzilla.package_status import collect_worktree, inspect_package, receipt_inputs_unavailable
 from getzilla.receipts import validate_evidence

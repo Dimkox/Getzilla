@@ -3,6 +3,7 @@
 Each `.getzilla/runtime` entry gets one class: `protected` (state, approvals, receipts, evidence,
 worktrees), `ephemeral` (output Getzilla can recreate) or `unknown`. Unknown is never disposable.
 A `..` part, a linked `.getzilla` or runtime folder, or a symlink below it makes the entry unknown.
+The inventory does not read a linked `.getzilla` or runtime folder at all and reports itself incomplete.
 Nothing in this module deletes. `disposable()` is a path check, not a lock: a deleting caller must
 re-check each part through held directory descriptors (`O_NOFOLLOW`, `dir_fd`) and must skip
 entries a live run still owns, such as `par/<stamp>-<pid>` while that pid runs.
@@ -103,13 +104,27 @@ def measure(path: Path, budget: int = MAX_ENTRIES) -> dict[str, Any]:
     return {'bytes': size, 'entries': entries, 'complete': complete}
 
 
-def repository_copies(root: Path, depth: int = MAX_COPY_DEPTH) -> list[dict[str, Any]]:
-    """Repository copies under the runtime folders agents write snapshots to. Links are not followed,
-    and a copy is not searched for nested copies. The copies stay `unknown`: nothing proves them disposable."""
+def _linked_runtime(root: Path) -> bool:
+    """A linked `.getzilla` or runtime folder points the inventory at another tree: it is not read."""
+    return os.path.islink(root / '.getzilla') or os.path.islink(root / RUNTIME)
+
+
+def repository_copies(root: Path, depth: int = MAX_COPY_DEPTH,
+                      budget: int = MAX_ENTRIES) -> tuple[list[dict[str, Any]], bool]:
+    """Repository copies under the runtime folders agents write snapshots to, and whether the search
+    and every size are complete. One entry budget covers the search and all sizes. Links are not
+    followed, and a copy is not searched for nested copies. The copies stay `unknown`: nothing proves
+    them disposable."""
     runtime = root / RUNTIME
     found: list[dict[str, Any]] = []
+    if _linked_runtime(root):
+        return found, False
+    complete = True
     for top in COPY_ROOTS:
-        if os.path.islink(runtime) or os.path.islink(runtime / top) or not (runtime / top).is_dir():
+        if os.path.islink(runtime / top):
+            complete = False
+            continue
+        if not (runtime / top).is_dir():
             continue
         pending = [(runtime / top, 0)]
         while pending:
@@ -117,15 +132,23 @@ def repository_copies(root: Path, depth: int = MAX_COPY_DEPTH) -> list[dict[str,
             try:
                 with os.scandir(folder) as listing:
                     entries = list(listing)
+                names = {entry.name for entry in entries}
+                children = [Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False)]
             except OSError:
+                complete = False
                 continue
-            if COPY_MARKERS <= {entry.name for entry in entries}:
-                found.append({'path': folder.relative_to(root).as_posix(), **measure(folder)})
+            if COPY_MARKERS <= names:  # its own entries are counted once, by its size
+                size = measure(folder, budget)
+                budget -= size['entries']
+                complete = complete and size['complete']
+                found.append({'path': folder.relative_to(root).as_posix(), **size})
                 continue
+            budget -= len(entries)
+            if budget < 0:
+                return sorted(found, key=lambda item: item['path']), False
             if level < depth:
-                pending.extend((Path(entry.path), level + 1) for entry in entries
-                               if entry.is_dir(follow_symlinks=False))
-    return sorted(found, key=lambda item: item['path'])
+                pending.extend((child, level + 1) for child in children)
+    return sorted(found, key=lambda item: item['path']), complete
 
 
 def _disk(path: Path) -> dict[str, int] | None:
@@ -141,8 +164,9 @@ def inventory(root: Path, temp_dir: Path | None = None) -> dict[str, Any]:
     runtime = root / RUNTIME
     temp = Path(temp_dir or tempfile.gettempdir())
     resources: list[dict[str, Any]] = []
+    linked = _linked_runtime(root)
     try:
-        names = sorted(os.listdir(runtime))
+        names = [] if linked else sorted(os.listdir(runtime))
     except OSError:
         names = []
     for name in names:
@@ -159,9 +183,9 @@ def inventory(root: Path, temp_dir: Path | None = None) -> dict[str, Any]:
         group = totals.setdefault(item['class'], {'resources': 0, 'bytes': 0})
         group['resources'] += 1
         group['bytes'] += item['bytes']
-    copies = repository_copies(root)
+    copies, copies_complete = repository_copies(root)
     return {'schema_version': 'getzilla-resource-inventory-v1', 'runtime': str(runtime), 'temp': str(temp),
             'resources': resources, 'totals': totals, 'repository_copies': copies,
-            'complete': all(item['complete'] for item in resources),
+            'complete': copies_complete and all(item['complete'] for item in resources),
             'disk': {'runtime': _disk(runtime if runtime.exists() else root), 'temp': _disk(temp)},
             'deleted': 0}

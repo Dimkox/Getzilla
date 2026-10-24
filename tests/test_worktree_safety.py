@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -167,6 +168,8 @@ class WorktreeSafetyTests(unittest.TestCase):
         commit(kept_ref, 'app.py', 'value = 5\n', 'only in refs/worktree')
         git(kept_ref, 'update-ref', 'refs/worktree/keep', 'HEAD')
         git(kept_ref, 'checkout', '-q', '--detach', 'origin/main')
+        # Only refs/worktree reaches that commit now; the reflog worktree is added after the expiry.
+        git(kept_ref, 'reflog', 'expire', '--expire=now', '--all')
         reflog = self.add('reflog', '--detach')
         commit(reflog, 'app.py', 'value = 6\n', 'only in the reflog')
         git(reflog, 'checkout', '-q', '--detach', 'origin/main')
@@ -174,6 +177,21 @@ class WorktreeSafetyTests(unittest.TestCase):
             report = self.report(path)
             self.assertIn('commits not on any remote-tracking ref', report['reasons'], path)
             self.assertEqual(remove(self.root, str(path))['result'], 'kept')
+
+    def test_a_failed_head_reflog_read_keeps_the_worktree(self) -> None:
+        from getzilla import worktree_safety
+        path = self.add('reflog-error', '-b', 'reflog-error')
+        real_git = worktree_safety._git
+
+        def failing(worktree, *args):
+            if args[:2] == ('reflog', 'show'):
+                raise worktree_safety.WorktreeError('reflog unreadable')
+            return real_git(worktree, *args)
+
+        with patch('getzilla.worktree_safety._git', side_effect=failing):
+            report = self.report(path)
+        self.assertFalse(report['removable'])
+        self.assertIn('check failed: reflog unreadable', report['reasons'])
 
     def test_an_operation_in_progress_keeps_the_worktree(self) -> None:
         path = self.add('merging', '-b', 'merging')
@@ -266,8 +284,8 @@ class WorktreeSafetyTests(unittest.TestCase):
             hidden.add(str(os.getpid()))  # this test process started before the worktree below
             older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
             self.assertIsNotNone(older)
-            self.assertFalse(worktree_safety._in_use(path, older + 60))
-            self.assertFalse(worktree_safety._in_use(path, older + 10), 'a 2 s margin, not more')
+            self.assertIs(worktree_safety._in_use(path, older + 60), False)
+            self.assertIs(worktree_safety._in_use(path, older + 10), False, 'a 2 s margin, not more')
             with patch('getzilla.worktree_safety._started_at', return_value=None):
                 self.assertIsNone(worktree_safety._in_use(path, older + 60), 'an unknown start fails closed')
 
@@ -295,6 +313,11 @@ class WorktreeSafetyTests(unittest.TestCase):
         os.utime(git_dir / 'commondir', (future, future))
         os.utime(git_dir / 'gitdir', (future, future))
         self.assertIsNone(worktree_safety._created_at(path))
+        for ahead, trusted in ((5, False), (1, True)):  # a 2 s tolerance for clock ticks, not more
+            stamp = time.time() + ahead
+            os.utime(git_dir / 'commondir', (stamp, stamp))
+            os.utime(git_dir / 'gitdir', (stamp, stamp))
+            self.assertEqual(worktree_safety._created_at(path) is not None, trusted, ahead)
 
     def test_a_worktree_a_process_works_in_is_kept(self) -> None:
         path = self.add('busy', '-b', 'busy')

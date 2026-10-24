@@ -128,7 +128,68 @@ class ReviewSnapshotTests(unittest.TestCase):
             review_snapshot.create(self.root, 'no-such-commit')
         self.assertFalse(self.snapshots.exists() and any(self.snapshots.iterdir()))
 
+    def test_an_option_shaped_revision_is_not_read_as_an_option(self) -> None:
+        for revision in ('--all', '--git-dir', '-q'):
+            with self.subTest(revision=revision), self.assertRaises(WorktreeError):
+                review_snapshot.create(self.root, revision)
+        self.assertFalse(self.snapshots.exists() and any(self.snapshots.iterdir()))
+
+    def test_an_annotated_tag_is_peeled_to_its_commit(self) -> None:
+        git(self.root, 'tag', '-a', '-m', 'release', 'v1', self.first)
+        path = review_snapshot.create(self.root, 'v1')
+        marker = json.loads((self.snapshots / f'{path.name}.json').read_text())
+        self.assertEqual(marker['commit'], self.first)
+        self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'removed')
+
+    def test_a_failed_worktree_add_leaves_no_marker(self) -> None:
+        real_git = review_snapshot._git
+
+        def failing(root, *args):
+            if args[:2] == ('worktree', 'add'):
+                raise WorktreeError('worktree add failed')
+            return real_git(root, *args)
+
+        with patch('getzilla.review_snapshot._git', side_effect=failing), self.assertRaises(WorktreeError):
+            review_snapshot.create(self.root, self.first)
+        self.assertEqual(list(self.snapshots.iterdir()), [])
+
+    def test_a_snapshot_made_from_a_task_worktree_lives_under_the_main_worktree(self) -> None:
+        task = self.root / '.getzilla' / 'runtime' / 'worktrees' / 'task'
+        git(self.root, 'worktree', 'add', '-q', '-b', 'task', str(task))
+        path = review_snapshot.create(task, self.first)
+        self.assertEqual(path.parent, self.snapshots)
+        self.assertFalse((task / '.getzilla' / 'runtime' / 'snapshots').exists())
+        self.assertEqual(review_snapshot.remove(task, str(path))['result'], 'removed')
+
+    def test_a_marker_with_another_schema_is_not_an_owner_marker(self) -> None:
+        path = review_snapshot.create(self.root, self.first)
+        marker = self.snapshots / f'{path.name}.json'
+        marker.write_text(json.dumps({'schema_version': 'other', 'commit': self.first}))
+        result = review_snapshot.remove(self.root, str(path))
+        self.assertEqual((result['result'], result['reason']), ('kept', 'no owner marker'))
+        self.assertTrue(path.is_dir())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX modes')
+    def test_an_existing_snapshots_folder_is_made_private(self) -> None:
+        self.snapshots.mkdir(parents=True, mode=0o755)
+        os.chmod(self.snapshots, 0o755)
+        review_snapshot.create(self.root, self.first)
+        self.assertEqual(stat.S_IMODE(os.stat(self.snapshots).st_mode), 0o700)
+
+    def test_a_marker_next_to_an_unregistered_folder_is_kept(self) -> None:
+        self.snapshots.mkdir(parents=True)
+        plain = self.snapshots / 'plain'
+        plain.mkdir()
+        (plain / 'work.txt').write_text('unique')
+        marker = self.snapshots / 'plain.json'
+        marker.write_text(json.dumps({'schema_version': review_snapshot.SCHEMA, 'commit': self.first}))
+        result = review_snapshot.remove(self.root, str(plain))
+        self.assertEqual((result['result'], result['reason']), ('kept', 'not a registered snapshot worktree'))
+        self.assertEqual((plain / 'work.txt').read_text(), 'unique')
+        self.assertTrue(marker.is_file())
+
     def test_cli_creates_and_removes_a_snapshot(self) -> None:
+        (self.root / '.getzilla').mkdir(exist_ok=True)  # find_root must stop here, not at an outer project
         cli = [sys.executable, str(ROOT / 'scripts' / 'getzilla_cleanup.py'), 'snapshot']
         created = json.loads(subprocess.run([*cli, self.second, '--json'], cwd=self.root, capture_output=True,
                                             text=True, check=True).stdout)
