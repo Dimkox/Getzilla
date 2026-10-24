@@ -116,6 +116,24 @@ def windows_process_running(pid: int, recorded_ns: int) -> bool:
 
 
 class NamedSmokeTests(unittest.TestCase):
+    def test_temp_files_a_killed_child_leaves_are_removed_with_the_run(self):
+        with fixture() as root, tempfile.TemporaryDirectory() as report_dir:
+            report = Path(report_dir) / 'leaked.txt'
+            (root / 'tests/test_leak.py').write_text(
+                'import os, tempfile, unittest\n'
+                'class Leak(unittest.TestCase):\n'
+                '    def test_leak(self):\n'
+                '        path = tempfile.mkdtemp(prefix="leak-")\n'
+                '        open(os.path.join(path, "blob"), "w").write("x")\n'
+                '        open(os.environ["LEAK_REPORT"], "w").write(path)\n'
+                '        os._exit(0)  # no cleanup runs, as after SIGKILL\n'
+            )
+            with patch.dict(os.environ, {'LEAK_REPORT': str(report)}):
+                python_test_runner.run_named_tests(root, ['tests.test_leak'], budget=30)
+            leaked = Path(report.read_text())
+            self.assertNotEqual(leaked.parent, Path(tempfile.gettempdir()))
+            self.assertFalse(leaked.exists())
+
     def test_existing_cli_requires_explicit_observation_mode_and_no_record(self):
         script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         for arguments in (

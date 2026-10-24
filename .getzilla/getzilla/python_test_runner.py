@@ -309,6 +309,10 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
 
 
 def _environment(root: Path, data_file: Path) -> dict[str, str]:
+    # Test children write temporary files inside this run's folder, so the run's own cleanup also
+    # removes what a killed or timed-out child left behind (#168).
+    scratch = data_file.parent / 'tmp'
+    scratch.mkdir(exist_ok=True)
     environment = {
         key: value for key, value in os.environ.items()
         if not key.startswith(('PYTEST_', 'COVERAGE_', 'COV_CORE_'))
@@ -316,7 +320,7 @@ def _environment(root: Path, data_file: Path) -> dict[str, str]:
     }
     environment.update(
         PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', PYTHONDONTWRITEBYTECODE='1',
-        _GETZILLA_TEST_CHILD='1', COVERAGE_FILE=str(data_file),
+        _GETZILLA_TEST_CHILD='1', COVERAGE_FILE=str(data_file), TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch),
         PYTHONPATH=os.pathsep.join((str(root), str(root / 'tests'), str(root / '.getzilla'), environment.get('PYTHONPATH', ''))),
     )
     return environment
