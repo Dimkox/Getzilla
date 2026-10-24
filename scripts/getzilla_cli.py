@@ -24,7 +24,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'route': ('getzilla_route.py', 'create or inspect the adaptive task route'),
     'status': ('getzilla_status.py', 'show the route, change package and agents'),
     'report': ('getzilla_report.py', 'per-profile overhead and defects caught before merge'),
-    'cleanup': ('getzilla_cleanup.py', 'read-only inventory of runtime state and temp directories'),
+    'cleanup': ('getzilla_cleanup.py', 'disk inventory and guarded removal of worktrees without unique work'),
     'change': ('getzilla_change.py', 'manage engineering change packages'),
     'spec': ('getzilla_spec.py', 'validate typed change specifications'),
     'verify': ('getzilla_verify.py', 'run route-selected verification and record a receipt'),
