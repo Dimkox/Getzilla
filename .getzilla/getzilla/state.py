@@ -501,8 +501,10 @@ def has_valid_approval(
         if approval.get('scope') != scope:
             continue
         branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
+        # A branch-bound grant is already held to the branch, its anchor and the exact files; every
+        # new prompt starts a new route, so binding the route as well made each message void it.
         if any(approval.get(key) != value for key, value in bindings.items()
-               if not (branch_bound and key == 'git_head')):
+               if not (branch_bound and key in {'git_head', 'route_id'})):
             continue
         grant_binding_digest = approval.get('grant_binding_digest')
         legacy_tree_fingerprint = approval.get('tree_fingerprint')

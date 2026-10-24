@@ -135,6 +135,24 @@ class GrantLifecycleTests(unittest.TestCase):
                     outside.write_text('initial dirty bytes\n')
                 self.assertFalse(valid(root), f'{layer} Git names must retain literal backslashes')
 
+    def test_a_new_route_keeps_a_branch_bound_grant_but_not_a_production_grant(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
+            set_active_route(root, build_route(root, 'Next prompt about something else', 's1').to_dict())
+            self.assertTrue(valid(root))
+            self.assertFalse(valid(root, 'production', None))
+
+    def test_a_branch_change_still_voids_the_grant_after_a_new_route(self) -> None:
+        from tests.branch_support import git
+        with github_project() as root:
+            add_approval(root, 'protected-path', 'one file', 15,
+                         actions=['protected-path-write'], resources=[TARGET])
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            git(root, 'checkout', '-q', '-b', 'other-branch')
+            self.assertFalse(valid(root))
+
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:
             approval = add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
