@@ -48,6 +48,15 @@ def _inventory(args: argparse.Namespace) -> int:
     for place, usage in sorted(report['disk'].items()):
         if usage:
             print(f'Disk {place}: {_size(usage["free"])} free of {_size(usage["total"])}')
+    copies = report['repository_copies']
+    if copies:
+        total = sum(item['bytes'] for item in copies)
+        print(f'Repository copies (review snapshots and the like, kept until you decide): '
+              f'{len(copies)}, {_size(total)}')
+        for item in sorted(copies, key=lambda entry: -entry['bytes'])[:10]:
+            print(f'  {_size(item["bytes"]):>10}  {item["path"]}')
+        if len(copies) > 10:
+            print(f'  ... {len(copies) - 10} more; use --json for all.')
     if not report['complete']:
         print('Some sizes are incomplete: unreadable entries or the entry budget was reached.')
     return 0
