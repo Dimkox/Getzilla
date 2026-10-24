@@ -161,8 +161,8 @@ def _local_only(worktree: Path) -> bool:
 def _started_at(entry: Path) -> float | None:
     """Process start time in epoch seconds from the world-readable /proc stat files."""
     try:
-        fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
-        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+        fields = (entry / 'stat').read_text(encoding='utf-8', errors='surrogateescape').rsplit(')', 1)[1].split()
+        boot = next(float(line.split()[1]) for line in Path('/proc/stat').read_text(encoding='ascii').splitlines()
                     if line.startswith('btime '))
         return boot + int(fields[19]) / os.sysconf('SC_CLK_TCK')
     except (OSError, ValueError, IndexError, StopIteration):
