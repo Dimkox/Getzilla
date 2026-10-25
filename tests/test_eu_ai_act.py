@@ -170,7 +170,13 @@ class RiskRecordTests(unittest.TestCase):
                                    {**CONFIRMED, 'role': 7}, {**CONFIRMED, 'role': None})]
         cases += [({'residual': 'high', 'accepted_by': accepted}, 'confirmation.date must be YYYY-MM-DD')
                   for accepted in (without_date, {**CONFIRMED, 'date': ''}, {**CONFIRMED, 'date': '20-10-2026'},
-                                   {**CONFIRMED, 'date': '2026-02-30'}, {**CONFIRMED, 'date': None})]
+                                   {**CONFIRMED, 'date': '2026-02-30'}, {**CONFIRMED, 'date': None},
+                                   {**CONFIRMED, 'date': '20261020'}, {**CONFIRMED, 'date': 20261020},
+                                   {**CONFIRMED, 'date': '2026-W43-1'})]
+        cases += [({'residual': 'high', 'accepted_by': {**CONFIRMED, 'date': '2026-10-21'}},
+                   'confirmation.date is in the future'),
+                  ({'reviewed': '20261020'}, 'reviewed must be YYYY-MM-DD'),
+                  ({'reviewed': '2026-10-21'}, 'reviewed is in the future')]
         cases += [
                   ({'next_review': '2026-10-19'}, 'next_review 2026-10-19 has passed'),
                   ({'next_review': TODAY.isoformat()}, None), ({'next_review': 'bad'}, 'YYYY-MM-DD')]
@@ -183,6 +189,26 @@ class RiskRecordTests(unittest.TestCase):
                     self.assertIsNone(problem)
                 else:
                     self.assertIn(expected, problem or '')
+
+
+class ConfirmationDateTests(unittest.TestCase):
+    def test_a_class_confirmation_needs_a_past_yyyy_mm_dd_date(self):
+        # Basic-format, integer, week and future dates must not confirm a class (#191).
+        repo = Repo(self)
+        system = {'id': 'spell', 'purpose': 'Spell checker for invoices', 'class': 'minimal', 'role': 'provider'}
+        for value, expected in (('20261020', 'must be YYYY-MM-DD'), (20261020, 'must be YYYY-MM-DD'),
+                                ('2026-W43-1', 'must be YYYY-MM-DD'), ('2026-10-21', 'is in the future'),
+                                (TODAY.isoformat(), None)):
+            with self.subTest(value=value):
+                repo.registry({**system, 'confirmation': {**CONFIRMED, 'date': value}})
+                repo.commit('class confirmation')
+                unconfirmed = [problem for problem in repo.evaluate().problems
+                               if problem.startswith('AI_CLASS_UNCONFIRMED')]
+                if expected is None:
+                    self.assertEqual(unconfirmed, [])
+                else:
+                    self.assertEqual(len(unconfirmed), 1)
+                    self.assertIn(expected, unconfirmed[0])
 
 
 class IsoMapTests(unittest.TestCase):
@@ -363,6 +389,12 @@ class DecisionTests(unittest.TestCase):
         report = repo.evaluate()
         self.assertEqual(report.status, 'pass', report.problems)
         self.assertEqual({row['obligation']: row['status'] for row in report.matrix}['AIA-50-2'], 'exempt')
+        future = {**CONFIRMED, 'date': (TODAY + timedelta(days=1)).isoformat()}
+        repo.registry({**self.SUPPORT, 'role': 'provider', 'exemptions': [{**exemption, 'confirmation': future}]})
+        repo.commit('exemption confirmed in the future')
+        report = repo.evaluate()
+        self.assertIn('AI_EXEMPTION_UNCONFIRMED', codes(report))
+        self.assertIn('in the future', ' '.join(report.problems))
         repo.registry({**self.SUPPORT, 'role': 'provider', 'marking_symbol': 'mark_generated_content',
                        'exemptions': [{'obligation': 'AIA-5', 'basis': 'not a prohibited practice', 'confirmation': CONFIRMED}]})
         repo.commit('art 5 is not exemptible')

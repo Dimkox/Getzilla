@@ -257,7 +257,14 @@ def _owned(path: str, system: dict[str, Any]) -> bool:
     return any(isinstance(pattern, str) and fnmatch.fnmatchcase(path, pattern) for pattern in system.get('paths') or [])
 
 
-def _confirmation_problem(system: dict[str, Any]) -> str | None:
+def _iso_day(value: Any) -> date:
+    """Only the YYYY-MM-DD text form; fromisoformat alone also takes 20261020 and week dates (#191)."""
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError(value)
+    return date.fromisoformat(value)
+
+
+def _confirmation_problem(system: dict[str, Any], today: date) -> str | None:
     confirmation = system.get('confirmation')
     if not isinstance(confirmation, dict):
         return 'no confirmation'
@@ -265,9 +272,11 @@ def _confirmation_problem(system: dict[str, Any]) -> str | None:
         if not isinstance(confirmation.get(key), str) or len(confirmation[key].strip()) < 2:
             return f'confirmation.{key} is missing'
     try:
-        date.fromisoformat(str(confirmation.get('date')))
+        confirmed = _iso_day(confirmation.get('date'))
     except ValueError:
         return 'confirmation.date must be YYYY-MM-DD'
+    if confirmed > today:
+        return 'confirmation.date is in the future'
     return None
 
 
@@ -299,9 +308,11 @@ def _risk_register_problem(root: Path, head: str, path: Any, today: date, *, che
                                                 for key in ('risk', 'mitigation', 'owner', 'reviewed')):
             return f'{path} risk {index} needs risk, mitigation, owner and reviewed'
         try:
-            age = (today - date.fromisoformat(risk['reviewed'])).days
+            age = (today - _iso_day(risk['reviewed'])).days
         except ValueError:
             return f'{path} risk {index}: reviewed must be YYYY-MM-DD'
+        if age < 0:
+            return f'{path} risk {index}: reviewed is in the future'
         if age > RISK_REVIEW_DAYS:
             return f'{path} risk {index} was last reviewed {age} days ago (limit {RISK_REVIEW_DAYS})'
         for key in ('likelihood', 'severity'):
@@ -310,7 +321,7 @@ def _risk_register_problem(root: Path, head: str, path: Any, today: date, *, che
         if 'residual' in risk and risk['residual'] not in RESIDUAL_LEVELS:
             return f'{path} risk {index}: residual must be low, medium or high'
         if risk.get('residual') == 'high':
-            problem = _confirmation_problem({'confirmation': risk.get('accepted_by')})
+            problem = _confirmation_problem({'confirmation': risk.get('accepted_by')}, today)
             if problem:
                 return f'{path} risk {index}: high residual risk needs accepted_by: {problem}'
         if check_deadline and 'next_review' in risk:
@@ -369,7 +380,7 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
             problems.append(f'AI_CLASS_UNCONFIRMED: {name} has no class; draft is {draft.risk_class}'
                             + (f' ({"; ".join(draft.reasons)})' if draft.reasons else ''))
             continue
-        unconfirmed = _confirmation_problem(system)
+        unconfirmed = _confirmation_problem(system, today)
         if unconfirmed:
             problems.append(f'AI_CLASS_UNCONFIRMED: {name} class {risk_class}: {unconfirmed}; a person confirms the class, the agent never does')
         if RANK[risk_class] < RANK[draft.risk_class] and not str(system.get('downgrade_reason') or '').strip():
@@ -401,7 +412,7 @@ def evaluate(root: Path, mode: str, bases: Iterable[str], head: str = 'HEAD', *,
             if exemption is not None:
                 basis = str(exemption.get('basis') or '').strip()
                 problem = (None if obligation.get('exemptible') else 'this obligation has no exemption') or \
-                    ('basis is missing' if len(basis) < 8 else None) or _confirmation_problem(exemption)
+                    ('basis is missing' if len(basis) < 8 else None) or _confirmation_problem(exemption, today)
                 if problem is None:
                     matrix.append({**row, 'status': 'exempt', 'evidence': f'{basis} (confirmed by {exemption["confirmation"]["by"]})'})
                     continue
