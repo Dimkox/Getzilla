@@ -189,3 +189,31 @@ class ScaffoldTests(unittest.TestCase):
                     self.assertEqual(adapter.read_bytes(), template.read_bytes())
                     self.assertEqual(after.pop('src/bot/ai_transparency.py'), template.read_bytes())
                     self.assertEqual(after, before)
+
+    @unittest.skipIf(os.name == 'nt', 'scaffold refuses on Windows')
+    def test_archive_install_finds_templates_through_the_stack_dir(self):
+        # In a lean install the engine runs from getzilla.zip, so a module-relative template path breaks (#122).
+        spec = importlib.util.spec_from_file_location('install_scaffold_archive', ROOT / 'scripts/install_into.py')
+        installer = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = installer
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            selection = installer.PayloadSelection(('qwen',), compliance=('eu-ai-act',), engine_archive=True)
+            for entry in installer.build_payload(ROOT, selection=selection):
+                path = project / entry.path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(entry.content)
+            self.assertTrue((project / installer.ENGINE_ARCHIVE).is_file())
+            self.assertFalse((project / '.getzilla/getzilla/compliance_scaffold.py').exists())
+            (project / '.getzilla/config/ai-systems.json').write_text(json.dumps(
+                {'schema_version': 'ai-systems-v1', 'systems': [{'id': 'bot', 'paths': ['src/bot/**']}]}),
+                encoding='utf-8')
+            env = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
+            result = subprocess.run(
+                [sys.executable, str(project / 'scripts/getzilla_compliance.py'), 'scaffold',
+                 '--system', 'bot', '--lang', 'python'], cwd=project,
+                env={**env, 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True, check=False, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            template = project / '.getzilla/templates/eu-ai-act/transparency/python/ai_transparency.py'
+            self.assertEqual((project / 'src/bot/ai_transparency.py').read_bytes(), template.read_bytes())

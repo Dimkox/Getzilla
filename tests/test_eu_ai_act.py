@@ -112,6 +112,14 @@ class MatrixFreshnessTests(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertIsNotNone(eu_ai_act.matrix_review_problem(data, TODAY))
 
+    def test_sources_need_an_http_scheme_and_a_host(self):
+        recent = {'reviewed': TODAY.isoformat(), 'sources': ['https://eur-lex.europa.eu/eli/reg/2024/1689/oj']}
+        for source in ('ftp://eur-lex.europa.eu/eli/reg/2024/1689/oj', 'gopher://eur-lex.europa.eu/x',
+                       'file:///srv/matrix.json', 'mailto:owner@example.com', 'https://', 'eur-lex.europa.eu/x'):
+            with self.subTest(source=source):
+                problem = eu_ai_act.matrix_review_problem({**recent, 'sources': [source]}, TODAY)
+                self.assertIn('public source URLs', problem or '')
+
     def test_empty_registry_reports_stale_matrix_and_legacy_still_parses(self):
         repo = Repo(self)
         data = json.loads((repo.root / eu_ai_act.OBLIGATIONS).read_text(encoding='utf-8'))
@@ -154,6 +162,16 @@ class RiskRecordTests(unittest.TestCase):
                   ({'residual': 'high'}, 'high residual risk needs accepted_by'),
                   ({'residual': 'high', 'accepted_by': CONFIRMED}, None),
                   ({'residual': 'high', 'accepted_by': {'by': 'x'}}, 'confirmation'),
+                  ({'residual': 'high', 'accepted_by': 'Jane Doe'}, 'no confirmation')]
+        without_role = {key: value for key, value in CONFIRMED.items() if key != 'role'}
+        without_date = {key: value for key, value in CONFIRMED.items() if key != 'date'}
+        cases += [({'residual': 'high', 'accepted_by': accepted}, 'confirmation.role is missing')
+                  for accepted in (without_role, {**CONFIRMED, 'role': ''}, {**CONFIRMED, 'role': ' x '},
+                                   {**CONFIRMED, 'role': 7}, {**CONFIRMED, 'role': None})]
+        cases += [({'residual': 'high', 'accepted_by': accepted}, 'confirmation.date must be YYYY-MM-DD')
+                  for accepted in (without_date, {**CONFIRMED, 'date': ''}, {**CONFIRMED, 'date': '20-10-2026'},
+                                   {**CONFIRMED, 'date': '2026-02-30'}, {**CONFIRMED, 'date': None})]
+        cases += [
                   ({'next_review': '2026-10-19'}, 'next_review 2026-10-19 has passed'),
                   ({'next_review': TODAY.isoformat()}, None), ({'next_review': 'bad'}, 'YYYY-MM-DD')]
         for extra, expected in cases:
