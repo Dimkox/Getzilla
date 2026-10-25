@@ -218,6 +218,20 @@ class CiAuditTests(unittest.TestCase):
         self.assertEqual(result['decision'], 'review')
         self.assertIn('AI_SYSTEM_UNREGISTERED', ' '.join(result['reasons']))
 
+    def test_first_audit_uses_captured_providers_not_the_engine_loader(self):
+        # No earlier audit warms anything: the engine loader is stale from the first call (#122).
+        from getzilla import cost_guard
+        repo = self.repo()
+        repo.write('src/bot.py', 'import openai\nopenai.chat.completions.create(model="fixture", messages=[])\n')
+        repo.commit('provider call')
+        stale = {**cost_guard.parse_providers((ROOT / '.getzilla/config/cost-providers.json').read_bytes()),
+                 'python_modules': [], 'hosts': []}
+        with mock.patch.object(cost_guard, 'load_providers', return_value=stale) as engine_loader:
+            result = self.module().ci_check(repo.root, repo.base)
+        engine_loader.assert_not_called()
+        self.assertEqual(result['decision'], 'review')
+        self.assertIn('AI_SYSTEM_UNREGISTERED', ' '.join(result['reasons']))
+
     def test_head_date_and_optional_metadata_use_one_snapshot(self):
         from getzilla import eu_ai_act
         repo = self.repo()
@@ -411,6 +425,15 @@ class AttestationClaimTests(unittest.TestCase):
             bad['command_results'][0][key] = value
             self.assertIsNotNone(self.problem(bad))
 
+    def test_identity_metadata_is_required(self):
+        for key in ('attestation_id', 'key_id', 'policy_digest'):
+            missing = {name: value for name, value in self.payload.items() if name != key}
+            with self.subTest(key=key, value='missing'):
+                self.assertIn('identity', self.problem(missing) or '')
+            for value in ('', None, 1, ['a1'], {'id': 'a1'}):
+                with self.subTest(key=key, value=value):
+                    self.assertIn('identity', self.problem({**self.payload, key: value}) or '')
+
     def test_attestation_cannot_remove_normal_receipt_requirement(self):
         repo = Repo(self)
         repo.registry()
@@ -489,3 +512,11 @@ class VerifierProcessTests(unittest.TestCase):
                     mod.verify_attestation(repo.root, envelope, public, exe)
             with self.assertRaisesRegex(ValueError, 'outside|trusted'):
                 mod.verify_attestation(repo.root, envelope, public, repo.root / 'verifier')
+            # A working executable inside the project is still refused, so only the location guard can stop it.
+            inside = repo.root / 'tools/adaptive-trust-ci'
+            inside.parent.mkdir()
+            inside.write_text('#!' + sys.executable + '\nimport json\nprint(json.dumps({"status": "passed"}))\n',
+                              encoding='utf-8')
+            inside.chmod(0o700)
+            with self.assertRaisesRegex(ValueError, 'outside the audited project'):
+                mod.verify_attestation(repo.root, envelope, public, inside)
