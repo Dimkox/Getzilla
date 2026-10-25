@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if summary['profiles']:
         print(f'{"profile":<10} {"routes":>6} {"median min to pass":>19} {"verify runs/route":>18} {"reviews":>8} {"failed outcomes":>20}')
         for name, group in sorted(summary['profiles'].items()):
-            print(f'{name:<10} {group["routes"]:>6} {_cell(group["median_minutes_to_pass"]):>19} '
+            print(f'{_printable(name):<10} {group["routes"]:>6} {_cell(group["median_minutes_to_pass"]):>19} '
                   f'{group["verify_runs_per_route"]:>18} {group["reviews"]:>8} {group["failed_check_or_review_outcomes"]:>20}')
     else:
         print('No routes recorded yet: metrics start with the next route and verification run.')

@@ -247,8 +247,10 @@ class RecordingTests(unittest.TestCase):
         stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         (self.root / '.getzilla' / 'runtime').mkdir()
         hostile = 'r1\x1b]0;owned\x07‮'
-        (self.root / METRICS).write_text(json.dumps({'at': stamp, 'event': 'route', 'route_id': hostile}) + '\n',
-                                         encoding='utf-8')
+        (self.root / METRICS).write_text('\n'.join(json.dumps(item) for item in [
+            {'at': stamp, 'event': 'route', 'route_id': hostile},
+            {'at': stamp, 'event': 'verify', 'route_id': hostile, 'status': 'pass', 'profile': 'std\x1b[2J'},
+        ]) + '\n', encoding='utf-8')
         text = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py'), '--since', '1d'],
                               cwd=self.root, capture_output=True, text=True, check=True).stdout
         self.assertNotIn('\x1b', text)

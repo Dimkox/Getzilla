@@ -135,9 +135,15 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertFalse(leaked.exists())
 
     def test_a_cleanup_error_keeps_the_named_and_trust_verdicts(self):
+        left: list[tempfile.TemporaryDirectory] = []
+        real_cleanup = tempfile.TemporaryDirectory.cleanup
+
         def broken_cleanup(self):
+            left.append(self)
             raise PermissionError('locked file')
 
+        # The real cleanup runs afterwards, so the test leaves no run folders behind.
+        self.addCleanup(lambda: [real_cleanup(directory) for directory in left])
         with fixture() as root, patch.object(tempfile.TemporaryDirectory, 'cleanup', broken_cleanup):
             named = python_test_runner.run_named_tests(root, ['tests.test_sample'], budget=30)
             self.assertEqual(named.returncode, 0, named.stderr)
