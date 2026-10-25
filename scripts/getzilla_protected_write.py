@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.protected_write import ProtectedWriteError, apply_manifest
+from getzilla.state import bind_session
 from getzilla.util import find_root
 
 
@@ -24,6 +26,8 @@ def main() -> int:
     parser.add_argument('--manifest', required=True, type=Path)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    # The caller's session, as in getzilla_approve.py, so a session-bound grant follows its later routes (#134).
+    bind_session(os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('GETZILLA_SESSION_ID'))
     try:
         result = apply_manifest(find_root(ROOT), args.manifest, dry_run=args.dry_run)
     except ProtectedWriteError as exc:

@@ -134,6 +134,27 @@ class NamedSmokeTests(unittest.TestCase):
             self.assertNotEqual(leaked.parent, Path(tempfile.gettempdir()))
             self.assertFalse(leaked.exists())
 
+    def test_a_cleanup_error_keeps_the_named_and_trust_verdicts(self):
+        left: list[tempfile.TemporaryDirectory] = []
+        real_cleanup = tempfile.TemporaryDirectory.cleanup
+
+        def broken_cleanup(self):
+            left.append(self)
+            raise PermissionError('locked file')
+
+        # The real cleanup runs afterwards, so the test leaves no run folders behind.
+        self.addCleanup(lambda: [real_cleanup(directory) for directory in left])
+        with fixture() as root, patch.object(tempfile.TemporaryDirectory, 'cleanup', broken_cleanup):
+            named = python_test_runner.run_named_tests(root, ['tests.test_sample'], budget=30)
+            self.assertEqual(named.returncode, 0, named.stderr)
+            self.assertIn('PermissionError: locked file', named.cleanup_error)
+            (root / 'trust-ci' / 'tests').mkdir(parents=True)
+            (root / 'trust-ci' / 'tests' / 'test_trust.py').write_text(
+                'import unittest\nclass Trust(unittest.TestCase):\n    def test_ok(self):\n        pass\n')
+            trust = python_test_runner.run_trust_tests(root, 0)
+            self.assertEqual(trust.returncode, 0, trust.stderr)
+            self.assertIn('PermissionError: locked file', trust.cleanup_error)
+
     def test_existing_cli_requires_explicit_observation_mode_and_no_record(self):
         script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_verify.py'
         for arguments in (

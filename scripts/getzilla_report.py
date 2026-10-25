@@ -38,6 +38,11 @@ def _cell(value: object) -> str:
     return '-' if value is None else str(value)
 
 
+def _printable(value: object) -> str:
+    """Journal text for the terminal: control and format characters become `?` (#134)."""
+    return ''.join(char if char.isprintable() else '?' for char in str(value))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog='getzilla report', description=__doc__.split('\n')[0])
     parser.add_argument('--since', default='7d', help='period: Nd, Nh or all (default 7d)')
@@ -56,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if summary['profiles']:
         print(f'{"profile":<10} {"routes":>6} {"median min to pass":>19} {"verify runs/route":>18} {"reviews":>8} {"failed outcomes":>20}')
         for name, group in sorted(summary['profiles'].items()):
-            print(f'{name:<10} {group["routes"]:>6} {_cell(group["median_minutes_to_pass"]):>19} '
+            print(f'{_printable(name):<10} {group["routes"]:>6} {_cell(group["median_minutes_to_pass"]):>19} '
                   f'{group["verify_runs_per_route"]:>18} {group["reviews"]:>8} {group["failed_check_or_review_outcomes"]:>20}')
     else:
         print('No routes recorded yet: metrics start with the next route and verification run.')
@@ -68,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'Route observation gaps ({observed["routes_with_gaps"]} of {observed["routes"]} routes; unknown is not zero):')
         gapped = [route for route in summary['routes'] if route.get('gaps')]
         for route in gapped[:MAX_GAP_ROUTES]:
-            print(f'  {route["route_id"]}: ' + '; '.join(route['gaps']))
+            print(f'  {_printable(route["route_id"])}: ' + '; '.join(route['gaps']))
         if len(gapped) > MAX_GAP_ROUTES:
             print(f'  ... {len(gapped) - MAX_GAP_ROUTES} more; use --json for all.')
     hints = summary['counters'].get('path_hints', {})

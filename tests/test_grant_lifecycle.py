@@ -193,6 +193,44 @@ class GrantLifecycleTests(unittest.TestCase):
             set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
             self.assertTrue(valid(root))
 
+    def test_the_cli_falls_back_to_getzilla_session_id_and_prefers_claude_code(self) -> None:
+        approve = [sys.executable, str(ROOT / 'scripts' / 'getzilla_approve.py'), 'protected-path',
+                   '--reason', 'one file', '--action', 'protected-path-write', '--resource', TARGET]
+        for env_extra, expected in (({'GETZILLA_SESSION_ID': 's1'}, 's1'),
+                                    ({'GETZILLA_SESSION_ID': 's2', 'CLAUDE_CODE_SESSION_ID': 's1'}, 's1')):
+            with self.subTest(env=env_extra), github_project() as root:
+                env = {key: value for key, value in os.environ.items()
+                       if key not in {'CLAUDE_CODE_SESSION_ID', 'GETZILLA_SESSION_ID'}}
+                subprocess.run(approve, cwd=root, env={**env, **env_extra}, check=True, capture_output=True)
+                recorded = json.loads(approvals_path(root).read_text(encoding='utf-8'))[-1]['session_id']
+                self.assertEqual(recorded, expected)
+
+    def test_protected_write_cli_follows_the_caller_session(self) -> None:
+        import base64
+        import shutil
+        from getzilla.util import file_sha256
+        with github_project() as root:
+            (root / 'scripts').mkdir(exist_ok=True)
+            shutil.copy2(ROOT / 'scripts' / 'getzilla_protected_write.py', root / 'scripts')
+            target = root / 'AGENTS.md'
+            add_approval(root, 'protected-path', 'one file', 15, actions=['protected-path-write'],
+                         resources=['AGENTS.md'])
+            set_active_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            manifest = root.parent / 'protected-write.json'
+            manifest.write_text(json.dumps({'schema_version': 1, 'operations': [{
+                'path': 'AGENTS.md', 'expected_sha256': file_sha256(target),
+                'content_base64': base64.b64encode(target.read_bytes() + b'\n# edit\n').decode('ascii')}]}),
+                encoding='utf-8')
+            cli = [sys.executable, str(root / 'scripts' / 'getzilla_protected_write.py'), '--manifest', str(manifest),
+                   '--dry-run']
+            env = {key: value for key, value in os.environ.items()
+                   if key not in {'CLAUDE_CODE_SESSION_ID', 'GETZILLA_SESSION_ID'}}
+            unbound = subprocess.run(cli, cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(unbound.returncode, 2, unbound.stdout)
+            bound = subprocess.run(cli, cwd=root, env={**env, 'CLAUDE_CODE_SESSION_ID': 's1'},
+                                   capture_output=True, text=True)
+            self.assertEqual(bound.returncode, 0, bound.stderr)
+
     def test_without_a_known_session_the_exact_route_is_still_required(self) -> None:
         with github_project() as root:
             approval = add_approval(root, 'protected-path', 'one file', 15,

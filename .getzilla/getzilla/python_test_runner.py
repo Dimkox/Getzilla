@@ -337,9 +337,11 @@ def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> Pro
         for target in targets
     ):
         raise RunnerError('named tests require nonempty existing tests.test_module[.Class[.test_method]] targets')
-    with tempfile.TemporaryDirectory(prefix='grok-named-smoke-') as directory:
-        return execute([sys.executable, '-m', 'unittest', *targets], root,
-                       _environment(root, Path(directory) / '.coverage'), timeout=budget)
+    retained: dict[str, ProcessResult] = {}
+    with _run_directory('grok-named-smoke-', retained) as directory:
+        retained['tests'] = execute([sys.executable, '-m', 'unittest', *targets], root,
+                                    _environment(root, Path(directory) / '.coverage'), timeout=budget)
+    return retained['tests']
 
 
 def _tool_versions(required: list[str]) -> dict[str, str]:
@@ -617,10 +619,13 @@ def run_trust_tests(root: Path, workers: int) -> ProcessResult:
     command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else [
         sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
     ]
-    with tempfile.TemporaryDirectory(prefix='grok-trust-tests-') as directory:
+    retained: dict[str, ProcessResult] = {}
+    # Child temp files now live in this folder, so its cleanup must not replace the verdict (#134).
+    with _run_directory('grok-trust-tests-', retained) as directory:
         environment = _environment(suite, Path(directory) / '.coverage')
         environment['PYTHONPATH'] = os.pathsep.join(str(path) for path in (suite / 'src', suite / 'tests', suite))
-        return execute(command, suite, environment)
+        retained['tests'] = execute(command, suite, environment)
+    return retained['tests']
 
 
 def main() -> int:
