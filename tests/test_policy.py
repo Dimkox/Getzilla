@@ -350,12 +350,12 @@ class PolicyTests(unittest.TestCase):
                   'mcp__Ahrefs__management-projects-create', 'mcp__Ahrefs__management-project-keywords-delete',
                   'mcp__Ahrefs__social-media-post-update', 'mcp__claude-code-remote__set_session_tags',
                   'mcp__claude-code-remote__add_repo', 'mcp__Gmail__label_message', 'mcp__x__runJob',
-                  'mcp__x__page_write', 'mcp__x__records-write')
+                  'mcp__x__page_write', 'mcp__x__records-write', 'mcp__gh__actions_run_trigger')
         reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
                  'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Ahrefs__site-explorer-metrics',
                  'mcp__Ahrefs__management-projects', 'mcp__claude-code-remote__get_session',
                  'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads', 'mcp__x__updatedSince',
-                 'mcp__x__createdAt', 'Bash', 'Edit')
+                 'mcp__x__createdAt', 'mcp__cloud-run__get_service', 'mcp__x-post__list_items', 'Bash', 'Edit')
         for tool in writes:
             with self.subTest(tool=tool):
                 self.assertTrue(mcp_side_effect(tool))
@@ -377,6 +377,7 @@ class PolicyTests(unittest.TestCase):
                            {'owner': 'Dimkox'}, {'repo': 'Getzilla'}, {'owner': 'Dimkox', 'repo': ''},
                            {'owner': ['Dimkox'], 'repo': 'Getzilla'}, {'owner': 'Dimkox/Getzilla', 'repo': ''},
                            {'owner': 'Dimkox ', 'repo': 'Getzilla'}, {'owner': 'Dimkox', 'repo': 'Getzilla/x'},
+                           # U+212A KELVIN SIGN lowercases to an ASCII k: only the ASCII name check refuses it.
                            {'owner': 'DimKox', 'repo': 'Getzilla'}):
                 with self.subTest(target=target):
                     allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,

@@ -147,6 +147,7 @@ SIDE_EFFECT_TOOL = re.compile(
     r'|insert|append|batch|import|invite|forward|respond|save|generate|manage|star|unstar|reprioritize'
     r'|transition)' + _VERB_END
     + r'|(?:^|[_-])(?i:write)' + _VERB_END
+    + r'|^actions_run' + _VERB_END
 )
 # A GitHub server fails closed: a tool is a write unless it is a known read, since server versions add
 # write tools under new verbs (run_workflow, manage_notification_subscription).
@@ -169,7 +170,8 @@ def mcp_side_effect(tool: str) -> bool:
     github = 'github' in server.lower()
     if github and action in _GITHUB_READ_NAMES:
         return False
-    if SIDE_EFFECT_TOOL.search(tool):
+    # The action only: a verb in the server name (cloud-run) must not make every tool a write.
+    if SIDE_EFFECT_TOOL.search(action):
         return True
     return github and not _GITHUB_READ.search(action)
 
