@@ -10,7 +10,7 @@ from ._policy_legacy import (
     DEFAULT_CONTROL_PLANE as _LEGACY_CONTROL_PLANE,
     DEFAULT_SECRET_READ as _LEGACY_SECRET_READ,
     DESTRUCTIVE_COMMANDS as _LEGACY_DESTRUCTIVE_COMMANDS,
-    SIDE_EFFECT_TOOL as _LEGACY_SIDE_EFFECT_TOOL,
+    mcp_side_effect as _legacy_mcp_side_effect,
     _configured_patterns as _legacy_configured_patterns,
     _destructive_pattern as _legacy_destructive_pattern,
     _http_write_resource as _legacy_http_write_resource,
@@ -38,7 +38,7 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
         word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file')
     ):
         return 'protected-path-write'
-    if tool.startswith('mcp__') and _LEGACY_SIDE_EFFECT_TOOL.search(tool):
+    if _legacy_mcp_side_effect(tool):
         return 'external-write'
     if tool != 'Bash':
         return None
