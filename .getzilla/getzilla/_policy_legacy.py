@@ -158,8 +158,9 @@ _GITHUB_NAME = re.compile(r'[A-Za-z0-9._-]+')
 
 
 def _mcp_server_action(tool: str) -> tuple[str, str]:
+    # The action is every segment after the server: a verb may sit before the last `__` (delete__file).
     parts = tool.split('__')
-    return (parts[1] if len(parts) > 2 else ''), parts[-1]
+    return (parts[1], '__'.join(parts[2:])) if len(parts) > 2 else ('', parts[-1])
 
 
 def mcp_side_effect(tool: str) -> bool:
