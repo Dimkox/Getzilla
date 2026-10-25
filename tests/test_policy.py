@@ -313,27 +313,55 @@ class PolicyTests(unittest.TestCase):
 
     def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
         # These names carry the write verb inside the name and used to pass with no grant (#193).
-        from getzilla.policy import SIDE_EFFECT_TOOL, sensitive_action
+        from getzilla.policy import mcp_side_effect, sensitive_action
         writes = ('issue_write', 'sub_issue_write', 'pull_request_review_write', 'add_issue_comment',
                   'add_reply_to_pull_request_comment', 'add_comment_to_pending_review', 'push_files',
                   'resolve_review_thread', 'unresolve_review_thread', 'enable_pr_auto_merge',
                   'disable_pr_auto_merge', 'fork_repository', 'request_copilot_review', 'actions_run_trigger',
-                  'create_issue', 'update_issue_comment', 'merge_pull_request', 'create_or_update_file')
+                  'create_issue', 'update_issue_comment', 'merge_pull_request', 'create_or_update_file',
+                  # Not on the verb list: a GitHub server fails closed for any tool that is not a known read.
+                  'run_workflow', 'manage_notification_subscription', 'star_repository', 'unstar_repository',
+                  'reprioritize_sub_issue', 'mark_all_notifications_read', 'some_future_tool')
         reads = ('get_me', 'issue_read', 'list_issues', 'search_issues', 'pull_request_read', 'get_check_run',
                  'get_job_logs', 'actions_get', 'actions_list', 'list_branches', 'get_file_contents',
-                 'run_secret_scanning', 'search_code')
+                 'run_secret_scanning', 'search_code', 'projects_list', 'download_workflow_run_artifact',
+                 'list_starred_repositories')
         with github_project() as root:
-            for name in writes:
-                tool = 'mcp__github__' + name
-                with self.subTest(tool=tool):
-                    self.assertTrue(SIDE_EFFECT_TOOL.search(tool))
-                    self.assertEqual(sensitive_action(root, {'tool_name': tool, 'tool_input': {}}), 'external-write')
-                    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
-                    self.assertFalse(allowed)
-                    self.assertIn('external-write grant', reason or '')
-            for name in reads:
-                with self.subTest(tool=name):
-                    self.assertIsNone(SIDE_EFFECT_TOOL.search('mcp__github__' + name))
+            for server in ('github', 'plugin_github_github', 'GitHub'):
+                for name in writes:
+                    tool = f'mcp__{server}__{name}'
+                    with self.subTest(tool=tool):
+                        self.assertTrue(mcp_side_effect(tool))
+                        self.assertEqual(sensitive_action(root, {'tool_name': tool, 'tool_input': {}}),
+                                         'external-write')
+                        allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+                        self.assertFalse(allowed)
+                        self.assertIn('external-write grant', reason or '')
+                for name in reads:
+                    with self.subTest(tool=f'mcp__{server}__{name}'):
+                        self.assertFalse(mcp_side_effect(f'mcp__{server}__{name}'))
+
+    def test_camel_case_and_hyphen_write_tools_need_a_grant(self) -> None:
+        from getzilla.policy import mcp_side_effect
+        writes = ('mcp__Atlassian_MCP__executeWrite', 'mcp__Atlassian_MCP__executeDestructive',
+                  'mcp__Atlassian_MCP__createJiraIssue', 'mcp__Atlassian_MCP__editJiraIssue',
+                  'mcp__Atlassian_MCP__addCommentToJiraIssue', 'mcp__Atlassian_MCP__transitionJiraIssue',
+                  'mcp__Atlassian_MCP__updateConfluencePage', 'mcp__Google_Docs__batchUpdate',
+                  'mcp__Ahrefs__management-projects-create', 'mcp__Ahrefs__management-project-keywords-delete',
+                  'mcp__Ahrefs__social-media-post-update', 'mcp__claude-code-remote__set_session_tags',
+                  'mcp__claude-code-remote__add_repo', 'mcp__Gmail__label_message', 'mcp__x__runJob',
+                  'mcp__x__page_write', 'mcp__x__records-write')
+        reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
+                 'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Ahrefs__site-explorer-metrics',
+                 'mcp__Ahrefs__management-projects', 'mcp__claude-code-remote__get_session',
+                 'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads', 'mcp__x__updatedSince',
+                 'mcp__x__createdAt', 'Bash', 'Edit')
+        for tool in writes:
+            with self.subTest(tool=tool):
+                self.assertTrue(mcp_side_effect(tool))
+        for tool in reads:
+            with self.subTest(tool=tool):
+                self.assertFalse(mcp_side_effect(tool))
 
     def test_github_write_grants_bind_to_the_local_repository(self) -> None:
         # A grant names only the tool; the call's owner/repo must be the repository it binds (#184).
@@ -347,12 +375,26 @@ class PolicyTests(unittest.TestCase):
                     self.assertTrue(allowed, reason)
             for target in ({'owner': 'Dimkox', 'repo': 'Other'}, {'owner': 'someone', 'repo': 'Getzilla'},
                            {'owner': 'Dimkox'}, {'repo': 'Getzilla'}, {'owner': 'Dimkox', 'repo': ''},
-                           {'owner': ['Dimkox'], 'repo': 'Getzilla'}, {'owner': 'Dimkox/Getzilla', 'repo': ''}):
+                           {'owner': ['Dimkox'], 'repo': 'Getzilla'}, {'owner': 'Dimkox/Getzilla', 'repo': ''},
+                           {'owner': 'Dimkox ', 'repo': 'Getzilla'}, {'owner': 'Dimkox', 'repo': 'Getzilla/x'},
+                           {'owner': 'DimKox', 'repo': 'Getzilla'}):
                 with self.subTest(target=target):
                     allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,
                                                                'tool_input': {'method': 'create', **target}})
                     self.assertFalse(allowed)
                     self.assertIn('refused', reason or '')
+            # A renamed GitHub server is bound the same way; another server's owner/repo keys are not GitHub targets.
+            renamed = 'mcp__plugin_github_github__issue_write'
+            add_approval(root, 'external-write', 'renamed server', 5, actions=['external-write'], resources=[renamed])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': renamed,
+                                                       'tool_input': {'owner': 'other', 'repo': 'project'}})
+            self.assertFalse(allowed)
+            self.assertIn('refused', reason or '')
+            other = 'mcp__claude-code-remote__add_repo'
+            add_approval(root, 'external-write', 'add repo', 5, actions=['external-write'], resources=[other])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': other,
+                                                       'tool_input': {'owner': 'other', 'repo': 'project'}})
+            self.assertTrue(allowed, reason)
         with project_copy(git=True) as root:
             set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,

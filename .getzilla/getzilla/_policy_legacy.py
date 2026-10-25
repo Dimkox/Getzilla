@@ -136,17 +136,42 @@ _SHELL_MUTATION_SIGNAL = re.compile(
 )
 _GLOB_META = re.compile(r'[*?[]')
 _HTTP_URL = re.compile(r'https?://[^\s"\']+', re.IGNORECASE)
-# A leading write verb, a `write` token anywhere (issue_write, pull_request_review_write) or a workflow
-# run (actions_run_trigger); a verb inside the name used to pass with no grant (#193).
+# A write verb that starts the action or a `-` token, or a `write` token anywhere. A verb ends at
+# `_`, `-`, an uppercase letter (camelCase) or the end: a verb inside the name, as in issue_write,
+# createJiraIssue or projects-create, used to pass with no grant (#193).
+_VERB_END = r'(?:[_-]|(?=[A-Z])|$)'
 SIDE_EFFECT_TOOL = re.compile(
-    r'(?:^|__)(?:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash|move'
-    r'|add|push|resolve|unresolve|enable|disable|fork|request|submit|set|assign|approve|dismiss|cancel|rerun'
-    r'|reply|post|comment|upload|edit|rename|transfer|lock|unlock|label|unlabel|mark|untrash|fire|share|copy'
-    r'|insert|append|batch|import|invite|forward|respond|save|generate)(?:_|$)'
-    r'|(?:^|_)write(?:_|$)'
-    r'|(?:^|__)actions_run(?:_|$)',
-    re.IGNORECASE,
+    r'(?:^|__|-)(?i:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash'
+    r'|move|add|push|resolve|unresolve|enable|disable|fork|request|submit|set|assign|approve|dismiss|cancel|rerun'
+    r'|run|reply|post|comment|upload|edit|rename|transfer|lock|unlock|label|unlabel|mark|untrash|fire|share|copy'
+    r'|insert|append|batch|import|invite|forward|respond|save|generate|manage|star|unstar|reprioritize'
+    r'|transition)' + _VERB_END
+    + r'|(?:^|[_-])(?i:write)' + _VERB_END
 )
+# A GitHub server fails closed: a tool is a write unless it is a known read, since server versions add
+# write tools under new verbs (run_workflow, manage_notification_subscription).
+_GITHUB_READ = re.compile(r'^(?:get|list|search|download)_|_read$|^(?:actions|projects)_(?:get|list)$')
+# Reads whose name starts with a write verb.
+_GITHUB_READ_NAMES = frozenset({'run_secret_scanning'})
+_GITHUB_NAME = re.compile(r'[A-Za-z0-9._-]+')
+
+
+def _mcp_server_action(tool: str) -> tuple[str, str]:
+    parts = tool.split('__')
+    return (parts[1] if len(parts) > 2 else ''), parts[-1]
+
+
+def mcp_side_effect(tool: str) -> bool:
+    """Whether an MCP tool may write and so needs an exact external-write grant."""
+    if not tool.startswith('mcp__'):
+        return False
+    server, action = _mcp_server_action(tool)
+    github = 'github' in server.lower()
+    if github and action in _GITHUB_READ_NAMES:
+        return False
+    if SIDE_EFFECT_TOOL.search(tool):
+        return True
+    return github and not _GITHUB_READ.search(action)
 
 
 def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
@@ -154,8 +179,9 @@ def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
     if not isinstance(tool_input, dict) or 'owner' not in tool_input and 'repo' not in tool_input:
         return None
     owner, repo = tool_input.get('owner'), tool_input.get('repo')
-    if not isinstance(owner, str) or not isinstance(repo, str) or not owner or not repo:
-        return 'it names an incomplete owner/repo target'
+    if not isinstance(owner, str) or not isinstance(repo, str) \
+            or not _GITHUB_NAME.fullmatch(owner) or not _GITHUB_NAME.fullmatch(repo):
+        return 'it names an incomplete or invalid owner/repo target'
     from .state import _repository_identity
     try:
         bound = _repository_identity(root)
@@ -2692,13 +2718,13 @@ def evaluate_pre_tool(
                 if active:
                     return False, f'Another write agent is already active: {active}'
 
-    if tool.startswith('mcp__') and SIDE_EFFECT_TOOL.search(tool):
+    if mcp_side_effect(tool):
         from .human_gates import gate_block_reason
 
         gate_reason = gate_block_reason(root, 'external-write', 'external-write', tool)
         if gate_reason:
             return False, gate_reason
-        if tool.startswith('mcp__github__'):
+        if 'github' in _mcp_server_action(tool)[0].lower():
             problem = _mcp_repository_problem(root, tool_input)
             if problem:
                 return False, f'MCP side-effect tool {tool} is refused: {problem}.'
