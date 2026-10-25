@@ -68,6 +68,9 @@ FOLLOW_UP_RE = re.compile(
     r'|вариант\s+[abcабв123]|[abcабв123])\s*[.!?…]*\s*$',
     re.IGNORECASE,
 )
+# Harness envelopes (a finished background command or subagent, a system reminder) arrive as prompts but
+# carry no user intent (#185). A prompt made only of them keeps the active route like a short reply.
+SYSTEM_ENVELOPE_RE = re.compile(r'<(task-notification|system-reminder)>.*?</\1>', re.DOTALL)
 CLOSED_ROUTE_STATUSES = frozenset({'ready', 'released', 'completed', 'cancelled', 'archived'})
 FEATURE_LIKE_INTENTS = frozenset({'feature', 'architecture', 'refactor', 'research'})
 DEFAULT_ANALYSIS_CAP = 10
@@ -447,8 +450,14 @@ def _complexity(intent: str, risk: str, domains: list[str], text: str) -> str:
     return 'standard'
 
 
+def is_system_notice(prompt: str) -> bool:
+    """True when the prompt holds harness envelopes and nothing else."""
+    text = prompt or ''
+    return bool(SYSTEM_ENVELOPE_RE.search(text)) and not SYSTEM_ENVELOPE_RE.sub('', text).strip()
+
+
 def should_reuse_active_route(prompt: str) -> bool:
-    return bool(FOLLOW_UP_RE.match(prompt or ''))
+    return bool(FOLLOW_UP_RE.match(prompt or '')) or is_system_notice(prompt)
 
 
 def can_reuse_active_route(prompt: str, existing: dict | None, session_id: str | None) -> bool:

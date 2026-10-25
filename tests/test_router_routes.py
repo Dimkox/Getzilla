@@ -15,6 +15,7 @@ from getzilla.router import (
     build_route,
     can_reuse_active_route,
     is_development_prompt,
+    is_system_notice,
     should_reuse_active_route,
 )
 from tests._support import project_copy
@@ -259,6 +260,25 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(should_reuse_active_route('please inspect hook policy matching'))
         self.assertTrue(should_reuse_active_route('делай'))
         self.assertTrue(should_reuse_active_route('continue'))
+
+    def test_a_harness_notice_alone_keeps_the_route_but_text_with_it_does_not(self) -> None:
+        notice = ('<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n'
+                  '<summary>Background command "Run the final local PR gate" completed</summary>\n'
+                  '</task-notification>')
+        reminder = '<system-reminder>\nRelease build finished; deploy to production next.\n</system-reminder>'
+        for prompt in (notice, f'  {notice}\n', reminder, notice + '\n' + reminder):
+            with self.subTest(prompt=prompt[:30]):
+                self.assertTrue(is_system_notice(prompt))
+                self.assertTrue(should_reuse_active_route(prompt))
+                self.assertTrue(can_reuse_active_route(prompt, {'session_id': 's', 'status': 'routed'}, 's'))
+        for prompt in (notice + '\nFix the release script', 'Fix it <task-notification>x</task-notification>',
+                       '<task-notification>unclosed', '', 'plain task', notice + '​',
+                       '<system-reminder data="x">a</system-reminder>', '<TASK-NOTIFICATION>a</TASK-NOTIFICATION>',
+                       '<task-notification>a</system-reminder>'):
+            with self.subTest(prompt=prompt[:30]):
+                self.assertFalse(is_system_notice(prompt))
+        with project_copy() as root:
+            self.assertFalse(is_development_prompt(notice, detect_repo(root)))
 
     def test_can_reuse_requires_same_session_and_open_status(self) -> None:
         self.assertFalse(can_reuse_active_route('делай', None, 'session-1'))
