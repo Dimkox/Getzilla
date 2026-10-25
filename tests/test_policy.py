@@ -311,6 +311,55 @@ class PolicyTests(unittest.TestCase):
             allowed, _ = evaluate_pre_tool(root, {'tool_name': 'mcp__github__delete_issue', 'tool_input': {'id': 1}})
             self.assertFalse(allowed)
 
+    def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
+        # These names carry the write verb inside the name and used to pass with no grant (#193).
+        from getzilla.policy import SIDE_EFFECT_TOOL, sensitive_action
+        writes = ('issue_write', 'sub_issue_write', 'pull_request_review_write', 'add_issue_comment',
+                  'add_reply_to_pull_request_comment', 'add_comment_to_pending_review', 'push_files',
+                  'resolve_review_thread', 'unresolve_review_thread', 'enable_pr_auto_merge',
+                  'disable_pr_auto_merge', 'fork_repository', 'request_copilot_review', 'actions_run_trigger',
+                  'create_issue', 'update_issue_comment', 'merge_pull_request', 'create_or_update_file')
+        reads = ('get_me', 'issue_read', 'list_issues', 'search_issues', 'pull_request_read', 'get_check_run',
+                 'get_job_logs', 'actions_get', 'actions_list', 'list_branches', 'get_file_contents',
+                 'run_secret_scanning', 'search_code')
+        with github_project() as root:
+            for name in writes:
+                tool = 'mcp__github__' + name
+                with self.subTest(tool=tool):
+                    self.assertTrue(SIDE_EFFECT_TOOL.search(tool))
+                    self.assertEqual(sensitive_action(root, {'tool_name': tool, 'tool_input': {}}), 'external-write')
+                    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+                    self.assertFalse(allowed)
+                    self.assertIn('external-write grant', reason or '')
+            for name in reads:
+                with self.subTest(tool=name):
+                    self.assertIsNone(SIDE_EFFECT_TOOL.search('mcp__github__' + name))
+
+    def test_github_write_grants_bind_to_the_local_repository(self) -> None:
+        # A grant names only the tool; the call's owner/repo must be the repository it binds (#184).
+        tool = 'mcp__github__issue_write'
+        with github_project() as root:
+            add_approval(root, 'external-write', 'own issue', 5, actions=['external-write'], resources=[tool])
+            for target in ({'owner': 'Dimkox', 'repo': 'Getzilla'}, {'owner': 'dimkox', 'repo': 'getzilla'}, {}):
+                with self.subTest(target=target):
+                    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,
+                                                               'tool_input': {'method': 'create', **target}})
+                    self.assertTrue(allowed, reason)
+            for target in ({'owner': 'Dimkox', 'repo': 'Other'}, {'owner': 'someone', 'repo': 'Getzilla'},
+                           {'owner': 'Dimkox'}, {'repo': 'Getzilla'}, {'owner': 'Dimkox', 'repo': ''},
+                           {'owner': ['Dimkox'], 'repo': 'Getzilla'}, {'owner': 'Dimkox/Getzilla', 'repo': ''}):
+                with self.subTest(target=target):
+                    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,
+                                                               'tool_input': {'method': 'create', **target}})
+                    self.assertFalse(allowed)
+                    self.assertIn('refused', reason or '')
+        with project_copy(git=True) as root:
+            set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,
+                                                       'tool_input': {'owner': 'Dimkox', 'repo': 'Getzilla'}})
+            self.assertFalse(allowed)
+            self.assertIn('no GitHub origin', reason or '')
+
 
 if __name__ == '__main__':
     unittest.main()

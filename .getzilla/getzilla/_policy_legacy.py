@@ -136,10 +136,34 @@ _SHELL_MUTATION_SIGNAL = re.compile(
 )
 _GLOB_META = re.compile(r'[*?[]')
 _HTTP_URL = re.compile(r'https?://[^\s"\']+', re.IGNORECASE)
+# A leading write verb, a `write` token anywhere (issue_write, pull_request_review_write) or a workflow
+# run (actions_run_trigger); a verb inside the name used to pass with no grant (#193).
 SIDE_EFFECT_TOOL = re.compile(
-    r'(?:^|__)(?:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash|move)(?:_|$)',
+    r'(?:^|__)(?:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash|move'
+    r'|add|push|resolve|unresolve|enable|disable|fork|request|submit|set|assign|approve|dismiss|cancel|rerun'
+    r'|reply|post|comment|upload|edit|rename|transfer|lock|unlock|label|unlabel|mark|untrash|fire|share|copy'
+    r'|insert|append|batch|import|invite|forward|respond|save|generate)(?:_|$)'
+    r'|(?:^|_)write(?:_|$)'
+    r'|(?:^|__)actions_run(?:_|$)',
     re.IGNORECASE,
 )
+
+
+def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
+    """A GitHub write names its target in owner/repo; it must be the repository grants bind to (#184)."""
+    if not isinstance(tool_input, dict) or 'owner' not in tool_input and 'repo' not in tool_input:
+        return None
+    owner, repo = tool_input.get('owner'), tool_input.get('repo')
+    if not isinstance(owner, str) or not isinstance(repo, str) or not owner or not repo:
+        return 'it names an incomplete owner/repo target'
+    from .state import _repository_identity
+    try:
+        bound = _repository_identity(root)
+    except RuntimeError:
+        return 'the local repository has no GitHub origin to bind grants to'
+    if f'{owner}/{repo}'.lower() != bound.lower():
+        return f'it targets {owner}/{repo}, but grants here bind only {bound}'
+    return None
 
 # Set while a command is read as a POSIX shell reads it on Windows: Claude Code runs Git Bash
 # there, where `\n` is an escaped `n`, while cmd.exe and PowerShell read `\` as a separator.
@@ -2674,6 +2698,10 @@ def evaluate_pre_tool(
         gate_reason = gate_block_reason(root, 'external-write', 'external-write', tool)
         if gate_reason:
             return False, gate_reason
+        if tool.startswith('mcp__github__'):
+            problem = _mcp_repository_problem(root, tool_input)
+            if problem:
+                return False, f'MCP side-effect tool {tool} is refused: {problem}.'
         if not has_valid_approval(root, 'external-write', action='external-write', resource=tool):
             return False, f'MCP side-effect tool {tool} requires an exact delegated external-write grant.'
 
