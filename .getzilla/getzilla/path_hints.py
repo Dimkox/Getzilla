@@ -330,7 +330,8 @@ def _readable_in_linked_worktree(root: Path, command: str, cwd: Path) -> bool:
     try:
         relative = cwd.resolve().relative_to(root.resolve())
         proc = subprocess.run(['git', 'worktree', 'list', '--porcelain'], cwd=root,
-                              capture_output=True, text=True, timeout=5, check=False)
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              timeout=5, check=False)
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
     for line in proc.stdout.splitlines():
