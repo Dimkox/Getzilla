@@ -321,10 +321,36 @@ def command_cwd(root: Path, payload: dict, tool_input: dict) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _readable_in_linked_worktree(root: Path, command: str, cwd: Path) -> bool:
+    """True when the same relative read succeeds in another worktree of this repository.
+
+    Some agents do not pass the command's own directory to the hook, so a read run inside a
+    worker worktree is first checked from the main checkout, where new files do not exist yet.
+    """
+    try:
+        relative = cwd.resolve().relative_to(root.resolve())
+        proc = subprocess.run(['git', 'worktree', 'list', '--porcelain'], cwd=root,
+                              capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    for line in proc.stdout.splitlines():
+        if not line.startswith('worktree '):
+            continue
+        tree = Path(line[len('worktree '):])
+        if tree.resolve() == root.resolve():
+            continue
+        found = inspect(command, tree / relative)
+        if found is not None and not found.nothing_readable:
+            return True
+    return False
+
+
 def refusal(root: Path, command: str, cwd: Path) -> str | None:
     """PreToolUse: the reason to refuse a read that can only fail, with the real paths to use."""
     found = inspect(command, cwd)
     if found is None or not found.nothing_readable:
+        return None
+    if _readable_in_linked_worktree(root, command, cwd):
         return None
     _record(root, 'refused')
     return _message(root, cwd, found.missing, 'Getzilla: not run, none of these paths exist (closest existing paths):')
