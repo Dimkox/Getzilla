@@ -8,16 +8,36 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Iterator
 
 PROJECT = Path(__file__).resolve().parents[1]
+CLEANUP_ATTEMPTS = 4
+
+
+@contextlib.contextmanager
+def _test_directory() -> Iterator[str]:
+    """A temporary directory whose cleanup retries briefly: a late git child still added a file under
+    .git while it was removed, and that failed a passing test on CI (#196). The last failure is raised."""
+    directory = tempfile.TemporaryDirectory(prefix='getzilla-test-')
+    try:
+        yield directory.name
+    finally:
+        for attempt in range(1, CLEANUP_ATTEMPTS + 1):
+            try:
+                directory.cleanup()
+                break
+            except OSError:
+                if attempt == CLEANUP_ATTEMPTS:
+                    raise
+                time.sleep(0.25 * attempt)
 
 
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(prefix='getzilla-test-') as tmp:
+    with _test_directory() as tmp:
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -49,6 +69,10 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
             subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
             subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
             subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=root, check=True)
+            # Newer git starts auto maintenance detached after a commit; it can still write under .git
+            # while the fixture is removed (#196).
+            subprocess.run(['git', 'config', 'maintenance.auto', 'false'], cwd=root, check=True)
+            subprocess.run(['git', 'config', 'gc.auto', '0'], cwd=root, check=True)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'initial'], cwd=root, check=True)
         yield root
