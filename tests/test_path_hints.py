@@ -121,6 +121,17 @@ class SuggestionTests(unittest.TestCase):
         stats = json.loads((self.root / '.getzilla/runtime/path-hints.json').read_text(encoding='utf-8'))
         self.assertEqual((stats['refused'], stats['hinted']), (1, 1))
 
+    def test_a_read_that_works_in_a_linked_worktree_is_not_refused(self) -> None:
+        # The agent ran `sed` inside a worker worktree but the hook only saw the main checkout.
+        subprocess.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'base'], cwd=self.root, check=True)
+        worker = self.root / '.getzilla/runtime/scratch/worker-1/worktree'
+        subprocess.run(['git', 'worktree', 'add', '-q', '--detach', str(worker)], cwd=self.root, check=True)
+        (worker / 'deploy').mkdir()
+        (worker / 'deploy' / 'new_release.py').write_text('x\n', encoding='utf-8')
+        self.assertIsNone(refusal(self.root, 'sed -n 1,260p deploy/new_release.py', self.root))
+        message = refusal(self.root, 'sed -n 1,260p deploy/old_release.py', self.root)
+        self.assertIn('none of these paths exist', message)
+
     def test_command_directory_comes_from_the_tool_input_first(self) -> None:
         self.assertEqual(command_cwd(self.root, {'cwd': '/elsewhere'}, {'workdir': MODULE}), self.root / MODULE)
         self.assertEqual(command_cwd(self.root, {'cwd': '/elsewhere'}, {}), Path('/elsewhere'))
