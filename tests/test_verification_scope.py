@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -681,7 +682,10 @@ class FocusedPythonExecutionTests(unittest.TestCase):
         )
 
     def _run(self, root: Path, scope: dict[str, object]) -> dict[str, CheckResult]:
-        return {item.name: item for item in _python(root, 'pr', scope)}
+        # A host without ruff or bandit refuses PR mode before the suites these tests pin (#198).
+        with mock.patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'stub')), \
+                mock.patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'pass', 'stub')):
+            return {item.name: item for item in _python(root, 'pr', scope)}
 
     def test_admitted_inventory_never_executes_full_suite_discovery(self) -> None:
         with tempfile.TemporaryDirectory(prefix='grok-scope-probe-') as tmp:

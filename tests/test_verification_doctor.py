@@ -49,6 +49,15 @@ def project_copy(*, git: bool = False):
     # complete runtime's scanner results. Full-source coverage stays explicit.
     return full_project_copy(git=git, minimal_runtime=True)
 
+
+@contextlib.contextmanager
+def _installed_linters():
+    """A host without ruff or bandit refuses PR mode first; tests that pin later checks stub them (#198)."""
+    with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'stub')), \
+            patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'pass', 'stub')):
+        yield
+
+
 _PASSING_UNITTEST = (
     'import unittest\n'
     '\n'
@@ -1550,7 +1559,8 @@ class VerificationTests(unittest.TestCase):
             (package / 'run_disposable_exit.py').write_text('print("postgres api restart exit")\n', encoding='utf-8')
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop('GETZILLA_VERIFY_CAPABILITY', None)
-                checks = _python(root, mode='pr')
+                with _installed_linters():
+                    checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
             self.assertEqual(postgres.status, 'pass')
@@ -1580,7 +1590,8 @@ class VerificationTests(unittest.TestCase):
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
             with patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
-                checks = _python(root, mode='pr')
+                with _installed_linters():
+                    checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
             self.assertEqual(postgres.status, 'skip')
@@ -1597,7 +1608,8 @@ class VerificationTests(unittest.TestCase):
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop('GETZILLA_VERIFY_CAPABILITY', None)
-                checks = _python(root, mode='pr')
+                with _installed_linters():
+                    checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
             self.assertEqual(postgres.status, 'fail')
@@ -1612,7 +1624,8 @@ class VerificationTests(unittest.TestCase):
             (package / 'test_contracts.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             (package / 'run_disposable_exit.py').write_text('raise SystemExit(9)\n', encoding='utf-8')
             with patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox-extra'}):
-                checks = _python(root, mode='pr')
+                with _installed_linters():
+                    checks = _python(root, mode='pr')
             postgres = next((item for item in checks if item.name == 'factory-postgres-exit'), None)
             self.assertIsNotNone(postgres)
             self.assertEqual(postgres.status, 'fail')
