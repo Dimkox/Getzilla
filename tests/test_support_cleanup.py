@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import errno
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,15 +33,26 @@ class ProjectCopyCleanupTests(unittest.TestCase):
         self.assertFalse(Path(calls[0]).exists())
 
     def test_a_lasting_cleanup_error_is_raised(self) -> None:
-        failing = mock.Mock(side_effect=OSError(errno.ENOTEMPTY, 'Directory not empty'))
-        with mock.patch.object(tempfile.TemporaryDirectory, 'cleanup', failing), \
+        def failing(directory: tempfile.TemporaryDirectory) -> None:
+            directory._finalizer.detach()  # no implicit cleanup warning when the object is collected
+            raise OSError(errno.ENOTEMPTY, 'Directory not empty', directory.name)
+
+        calls = mock.Mock(side_effect=failing)
+        with mock.patch.object(tempfile.TemporaryDirectory, 'cleanup', lambda self: calls(self)), \
                 mock.patch.object(_support.time, 'sleep'):
             with self.assertRaises(OSError):
                 with _support._test_directory() as name:
                     pass
-        self.assertEqual(failing.call_count, _support.CLEANUP_ATTEMPTS)
-        # What the failing cleanup left behind, unless the directory's finalizer already removed it.
-        shutil.rmtree(name, ignore_errors=True)
+        self.assertEqual(calls.call_count, _support.CLEANUP_ATTEMPTS)
+        shutil.rmtree(name)  # what the failing cleanup left behind
+
+    def test_the_git_fixture_turns_off_auto_maintenance(self) -> None:
+        with _support.project_copy(git=True) as root:
+            for key, value in (('maintenance.auto', 'false'), ('gc.auto', '0')):
+                with self.subTest(key=key):
+                    shown = subprocess.run(['git', 'config', '--local', '--get', key], cwd=root,
+                                           capture_output=True, text=True, check=True)
+                    self.assertEqual(shown.stdout.strip(), value)
 
 
 if __name__ == '__main__':

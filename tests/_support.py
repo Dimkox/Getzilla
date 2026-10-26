@@ -69,6 +69,10 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
             subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
             subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
             subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=root, check=True)
+            # Newer git starts auto maintenance detached after a commit; it can still write under .git
+            # while the fixture is removed (#196).
+            subprocess.run(['git', 'config', 'maintenance.auto', 'false'], cwd=root, check=True)
+            subprocess.run(['git', 'config', 'gc.auto', '0'], cwd=root, check=True)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'initial'], cwd=root, check=True)
         yield root
