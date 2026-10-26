@@ -72,6 +72,7 @@ MANAGED_FILES = (
     "scripts/getzilla_agent.py",
     "scripts/getzilla_deploy.py",
     "scripts/getzilla_evidence.py",
+    "scripts/getzilla_ci_evidence.py",
     "session_start.py",
     "user_prompt_submit.py",
     "pre_tool_use.py",

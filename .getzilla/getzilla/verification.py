@@ -180,8 +180,9 @@ _STATIC_LANDING_PREFIX = 'side-projects/seo-landings/'
 _FOCUSED_LANDING_TEST_NAME = re.compile(
     r'^test_(?P<landing>[A-Za-z0-9][A-Za-z0-9_-]*?)_seo_landing(?:_[A-Za-z0-9_-]+)?\.py$'
 )
+# New packages live in the ignored runtime namespace; tracked legacy packages stay valid.
 _CHANGE_PACKAGE_PREFIX = re.compile(
-    r'^engineering/changes/[A-Za-z0-9][A-Za-z0-9._-]*$'
+    r'^(?:engineering|\.getzilla/runtime)/changes/[A-Za-z0-9][A-Za-z0-9._-]*$'
 )
 _SAFE_FOCUSED_FILE_STATUSES = {'A', 'M', '??'}
 _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS = 900

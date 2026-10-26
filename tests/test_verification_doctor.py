@@ -370,6 +370,21 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(scope['focused_tests'], ['tests/test_winston_wolfe_seo_landing.py'])
         self.assertEqual(scope['rejected_files'], [])
 
+    def test_static_landing_scope_accepts_runtime_and_legacy_change_packages(self) -> None:
+        files = [
+            'side-projects/seo-landings/winston-wolfe/index.html',
+            'tests/test_winston_wolfe_seo_landing.py',
+        ]
+        for package in ('.getzilla/runtime/changes/20261026-landing', 'engineering/changes/20261026-landing'):
+            with self.subTest(package=package):
+                self.assertTrue(self._landing_scope(files, change_package=package)['eligible'])
+        for package in ('.getzilla/runtime/receipts/20261026-landing', 'tmp/changes/20261026-landing',
+                        '.getzilla/runtime/changes/../x'):
+            with self.subTest(package=package):
+                scope = self._landing_scope(files, change_package=package)
+                self.assertFalse(scope['eligible'])
+                self.assertIn('change-package path is invalid', scope['reason'])
+
     def test_static_landing_scope_rejects_mixed_product_paths(self) -> None:
         scope = self._landing_scope([
             'side-projects/seo-landings/winston-wolfe/index.html',
