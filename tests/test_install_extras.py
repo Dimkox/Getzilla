@@ -138,10 +138,11 @@ class InstallExtrasTests(unittest.TestCase):
             from getzilla.doctor import run_doctor
             items = {item.name: item for item in run_doctor(project)}
             self.assertEqual(items['engine-archive'].status, 'pass')
-            # The evidence exporter the delivery skill names ships and starts from the archive.
-            exporter = subprocess.run([sys.executable, '-B', 'scripts/getzilla_evidence.py', '--help'],
-                                      cwd=project, capture_output=True, text=True, check=False)
-            self.assertEqual(exporter.returncode, 0, exporter.stderr)
+            # The evidence exporters the delivery skill and the CI template name ship and start from the archive.
+            for script in ('scripts/getzilla_evidence.py', 'scripts/getzilla_ci_evidence.py'):
+                exporter = subprocess.run([sys.executable, '-B', script, '--help'],
+                                          cwd=project, capture_output=True, text=True, check=False)
+                self.assertEqual(exporter.returncode, 0, f'{script}: {exporter.stderr}')
             # A repeated denial is counted although the policy source sits inside getzilla.zip.
             subprocess.run(['git', 'init', '-q', str(project)], check=True)
             payload = {'cwd': str(project), 'session_id': 'archive-ledger',
