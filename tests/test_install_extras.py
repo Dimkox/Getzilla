@@ -17,6 +17,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 from getzilla import on_demand  # noqa: E402
+from tests._support import run_hook  # noqa: E402
 
 
 def paths(selection) -> set[str]:
@@ -137,6 +138,18 @@ class InstallExtrasTests(unittest.TestCase):
             from getzilla.doctor import run_doctor
             items = {item.name: item for item in run_doctor(project)}
             self.assertEqual(items['engine-archive'].status, 'pass')
+            # The evidence exporter the delivery skill names ships and starts from the archive.
+            exporter = subprocess.run([sys.executable, '-B', 'scripts/getzilla_evidence.py', '--help'],
+                                      cwd=project, capture_output=True, text=True, check=False)
+            self.assertEqual(exporter.returncode, 0, exporter.stderr)
+            # A repeated denial is counted although the policy source sits inside getzilla.zip.
+            subprocess.run(['git', 'init', '-q', str(project)], check=True)
+            payload = {'cwd': str(project), 'session_id': 'archive-ledger',
+                       'tool_name': 'exec_command', 'tool_input': {'cmd': ''}}
+            run_hook(project, 'pre_tool_use.py', payload)
+            _, data, error = run_hook(project, 'pre_tool_use.py', payload)
+            self.assertIn('exact tool invocation was denied again', data.get('reason', ''), error)
+            self.assertNotIn('Denial recording unavailable', data.get('reason', ''))
 
     def test_an_upgrade_with_engine_files_keeps_them_and_a_checkout_uses_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
