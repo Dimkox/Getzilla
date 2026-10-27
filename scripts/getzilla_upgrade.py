@@ -190,7 +190,10 @@ def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
     retire = sorted(item['path'] for item in installer._legacy_migration(project)
                     if item['path'] in tree and replaced(item['path']))
     retired = set(retire)
-    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', '-e', 'adaptive_grok', '-e', '.grok-stack/', 'HEAD', '--', '*.py')
+    needles = ['-e', 'adaptive_grok', '-e', '.grok-stack/']
+    if any(path.startswith('factory/src/adaptive_factory/') for path in retire):
+        needles += ['-e', 'adaptive_factory']  # only when the old factory is retired, not while it is the live one
+    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', *needles, 'HEAD', '--', '*.py')
     importers = sorted({line.split(':', 1)[1] for line in found.stdout.splitlines() if ':' in line} - retired) \
         if found.returncode == 0 else []
     record = git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}')
@@ -315,8 +318,10 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         # The sync history log moves with the record, so the old stack folder can go.
         old_log = installer.LEGACY_STACK_DIR + '/AGBP_SYNC.log.jsonl'
         if old_log in tree and installer.legacy_to_current_path(old_log) not in tree:
-            changes.append((installer.legacy_to_current_path(old_log),
-                            git(project, 'cat-file', 'blob', f'HEAD:{old_log}', data=b'').stdout, tree[old_log][0]))
+            log = git(project, 'cat-file', 'blob', f'HEAD:{old_log}', data=b'')
+            if log.returncode != 0:
+                raise UpdateError(f'cannot read {old_log} from HEAD')
+            changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
         legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes})
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
