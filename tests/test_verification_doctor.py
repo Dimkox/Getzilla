@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2350,6 +2351,18 @@ class DoctorTests(unittest.TestCase):
         items = run_doctor(ROOT)
         failures = [item for item in items if item.status == 'fail']
         self.assertEqual(failures, [], [(item.name, item.message) for item in failures])
+
+    def test_routing_self_test_allows_project_review_floors_and_names_the_field(self) -> None:
+        real = build_route(ROOT, 'Исправить ошибку в обработчике события Битрикс D7 и добавить PHPUnit тест', 'doctor')
+        extra = replace(real, review_agents=['code_reviewer', 'test_reviewer'])
+        with patch('getzilla.doctor.build_route', return_value=extra):
+            item, = [item for item in run_doctor(ROOT) if item.name == 'adaptive-routing']
+        self.assertEqual(item.status, 'pass', item.message)
+        wrong = replace(real, write_agent='general_implementer')
+        with patch('getzilla.doctor.build_route', return_value=wrong):
+            item, = [item for item in run_doctor(ROOT) if item.name == 'adaptive-routing']
+        self.assertEqual(item.status, 'fail')
+        self.assertEqual(item.message, "write_agent: expected 'bitrix_implementer', got 'general_implementer'")
 
     def test_unmanaged_agent_does_not_break_harness_doctor(self) -> None:
         with project_copy() as root:
