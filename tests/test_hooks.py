@@ -266,6 +266,19 @@ class HookTests(unittest.TestCase):
             _, data, _ = run_hook(session_root, 'pre_tool_use.py', missing)
             self.assertEqual(data['decision'], 'deny')
 
+    def test_a_file_edit_is_checked_in_the_repository_that_holds_the_file(self) -> None:
+        # #205: the session sits in one repository and edits a protected file of another.
+        target = '.getzilla/getzilla/policy.py'
+        with project_copy(git=True) as session_root, project_copy(git=True) as file_root:
+            self._grant(session_root, 'protected-path', actions=['protected-path-write'], resources=[target])
+            payload = {'cwd': str(session_root), 'session_id': 'two-repositories', 'tool_name': 'Edit',
+                       'tool_input': {'file_path': str(file_root / target), 'old_string': 'a', 'new_string': 'b'}}
+            _, data, _ = run_hook(session_root, 'pre_tool_use.py', payload)
+            self.assertEqual(data['decision'], 'deny', 'a grant of the session repository must not cover another one')
+            self._grant(file_root, 'protected-path', actions=['protected-path-write'], resources=[target])
+            _, data, error = run_hook(session_root, 'pre_tool_use.py', payload)
+            self.assertEqual(data['decision'], 'allow', (data, error))
+
     def test_sensitive_external_and_protected_writes_cannot_borrow_session_grants(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:
             target = '.getzilla/getzilla/policy.py'

@@ -816,11 +816,41 @@ def root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str)
         return RootContext(session_cwd, None, {}, None, 'root-resolution-error')
 
 
+_FILE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit', 'NotebookEdit'})
+_FILE_PATH_KEYS = ('file_path', 'notebook_path', 'filePath', 'path')
+
+
+def _file_tool_root(input_data: dict[str, Any], tool: str) -> tuple[str, Path] | None:
+    """(path, root) when a file tool names one absolute path inside a Getzilla project (#205).
+
+    The edited file decides its repository, not the shell's last cwd: in a session that works on
+    two repositories, an edit in the second one is checked against that repository's policy and grants.
+    """
+    if tool not in _FILE_TOOLS:
+        return None
+    paths = {str(input_data[key]) for key in _FILE_PATH_KEYS if isinstance(input_data.get(key), str) and input_data[key]}
+    if len(paths) != 1:
+        return None
+    raw = next(iter(paths))
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None
+    recognized = _recognized_root(path)
+    return (raw, recognized) if recognized is not None else None
+
+
 def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str) -> RootContext:
     session_values = {
         key: str(payload[key]) for key in _SESSION_ROOT_ALIASES if payload.get(key) not in (None, '')
     }
     session_cwd = next(iter(session_values.values()), None)
+    file_root = _file_tool_root(input_data, tool)
+    if file_root is not None:
+        session_root = None
+        if session_cwd is not None:
+            session_path = Path(session_cwd).expanduser()
+            session_root = _recognized_root(session_path if session_path.is_absolute() else Path.cwd() / session_path)
+        return RootContext(session_cwd, session_root, {}, file_root[1], 'effective-root')
     session_paths: list[Path] = []
     session_roots: set[Path] = set()
     recognized_session_values = 0
