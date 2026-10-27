@@ -311,45 +311,59 @@ def _dynamic_target_mentions_control_plane(raw: str, patterns: list[str]) -> boo
 
 # Git subcommands that write only inside the work tree they run in.
 _SCRATCH_GIT = frozenset({'checkout', 'switch', 'restore', 'reset', 'clean', 'status', 'diff', 'log', 'show',
-                          'init', 'add', 'commit', 'rev-parse', 'ls-files', 'cat-file', 'stash'})
+                          'add', 'commit', 'rev-parse', 'ls-files', 'cat-file', 'stash'})
 # Options that move a write somewhere else: another work tree or git dir, a prefix, an output file.
-_REDIRECTING = re.compile(r'^-(?:-work-tree|-git-dir|-prefix|-output|o$|-directory|c$|-config-env|-exec-path)', re.I)
+_REDIRECTING = re.compile(r'^-(?:-work-tree|-git-dir|-separate-git-dir|-template|-prefix|-output|o$|-directory'
+                          r'|c$|-config-env|-exec-path)', re.I)
 
 
 def _scratch_only(root: Path, command: str) -> bool:
     """Whether the command only works on the agent's own copy in scratch (#183).
 
-    Allowed forms: `cd <scratch>`, `git -C <scratch> <sub>` or `git <sub>` after that cd, with a
-    subcommand that writes only inside its work tree, and `rm` of scratch paths. No redirection,
-    pipe, expansion, environment assignment or option that sends a write elsewhere.
+    Allowed forms: `cd <scratch copy>`, `git -C <scratch copy> <sub>` or `git <sub>` after that cd,
+    and `rm` of scratch paths. The copy must be its own Git repository, so Git never climbs into the
+    live one; the subcommand writes only inside its work tree; every path argument stays inside the
+    copy. No redirection, pipe, expansion, environment assignment or option that sends a write elsewhere.
     """
     from ._policy_legacy import AGENT_SCRATCH, _simple_commands, agent_scratch
 
     if re.search(r"[<>|`$=\\]", command):
         return False
 
-    def inside(word: str) -> bool:
-        rel = safe_relative_path(root, word.removeprefix('./'))
-        return rel is not None and rel.startswith(AGENT_SCRATCH + '/') and agent_scratch(root, rel)
+    def scratch_rel(word: str, base: Path) -> str | None:
+        target = Path(word) if Path(word).is_absolute() else base / word
+        rel = safe_relative_path(root, target)
+        return rel if rel is not None and rel.startswith(AGENT_SCRATCH + '/') and agent_scratch(root, rel) else None
 
-    in_scratch = False
+    def copy_dir(word: str) -> Path | None:
+        rel = scratch_rel(word.removeprefix('./'), root)
+        return (root / rel) if rel is not None and (root / rel / '.git').exists() else None
+
+    workdir: Path | None = None
     commands = _simple_commands(command)
     for argv in commands:
         if argv is None or not argv:
             return False
         name, rest = argv[0], argv[1:]
-        if name == 'cd' and len(rest) == 1 and inside(rest[0]):
-            in_scratch = True
+        if name == 'cd' and len(rest) == 1:
+            workdir = copy_dir(rest[0])
+            if workdir is None:
+                return False
         elif name == 'git':
-            if len(rest) >= 2 and rest[0] == '-C' and inside(rest[1]):
-                rest = rest[2:]
-            elif not in_scratch:
+            base = workdir
+            if len(rest) >= 2 and rest[0] == '-C':
+                base, rest = copy_dir(rest[1]), rest[2:]
+            if base is None or not rest or rest[0] not in _SCRATCH_GIT:
                 return False
-            if not rest or rest[0] not in _SCRATCH_GIT or any(_REDIRECTING.match(arg) for arg in rest):
-                return False
+            for arg in rest[1:]:
+                if _REDIRECTING.match(arg) or arg.startswith(':'):
+                    return False
+                # A word that names a path (a ref like HEAD~1 does not) must stay inside the copy.
+                if not arg.startswith('-') and ('/' in arg or arg.startswith('.')) and scratch_rel(arg, base) is None:
+                    return False
         elif name == 'rm':
             paths = [arg for arg in rest if not arg.startswith('-')]
-            if not paths or not all(inside(path) for path in paths):
+            if not paths or not all(scratch_rel(path.removeprefix('./'), root) for path in paths):
                 return False
         else:
             return False

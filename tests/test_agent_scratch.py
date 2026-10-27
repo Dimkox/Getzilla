@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -48,10 +49,13 @@ class AgentScratchTests(unittest.TestCase):
         with project_copy(git=True) as root:
             copy = '.getzilla/runtime/scratch/review-1'
             (root / copy / '.getzilla/getzilla').mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(root / copy)], check=True)
             for event in (write(root, f'{copy}/.getzilla/getzilla/policy.py'),
                           bash(f'git -C {copy} checkout -q HEAD'),
                           bash(f'cd {copy} && git checkout -q HEAD'),
                           bash(f'git -C {root / copy} checkout -q HEAD'),
+                          bash(f'git -C {copy} checkout -q HEAD~1 -- .getzilla/getzilla/policy.py'),
+                          bash(f'git -C {copy} add .'),
                           bash(f'rm -rf {copy}')):
                 with self.subTest(event=str(event)[:90]):
                     allowed, reason = evaluate_pre_tool(root, event)
@@ -64,7 +68,12 @@ class AgentScratchTests(unittest.TestCase):
                             f'git -C {copy} checkout-index -a --prefix=../../../../',
                             f'xargs -a {copy}/list rm -f',
                             f'cd {copy} && rm -rf .getzilla/getzilla',
-                            f'GIT_WORK_TREE=. git -C {copy} checkout -q HEAD -- .grok'):
+                            f'GIT_WORK_TREE=. git -C {copy} checkout -q HEAD -- .grok',
+                            # Code review of the fix: a path argument that climbs out of the copy.
+                            f'git -C {copy} checkout -q HEAD~1 -- ../../../getzilla/policy.py',
+                            f'git -C {copy} clean -fdx ../../../getzilla',
+                            # A scratch folder that is not its own repository lets Git act on the live one.
+                            'git -C .getzilla/runtime/scratch checkout -q HEAD -- .getzilla/getzilla'):
                 with self.subTest(command=command):
                     allowed, _ = evaluate_pre_tool(root, bash(command))
                     self.assertFalse(allowed, 'a live control-plane path next to scratch stays refused')

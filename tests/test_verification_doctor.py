@@ -1980,6 +1980,9 @@ class QualityContourTests(unittest.TestCase):
             for rel in ('packages/core/src/core/app.py', '.claude/hooks/mirror.py', 'manage.py'):
                 (root / rel).parent.mkdir(parents=True, exist_ok=True)
                 (root / rel).write_text('x = 1\n', encoding='utf-8')
+            (root / '--exit-zero').mkdir()
+            (root / '--exit-zero/opt.py').write_text('x = 1\n', encoding='utf-8')
+            subprocess.run(['git', 'add', '--', '--exit-zero'], cwd=root, check=True)
             (root / 'untracked').mkdir()
             (root / 'untracked/loose.py').write_text('x = 1\n', encoding='utf-8')
             subprocess.run(['git', 'add', 'packages', '.claude', 'manage.py'], cwd=root, check=True)
@@ -1989,6 +1992,7 @@ class QualityContourTests(unittest.TestCase):
             self.assertIn('manage.py', paths)
             self.assertNotIn('.claude', paths)
             self.assertNotIn('untracked', paths)
+            self.assertNotIn('--exit-zero', paths)
             with _PathTools({'bandit': _FAKE_BANDIT}):
                 (root / 'packages/core/src/core/unsafe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
                 subprocess.run(['git', 'add', 'packages'], cwd=root, check=True)
@@ -2016,6 +2020,8 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
                 self.assertEqual(_bandit(root).status, 'skip')
                 self.assertIn('0 lines', _bandit(root).summary)
                 self.assertEqual(_ruff(root).status, 'skip')
+            with _PathTools({'bandit': report % '0' + 'sys.exit(2)\n'}):
+                self.assertEqual(_bandit(root).status, 'fail', 'a failed run with 0 lines is not a skip')
             with _PathTools({'bandit': report % '12'}):
                 partial = _bandit(root)
             self.assertEqual(partial.status, 'pass')
