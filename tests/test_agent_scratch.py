@@ -79,6 +79,20 @@ class AgentScratchTests(unittest.TestCase):
                     allowed, _ = evaluate_pre_tool(root, bash(command))
                     self.assertFalse(allowed, 'a live control-plane path next to scratch stays refused')
 
+    def test_a_scratch_copy_whose_git_points_elsewhere_is_not_scratch_only(self) -> None:
+        # Code review: a .git file, or a config that moves the work tree, sends git into the live tree.
+        with project_copy(git=True) as root:
+            copy = '.getzilla/runtime/scratch/review-2'
+            subprocess.run(['git', 'init', '-q', str(root / copy)], check=True)
+            command = bash(f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py')
+            self.assertTrue(evaluate_pre_tool(root, command)[0])
+            subprocess.run(['git', '-C', str(root / copy), 'config', 'core.worktree', str(root)], check=True)
+            self.assertFalse(evaluate_pre_tool(root, command)[0])
+            other = '.getzilla/runtime/scratch/review-3'
+            (root / other).mkdir(parents=True)
+            (root / other / '.git').write_text(f'gitdir: {root}/.git\n', encoding='utf-8')
+            self.assertFalse(evaluate_pre_tool(root, bash(f'git -C {other} checkout -q HEAD -- .getzilla/getzilla/policy.py'))[0])
+
     def test_a_symlink_out_of_scratch_is_still_protected(self) -> None:
         with project_copy(git=True) as root:
             scratch = root / '.getzilla' / 'runtime' / 'scratch'

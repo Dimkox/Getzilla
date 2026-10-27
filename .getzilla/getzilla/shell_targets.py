@@ -313,6 +313,10 @@ def _dynamic_target_mentions_control_plane(raw: str, patterns: list[str]) -> boo
 _SCRATCH_GIT = frozenset({'checkout', 'switch', 'restore', 'reset', 'clean', 'status', 'diff', 'log', 'show',
                           'add', 'commit', 'rev-parse', 'ls-files', 'cat-file', 'stash'})
 # Options that move a write somewhere else: another work tree or git dir, a prefix, an output file.
+# Git config keys that move the work tree or git dir, pull in other config, or run a program.
+_UNSAFE_GIT_CONFIG = re.compile(r'(?im)^\s*bare\s*=\s*(?:true|yes|on|1)\b|^\s*(?:worktree|hookspath|fsmonitor|sshcommand|editor|pager|askpass'
+                                r'|gitproxy|textconv|clean|smudge|process|command|helper)\s*='
+                                r'|^\s*\[\s*(?:include|includeif|alias|filter|diff|merge|credential)\b')
 _REDIRECTING = re.compile(r'^-(?:-work-tree|-git-dir|-separate-git-dir|-template|-prefix|-output|o$|-directory'
                           r'|c$|-config-env|-exec-path)', re.I)
 
@@ -339,12 +343,18 @@ def _scratch_only(root: Path, command: str) -> bool:
     def copy_dir(word: str) -> Path | None:
         rel = scratch_rel(word.removeprefix('./'), root)
         git_dir = root / rel / '.git' if rel is not None else None
-        return (root / rel) if git_dir is not None and git_dir.is_dir() and not git_dir.is_symlink() else None
+        if git_dir is None or not git_dir.is_dir() or git_dir.is_symlink() or (git_dir / 'commondir').exists():
+            return None
+        try:
+            config = (git_dir / 'config').read_bytes()[:65537] if (git_dir / 'config').is_file() else b''
+        except OSError:
+            return None
+        # The copy's own config can move the work tree or run code; such a copy is not scratch-only.
+        if len(config) > 65536 or _UNSAFE_GIT_CONFIG.search(config.decode('utf-8', 'replace')):
+            return None
+        return root / rel
 
     commands = _simple_commands(command)
-    names = {argv[0] for argv in commands if argv}
-    if 'rm' in names and names != {'rm'}:
-        return False  # removing a copy and then using it in the same command is never scratch-only
     for argv in commands:
         if argv is None or not argv:
             return False
