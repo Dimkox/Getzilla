@@ -850,7 +850,10 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
         if session_cwd is not None:
             session_path = Path(session_cwd).expanduser()
             session_root = _recognized_root(session_path if session_path.is_absolute() else Path.cwd() / session_path)
-        return RootContext(session_cwd, session_root, {}, file_root[1], 'effective-root')
+        # A file inside the session's repository stays under its rules, including a project copy
+        # in that repository's scratch area; only a file outside it takes its own repository.
+        if session_root is None or not Path(file_root[0]).expanduser().resolve().is_relative_to(session_root):
+            return RootContext(session_cwd, session_root, {}, file_root[1], 'effective-root')
     session_paths: list[Path] = []
     session_roots: set[Path] = set()
     recognized_session_values = 0

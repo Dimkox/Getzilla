@@ -309,8 +309,30 @@ def _dynamic_target_mentions_control_plane(raw: str, patterns: list[str]) -> boo
     return False
 
 
+_WORD = re.compile(r'[^\s\'"=(:,>;&|)]+')
+
+
+def _without_agent_scratch(root: Path, command: str) -> str:
+    """The command with every word that resolves inside the agent scratch area blanked out (#183).
+
+    A reviewer's private copy there holds `.getzilla/...` paths of its own; naming it is not a
+    reference to the live control plane. Words are resolved, so `..` and symlinks cannot leave scratch.
+    """
+    from ._policy_legacy import AGENT_SCRATCH, agent_scratch
+
+    def blank(match: re.Match[str]) -> str:
+        word = match.group(0)
+        if AGENT_SCRATCH not in word:
+            return word
+        rel = safe_relative_path(root, word.removeprefix('./'))
+        inside = rel is not None and rel.startswith(AGENT_SCRATCH + '/') and agent_scratch(root, rel)
+        return ' ' if inside else word
+
+    return _WORD.sub(blank, command)
+
+
 def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str]) -> bool:
-    normalized = command.replace('\\', '/')
+    normalized = _without_agent_scratch(root, command.replace('\\', '/'))
     absolute_root = root.resolve().as_posix().rstrip('/')
     for pattern in patterns:
         prefix = _literal_pattern_prefix(pattern)

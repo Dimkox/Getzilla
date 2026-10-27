@@ -43,6 +43,25 @@ class AgentScratchTests(unittest.TestCase):
             self.assertFalse(allowed)
             self.assertIn('scratch', reason or '')
 
+    def test_a_reviewer_copy_in_scratch_can_be_checked_out_and_edited(self) -> None:
+        # #183: a mutation probe edits `.getzilla/getzilla/...` inside its own copy in scratch.
+        with project_copy(git=True) as root:
+            copy = '.getzilla/runtime/scratch/review-1'
+            (root / copy / '.getzilla/getzilla').mkdir(parents=True)
+            for event in (write(root, f'{copy}/.getzilla/getzilla/policy.py'),
+                          bash(f'git -C {copy} checkout -q HEAD'),
+                          bash(f'cd {copy} && git checkout -q HEAD'),
+                          bash(f'git -C {root / copy} checkout -q HEAD'),
+                          bash(f'rm -rf {copy}')):
+                with self.subTest(event=str(event)[:90]):
+                    allowed, reason = evaluate_pre_tool(root, event)
+                    self.assertTrue(allowed, reason)
+            for command in (f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py && git checkout -- .grok/hooks',
+                            'git checkout -q HEAD -- .getzilla/runtime/scratch/../../getzilla/policy.py'):
+                with self.subTest(command=command):
+                    allowed, _ = evaluate_pre_tool(root, bash(command))
+                    self.assertFalse(allowed, 'a live control-plane path next to scratch stays refused')
+
     def test_a_symlink_out_of_scratch_is_still_protected(self) -> None:
         with project_copy(git=True) as root:
             scratch = root / '.getzilla' / 'runtime' / 'scratch'

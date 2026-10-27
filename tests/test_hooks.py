@@ -278,6 +278,12 @@ class HookTests(unittest.TestCase):
             self._grant(file_root, 'protected-path', actions=['protected-path-write'], resources=[target])
             _, data, error = run_hook(session_root, 'pre_tool_use.py', payload)
             self.assertEqual(data['decision'], 'allow', (data, error))
+            # A project copy in the session's own scratch area is not a second repository (#183).
+            copy = session_root / '.getzilla/runtime/scratch/review-1'
+            (copy / '.getzilla/getzilla').mkdir(parents=True)
+            scratch_edit = {**payload, 'tool_input': {**payload['tool_input'], 'file_path': str(copy / target)}}
+            _, data, error = run_hook(session_root, 'pre_tool_use.py', scratch_edit)
+            self.assertEqual(data['decision'], 'allow', (data, error))
 
     def test_sensitive_external_and_protected_writes_cannot_borrow_session_grants(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:
