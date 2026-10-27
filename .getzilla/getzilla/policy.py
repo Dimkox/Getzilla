@@ -120,10 +120,14 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
             f'(Edit/Write/apply_patch) with an exact protected-path grant for each target.{hint}'
         )
     if opaque:
+        # A Git command in a review copy can be pointed at the live tree by that copy's own config or
+        # hooks, so it stays refused; the snapshot tool makes and removes copies instead (#183).
+        hint = (' For a review copy, run `getzilla cleanup snapshot <commit>`, edit it with Edit/Write, and '
+                'remove it with `getzilla cleanup snapshot --remove <path>`.') if _legacy.AGENT_SCRATCH in command else ''
         return False, (
             'Blocked opaque control-plane shell mutation; split the command or use Edit/Write/apply_patch '
             'so targets are explicit repository-relative paths. Do not create a protected-path grant until '
-            'the exact targets are known.'
+            'the exact targets are known.' + hint
         )
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.

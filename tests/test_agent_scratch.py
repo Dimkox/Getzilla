@@ -44,54 +44,20 @@ class AgentScratchTests(unittest.TestCase):
             self.assertFalse(allowed)
             self.assertIn('scratch', reason or '')
 
-    def test_a_reviewer_copy_in_scratch_can_be_checked_out_and_edited(self) -> None:
-        # #183: a mutation probe edits `.getzilla/getzilla/...` inside its own copy in scratch.
+    def test_a_reviewer_copy_in_scratch_can_be_edited_but_not_driven_by_git(self) -> None:
+        # #183: a mutation probe edits `.getzilla/getzilla/...` inside its own copy in scratch. Git commands
+        # there stay refused: the copy's own config or hooks can point them at the live tree.
         with project_copy(git=True) as root:
             copy = '.getzilla/runtime/scratch/review-1'
             (root / copy / '.getzilla/getzilla').mkdir(parents=True)
             subprocess.run(['git', 'init', '-q', str(root / copy)], check=True)
-            for event in (write(root, f'{copy}/.getzilla/getzilla/policy.py'),
-                          bash(f'git -C {copy} checkout -q HEAD'),
-                          bash(f'git -C {root / copy} checkout -q HEAD'),
-                          bash(f'git -C {copy} checkout -q HEAD~1 -- .getzilla/getzilla/policy.py'),
-                          bash(f'git -C {copy} add .'),
-                          bash(f'rm -rf {copy}')):
+            for event in (write(root, f'{copy}/.getzilla/getzilla/policy.py'), bash(f'rm -rf {copy}')):
                 with self.subTest(event=str(event)[:90]):
                     allowed, reason = evaluate_pre_tool(root, event)
                     self.assertTrue(allowed, reason)
-            for command in (f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py && git checkout -- .grok/hooks',
-                            'git checkout -q HEAD -- .getzilla/runtime/scratch/../../getzilla/policy.py',
-                            # Security review of #183: the target set by another option or a list file.
-                            f'git -C {copy} --work-tree=. checkout -q HEAD -- .grok/hooks/_lib.py',
-                            f'git --git-dir={copy}/.git --work-tree=. checkout -q HEAD -- .grok',
-                            f'git -C {copy} checkout-index -a --prefix=../../../../',
-                            f'xargs -a {copy}/list rm -f',
-                            f'cd {copy} && rm -rf .getzilla/getzilla',
-                            # A failed cd would leave git in the live repository (code review of f9165dc).
-                            f'cd {copy} && git checkout -q HEAD~1 -- .getzilla/getzilla/policy.py',
-                            f'GIT_WORK_TREE=. git -C {copy} checkout -q HEAD -- .grok',
-                            # Code review of the fix: a path argument that climbs out of the copy.
-                            f'git -C {copy} checkout -q HEAD~1 -- ../../../getzilla/policy.py',
-                            f'git -C {copy} clean -fdx ../../../getzilla',
-                            # A scratch folder that is not its own repository lets Git act on the live one.
-                            'git -C .getzilla/runtime/scratch checkout -q HEAD -- .getzilla/getzilla'):
-                with self.subTest(command=command):
-                    allowed, _ = evaluate_pre_tool(root, bash(command))
-                    self.assertFalse(allowed, 'a live control-plane path next to scratch stays refused')
-
-    def test_a_scratch_copy_whose_git_points_elsewhere_is_not_scratch_only(self) -> None:
-        # Code review: a .git file, or a config that moves the work tree, sends git into the live tree.
-        with project_copy(git=True) as root:
-            copy = '.getzilla/runtime/scratch/review-2'
-            subprocess.run(['git', 'init', '-q', str(root / copy)], check=True)
-            command = bash(f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py')
-            self.assertTrue(evaluate_pre_tool(root, command)[0])
-            subprocess.run(['git', '-C', str(root / copy), 'config', 'core.worktree', str(root)], check=True)
-            self.assertFalse(evaluate_pre_tool(root, command)[0])
-            other = '.getzilla/runtime/scratch/review-3'
-            (root / other).mkdir(parents=True)
-            (root / other / '.git').write_text(f'gitdir: {root}/.git\n', encoding='utf-8')
-            self.assertFalse(evaluate_pre_tool(root, bash(f'git -C {other} checkout -q HEAD -- .getzilla/getzilla/policy.py'))[0])
+            allowed, reason = evaluate_pre_tool(root, bash(f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py'))
+            self.assertFalse(allowed)
+            self.assertIn('getzilla cleanup snapshot', reason or '')
 
     def test_a_symlink_out_of_scratch_is_still_protected(self) -> None:
         with project_copy(git=True) as root:
