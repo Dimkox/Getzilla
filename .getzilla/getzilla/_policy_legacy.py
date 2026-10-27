@@ -136,24 +136,28 @@ _SHELL_MUTATION_SIGNAL = re.compile(
 )
 _GLOB_META = re.compile(r'[*?[]')
 _HTTP_URL = re.compile(r'https?://[^\s"\']+', re.IGNORECASE)
-# A write verb that starts the action or a `-` token, or a `write` token anywhere. A verb ends at
-# `_`, `-`, an uppercase letter (camelCase) or the end: a verb inside the name, as in issue_write,
-# createJiraIssue or projects-create, used to pass with no grant (#193).
-_VERB_END = r'(?:[_-]|(?=[A-Z])|$)'
-SIDE_EFFECT_TOOL = re.compile(
-    r'(?:^|__|-)(?i:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash'
-    r'|move|add|push|resolve|unresolve|enable|disable|fork|request|submit|set|assign|approve|dismiss|cancel|rerun'
-    r'|run|reply|post|comment|upload|edit|rename|transfer|lock|unlock|label|unlabel|mark|untrash|fire|share|copy'
-    r'|insert|append|batch|import|invite|forward|respond|save|generate|manage|star|unstar|reprioritize'
-    r'|transition)' + _VERB_END
-    + r'|(?:^|[_-])(?i:write)' + _VERB_END
-    + r'|^actions_run' + _VERB_END
-)
-# A GitHub server fails closed: a tool is a write unless it is a known read, since server versions add
-# write tools under new verbs (run_workflow, manage_notification_subscription).
-_GITHUB_READ = re.compile(r'^(?:get|list|search|download)_|_read$|^(?:actions|projects)_(?:get|list)$')
-# Reads whose name starts with a write verb.
-_GITHUB_READ_NAMES = frozenset({'run_secret_scanning'})
+# Every MCP server fails closed (#195): a tool is a write unless its name reads as a read. A read
+# starts or ends with a read verb (get_issue, searchConfluence, issue_read) and has no write verb
+# anywhere in it, so get_or_create_x and mark_all_notifications_read stay writes. Any other name,
+# including a verb that is not on a list (modify_x, pay_x, bulkCreate), needs an external-write grant.
+_READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'fetch', 'lookup', 'query', 'describe', 'download'})
+_WRITE_VERBS = frozenset({
+    'create', 'update', 'delete', 'remove', 'write', 'modify', 'patch', 'put', 'replace', 'insert', 'upsert',
+    'append', 'upload', 'send', 'publish', 'merge', 'revoke', 'grant', 'trash', 'archive', 'close', 'reopen',
+    'cancel', 'trigger', 'execute', 'mark', 'set', 'add', 'edit', 'post', 'submit', 'approve', 'transfer',
+    'move', 'rename', 'import', 'invite', 'pay', 'refund', 'clear', 'destroy', 'purge', 'drop', 'reset',
+    'restore', 'assign', 'enable', 'disable', 'start', 'stop', 'accept', 'decline', 'lock', 'unlock',
+    'deploy', 'push', 'apply', 'save', 'star', 'unstar', 'fork', 'resolve', 'unresolve', 'dismiss',
+    'manage', 'transition', 'comment', 'reply', 'label', 'unlabel', 'share', 'forward', 'respond',
+    'rerun', 'untrash', 'fire', 'copy', 'batch', 'generate', 'reprioritize',
+})
+# Exact read tools whose names do not read as reads. A project adds its own per server in
+# .getzilla/config/policy.json under "mcp_read_tools" ({"Server": ["tool", ...]}).
+_MCP_READ_TOOLS = {
+    'github': frozenset({'run_secret_scanning'}),
+    'Atlassian_MCP': frozenset({'atlassianUserInfo', 'executeRead'}),
+}
+_NAME_TOKEN = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+')
 _GITHUB_NAME = re.compile(r'[A-Za-z0-9._-]+')
 
 
@@ -163,18 +167,33 @@ def _mcp_server_action(tool: str) -> tuple[str, str]:
     return (parts[1], '__'.join(parts[2:])) if len(parts) > 2 else ('', parts[-1])
 
 
-def mcp_side_effect(tool: str) -> bool:
+def _mcp_github(tool: str) -> bool:
+    """A GitHub server, also behind a prefix segment (mcp__a__github__create_issue)."""
+    parts = tool.split('__')
+    return any('github' in part.lower() for part in parts[1:-1])
+
+
+def _configured_mcp_reads(root: Path | None, server: str) -> frozenset[str]:
+    if root is None:
+        return frozenset()
+    config = load_json(root / '.getzilla/config/policy.json', {}) or {}
+    reads = config.get('mcp_read_tools') if isinstance(config, dict) else None
+    names = reads.get(server) if isinstance(reads, dict) else None
+    return frozenset(name for name in names if isinstance(name, str)) if isinstance(names, list) else frozenset()
+
+
+def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     """Whether an MCP tool may write and so needs an exact external-write grant."""
     if not tool.startswith('mcp__'):
         return False
     server, action = _mcp_server_action(tool)
-    github = 'github' in server.lower()
-    if github and action in _GITHUB_READ_NAMES:
+    known = _MCP_READ_TOOLS.get('github' if _mcp_github(tool) else server, frozenset())
+    if action in known or action in _configured_mcp_reads(root, server):
         return False
-    # The action only: a verb in the server name (cloud-run) must not make every tool a write.
-    if SIDE_EFFECT_TOOL.search(action):
+    tokens = [token.lower() for token in _NAME_TOKEN.findall(action)]
+    if not tokens or any(token in _WRITE_VERBS for token in tokens):
         return True
-    return github and not _GITHUB_READ.search(action)
+    return not (tokens[0] in _READ_VERBS or tokens[-1] in _READ_VERBS)
 
 
 def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
@@ -2721,13 +2740,13 @@ def evaluate_pre_tool(
                 if active:
                     return False, f'Another write agent is already active: {active}'
 
-    if mcp_side_effect(tool):
+    if mcp_side_effect(tool, root):
         from .human_gates import gate_block_reason
 
         gate_reason = gate_block_reason(root, 'external-write', 'external-write', tool)
         if gate_reason:
             return False, gate_reason
-        if 'github' in _mcp_server_action(tool)[0].lower():
+        if _mcp_github(tool):
             problem = _mcp_repository_problem(root, tool_input)
             if problem:
                 return False, f'MCP side-effect tool {tool} is refused: {problem}.'

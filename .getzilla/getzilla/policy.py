@@ -38,7 +38,7 @@ def sensitive_action(root: Path, event: dict[str, Any]) -> str | None:
         word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file')
     ):
         return 'protected-path-write'
-    if _legacy_mcp_side_effect(tool):
+    if _legacy_mcp_side_effect(tool, root):
         return 'external-write'
     if tool != 'Bash':
         return None
