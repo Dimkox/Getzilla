@@ -60,7 +60,10 @@ def _remember_reads(payload: dict, root) -> None:
                 if rel:
                     record(root, session_id(payload), {rel})
             return
-        observe(root, session_id(payload), tool, data.get('command'), cwd)
+        response = payload.get('tool_response')
+        if isinstance(response, dict):
+            response = '\n'.join(str(response.get(key) or '') for key in ('output', 'stdout', 'aggregated_output'))
+        observe(root, session_id(payload), tool, data.get('command'), cwd, response if isinstance(response, str) else '')
     except Exception:
         return
 
