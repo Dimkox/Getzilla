@@ -536,7 +536,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `components` | `scripts/getzilla_components.py` | Show and add optional components (`agent:<name>`, `extra:bitrix`, `extra:seo-landing`, `compliance:eu-ai-act`, `factory`) |
 | `baseline` | `scripts/getzilla_baseline.py` | Mandatory pinned baseline: `status`, `apply` |
 | `harness` | `scripts/getzilla_harness.py` | Check, or with `--write` regenerate, the generated agent harness copies |
-| `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, write the new files into the project on a `getzilla-update-<version>` branch, then update third-party tools (`--no-self`, `--no-tools`, `--accept-local`) |
+| `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, write the new files into the project on a `getzilla-update-<version>` branch, then update third-party tools (`--no-self`, `--no-tools`, `--accept-local`, `--retire-legacy`); the project's own lint and coverage configuration stays |
 | — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |
 | `cpu` | `scripts/getzilla_startup_cpu.py` | Startup step zero: measure and record usable CPUs (`--reserve`, `--attach`) |
 | `par` | `scripts/getzilla_par.py` | Run independent commands in parallel on the measured CPUs (`-j`, `--each`) |

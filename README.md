@@ -100,7 +100,7 @@ To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, 
 
 To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this at the end of every run.
 
-To update everything with one command, run `getzilla update` inside your project. It updates Getzilla itself, then writes the new Getzilla files into the project on a new branch `getzilla-update-<version>` and commits them there, then updates the third-party tools. The project must have no uncommitted changes. Nothing is pushed or deleted; review the branch and open a pull request. `--no-self` and `--no-tools` skip the first and the last step. If a file your project keeps as its own (`.getzilla/AGBP_SYNC.json`) changed since its digest was recorded, the update stops; `getzilla update --accept-local` records the committed version as the one to keep and continues.
+To update everything with one command, run `getzilla update` inside your project. It updates Getzilla itself, then writes the new Getzilla files into the project on a new branch `getzilla-update-<version>` and commits them there, then updates the third-party tools. The project must have no uncommitted changes. Nothing is pushed, and nothing is deleted unless you pass `--retire-legacy`; review the branch and open a pull request. `--no-self` and `--no-tools` skip the first and the last step. If a file your project keeps as its own (`.getzilla/AGBP_SYNC.json`) changed since its digest was recorded, the update stops; `getzilla update --accept-local` records the committed version as the one to keep and continues. The project's own `ruff.toml`, `bandit.yaml` and `.coveragerc` stay as they are. A project without a sync record gets one. On a pre-rename project the update lists the old `.grok-stack/` and `scripts/grok_*` files and any file that still imports the old engine; `--retire-legacy` removes the old files in the same commit once nothing imports them.
 
 Then, from the Getzilla folder, take the read-only tour in your browser:
 
@@ -131,7 +131,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla components status`, `components add <name>` | Shows and adds optional parts, for example `agent:cursor`, `extra:bitrix`, `compliance:eu-ai-act`, `factory` |
 | | `getzilla baseline status\|apply` | Shows or applies the mandatory pinned baseline |
 | | `getzilla harness [--write]` | Checks or regenerates the agent files in `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/` and `.cursor/` |
-| Update | `getzilla update [--no-self] [--no-tools] [--accept-local]` | Updates Getzilla, writes the new files into the project on a new branch, then updates third-party tools |
+| Update | `getzilla update [--no-self] [--no-tools] [--accept-local] [--retire-legacy]` | Updates Getzilla, writes the new files into the project on a new branch, then updates third-party tools |
 | A task | `getzilla cpu` | Measures and records the usable CPUs (startup step zero) |
 | | `getzilla route "<task>"` | Creates the task route; `--show` prints it, `--reconcile` binds it to the committed diff, `--reconcile --add-reviewer <role>` keeps an extra reviewer |
 | | `getzilla status` | Shows the route, the change package, open evidence gaps and agents |
