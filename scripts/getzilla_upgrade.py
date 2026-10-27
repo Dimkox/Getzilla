@@ -23,6 +23,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -168,11 +169,31 @@ def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None
     return digests, (json.dumps(record, indent=2, sort_keys=True) + '\n').encode('utf-8'), accepted
 
 
-def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]]) -> tuple[list[str], list[str], list[str]]:
-    """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps)."""
-    retire = sorted(item['path'] for item in installer._legacy_migration(project) if item['path'] in tree)
+# Dated change evidence is a record of its day: it is listed, never rewritten, and never blocks retirement.
+HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[^/]+/evidence/')
+
+
+def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
+                  incoming: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
+
+    Only a pre-rename file whose Getzilla replacement is committed or arrives with this update is
+    retired; one without a replacement (a vendored factory the update does not install) stays.
+    """
+    present = set(tree) | incoming
+
+    def replaced(path: str) -> bool:
+        current = installer.legacy_to_current_path(path)
+        # The engine may ship as one archive instead of a folder of modules.
+        return current in present or (current.startswith(installer.ENGINE_DIR) and installer.ENGINE_ARCHIVE in present)
+
+    retire = sorted(item['path'] for item in installer._legacy_migration(project)
+                    if item['path'] in tree and replaced(item['path']))
     retired = set(retire)
-    found = git(project, 'grep', '-l', '-I', '-F', '-e', 'adaptive_grok', '-e', '.grok-stack/', 'HEAD', '--', '*.py')
+    needles = ['-e', 'adaptive_grok', '-e', '.grok-stack/']
+    if any(path.startswith('factory/src/adaptive_factory/') for path in retire):
+        needles += ['-e', 'adaptive_factory']  # only when the old factory is retired, not while it is the live one
+    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', *needles, 'HEAD', '--', '*.py')
     importers = sorted({line.split(':', 1)[1] for line in found.stdout.splitlines() if ':' in line} - retired) \
         if found.returncode == 0 else []
     record = git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}')
@@ -291,8 +312,17 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         digests, record, accepted = accept_local(installer, project) if accept else ({}, None, [])
         changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs)
         tree = head_tree(project)
-        legacy, importers, legacy_kept = legacy_report(installer, project, tree)
         fresh_record = sync_record(installer, project, tree) if record is None else None
+        if fresh_record is not None:
+            changes.append((installer.STACK_SYNC_RECORD, fresh_record, '100644'))
+        # The sync history log moves with the record, so the old stack folder can go.
+        old_log = installer.LEGACY_STACK_DIR + '/AGBP_SYNC.log.jsonl'
+        if old_log in tree and installer.legacy_to_current_path(old_log) not in tree:
+            log = git(project, 'cat-file', 'blob', f'HEAD:{old_log}', data=b'')
+            if log.returncode != 0:
+                raise UpdateError(f'cannot read {old_log} from HEAD')
+            changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
+        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes})
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
@@ -301,8 +331,8 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         raise UpdateError(f'the pre-rename sync record is not valid JSON: {exc}') from exc
     if record is not None:
         changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
-    if fresh_record is not None:
-        changes.append((installer.STACK_SYNC_RECORD, fresh_record, '100644'))
+    historical = [path for path in importers if HISTORICAL_EVIDENCE.match(path)]
+    importers = [path for path in importers if path not in historical]
     if retire and legacy and (importers or legacy_kept):
         raise UpdateError('the project still depends on the old engine; port these first, then retire it: '
                           + ', '.join(importers + legacy_kept))
@@ -314,6 +344,13 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
                      + ', '.join(legacy_kept))
     if importers:
         notes.append('these files import the old engine and need porting: ' + ', '.join(importers))
+    if historical:
+        notes.append(f'{len(historical)} dated evidence file(s) name the old engine; they stay as records of their day')
+    unreplaced = [item['path'] for item in installer._legacy_migration(project)
+                  if item['path'] in tree and item['path'] not in legacy]
+    if unreplaced:
+        notes.append(f'{len(unreplaced)} pre-rename file(s) have no Getzilla replacement here and stay, '
+                     f'for example {unreplaced[0]}')
     if legacy and retire:
         changes.extend((path, None, '') for path in legacy)
         notes.append(f'removed {len(legacy)} pre-rename file(s)')
