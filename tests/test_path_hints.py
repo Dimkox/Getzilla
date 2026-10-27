@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
-from getzilla.path_hints import command_cwd, hint, inspect, refusal, suggestions  # noqa: E402
+from getzilla.path_hints import PROMPT_LOCATE, command_cwd, hint, inspect, prompt_paths, refusal, suggestions  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
 
 MODULE = 'vendor/modules/acme.selector'
@@ -138,6 +138,24 @@ class SuggestionTests(unittest.TestCase):
         self.assertEqual(command_cwd(self.root, {}, {}), self.root)
 
 
+class PromptPathTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = _repo(Path(tmp.name))
+
+    def test_names_in_a_task_come_back_as_real_paths(self) -> None:
+        text = prompt_paths(self.root, 'Fix SheetController, then lib/Service/CurvePointEvaluator.php and test_sheet')
+        self.assertIn(f'- SheetController: `{MODULE}/lib/SheetController.php`', text)
+        self.assertIn(f'`{MODULE}/lib/CurvePointEvaluator.php`', text)
+        self.assertIn('`tests/php/test_sheet.php`', text)
+        self.assertTrue(text.endswith(PROMPT_LOCATE))
+
+    def test_a_task_without_known_names_gets_only_the_locate_rule(self) -> None:
+        self.assertEqual(prompt_paths(self.root, 'Make the README clearer for UnknownWidget'), PROMPT_LOCATE)
+        self.assertEqual(prompt_paths(self.root, ''), PROMPT_LOCATE)
+
+
 def _notes(root: Path) -> None:
     (root / 'notes').mkdir()
     (root / 'notes' / 'install_guide.md').write_text('x\n', encoding='utf-8')
@@ -160,6 +178,15 @@ class HookTests(unittest.TestCase):
             self.assertEqual(data['decision'], 'allow', data)
             code, data, _ = run_hook(root, 'pre_tool_use.py', self._payload(root, 'PreToolUse', 'cat notes/install_guidee.md notes/install_guide.md'))
             self.assertEqual(data['decision'], 'allow', data)
+
+    def test_user_prompt_submit_names_the_real_paths(self) -> None:
+        with project_copy(git=True) as root:
+            _notes(root)
+            payload = {'cwd': str(root), 'session_id': 'path-hints', 'hook_event_name': 'UserPromptSubmit',
+                       'prompt': 'Update install_guide before the release'}
+            code, data, stderr = run_hook(root, 'user_prompt_submit.py', payload)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn('`notes/install_guide.md`', data['hookSpecificOutput']['additionalContext'])
 
     def test_post_tool_use_adds_the_hint_beside_the_output(self) -> None:
         with project_copy(git=True) as root:

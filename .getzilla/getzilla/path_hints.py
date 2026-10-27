@@ -364,3 +364,48 @@ def hint(root: Path, command: str, cwd: Path) -> str | None:
         return None
     _record(root, 'hinted')
     return _message(root, cwd, found.missing, 'Getzilla: these paths do not exist (closest existing paths):')
+
+
+# -- paths named in a task ------------------------------------------------------------------------
+
+_CAMEL = re.compile(r'\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b')
+_SNAKE = re.compile(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b')
+_FILE = re.compile(r'[\w.\-/]*\w\.(?:php|py|js|mjs|ts|tsx|jsx|json|ya?ml|md|sql|twig|css|scss|html|sh|toml|xml|ini|go|rs|java|kt|cs)\b')
+MAX_PROMPT_NAMES = 12
+MAX_PATHS_PER_NAME = 3
+PROMPT_LOCATE = ('For any other file, locate it before reading (`rg --files | rg -i <name>`); '
+                 'never build a path from a naming habit.')
+
+
+def prompt_paths(root: Path, prompt: str) -> str:
+    """Context for a new task: the real paths of the files and classes the task names.
+
+    An agent that reads the task builds a path from habit (lib/Service/X.php) when the file is
+    lib/X.php; that miss costs a model call. Giving the tracked paths up front removes the guess.
+    """
+    names: list[str] = []
+    for pattern in (_FILE, _CAMEL, _SNAKE):
+        for match in pattern.findall(prompt or ''):
+            if match not in names:
+                names.append(match)
+    names = names[:MAX_PROMPT_NAMES]
+    if not names:
+        return PROMPT_LOCATE
+    files = _index(root)
+    lines = []
+    for name in names:
+        if '/' in name and (root / name).is_file():
+            continue  # already a real path
+        lowered = PurePosixPath(name).name.lower()
+        stem = lowered if '.' not in lowered else None
+        same = [path for path in files
+                if (base := path.rsplit('/', 1)[-1].lower()) == lowered or (stem and base.split('.', 1)[0] == stem)]
+        if not same:
+            continue
+        shown = ', '.join(f'`{path}`' for path in same[:MAX_PATHS_PER_NAME])
+        more = f' (+{len(same) - MAX_PATHS_PER_NAME} more)' if len(same) > MAX_PATHS_PER_NAME else ''
+        lines.append(f'- {name}: {shown}{more}')
+    if not lines:
+        return PROMPT_LOCATE
+    return '\n'.join(['Getzilla: files this task names, by their real tracked paths (read these; do not guess):',
+                      *lines, PROMPT_LOCATE])
