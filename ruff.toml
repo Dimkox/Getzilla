@@ -12,5 +12,8 @@ exclude = [
 ]
 
 [lint]
+# The pycodestyle whitespace rules (E2, for example E225 in `x =y`) are left out on purpose:
+# Ruff ships them only in preview mode, whose behaviour changes between Ruff releases, and a
+# merge gate must not change with the tool version (#202). A formatter catches them instead.
 select = ["E4", "E7", "E9", "F"]
 ignore = ["E402"]

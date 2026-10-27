@@ -9,12 +9,22 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 import zipfile
 from pathlib import Path
 from typing import Iterator
 
 PROJECT = Path(__file__).resolve().parents[1]
 CLEANUP_ATTEMPTS = 4
+
+
+def missing_history(what: str) -> None:
+    """A test reads a commit or tag this clone lacks (#202): skip with the reason, but fail in CI,
+    which checks out with fetch-depth: 0 and must not lose the check."""
+    message = f'{what} is not in this clone; fetch the full history and tags (CI uses fetch-depth: 0)'
+    if os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS'):
+        raise AssertionError(message)
+    raise unittest.SkipTest(message)
 
 
 @contextlib.contextmanager
