@@ -6,9 +6,11 @@
    updated Getzilla (the same set `install_into.py --plan` lists) are committed on a new branch
    `getzilla-update-<version>`, which is then checked out. The commit is built in a private Git
    index, so a failure at any step leaves the project as it was. The project must be a clean Git
-   work tree. Nothing is pushed or deleted, and an up-to-date project gets no branch. Paths the
+   work tree. Nothing is pushed, nothing is deleted without --retire-legacy, and an up-to-date
+   project gets no branch. Paths the
    project keeps (`.getzilla/AGBP_SYNC.json`) are left alone; in AGENTS.md only the managed block
-   is replaced.
+   is replaced. The project's own ruff.toml, bandit.yaml and .coveragerc stay; --retire-legacy also removes
+   committed pre-rename files (.grok-stack, scripts/grok_*) once nothing imports the old engine.
 3. tools: the third-party tools, through `getzilla_update.py` as before.
 
 `getzilla update` runs all three; `getzilla update core|project|tools` runs one. The tool options
@@ -28,8 +30,10 @@ from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
-OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--help')
+OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
+# Lint and coverage settings name the project's own paths and rules; Getzilla's copy is only a first default.
+PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc'})
 STEPS = {
     'core': 'update only Getzilla itself',
     'project': 'update only the project, on a new branch',
@@ -84,7 +88,7 @@ def find_project(start: Path, home: Path) -> Path | None:
     """The nearest folder at or above start that carries Getzilla, unless it is Getzilla itself."""
     start = start.resolve()
     for base in (start, *start.parents):
-        if (base / '.getzilla').is_dir():
+        if (base / '.getzilla').is_dir() or (base / '.grok-stack').is_dir():
             return None if base == home.resolve() else base
     return None
 
@@ -164,9 +168,45 @@ def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None
     return digests, (json.dumps(record, indent=2, sort_keys=True) + '\n').encode('utf-8'), accepted
 
 
+def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]]) -> tuple[list[str], list[str], list[str]]:
+    """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps)."""
+    retire = sorted(item['path'] for item in installer._legacy_migration(project) if item['path'] in tree)
+    retired = set(retire)
+    found = git(project, 'grep', '-l', '-I', '-F', '-e', 'adaptive_grok', '-e', '.grok-stack/', 'HEAD', '--', '*.py')
+    importers = sorted({line.split(':', 1)[1] for line in found.stdout.splitlines() if ':' in line} - retired) \
+        if found.returncode == 0 else []
+    record = git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}')
+    kept = []
+    if record.returncode == 0:
+        try:
+            kept = sorted(path for path in json.loads(record.stdout).get('kept_local', [])
+                          if isinstance(path, str) and path.startswith(installer.LEGACY_STACK_DIR + '/'))
+        except (ValueError, AttributeError):
+            kept = []
+    return retire, importers, kept
+
+
+def sync_record(installer, project: Path, tree: dict[str, tuple[str, str]]) -> bytes | None:
+    """The sync record to add when the project has none: the pre-rename one with its paths renamed, or a fresh one."""
+    if installer.STACK_SYNC_RECORD in tree:
+        return None
+    if installer.LEGACY_STACK_SYNC_RECORD not in tree:
+        return installer.FRESH_SYNC_RECORD
+    record = json.loads(git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}').stdout)
+    rename = installer.legacy_to_current_path
+    record['kept_local'] = [rename(path) for path in record.get('kept_local', [])]
+    record['kept_local_sha256'] = {rename(path): digest for path, digest in record.get('kept_local_sha256', {}).items()}
+    return (json.dumps(record, indent=2, sort_keys=True) + '\n').encode('utf-8')
+
+
 def planned_changes(installer, home: Path, project: Path,
-                    digests: dict[str, str] | None = None) -> list[tuple[str, bytes, str]]:
-    """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD."""
+                    digests: dict[str, str] | None = None,
+                    kept_configs: list[str] | None = None) -> list[tuple[str, bytes, str]]:
+    """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD.
+
+    A lint or coverage configuration the project already commits is its own and stays; its path
+    goes to kept_configs.
+    """
     if digests is not None:
         # This installer module was loaded for this run only, so the override stays local to it.
         installer._kept_local_digests = lambda _target: digests
@@ -195,6 +235,10 @@ def planned_changes(installer, home: Path, project: Path,
         mode = '100755' if entry.mode & 0o111 else '100644'
         if tree.get(entry.path) == (mode, blob_id(content, object_format)):
             continue
+        if entry.path in PROJECT_CONFIGS and entry.path in tree:
+            if kept_configs is not None:
+                kept_configs.append(entry.path)
+            continue
         parts = entry.path.split('/')
         for depth in range(1, len(parts) + 1):
             prefix = '/'.join(parts[:depth])
@@ -212,13 +256,20 @@ def version_of(home: Path) -> str:
         return 'latest'
 
 
-def commit_changes(project: Path, changes: list[tuple[str, bytes, str]], message: str) -> str:
-    """Build the commit in a private index; the work tree and the project's index stay untouched."""
+def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], message: str) -> str:
+    """Build the commit in a private index; the work tree and the project's index stay untouched.
+
+    A change with content None removes that path.
+    """
+    zero = '0' * len(_git_out(project, 'rev-parse', 'HEAD'))
     with tempfile.TemporaryDirectory(prefix='getzilla-update-') as scratch:
         env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
         _git_out(project, 'read-tree', 'HEAD', env=env)
         lines = []
         for path, content, mode in changes:
+            if content is None:
+                lines.append(f'0 {zero}\t{path}')
+                continue
             oid = _git_out(project, 'hash-object', '-w', '--stdin', data=content)
             lines.append(f'{mode} {oid}\t{path}')
         _git_out(project, 'update-index', '--index-info', data=('\n'.join(lines) + '\n').encode('utf-8'), env=env)
@@ -226,8 +277,8 @@ def commit_changes(project: Path, changes: list[tuple[str, bytes, str]], message
     return _git_out(project, 'commit-tree', tree, '-p', 'HEAD', '-m', message)
 
 
-def sync_project(home: Path, project: Path, *, accept: bool = False) -> str:
-    """Commit the managed files on a new branch and check it out; returns a one-line result."""
+def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False) -> str:
+    """Commit the managed files on a new branch and check it out; returns the result and its notes."""
     project = project.resolve()
     top = git(project, 'rev-parse', '--show-toplevel')
     if top.returncode != 0 or Path(top.stdout.strip()).resolve() != project:
@@ -235,17 +286,47 @@ def sync_project(home: Path, project: Path, *, accept: bool = False) -> str:
     if _git_out(project, 'status', '--porcelain', '--untracked-files=all'):
         raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
     installer = load_installer(home)
+    kept_configs: list[str] = []
     try:
         digests, record, accepted = accept_local(installer, project) if accept else ({}, None, [])
-        changes = planned_changes(installer, home, project, digests if accepted else None)
+        changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs)
+        tree = head_tree(project)
+        legacy, importers, legacy_kept = legacy_report(installer, project, tree)
+        fresh_record = sync_record(installer, project, tree) if record is None else None
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
         raise UpdateError(f'{exc}{hint}') from exc
+    except json.JSONDecodeError as exc:
+        raise UpdateError(f'the pre-rename sync record is not valid JSON: {exc}') from exc
     if record is not None:
         changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
+    if fresh_record is not None:
+        changes.append((installer.STACK_SYNC_RECORD, fresh_record, '100644'))
+    if retire and legacy and (importers or legacy_kept):
+        raise UpdateError('the project still depends on the old engine; port these first, then retire it: '
+                          + ', '.join(importers + legacy_kept))
+    notes = []
+    if kept_configs:
+        notes.append(f'kept your own {", ".join(sorted(kept_configs))}; Getzilla does not replace them')
+    if legacy_kept:
+        notes.append('your sync record keeps changed old-engine files, which the new engine does not carry: '
+                     + ', '.join(legacy_kept))
+    if importers:
+        notes.append('these files import the old engine and need porting: ' + ', '.join(importers))
+    if legacy and retire:
+        changes.extend((path, None, '') for path in legacy)
+        notes.append(f'removed {len(legacy)} pre-rename file(s)')
+    elif legacy:
+        notes.append(f'{len(legacy)} pre-rename file(s) remain, for example {legacy[0]}; '
+                     'run `getzilla update --retire-legacy` to remove them')
+    arriving = sorted(path for path, content, mode in changes
+                      if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
+    if arriving:
+        notes.append(f'{len(arriving)} new executable file(s) arrive (hooks and scripts); '
+                     'approve or exclude them in your own checks')
     if not changes:
-        return f'{project.name} is up to date'
+        return '\n'.join([f'{project.name} is up to date', *notes])
     version = version_of(home)
     branch = BRANCH_PREFIX + version
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
@@ -262,8 +343,8 @@ def sync_project(home: Path, project: Path, *, accept: bool = False) -> str:
         raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
                           f'{switched.stderr.strip()}; run `git switch {branch}`')
     kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
-    return (f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
-            'review it and open a pull request')
+    return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
+                      'review it and open a pull request', *notes])
 
 
 def run_tools(home: Path, args: list[str]) -> int:
@@ -299,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
     if step != 'core':
         parser.add_argument('--accept-local', action='store_true',
                             help='keep the committed version of kept files that changed since their digest was recorded')
+        parser.add_argument('--retire-legacy', action='store_true',
+                            help='also remove the committed pre-rename files (.grok-stack, scripts/grok_*) in the same commit')
     args = parser.parse_args(rest)
     try:
         if step == 'core':
@@ -309,14 +392,15 @@ def main(argv: list[str] | None = None) -> int:
             # Steps 2 and 3 run on the code just fetched, not on this process's old copy.
             project = args.project or find_project(Path.cwd(), HOME)
             again = [*([str(project)] if project else []), '--no-self', *(['--no-tools'] if args.no_tools else []),
-                     *(['--accept-local'] if args.accept_local else [])]
+                     *(['--accept-local'] if args.accept_local else []),
+                     *(['--retire-legacy'] if args.retire_legacy else [])]
             return subprocess.run([sys.executable, str(HOME / 'scripts/getzilla_upgrade.py'), *again],
                                   check=False).returncode
         project = Path(args.project) if args.project else find_project(Path.cwd(), HOME)
         if project is None:
             print('no project here: run `getzilla update` inside a project to update it too')
         else:
-            print(sync_project(HOME, project, accept=args.accept_local), flush=True)
+            print(sync_project(HOME, project, accept=args.accept_local, retire=args.retire_legacy), flush=True)
     except UpdateError as exc:
         print(f'getzilla update: {exc}', file=sys.stderr)
         return 1

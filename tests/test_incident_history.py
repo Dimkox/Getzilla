@@ -10,6 +10,8 @@ from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+from tests._support import missing_history  # noqa: E402
 BASE = '01f67873ea17949208f92c83d34d0af38a586779'
 ASSOCIATIONS = {('2026-10-09-root-1967.md', b'74'): 'https://github.com/Dimkox/Getzilla/pull/74'}
 
@@ -18,7 +20,10 @@ ASSOCIATIONS = {('2026-10-09-root-1967.md', b'74'): 'https://github.com/Dimkox/G
 def _original(source: str) -> bytes:
     if source not in {'mistakes.md', 'engineering/mistakes.md'}:
         raise ValueError('unknown historical source')
-    return subprocess.check_output(['git', 'show', f'{BASE}:{source}'], cwd=ROOT)
+    shown = subprocess.run(['git', 'show', f'{BASE}:{source}'], cwd=ROOT, capture_output=True, check=False)
+    if shown.returncode != 0:
+        missing_history(f'historical commit {BASE}')
+    return shown.stdout
 
 
 def historical_incident(relative: str, root: Path = ROOT) -> bool:
@@ -57,7 +62,7 @@ class IncidentHistoryTests(unittest.TestCase):
         manifest = json.loads((ROOT / 'engineering/incidents/provenance.json').read_bytes())
         self.assertEqual(manifest['base'], BASE)
         for source in ('mistakes.md', 'engineering/mistakes.md'):
-            original = subprocess.check_output(['git', 'show', f'{BASE}:{source}'], cwd=ROOT)
+            original = _original(source)
             rows = sorted((row for row in manifest['segments'] if row['source'] == source), key=lambda row: row['start_byte'])
             recovered = b''
             for row in rows:

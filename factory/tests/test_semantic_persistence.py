@@ -1,11 +1,10 @@
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 import unittest
 
 from fastapi.testclient import TestClient
 
 from getzilla_factory.api import Authenticator, create_app
-from getzilla_factory.contracts import canonical_digest
 from getzilla_factory.models import Actor
 from getzilla_factory.semantic_bridge import build_semantic_subject
 from getzilla_factory.store import PostgresSemanticCoordinatorStore, StoreError

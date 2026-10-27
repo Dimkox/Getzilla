@@ -621,7 +621,7 @@ class PostgresStore:
                 WHERE job_id = %s AND lease_owner = %s
                   AND status IN ({placeholders}) AND lease_expires_at >= %s
                 RETURNING *
-                """,
+                """,  # nosec B608: assignments are fixed column lists from this class; values are bound parameters
                 (*assignment_values, job_id, worker_id, *allowed, now),
             )
             row = cursor.fetchone()

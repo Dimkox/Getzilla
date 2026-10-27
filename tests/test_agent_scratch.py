@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -42,6 +43,21 @@ class AgentScratchTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, bash('echo {} > .getzilla/runtime/active-route.json'))
             self.assertFalse(allowed)
             self.assertIn('scratch', reason or '')
+
+    def test_a_reviewer_copy_in_scratch_can_be_edited_but_not_driven_by_git(self) -> None:
+        # #183: a mutation probe edits `.getzilla/getzilla/...` inside its own copy in scratch. Git commands
+        # there stay refused: the copy's own config or hooks can point them at the live tree.
+        with project_copy(git=True) as root:
+            copy = '.getzilla/runtime/scratch/review-1'
+            (root / copy / '.getzilla/getzilla').mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(root / copy)], check=True)
+            for event in (write(root, f'{copy}/.getzilla/getzilla/policy.py'), bash(f'rm -rf {copy}')):
+                with self.subTest(event=str(event)[:90]):
+                    allowed, reason = evaluate_pre_tool(root, event)
+                    self.assertTrue(allowed, reason)
+            allowed, reason = evaluate_pre_tool(root, bash(f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py'))
+            self.assertFalse(allowed)
+            self.assertIn('getzilla cleanup snapshot', reason or '')
 
     def test_a_symlink_out_of_scratch_is_still_protected(self) -> None:
         with project_copy(git=True) as root:

@@ -325,6 +325,22 @@ class PackageStatusTests(unittest.TestCase):
             self.update_state(package, change_id='different-package')
             self.assertIn('package_identity_mismatch', self.codes(self.inspect(root)))
 
+    def test_a_new_route_after_a_closed_package_is_not_an_identity_mismatch(self):
+        with project_copy() as root:
+            _, _, _, package = self.prepare(root, complete=True)
+            route = get_active_route(root)
+            later = {**route, 'route_id': 'later-route'}
+            self.update_state(package, status='implementing')
+            result = self.module().inspect_package(root, later, get_active_change(root))
+            mismatch = [item for item in result['findings'] if item['code'] == 'package_identity_mismatch']
+            self.assertEqual(len(mismatch), 1)
+            self.assertIn(repr(route['route_id']), mismatch[0]['message'])
+            self.assertIn("'later-route'", mismatch[0]['message'])
+            self.update_state(package, status='released')
+            codes = self.codes(self.module().inspect_package(root, later, get_active_change(root)))
+            self.assertNotIn('package_identity_mismatch', codes)
+            self.assertIn('package_closed', codes)
+
     def test_invalid_typed_state_and_obligation_values_remain_bounded_diagnostics(self):
         for fields in (
             {'status': ['implementing']},

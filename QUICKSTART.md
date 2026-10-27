@@ -129,7 +129,7 @@ python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40
    python3 scripts/getzilla_status.py
    ```
 
-   `getzilla change start` writes the change package to `.getzilla/runtime/changes/<id>/`. This is ignored runtime state, not Git content; older tracked packages under `engineering/changes/` are history.
+   `getzilla change start` writes the change package to `.getzilla/runtime/changes/<id>/`. This is ignored runtime state, not Git content; older tracked packages under `engineering/changes/` are history. `getzilla verify --mode pr` needs this package and its typed spec on a route that delivers code, unless the exact diff is admitted to the light lane.
 
 5. Complete delivery checks once:
 

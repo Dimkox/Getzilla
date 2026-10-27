@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from pilot.authority import LiteralGrantAuthority
-from pilot.github import GitHubPublication, PushReceiptV1
+from pilot.github import GitHubPublication
 from pilot.live_github import CommandResult, PinnedGitHubTransport
 from pilot.store import PilotStore
 from pilot.tests.support import utc_time

@@ -5,13 +5,11 @@ from __future__ import annotations
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import hashlib
-from pathlib import Path
 import re
 from typing import Callable, Mapping, Protocol
 
 from .authority import GrantUseV1, LiteralGrantAuthority, operation_resource
-from .contracts import PullRequestProposalV1, canonical_json, contract_digest
+from .contracts import PullRequestProposalV1, contract_digest
 from .profile import PilotProfileV1
 from .store import EffectRecord, PilotJob, PilotStore
 from .workspace import PreparedWorkspace

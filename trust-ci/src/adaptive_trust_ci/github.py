@@ -34,7 +34,7 @@ class UrllibTransport:
         raw = json.dumps(body).encode('utf-8') if body is not None else None
         request = urllib.request.Request(url, data=raw, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310: URL is the configured GitHub API base plus a fixed path
                 return response.status, _decode_response(response.read())
         except urllib.error.HTTPError as exc:
             return exc.code, _decode_response(exc.read())

@@ -140,6 +140,52 @@ class ProjectSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(upgrade.UpdateError, 'not the root'):
             upgrade.sync_project(ROOT, self.project / 'sub')
 
+    def test_the_projects_own_lint_configuration_stays_and_a_sync_record_appears(self) -> None:
+        result = upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / 'ruff.toml').read_text(encoding='utf-8'), 'line-length = 80\n')
+        self.assertIn('kept your own ruff.toml', result)
+        self.assertEqual((self.project / 'bandit.yaml').read_bytes(), (ROOT / 'bandit.yaml').read_bytes())
+        self.assertEqual(json.loads((self.project / '.getzilla/AGBP_SYNC.json').read_text(encoding='utf-8')),
+                         {'kept_local': [], 'kept_local_sha256': {}, 'schema_version': 1})
+        self.assertIn('new executable file(s) arrive', result)
+
+    def _pre_rename(self) -> None:
+        for rel in ('.grok-stack/adaptive_grok/verification.py', 'scripts/grok_route.py'):
+            (self.project / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.project / rel).write_text('old = 1\n', encoding='utf-8')
+        digest = hashlib.sha256(b'line-length = 80\n').hexdigest()
+        record = {'schema_version': 1, 'kept_local': ['ruff.toml'], 'kept_local_sha256': {'ruff.toml': digest}}
+        (self.project / '.grok-stack/AGBP_SYNC.json').write_text(json.dumps(record), encoding='utf-8')
+        self.commit('pre-rename layout')
+
+    def test_a_pre_rename_project_gets_its_record_moved_and_its_old_files_listed(self) -> None:
+        self._pre_rename()
+        result = upgrade.sync_project(ROOT, self.project)
+        record = json.loads((self.project / '.getzilla/AGBP_SYNC.json').read_text(encoding='utf-8'))
+        self.assertEqual(record['kept_local'], ['ruff.toml'])
+        self.assertIn('pre-rename file(s) remain', result)
+        self.assertIn('--retire-legacy', result)
+        self.assertTrue((self.project / 'scripts/grok_route.py').is_file())
+
+    def test_retire_legacy_removes_the_old_files_in_the_same_commit(self) -> None:
+        self._pre_rename()
+        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        self.assertIn('removed', result)
+        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertFalse((self.project / 'scripts/grok_route.py').exists())
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual(git(self.project, 'rev-list', '--count', 'HEAD'), '3')
+
+    def test_a_test_that_imports_the_old_engine_is_reported_and_blocks_retirement(self) -> None:
+        self._pre_rename()
+        (self.project / 'tests').mkdir()
+        (self.project / 'tests/test_old.py').write_text('from adaptive_grok import verification\n', encoding='utf-8')
+        self.commit('pin the old engine')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'tests/test_old.py'):
+            upgrade.sync_project(ROOT, self.project, retire=True)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertIn('tests/test_old.py', upgrade.sync_project(ROOT, self.project))
+
 
 class HelperTests(unittest.TestCase):
     def test_agents_merge_replaces_only_the_managed_block(self) -> None:

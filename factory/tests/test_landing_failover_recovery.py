@@ -1,8 +1,6 @@
 """Crash, journal ownership, input lifetime and binding failure tests."""
 
-import json
 from pathlib import Path
-import sqlite3
 import tempfile
 import unittest
 
