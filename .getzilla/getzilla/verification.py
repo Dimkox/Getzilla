@@ -9,7 +9,7 @@ import signal
 import sys
 import tempfile
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from .bitrix_checks import check_bitrix
@@ -1668,7 +1668,18 @@ _TRIVY_FILES = ('Dockerfile', 'dockerfile', 'Containerfile')
 
 
 def _existing_quality_paths(root: Path) -> list[str]:
-    return [rel for rel in QUALITY_PY_PATHS if (root / rel).exists()]
+    """Getzilla's own Python paths plus every top-level tree that holds the project's tracked Python."""
+    paths = [rel for rel in QUALITY_PY_PATHS if (root / rel).exists()]
+    proc = run(['git', 'ls-files', '-z', '--', '*.py'], cwd=root, timeout=60)
+    if proc.returncode == 0:
+        for rel in proc.stdout.split('\0'):
+            # Dot directories hold generated hook mirrors and tool state, not product code.
+            if not rel or rel.startswith('.') or not (root / rel).is_file():
+                continue
+            top = rel.split('/', 1)[0]
+            if top not in paths:
+                paths.append(top)
+    return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
 
 
 def _ruff(root: Path) -> CheckResult:
@@ -1677,7 +1688,11 @@ def _ruff(root: Path) -> CheckResult:
         return CheckResult('ruff', 'skip', 'no python quality paths')
     if not command_exists('ruff'):
         return CheckResult('ruff', 'skip', 'ruff not available')
-    return _command_check(root, 'ruff', ['ruff', 'check', *paths], 300)
+    # --force-exclude keeps the project's own exclude list in force for the paths named here.
+    result = _command_check(root, 'ruff', ['ruff', 'check', '--force-exclude', *paths], 300)
+    if result.status == 'pass' and 'No Python files found' in result.stderr:
+        return replace(result, status='skip', summary='ruff checked 0 files: the ruff configuration excludes every path')
+    return result
 
 
 def _bandit(root: Path) -> CheckResult:
@@ -1686,10 +1701,29 @@ def _bandit(root: Path) -> CheckResult:
         return CheckResult('bandit', 'skip', 'no non-test python paths')
     if not command_exists('bandit'):
         return CheckResult('bandit', 'skip', 'bandit not available')
-    command = ['bandit', '-q', '-r', *paths]
-    if (root / 'bandit.yaml').is_file():
-        command = ['bandit', '-c', 'bandit.yaml', '-q', '-r', *paths]
-    return _command_check(root, 'bandit', command, 300)
+    config = ['-c', 'bandit.yaml'] if (root / 'bandit.yaml').is_file() else []
+    with tempfile.TemporaryDirectory(prefix='getzilla-bandit-') as tmp:
+        report_path = Path(tmp) / 'bandit.json'
+        result = _command_check(root, 'bandit', ['bandit', *config, '-q', '-f', 'json', '-o', str(report_path), '-r', *paths], 300)
+        try:
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+            lines = int(report['metrics']['_totals']['loc'])
+            issues = list(report.get('results') or [])
+            scanned = [name.removeprefix('./') for name in report['metrics'] if name != '_totals']
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return result
+    if lines == 0:
+        return replace(result, status='skip', summary='bandit scanned 0 lines: exclude_dirs in bandit.yaml covers every path')
+    unscanned = [rel for rel in paths if not any(name == rel or name.startswith(rel + '/') for name in scanned)]
+    if unscanned:
+        result = replace(result, summary=f"{result.summary}; not scanned (bandit.yaml exclude_dirs): {', '.join(unscanned)}")
+    details = [{
+        'severity': str(item.get('issue_severity', '')).lower(),
+        'code': str(item.get('test_id', '')),
+        'path': f"{item.get('filename', '')}:{item.get('line_number', '')}",
+        'message': str(item.get('issue_text', '')),
+    } for item in issues[:200]]
+    return replace(result, summary=f'{result.summary}; {len(issues)} issues in {lines} lines', details=details)
 
 
 def _semgrep(root: Path) -> CheckResult | None:

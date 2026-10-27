@@ -120,7 +120,7 @@ class PilotPhases:
             raise LivePilotError("candidate_unavailable")
         workspace = self._workspaces.recover(self._job_id, job.candidate)
         prepared = PreparedPilot(job, workspace)
-        request = self._publication.branch_request(self._job_id)
+        _request = self._publication.branch_request(self._job_id)
         effect_before = self._store.get_effect(self._job_id, "branch_push")
         push = self._coordinator.publish_branch(
             prepared,
@@ -158,7 +158,7 @@ class PilotPhases:
         workspace = self._workspaces.recover(self._job_id, job.candidate)
         prepared = PreparedPilot(job, workspace)
         push = self._publication.push_receipt(self._job_id)
-        request = self._publication.proposal_request(self._job_id, push)
+        _request = self._publication.proposal_request(self._job_id, push)
         effect_before = self._store.get_effect(self._job_id, "proposal_create")
         proposal, _outcome = self._coordinator.publish_proposal(
             prepared,
@@ -254,7 +254,8 @@ def _build(
                     environment, ("HOME", "CODEX_HOME")
                 ),
             )
-            provider_preflight = lambda: None
+            def provider_preflight() -> None:
+                return None
         else:
             capability = ApiKeyCapability(environment)
             provider_runner = SubprocessCodexRunner(capability.environment)

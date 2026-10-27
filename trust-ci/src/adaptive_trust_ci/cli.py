@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             headers={'Content-Type': 'application/json', 'User-Agent': 'adaptive-trust-ci-human/2.1.0'},
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310: the operator names the Trust CI API URL
                 sys.stdout.buffer.write(response.read())
                 sys.stdout.write('\n')
         except urllib.error.HTTPError as exc:

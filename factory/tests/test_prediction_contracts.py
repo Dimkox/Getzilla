@@ -395,7 +395,7 @@ class PredictionContractTests(unittest.TestCase):
 
     def test_schema_and_parser_reject_missing_extra_types_bounds_and_nested_shapes(self):
         module = self.module()
-        schema = json.loads((SCHEMAS / "prediction-observation.v1.schema.json").read_text(encoding="utf-8"))
+        _schema = json.loads((SCHEMAS / "prediction-observation.v1.schema.json").read_text(encoding="utf-8"))
         cases = []
         missing = prediction_facts()
         missing.pop("model_digest")
@@ -440,7 +440,7 @@ class PredictionContractTests(unittest.TestCase):
                     explanation_facts(prediction, **{key: value}), prediction=prediction
                 )
 
-        schema = json.loads((SCHEMAS / "prediction-explanation.v1.schema.json").read_text(encoding="utf-8"))
+        _schema = json.loads((SCHEMAS / "prediction-explanation.v1.schema.json").read_text(encoding="utf-8"))
         missing = explanation_facts(prediction)
         missing.pop("background_dataset_digest")
         nested = explanation_facts(prediction)

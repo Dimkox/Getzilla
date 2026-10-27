@@ -118,7 +118,7 @@ class Worker:
                         failure_code='policy-binding-unavailable',
                         now=utc_now(),
                     )
-                except Exception:
+                except Exception:  # nosec B110: lease expiry reconciles a failed binding record
                     pass
                 if once:
                     return 0
@@ -136,7 +136,7 @@ class Worker:
                     )
                     if result.status == 'dead':
                         runner.publish_dead_job(result, str(exc))
-                except Exception:
+                except Exception:  # nosec B110
                     # Lease expiry and the PostgreSQL claim function provide reconciliation.
                     pass
             if once:

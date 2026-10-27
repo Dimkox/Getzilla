@@ -1973,6 +1973,54 @@ class QualityContourTests(unittest.TestCase):
             self.assertIsNotNone(bandit)
             self.assertNotEqual(bandit.status, 'fail')
 
+    def test_lint_targets_include_the_project_python_outside_getzilla_paths(self) -> None:
+        from getzilla.verification import _existing_quality_paths
+        with project_copy(git=True) as root:
+            for rel in ('packages/core/src/core/app.py', '.claude/hooks/mirror.py', 'manage.py'):
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text('x = 1\n', encoding='utf-8')
+            (root / 'untracked').mkdir()
+            (root / 'untracked/loose.py').write_text('x = 1\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'packages', '.claude', 'manage.py'], cwd=root, check=True)
+            paths = _existing_quality_paths(root)
+            self.assertIn('.getzilla/getzilla', paths)
+            self.assertIn('packages', paths)
+            self.assertIn('manage.py', paths)
+            self.assertNotIn('.claude', paths)
+            self.assertNotIn('untracked', paths)
+            with _PathTools({'bandit': _FAKE_BANDIT}):
+                (root / 'packages/core/src/core/unsafe.py').write_text('value = eval("1 + 1")\n', encoding='utf-8')
+                subprocess.run(['git', 'add', 'packages'], cwd=root, check=True)
+                bandit = next(item for item in _python(root, mode='fast') if item.name == 'bandit')
+            self.assertEqual(bandit.status, 'fail')
+
+    def test_a_scan_that_reads_no_project_code_is_not_a_pass(self) -> None:
+        from getzilla.verification import _bandit, _ruff
+        report = '''#!/usr/bin/env python3
+import json, sys
+args = sys.argv[1:]
+out = args[args.index("-o") + 1]
+loc = int(%r)
+metrics = {"_totals": {"loc": loc}}
+if loc:
+    metrics["scripts/tool.py"] = {"loc": loc}
+json.dump({"results": [], "metrics": metrics}, open(out, "w"))
+'''
+        empty_ruff = '#!/usr/bin/env python3\nimport sys\nprint("warning: No Python files found under the given path(s)", file=sys.stderr)\n'
+        with project_copy(git=True) as root:
+            (root / 'packages/core').mkdir(parents=True)
+            (root / 'packages/core/app.py').write_text('x = 1\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'packages'], cwd=root, check=True)
+            with _PathTools({'bandit': report % '0', 'ruff': empty_ruff}):
+                self.assertEqual(_bandit(root).status, 'skip')
+                self.assertIn('0 lines', _bandit(root).summary)
+                self.assertEqual(_ruff(root).status, 'skip')
+            with _PathTools({'bandit': report % '12'}):
+                partial = _bandit(root)
+            self.assertEqual(partial.status, 'pass')
+            self.assertIn('not scanned', partial.summary)
+            self.assertIn('packages', partial.summary)
+
     def test_secret_scan_still_fails_when_bandit_present(self) -> None:
         with project_copy(git=True) as root:
             fake_secret = 'abcde' * 5

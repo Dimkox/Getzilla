@@ -7,13 +7,13 @@ bindings, and adds only a source-pinned delivery handoff envelope.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
 import hashlib
 import json
 import re
-from typing import Any, ClassVar
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from typing import ClassVar
 
 from getzilla_factory.autonomy import (
     AutonomyProfileV1,
@@ -22,7 +22,6 @@ from getzilla_factory.autonomy import (
     PromotionRecommendationV1,
 )
 from getzilla_factory.contracts import ContractError as M8BoundaryError
-
 
 PROVISIONAL_M8_PRODUCER_SHA = "f53275d5ed84022200419b399c799a995ed91a45"
 M8AutonomyTupleV1 = AutonomyTupleV1
@@ -184,7 +183,7 @@ class M8DeliveryHandoffV1:
             _fail("m8_handoff.handoff_digest", "does not bind the handoff")
 
     @classmethod
-    def from_dict(cls, data: object) -> "M8DeliveryHandoffV1":
+    def from_dict(cls, data: object) -> M8DeliveryHandoffV1:
         _validate_json_bounds(data)
         if not isinstance(data, Mapping) or set(data) != {
             "schema_version",

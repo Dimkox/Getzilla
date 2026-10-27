@@ -11,6 +11,8 @@ import hashlib
 import json
 from dataclasses import asdict, is_dataclass
 
+from factory.tests.test_autonomy import valid_handoff_payload, valid_tuple_payload
+
 from getzilla_delivery.contracts import (
     DeliveryDecisionV1,
     DeliveryPromotionV1,
@@ -26,7 +28,6 @@ from getzilla_delivery.m8_boundary import (
     M8DeliveryHandoffV1,
     M8PromotionRecommendationV1,
 )
-from factory.tests.test_autonomy import valid_handoff_payload, valid_tuple_payload
 
 SYNTHETIC_EVALUATION_TIME = "2026-09-02T09:21:00Z"
 SYNTHETIC_DECISION_TIME = "2026-09-02T09:22:00Z"

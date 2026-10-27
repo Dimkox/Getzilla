@@ -646,7 +646,7 @@ class JobRunner:
             'TRUST_CI_POLICY_DIGEST': job.policy_digest,
             'TRUST_CI_HOLDOUT_DIGEST': self.policy.holdout.digest,
             'HOME': '/home/ci',
-            'TMPDIR': '/tmp',
+            'TMPDIR': '/tmp',  # nosec B108: private noexec tmpfs inside the sandbox container
             'PYTHONDONTWRITEBYTECODE': '1',
             'GIT_TERMINAL_PROMPT': '0',
             'NO_COLOR': '1',

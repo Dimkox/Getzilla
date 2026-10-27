@@ -60,7 +60,7 @@ class ContainerExecutor:
             '--cpus',
             _format_float(self.sandbox.cpus),
             '--tmpfs',
-            f'/tmp:rw,noexec,nosuid,nodev,size={self.sandbox.tmpfs_mb}m',
+            f'/tmp:rw,noexec,nosuid,nodev,size={self.sandbox.tmpfs_mb}m',  # nosec B108: container-private tmpfs
             '--tmpfs',
             '/run/trust-ci-tmp:rw,exec,nosuid,nodev,size=128m',
             '--tmpfs',

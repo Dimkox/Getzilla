@@ -92,7 +92,6 @@ class BackendObservationTests(unittest.TestCase):
             self.assertEqual("authentication", retained.observation.category)
 
     def test_v1_store_migrates_without_fabricating_historical_observations(self):
-        from getzilla_factory import landing_sqlite_store as module
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "state"
             store = SQLiteLandingJobStore(root, repository_root=Path(__file__).parents[2])
