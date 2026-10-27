@@ -176,6 +176,19 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
         self.assertEqual(git(self.project, 'rev-list', '--count', 'HEAD'), '3')
 
+    def test_retire_legacy_keeps_old_files_that_have_no_replacement(self) -> None:
+        # A vendored factory under its old name is live code when the update installs no new factory.
+        self._pre_rename()
+        (self.project / 'factory/src/adaptive_factory').mkdir(parents=True)
+        (self.project / 'factory/src/adaptive_factory/cli.py').write_text('live = 1\n', encoding='utf-8')
+        (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_text('{"sync": 1}\n', encoding='utf-8')
+        self.commit('vendored factory and sync log')
+        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        self.assertTrue((self.project / 'factory/src/adaptive_factory/cli.py').is_file())
+        self.assertIn('no Getzilla replacement', result)
+        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"sync": 1}\n')
+
     def test_a_test_that_imports_the_old_engine_is_reported_and_blocks_retirement(self) -> None:
         self._pre_rename()
         (self.project / 'tests').mkdir()
