@@ -368,9 +368,14 @@ def hint(root: Path, command: str, cwd: Path) -> str | None:
 
 # -- paths named in a task ------------------------------------------------------------------------
 
-_CAMEL = re.compile(r'\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b')
-_SNAKE = re.compile(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b')
-_FILE = re.compile(r'[\w.\-/]*\w\.(?:php|py|js|mjs|ts|tsx|jsx|json|ya?ml|md|sql|twig|css|scss|html|sh|toml|xml|ini|go|rs|java|kt|cs)\b')
+# Each pattern is matched against one bounded word at a time, so a pasted log or blob stays linear.
+_PROMPT_WORD = re.compile(r'[^\s`\'"(),;:<>\[\]{}]+')
+_CAMEL = re.compile(r'[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+')
+_SNAKE = re.compile(r'[a-z][a-z0-9]*(?:_[a-z0-9]+)+')
+_FILE = re.compile(r'[\w.\-/]*\w\.(?:php|py|js|mjs|ts|tsx|jsx|json|ya?ml|md|sql|twig|css|scss|html|sh|toml|xml|ini|go|rs|java|kt|cs)')
+MAX_PROMPT_CHARS = 20_000
+MAX_PROMPT_WORD = 200
+MAX_PROMPT_WORDS = 400
 MAX_PROMPT_NAMES = 12
 MAX_PATHS_PER_NAME = 3
 PROMPT_LOCATE = ('For any other file, locate it before reading (`rg --files | rg -i <name>`); '
@@ -421,22 +426,30 @@ def prompt_paths(root: Path, prompt: str) -> str:
     lib/X.php; that miss costs a model call. Giving the tracked paths up front removes the guess.
     """
     names: list[str] = []
-    for pattern in (_FILE, _CAMEL, _SNAKE):
-        for match in pattern.findall(prompt or ''):
-            if match not in names:
-                names.append(match)
-    names = names[:MAX_PROMPT_NAMES]
+    for word in _PROMPT_WORD.findall((prompt or '')[:MAX_PROMPT_CHARS])[:MAX_PROMPT_WORDS]:
+        word = word.strip('.')
+        if len(word) > MAX_PROMPT_WORD:
+            continue
+        for pattern in (_FILE, _CAMEL, _SNAKE):
+            if pattern.fullmatch(word) and word not in names:
+                names.append(word)
+                break
     if not names:
         return PROMPT_LOCATE
     files = _index(root)
     matched: list[tuple[str, list[str]]] = []
     for name in names:
-        if '/' in name and (root / name).is_file():
+        if len(matched) >= MAX_PROMPT_NAMES:
+            break
+        relative = PurePosixPath(name)
+        if '/' in name and not relative.is_absolute() and '..' not in relative.parts and (root / name).is_file():
             continue  # already a real path
-        lowered = PurePosixPath(name).name.lower()
-        stem = lowered if '.' not in lowered else None
-        same = [path for path in files
-                if (base := path.rsplit('/', 1)[-1].lower()) == lowered or (stem and base.split('.', 1)[0] == stem)]
+        if _FILE.fullmatch(name):
+            wanted = relative.name.lower()  # a file name: any case
+            same = [path for path in files if path.rsplit('/', 1)[-1].lower() == wanted]
+        else:
+            # A class or stem names a file only with the same spelling: GitHub is not github.py.
+            same = [path for path in files if path.rsplit('/', 1)[-1].split('.', 1)[0] == name]
         if same and all(same != seen for _, seen in matched):
             matched.append((name, same))
     if not matched:

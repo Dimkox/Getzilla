@@ -162,6 +162,17 @@ class PromptPathTests(unittest.TestCase):
         self.assertNotIn('vendor/other.php', text, 'a longer name is not a use')
         self.assertEqual(text.count(f'`{MODULE}/lib/SheetController.php`'), 1, 'one file named twice is listed once')
 
+    def test_a_pasted_blob_stays_fast_and_common_words_name_no_file(self) -> None:
+        (self.root / 'pilot').mkdir()
+        (self.root / 'pilot/github.py').write_text('x = 1\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        blob = 'a' * 80_000 + '.' + 'b/' * 20_000 + 'x' * 5000 + '.php ' + 'SheetController'
+        started = time.perf_counter()
+        prompt_paths(self.root, blob)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(prompt_paths(self.root, 'Push to GitHub with JavaScript tests'), PROMPT_LOCATE)
+        self.assertEqual(prompt_paths(self.root, 'Read /etc/passwd.md and ../../x.py'), PROMPT_LOCATE)
+
     def test_a_task_without_known_names_gets_only_the_locate_rule(self) -> None:
         self.assertEqual(prompt_paths(self.root, 'Make the README clearer for UnknownWidget'), PROMPT_LOCATE)
         self.assertEqual(prompt_paths(self.root, ''), PROMPT_LOCATE)
