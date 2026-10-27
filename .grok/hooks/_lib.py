@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import shlex
+import subprocess
 import sys
 import traceback
 from dataclasses import dataclass
@@ -836,7 +837,26 @@ def _file_tool_root(input_data: dict[str, Any], tool: str) -> tuple[str, Path] |
     if not path.is_absolute():
         return None
     recognized = _recognized_root(path)
-    return (raw, recognized) if recognized is not None else None
+    return (raw, recognized) if recognized is not None and _installed_root(recognized) else None
+
+
+def _installed_root(root: Path) -> bool:
+    """A real Getzilla install, not a `.getzilla` folder an agent made to borrow a root.
+
+    The root is a Git top level that commits its own `.getzilla/config/policy.json`, and it does not
+    sit inside another project's `.getzilla` tree (a scratch copy, or a fake folder in config/).
+    """
+    if '.getzilla' in root.parts or not (root / '.getzilla/config/policy.json').is_file():
+        return False
+    try:
+        top = subprocess.run(['git', '-C', str(root), 'rev-parse', '--show-toplevel'], capture_output=True,
+                             text=True, encoding='utf-8', errors='replace', timeout=5, check=False)
+        tracked = subprocess.run(['git', '-C', str(root), 'ls-files', '--error-unmatch', '--',
+                                  '.getzilla/config/policy.json'], capture_output=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return (top.returncode == 0 and tracked.returncode == 0
+            and Path(top.stdout.strip()).resolve() == root.resolve())
 
 
 def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str) -> RootContext:
@@ -852,7 +872,9 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
             session_root = _recognized_root(session_path if session_path.is_absolute() else Path.cwd() / session_path)
         # A file inside the session's repository stays under its rules, including a project copy
         # in that repository's scratch area; only a file outside it takes its own repository.
-        if session_root is None or not Path(file_root[0]).expanduser().resolve().is_relative_to(session_root):
+        outside = session_root is None or not Path(file_root[0]).expanduser().resolve().is_relative_to(session_root)
+        # A root that holds the session's own repository is never a second repository.
+        if outside and not (session_root is not None and session_root.is_relative_to(file_root[1])):
             return RootContext(session_cwd, session_root, {}, file_root[1], 'effective-root')
     session_paths: list[Path] = []
     session_roots: set[Path] = set()

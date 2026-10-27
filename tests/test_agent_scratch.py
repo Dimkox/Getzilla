@@ -57,7 +57,14 @@ class AgentScratchTests(unittest.TestCase):
                     allowed, reason = evaluate_pre_tool(root, event)
                     self.assertTrue(allowed, reason)
             for command in (f'git -C {copy} checkout -q HEAD -- .getzilla/getzilla/policy.py && git checkout -- .grok/hooks',
-                            'git checkout -q HEAD -- .getzilla/runtime/scratch/../../getzilla/policy.py'):
+                            'git checkout -q HEAD -- .getzilla/runtime/scratch/../../getzilla/policy.py',
+                            # Security review of #183: the target set by another option or a list file.
+                            f'git -C {copy} --work-tree=. checkout -q HEAD -- .grok/hooks/_lib.py',
+                            f'git --git-dir={copy}/.git --work-tree=. checkout -q HEAD -- .grok',
+                            f'git -C {copy} checkout-index -a --prefix=../../../../',
+                            f'xargs -a {copy}/list rm -f',
+                            f'cd {copy} && rm -rf .getzilla/getzilla',
+                            f'GIT_WORK_TREE=. git -C {copy} checkout -q HEAD -- .grok'):
                 with self.subTest(command=command):
                     allowed, _ = evaluate_pre_tool(root, bash(command))
                     self.assertFalse(allowed, 'a live control-plane path next to scratch stays refused')

@@ -99,6 +99,12 @@ class ReviewPlanTests(unittest.TestCase):
         self.assertEqual(binary['risk'], 'high')
         self.assertEqual(binary['risk_assessment']['profile_candidate'], 'full')
         self.assertIn({'rule': 'BINARY_FILE', 'path': 'assets/logo.png', 'risk': 'high'}, binary['risk_assessment']['reasons'])
+        # An executable or archive binary stays blocked: it runs or unpacks into code.
+        (self.root / 'assets/native.so').write_bytes(b'\x7fELF\0binary')
+        self.commit()
+        self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
+        git(self.root, 'rm', '-q', 'assets/native.so')
+        self.commit()
         # Source code that turned binary still cannot be read, so it stays incomplete.
         (self.root / 'app.py').write_bytes(b'\0binary')
         self.commit()

@@ -140,7 +140,11 @@ _HTTP_URL = re.compile(r'https?://[^\s"\']+', re.IGNORECASE)
 # starts or ends with a read verb (get_issue, searchConfluence, issue_read) and has no write verb
 # anywhere in it, so get_or_create_x and mark_all_notifications_read stay writes. Any other name,
 # including a verb that is not on a list (modify_x, pay_x, bulkCreate), needs an external-write grant.
-_READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'fetch', 'lookup', 'query', 'describe', 'download'})
+# query and fetch are not reads by default: a database query or an HTTP fetch can write.
+_READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'lookup', 'describe', 'download'})
+# Words that are nouns inside reads (get_check_run, pull_request_read) but writes as the first word
+# (run_query, request_download).
+_LEADING_WRITE_VERBS = frozenset({'run', 'request'})
 _WRITE_VERBS = frozenset({
     'create', 'update', 'delete', 'remove', 'write', 'modify', 'patch', 'put', 'replace', 'insert', 'upsert',
     'append', 'upload', 'send', 'publish', 'merge', 'revoke', 'grant', 'trash', 'archive', 'close', 'reopen',
@@ -158,6 +162,7 @@ _MCP_READ_TOOLS = {
     'Atlassian_MCP': frozenset({'atlassianUserInfo', 'executeRead'}),
 }
 _NAME_TOKEN = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+')
+_ASCII_NAME = re.compile(r'[A-Za-z0-9_.-]+')
 _GITHUB_NAME = re.compile(r'[A-Za-z0-9._-]+')
 
 
@@ -190,8 +195,10 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     known = _MCP_READ_TOOLS.get('github' if _mcp_github(tool) else server, frozenset())
     if action in known or action in _configured_mcp_reads(root, server):
         return False
+    if not _ASCII_NAME.fullmatch(action):
+        return True  # a look-alike letter must not split a write verb (get_dеlete)
     tokens = [token.lower() for token in _NAME_TOKEN.findall(action)]
-    if not tokens or any(token in _WRITE_VERBS for token in tokens):
+    if not tokens or tokens[0] in _LEADING_WRITE_VERBS or any(token in _WRITE_VERBS for token in tokens):
         return True
     return not (tokens[0] in _READ_VERBS or tokens[-1] in _READ_VERBS)
 

@@ -1674,7 +1674,8 @@ def _existing_quality_paths(root: Path) -> list[str]:
     if proc.returncode == 0:
         for rel in proc.stdout.split('\0'):
             # Dot directories hold generated hook mirrors and tool state, not product code.
-            if not rel or rel.startswith('.') or not (root / rel).is_file():
+            # A name that starts with '-' would read as an option of ruff or bandit.
+            if not rel or rel.startswith(('.', '-')) or not (root / rel).is_file():
                 continue
             top = rel.split('/', 1)[0]
             if top not in paths:
@@ -1689,7 +1690,7 @@ def _ruff(root: Path) -> CheckResult:
     if not command_exists('ruff'):
         return CheckResult('ruff', 'skip', 'ruff not available')
     # --force-exclude keeps the project's own exclude list in force for the paths named here.
-    result = _command_check(root, 'ruff', ['ruff', 'check', '--force-exclude', *paths], 300)
+    result = _command_check(root, 'ruff', ['ruff', 'check', '--force-exclude', '--', *paths], 300)
     if result.status == 'pass' and 'No Python files found' in result.stderr:
         return replace(result, status='skip', summary='ruff checked 0 files: the ruff configuration excludes every path')
     return result
@@ -1704,7 +1705,7 @@ def _bandit(root: Path) -> CheckResult:
     config = ['-c', 'bandit.yaml'] if (root / 'bandit.yaml').is_file() else []
     with tempfile.TemporaryDirectory(prefix='getzilla-bandit-') as tmp:
         report_path = Path(tmp) / 'bandit.json'
-        result = _command_check(root, 'bandit', ['bandit', *config, '-q', '-f', 'json', '-o', str(report_path), '-r', *paths], 300)
+        result = _command_check(root, 'bandit', ['bandit', *config, '-q', '-f', 'json', '-o', str(report_path), '-r', '--', *paths], 300)
         try:
             report = json.loads(report_path.read_text(encoding='utf-8'))
             lines = int(report['metrics']['_totals']['loc'])
@@ -1712,7 +1713,7 @@ def _bandit(root: Path) -> CheckResult:
             scanned = [name.removeprefix('./') for name in report['metrics'] if name != '_totals']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return result
-    if lines == 0:
+    if lines == 0 and result.status == 'pass':
         return replace(result, status='skip', summary='bandit scanned 0 lines: exclude_dirs in bandit.yaml covers every path')
     unscanned = [rel for rel in paths if not any(name == rel or name.startswith(rel + '/') for name in scanned)]
     if unscanned:

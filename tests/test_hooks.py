@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -284,6 +285,17 @@ class HookTests(unittest.TestCase):
             scratch_edit = {**payload, 'tool_input': {**payload['tool_input'], 'file_path': str(copy / target)}}
             _, data, error = run_hook(session_root, 'pre_tool_use.py', scratch_edit)
             self.assertEqual(data['decision'], 'allow', (data, error))
+            # Security review: a `.getzilla` folder an agent makes is not a repository root.
+            with tempfile.TemporaryDirectory() as outside:
+                (Path(outside) / '.getzilla').mkdir()
+                fake = {**payload, 'tool_input': {**payload['tool_input'], 'file_path': str(Path(outside) / 'x.py')}}
+                _, data, _ = run_hook(session_root, 'pre_tool_use.py', fake)
+                self.assertEqual(data['decision'], 'deny')
+            nested = file_root / '.getzilla/config/.getzilla'
+            nested.mkdir()
+            inside = {**payload, 'tool_input': {**payload['tool_input'], 'file_path': str(file_root / '.getzilla/config/policy.json')}}
+            _, data, _ = run_hook(session_root, 'pre_tool_use.py', inside)
+            self.assertEqual(data['decision'], 'deny', 'a nested fake root must not lift the real protection')
 
     def test_sensitive_external_and_protected_writes_cannot_borrow_session_grants(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:

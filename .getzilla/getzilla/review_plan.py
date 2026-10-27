@@ -18,6 +18,9 @@ DEFAULT_AUDITS = {
     'release': {'minimum_risk': 'medium', 'rules': ['DEPENDENCY_OR_CI', 'RELEASE_PATH']},
 }
 _SHA = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+# Binary files that run or unpack into code stay blocked; only inert assets take the full profile (#209).
+_EXECUTABLE_BINARY = ('.so', '.dll', '.dylib', '.exe', '.bin', '.pyc', '.pyo', '.class', '.jar', '.war', '.whl',
+                      '.egg', '.zip', '.tar', '.gz', '.tgz', '.bz2', '.xz', '.7z', '.rar', '.wasm', '.node', '.a', '.o')
 
 
 def _digest(value: Any) -> str:
@@ -126,9 +129,11 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                         modes.setdefault(name.decode('utf-8', 'strict'), set()).add(meta.split()[0])
             # A file Git itself calls binary (a PDF, an image) cannot be read line by line, so it takes
             # the full review profile; it no longer blocks delivery outright (#209). Any other
-            # unreadable row, or a binary that is not a regular file, stays an incomplete inventory.
+            # unreadable row, an executable or archive binary, or a binary that is not a regular
+            # file stays an incomplete inventory.
             for name in binaries:
-                if modes.get(name) and modes[name] <= {b'100644', b'100755'}:
+                executable = name.lower().endswith(_EXECUTABLE_BINARY) or b'100755' in modes.get(name, set())
+                if modes.get(name) and modes[name] <= {b'100644', b'100755'} and not executable:
                     reason = {'rule': 'BINARY_FILE', 'path': name, 'risk': 'high'}
                     if reason not in reasons:
                         reasons.append(reason)

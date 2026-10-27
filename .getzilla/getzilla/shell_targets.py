@@ -309,30 +309,57 @@ def _dynamic_target_mentions_control_plane(raw: str, patterns: list[str]) -> boo
     return False
 
 
-_WORD = re.compile(r'[^\s\'"=(:,>;&|)]+')
+# Git subcommands that write only inside the work tree they run in.
+_SCRATCH_GIT = frozenset({'checkout', 'switch', 'restore', 'reset', 'clean', 'status', 'diff', 'log', 'show',
+                          'init', 'add', 'commit', 'rev-parse', 'ls-files', 'cat-file', 'stash'})
+# Options that move a write somewhere else: another work tree or git dir, a prefix, an output file.
+_REDIRECTING = re.compile(r'^-(?:-work-tree|-git-dir|-prefix|-output|o$|-directory|c$|-config-env|-exec-path)', re.I)
 
 
-def _without_agent_scratch(root: Path, command: str) -> str:
-    """The command with every word that resolves inside the agent scratch area blanked out (#183).
+def _scratch_only(root: Path, command: str) -> bool:
+    """Whether the command only works on the agent's own copy in scratch (#183).
 
-    A reviewer's private copy there holds `.getzilla/...` paths of its own; naming it is not a
-    reference to the live control plane. Words are resolved, so `..` and symlinks cannot leave scratch.
+    Allowed forms: `cd <scratch>`, `git -C <scratch> <sub>` or `git <sub>` after that cd, with a
+    subcommand that writes only inside its work tree, and `rm` of scratch paths. No redirection,
+    pipe, expansion, environment assignment or option that sends a write elsewhere.
     """
-    from ._policy_legacy import AGENT_SCRATCH, agent_scratch
+    from ._policy_legacy import AGENT_SCRATCH, _simple_commands, agent_scratch
 
-    def blank(match: re.Match[str]) -> str:
-        word = match.group(0)
-        if AGENT_SCRATCH not in word:
-            return word
+    if re.search(r"[<>|`$=\\]", command):
+        return False
+
+    def inside(word: str) -> bool:
         rel = safe_relative_path(root, word.removeprefix('./'))
-        inside = rel is not None and rel.startswith(AGENT_SCRATCH + '/') and agent_scratch(root, rel)
-        return ' ' if inside else word
+        return rel is not None and rel.startswith(AGENT_SCRATCH + '/') and agent_scratch(root, rel)
 
-    return _WORD.sub(blank, command)
+    in_scratch = False
+    commands = _simple_commands(command)
+    for argv in commands:
+        if argv is None or not argv:
+            return False
+        name, rest = argv[0], argv[1:]
+        if name == 'cd' and len(rest) == 1 and inside(rest[0]):
+            in_scratch = True
+        elif name == 'git':
+            if len(rest) >= 2 and rest[0] == '-C' and inside(rest[1]):
+                rest = rest[2:]
+            elif not in_scratch:
+                return False
+            if not rest or rest[0] not in _SCRATCH_GIT or any(_REDIRECTING.match(arg) for arg in rest):
+                return False
+        elif name == 'rm':
+            paths = [arg for arg in rest if not arg.startswith('-')]
+            if not paths or not all(inside(path) for path in paths):
+                return False
+        else:
+            return False
+    return bool(commands)
 
 
 def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str]) -> bool:
-    normalized = _without_agent_scratch(root, command.replace('\\', '/'))
+    if _scratch_only(root, command):
+        return False
+    normalized = command.replace('\\', '/')
     absolute_root = root.resolve().as_posix().rstrip('/')
     for pattern in patterns:
         prefix = _literal_pattern_prefix(pattern)
