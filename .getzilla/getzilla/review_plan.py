@@ -110,10 +110,13 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
             stats = _git(root, 'diff', '--numstat', '-z', '--no-renames', '--no-textconv', '--no-ext-diff', base, head, '--').stdout
             if len(stats) > 4_194_304:
                 raise ValueError('changed inventory exceeds byte bound')
+            binaries = []
             for row in stats.split(b'\0'):
                 if row:
                     added, removed, name = row.split(b'\t', 2)
-                    if not added.isdigit() or not removed.isdigit():
+                    if added == removed == b'-':
+                        binaries.append(name.decode('utf-8', 'strict'))
+                    elif not added.isdigit() or not removed.isdigit():
                         gaps.append('BINARY_OR_UNKNOWN_INVENTORY')
             modes = {}
             for ref in (base, head):
@@ -121,6 +124,16 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                     if row:
                         meta, name = row.split(b'\t', 1)
                         modes.setdefault(name.decode('utf-8', 'strict'), set()).add(meta.split()[0])
+            # A file Git itself calls binary (a PDF, an image) cannot be read line by line, so it takes
+            # the full review profile; it no longer blocks delivery outright (#209). Any other
+            # unreadable row, or a binary that is not a regular file, stays an incomplete inventory.
+            for name in binaries:
+                if modes.get(name) and modes[name] <= {b'100644', b'100755'}:
+                    reason = {'rule': 'BINARY_FILE', 'path': name, 'risk': 'high'}
+                    if reason not in reasons:
+                        reasons.append(reason)
+                else:
+                    gaps.append('BINARY_OR_UNKNOWN_INVENTORY')
             for ref in (base, head):
                 raw = _document(root, ref, RULE_PATH)
                 rules = parse_rules(raw) if raw is not None else load_rules()

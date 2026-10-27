@@ -90,6 +90,16 @@ class ReviewPlanTests(unittest.TestCase):
         current = self.reconcile()
         self.assertEqual(current['risk'], 'high')
         self.assertIn('security_reviewer', current['review_agents'])
+        # A Git-identified binary asset takes the full profile instead of blocking delivery (#209).
+        (self.root / 'assets').mkdir()
+        (self.root / 'assets/logo.png').write_bytes(b'\x89PNG\0binary')
+        self.commit()
+        binary = self.reconcile()
+        self.assertEqual(binary['risk_assessment']['status'], 'complete', binary['risk_assessment']['gaps'])
+        self.assertEqual(binary['risk'], 'high')
+        self.assertEqual(binary['risk_assessment']['profile_candidate'], 'full')
+        self.assertIn({'rule': 'BINARY_FILE', 'path': 'assets/logo.png', 'risk': 'high'}, binary['risk_assessment']['reasons'])
+        # Source code that turned binary still cannot be read, so it stays incomplete.
         (self.root / 'app.py').write_bytes(b'\0binary')
         self.commit()
         self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
