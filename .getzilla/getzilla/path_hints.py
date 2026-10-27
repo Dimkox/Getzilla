@@ -377,6 +377,43 @@ PROMPT_LOCATE = ('For any other file, locate it before reading (`rg --files | rg
                  'never build a path from a naming habit.')
 
 
+_SOURCE_GLOBS = ('*.php', '*.py', '*.js', '*.mjs', '*.ts', '*.tsx', '*.jsx', '*.go', '*.rs', '*.java', '*.kt',
+                 '*.cs', '*.rb', '*.twig', '*.sql')
+MAX_RELATED = 5
+MAX_RELATED_FILES = 300
+
+
+def _is_test(path: str) -> bool:
+    base = path.rsplit('/', 1)[-1].lower()
+    return '/tests/' in f'/{path}' or '/test/' in f'/{path}' or base.startswith('test') or '_test.' in base or 'test.' in base
+
+
+def _related(root: Path, stems: dict[str, set[str]]) -> dict[str, list[str]]:
+    """Source files that name each stem as a whole word, except the stem's own files (one git grep, bounded)."""
+    terms = [stem for stem in stems if len(stem) >= 4]
+    if not terms:
+        return {}
+    argv = ['git', '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-w', '-F']
+    for term in terms:
+        argv += ['-e', term]
+    try:
+        proc = subprocess.run([*argv, '--', *_SOURCE_GLOBS], cwd=root, capture_output=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if proc.returncode not in (0, 1):
+        return {}
+    found: dict[str, list[str]] = {term: [] for term in terms}
+    for path in proc.stdout.decode('utf-8', 'replace').splitlines()[:MAX_RELATED_FILES]:
+        try:
+            text = (root / path).read_text(encoding='utf-8', errors='replace')[:1_000_000]
+        except OSError:
+            continue
+        for term in terms:
+            if path not in stems[term] and re.search(rf'(?<![\w$]){re.escape(term)}(?![\w])', text):
+                found[term].append(path)
+    return found
+
+
 def prompt_paths(root: Path, prompt: str) -> str:
     """Context for a new task: the real paths of the files and classes the task names.
 
@@ -392,7 +429,7 @@ def prompt_paths(root: Path, prompt: str) -> str:
     if not names:
         return PROMPT_LOCATE
     files = _index(root)
-    lines = []
+    matched: list[tuple[str, list[str]]] = []
     for name in names:
         if '/' in name and (root / name).is_file():
             continue  # already a real path
@@ -400,12 +437,26 @@ def prompt_paths(root: Path, prompt: str) -> str:
         stem = lowered if '.' not in lowered else None
         same = [path for path in files
                 if (base := path.rsplit('/', 1)[-1].lower()) == lowered or (stem and base.split('.', 1)[0] == stem)]
-        if not same:
-            continue
+        if same and all(same != seen for _, seen in matched):
+            matched.append((name, same))
+    if not matched:
+        return PROMPT_LOCATE
+    stems: dict[str, set[str]] = {}
+    for name, same in matched:
+        stems.setdefault(PurePosixPath(same[0]).name.split('.', 1)[0], set()).update(same)
+    related = _related(root, stems)
+    _record(root, 'named')
+    lines = []
+    for name, same in matched:
         shown = ', '.join(f'`{path}`' for path in same[:MAX_PATHS_PER_NAME])
         more = f' (+{len(same) - MAX_PATHS_PER_NAME} more)' if len(same) > MAX_PATHS_PER_NAME else ''
         lines.append(f'- {name}: {shown}{more}')
-    if not lines:
-        return PROMPT_LOCATE
+        users = related.get(PurePosixPath(same[0]).name.split('.', 1)[0], [])
+        tests = [path for path in users if _is_test(path)]
+        code = [path for path in users if not _is_test(path)]
+        for label, group in (('used in', code), ('tests', tests)):
+            if group:
+                extra = f' (+{len(group) - MAX_RELATED} more)' if len(group) > MAX_RELATED else ''
+                lines.append(f'  {label}: ' + ', '.join(f'`{path}`' for path in group[:MAX_RELATED]) + extra)
     return '\n'.join(['Getzilla: files this task names, by their real tracked paths (read these; do not guess):',
                       *lines, PROMPT_LOCATE])

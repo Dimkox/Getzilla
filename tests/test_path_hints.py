@@ -151,6 +151,17 @@ class PromptPathTests(unittest.TestCase):
         self.assertIn('`tests/php/test_sheet.php`', text)
         self.assertTrue(text.endswith(PROMPT_LOCATE))
 
+    def test_files_that_use_a_named_class_and_its_tests_are_listed(self) -> None:
+        (self.root / 'vendor/app.php').write_text('<?php new SheetController();\n', encoding='utf-8')
+        (self.root / 'tests/php/test_controller.php').write_text('<?php SheetController::run();\n', encoding='utf-8')
+        (self.root / 'vendor/other.php').write_text('<?php new SheetControllerFactory();\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        text = prompt_paths(self.root, 'Fix SheetController and lib/SheetController.php')
+        self.assertIn('  used in: `vendor/app.php`', text)
+        self.assertIn('  tests: `tests/php/test_controller.php`', text)
+        self.assertNotIn('vendor/other.php', text, 'a longer name is not a use')
+        self.assertEqual(text.count(f'`{MODULE}/lib/SheetController.php`'), 1, 'one file named twice is listed once')
+
     def test_a_task_without_known_names_gets_only_the_locate_rule(self) -> None:
         self.assertEqual(prompt_paths(self.root, 'Make the README clearer for UnknownWidget'), PROMPT_LOCATE)
         self.assertEqual(prompt_paths(self.root, ''), PROMPT_LOCATE)
