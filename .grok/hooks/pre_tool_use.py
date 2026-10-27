@@ -460,6 +460,20 @@ def _path_miss(current_tool: str, current_input: dict[str, Any], payload: dict[s
         return None
 
 
+def _unread_edit(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
+    """A patch that changes an existing file this session never read is refused (getzilla.read_ledger)."""
+    command = current_input.get('command')
+    if current_tool != 'apply_patch' or root is None or not isinstance(command, str):
+        return None
+    try:
+        from getzilla.path_hints import command_cwd
+        from getzilla.read_ledger import refusal
+        return refusal(root, session_id(payload), command, command_cwd(root, payload, current_input))
+    except Exception:
+        # The ledger is a guard against blind edits; when it cannot be read, the patch runs.
+        return None
+
+
 def _serial_batch(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
     """A serial batch of heavy commands is refused with the parallel command (getzilla.parallel)."""
     command = current_input.get('command')
@@ -537,6 +551,7 @@ def main() -> None:
                     raise
         if allowed:
             miss = (_path_miss(current_tool, current_input, payload, root)
+                    or _unread_edit(current_tool, current_input, payload, root)
                     or _serial_batch(current_tool, current_input, payload, root))
             emit(permission_output(miss is None, miss))
             return

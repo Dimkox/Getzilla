@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     if hints or guard:
         serial = ', '.join(f'{key} {value}' for key, value in sorted(guard.items()) if key != 'since') or '0'
         print(f'Path misses answered with real paths: {hints.get("refused", 0)} refused, {hints.get("hinted", 0)} hinted.')
+        print(f'Tasks given the real paths of the files they name: {hints.get("named", 0)}; '
+              f'patches refused because the file was not read first: {hints.get("edit_unread_refused", 0)}.')
         print(f'Serial batches sent to the parallel runner: {serial}.')
     return 0
 
