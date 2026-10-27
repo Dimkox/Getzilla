@@ -320,10 +320,11 @@ _REDIRECTING = re.compile(r'^-(?:-work-tree|-git-dir|-separate-git-dir|-template
 def _scratch_only(root: Path, command: str) -> bool:
     """Whether the command only works on the agent's own copy in scratch (#183).
 
-    Allowed forms: `cd <scratch copy>`, `git -C <scratch copy> <sub>` or `git <sub>` after that cd,
-    and `rm` of scratch paths. The copy must be its own Git repository, so Git never climbs into the
-    live one; the subcommand writes only inside its work tree; every path argument stays inside the
-    copy. No redirection, pipe, expansion, environment assignment or option that sends a write elsewhere.
+    Allowed forms: `git -C <scratch copy> <sub>`, or a command made only of `rm` of scratch paths. Each
+    git command names its copy itself: a `cd` that fails would leave it in the live repository. The copy
+    must be its own Git repository (a real `.git` folder), so Git never climbs into the live one; the
+    subcommand writes only inside its work tree; every path argument stays inside the copy. No
+    redirection, pipe, expansion, environment assignment or option that sends a write elsewhere.
     """
     from ._policy_legacy import AGENT_SCRATCH, _simple_commands, agent_scratch
 
@@ -337,23 +338,22 @@ def _scratch_only(root: Path, command: str) -> bool:
 
     def copy_dir(word: str) -> Path | None:
         rel = scratch_rel(word.removeprefix('./'), root)
-        return (root / rel) if rel is not None and (root / rel / '.git').exists() else None
+        git_dir = root / rel / '.git' if rel is not None else None
+        return (root / rel) if git_dir is not None and git_dir.is_dir() and not git_dir.is_symlink() else None
 
-    workdir: Path | None = None
     commands = _simple_commands(command)
+    names = {argv[0] for argv in commands if argv}
+    if 'rm' in names and names != {'rm'}:
+        return False  # removing a copy and then using it in the same command is never scratch-only
     for argv in commands:
         if argv is None or not argv:
             return False
         name, rest = argv[0], argv[1:]
-        if name == 'cd' and len(rest) == 1:
-            workdir = copy_dir(rest[0])
-            if workdir is None:
+        if name == 'git':
+            if len(rest) < 3 or rest[0] != '-C':
                 return False
-        elif name == 'git':
-            base = workdir
-            if len(rest) >= 2 and rest[0] == '-C':
-                base, rest = copy_dir(rest[1]), rest[2:]
-            if base is None or not rest or rest[0] not in _SCRATCH_GIT:
+            base, rest = copy_dir(rest[1]), rest[2:]
+            if base is None or rest[0] not in _SCRATCH_GIT:
                 return False
             for arg in rest[1:]:
                 if _REDIRECTING.match(arg) or arg.startswith(':'):
