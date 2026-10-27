@@ -23,6 +23,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -168,6 +169,10 @@ def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None
     return digests, (json.dumps(record, indent=2, sort_keys=True) + '\n').encode('utf-8'), accepted
 
 
+# Dated change evidence is a record of its day: it is listed, never rewritten, and never blocks retirement.
+HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[^/]+/evidence/')
+
+
 def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
                   incoming: set[str]) -> tuple[list[str], list[str], list[str]]:
     """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
@@ -185,7 +190,7 @@ def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
     retire = sorted(item['path'] for item in installer._legacy_migration(project)
                     if item['path'] in tree and replaced(item['path']))
     retired = set(retire)
-    found = git(project, 'grep', '-l', '-I', '-F', '-e', 'adaptive_grok', '-e', '.grok-stack/', 'HEAD', '--', '*.py')
+    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', '-e', 'adaptive_grok', '-e', '.grok-stack/', 'HEAD', '--', '*.py')
     importers = sorted({line.split(':', 1)[1] for line in found.stdout.splitlines() if ':' in line} - retired) \
         if found.returncode == 0 else []
     record = git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}')
@@ -321,6 +326,8 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         raise UpdateError(f'the pre-rename sync record is not valid JSON: {exc}') from exc
     if record is not None:
         changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
+    historical = [path for path in importers if HISTORICAL_EVIDENCE.match(path)]
+    importers = [path for path in importers if path not in historical]
     if retire and legacy and (importers or legacy_kept):
         raise UpdateError('the project still depends on the old engine; port these first, then retire it: '
                           + ', '.join(importers + legacy_kept))
@@ -332,6 +339,8 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
                      + ', '.join(legacy_kept))
     if importers:
         notes.append('these files import the old engine and need porting: ' + ', '.join(importers))
+    if historical:
+        notes.append(f'{len(historical)} dated evidence file(s) name the old engine; they stay as records of their day')
     unreplaced = [item['path'] for item in installer._legacy_migration(project)
                   if item['path'] in tree and item['path'] not in legacy]
     if unreplaced:

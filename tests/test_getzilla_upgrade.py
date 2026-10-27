@@ -189,6 +189,17 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / '.grok-stack').exists())
         self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"sync": 1}\n')
 
+    def test_dated_evidence_that_names_the_old_engine_does_not_block_retirement(self) -> None:
+        self._pre_rename()
+        evidence = self.project / 'engineering/changes/20261006-задача-1/evidence/probe.py'
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('from adaptive_grok import state\n', encoding='utf-8')
+        self.commit('dated evidence')
+        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        self.assertIn('dated evidence file(s)', result)
+        self.assertFalse((self.project / 'scripts/grok_route.py').exists())
+        self.assertTrue(evidence.is_file())
+
     def test_a_test_that_imports_the_old_engine_is_reported_and_blocks_retirement(self) -> None:
         self._pre_rename()
         (self.project / 'tests').mkdir()
