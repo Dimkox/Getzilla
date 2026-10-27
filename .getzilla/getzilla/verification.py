@@ -1581,7 +1581,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     except (OSError, ValueError) as exc:
         findings.append({'severity': 'error', 'code': 'historical-spec-migration-invalid', 'path': 'engineering/archived-change-specs.json', 'message': str(exc)})
     if gate and route and route.get('delivery_expected') and not active_rel and not exempt:
-        findings.append({'severity': 'error', 'code': 'active-spec-missing', 'path': '', 'message': 'PR/release validation requires an active typed spec.'})
+        findings.append({'severity': 'error', 'code': 'active-spec-missing', 'path': '', 'message': 'PR/release validation requires an active typed spec: run `getzilla change start --title <task>`, which writes the package and its spec (a diff admitted to the light lane needs none).'})
     for rel in sorted(selected):
         path = root / rel
         if not path.is_file():
