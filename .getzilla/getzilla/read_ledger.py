@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -123,7 +124,7 @@ def command_files(root: Path, command: str, cwd: Path) -> set[str]:
         previous = word
         for part in (word, word.split('=', 1)[-1]):
             if any(char in part for char in '*?['):
-                for match in glob.glob(str(part if os.path.isabs(part) else base / part))[:MAX_GLOB]:
+                for match in itertools.islice(glob.iglob(str(part if os.path.isabs(part) else base / part)), MAX_GLOB):
                     rel = _relative(root, match, base)
                     if rel:
                         found.add(rel)
