@@ -93,7 +93,7 @@ def record(root: Path, session: str, paths: set[str]) -> None:
             merged = [item for item in current if item not in paths] + fresh
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(f'{path.stem}.{os.getpid()}.tmp')
-            tmp.write_text(json.dumps({'seen': merged[-MAX_ENTRIES:]}) + '\n', encoding='utf-8')
+            tmp.write_text(json.dumps({'seen': merged[-MAX_ENTRIES:]}) + '\n', encoding='utf-8', newline='\n')
             os.replace(tmp, path)
         if new_session:
             _prune(path.parent)
