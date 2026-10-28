@@ -123,6 +123,17 @@ class ReadLedgerUnitTests(unittest.TestCase):
             printed = 'diff --git a/app/b.py b/app/b.py\n+++ b/app/c.py\napp/b.py:3:x\n'
             self.assertEqual(output_files(root, printed, root), {'app/b.py', 'app/c.py'})
 
+    def test_a_long_word_in_output_is_scanned_in_linear_time(self) -> None:
+        # Codex review of #222 consumers: a long base64 value made the old pattern quadratic.
+        import time
+        with project_copy(git=True) as root:
+            (root / 'app').mkdir()
+            (root / 'app/b.py').write_text('x\n', encoding='utf-8')
+            start = time.monotonic()
+            found = output_files(root, 'A' * 150_000 + ' app/b.py:1:x\n', root)
+            self.assertLess(time.monotonic() - start, 2.0)
+            self.assertEqual(found, {'app/b.py'})
+
     def test_command_files_and_patch_targets(self) -> None:
         with project_copy(git=True) as root:
             (root / 'a.py').write_text('x\n', encoding='utf-8')

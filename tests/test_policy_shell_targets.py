@@ -140,6 +140,7 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 'function f { cd docs; }; f; rm ../AGENTS.md', 'command -p cd docs && rm ../AGENTS.md',
                 'X=cd; eval "$X docs"; rm ../AGENTS.md',
                 'printf x >> .git/config.worktree',
+                'cd . > AGENTS.md', 'pushd . >> AGENTS.md',
             ):
                 allowed, reason = self.check(root, command)
                 self.assertFalse(allowed, f'{command}: {reason}')

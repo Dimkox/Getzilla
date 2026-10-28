@@ -26,7 +26,9 @@ MAX_OUTPUT = 200_000
 MAX_OUTPUT_WORDS = 2000
 MAX_GLOB = 200
 LEDGER_DAYS = 7
-_OUTPUT_PATH = re.compile(r'[\w.\-/]*[/.][\w.\-/]*\w')
+# Linear: take each run of path characters once (bounded), then keep those that look like a path.
+# An unanchored pattern that must find a dot or slash backtracked quadratically on long words.
+_OUTPUT_WORD = re.compile(r'[\w.\-/]{1,300}')
 _OPERATORS = {'&&', '||', ';', '|', '&'}
 _PATCH_TARGET = re.compile(r'^\*\*\* (Update|Delete|Add) File: (.+?)\s*$', re.MULTILINE)
 _PATCH_MOVE = re.compile(r'^\*\*\* Move to: (.+?)\s*$', re.MULTILINE)
@@ -138,7 +140,9 @@ def command_files(root: Path, command: str, cwd: Path) -> set[str]:
 def output_files(root: Path, output: str, cwd: Path) -> set[str]:
     """Repository files a command printed (rg/grep matches, git diff headers): the agent saw them."""
     found: set[str] = set()
-    words = list(dict.fromkeys(_OUTPUT_PATH.findall(output[:MAX_OUTPUT])))[:MAX_OUTPUT_WORDS]
+    runs = (word.rstrip('.-/') for word in _OUTPUT_WORD.findall(output[:MAX_OUTPUT]))
+    words = list(dict.fromkeys(word for word in runs if ('/' in word or '.' in word) and (word[-1:].isalnum()
+                               or word.endswith('_'))))[:MAX_OUTPUT_WORDS]
     for word in words:
         for candidate in (word, word[2:] if word[:2] in {'a/', 'b/'} else None):
             rel = _relative(root, candidate, cwd) if candidate else None
