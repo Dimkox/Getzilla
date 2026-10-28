@@ -1283,7 +1283,14 @@ _GIT_CONFIG_RUNS_CODE = re.compile(
     r'|core\.(?:hookspath|fsmonitor|sshcommand|worktree|editor|pager|askpass|gitproxy)'
     r'|(?:sequence\.editor|diff\.external|credential\.helper|gpg\.program|gpg\.\w+\.program)'
     r'|(?:diff|merge)\..+\.(?:textconv|command|driver)'
+    r'|credential\..*helper|core\.alternaterefscommand|remote\..+\.(?:uploadpack|receivepack)'
+    r'|gpg\.ssh\.defaultkeycommand|(?:mergetool|difftool)\..+\.cmd|pager\..+|sendemail\.sendmailcmd'
 )
+_GIT_CONFIG_VALUE_OPTIONS = frozenset({'-f', '--file', '--blob', '--type', '--default', '--comment', '--value'})
+_GIT_CONFIG_READS = frozenset({'get', 'list', 'get-regexp', 'get-urlmatch', 'get-color', 'get-colorbool',
+                               'unset', 'unset-all', 'remove-section', 'rename-section'})
+_GIT_CONFIG_READ_OPTIONS = frozenset({'--get', '--get-all', '--get-regexp', '-l', '--list', '--unset',
+                                      '--unset-all', '--remove-section', '--get-urlmatch'})
 
 
 def _git_config_defines_command(argv: list[str]) -> bool:
@@ -1292,10 +1299,24 @@ def _git_config_defines_command(argv: list[str]) -> bool:
     ``alias.*``/``include*`` make a later bare ``git <alias>`` run anything; hooks, filters, editors,
     fsmonitor and friends run a program inside an innocent-looking ``git commit`` or ``git status``.
     """
-    words = [word.lower() for word in argv[2:]]
+    words = [word.lower() for word in argv[_git_subcommand(argv)[1] + 1:]]
     if not any(_GIT_CONFIG_RUNS_CODE.fullmatch(word.split('=', 1)[0]) for word in words):
         return False
-    return not any(word in {'--get', '--get-all', '--get-regexp', '-l', '--list', 'get', 'list'} for word in words)
+    if any(word.split('=', 1)[0] in _GIT_CONFIG_READ_OPTIONS for word in words):
+        return False  # a read, or a removal that takes the program away
+    positional, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+        elif word in _GIT_CONFIG_VALUE_OPTIONS:
+            skip = True
+        elif not word.startswith('-'):
+            positional.append(word)
+    if positional[:1] and positional[0] in _GIT_CONFIG_READS:
+        return False
+    if positional[:1] == ['set']:
+        return True
+    return len(positional) >= 2 or any(word in {'--add', '--replace-all', '-e', '--edit'} for word in words)
 
 
 def _authority_token_is_dynamic(token: str) -> bool:

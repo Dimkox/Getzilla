@@ -44,11 +44,21 @@ def _shell_argv(chunk: str) -> list[str]:
         tokens = shlex.split(stripped)
     except ValueError:
         tokens = stripped.split()
+    # A group, subshell or compound keyword runs the command after it: `(rm x)`, `then rm x`.
+    while tokens and (tokens[0] in _SHELL_KEYWORDS or tokens[0][:1] in {'(', '{'}):
+        first = tokens[0].lstrip('({') if tokens[0] not in _SHELL_KEYWORDS else ''
+        tokens = ([first] if first else []) + tokens[1:]
+    if tokens:
+        last = tokens[-1].rstrip(')}')
+        tokens = tokens[:-1] + ([last] if last else [])
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
     while tokens and tokens[0].lower() in _WRAPPERS:
         tokens = tokens[1:]
     return tokens
+
+
+_SHELL_KEYWORDS = frozenset({'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'builtin', 'exec'})
 
 
 def _option_values(
@@ -262,6 +272,12 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
 
 
 _CD = frozenset({'cd', 'pushd'})
+# A directory change the tracker cannot follow: popd, `builtin cd`, a cd inside ( ), { }, if/then,
+# a nested shell, or `env -C`. After one, relative write targets are unknown (#214).
+_CD_ANYWHERE = re.compile(
+    r'(?:^|[\s;&|(){}!])(?:cd|pushd|popd|chdir)(?=$|[\s;&|)}])'
+    r'|\benv\b[^;&|\n]*\s(?:-C|--chdir)(?:\s|=|\S)',
+)
 
 
 def _chunks_with_operators(command: str) -> list[tuple[str, str]]:
@@ -315,13 +331,17 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
                 bases, unknown_base = bases | moved, unknown_base or moved_unknown
             pending = None
         inner = _unwrap_shell(chunk)
-        is_cd, directory = _cd_target(_shell_argv(inner))
-        if is_cd:
+        # Only a bare top-level cd is followed; `(cd x)`, `{ cd x; }` or `if cd x` end or branch elsewhere.
+        plain = inner == chunk and re.match(r'\s*(?:cd|pushd)\s', chunk) is not None and not re.search(r'[(){}]', chunk)
+        is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
+        if is_cd and len(_command_chunks(inner)) == 1:
             if directory is None:
                 pending = (set(bases), True)
             else:
                 pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
             continue
+        if not is_cd and _CD_ANYWHERE.search(inner):
+            unknown_base = True
         for piece in _command_chunks(inner):
             found: list[str] = []
             redirections = [
@@ -339,6 +359,7 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             elif signal:
                 mutation = True
                 unresolved = True
+                blind = blind or unknown_base
             for raw in found:
                 if not raw or raw.startswith('/') or any(marker in raw for marker in ('$', '`')):
                     targets.append(raw)
@@ -396,6 +417,12 @@ def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str
     return False
 
 
+def _git_code_path(rel: str) -> bool:
+    """A Git file that makes a later plain git command run a program (#214)."""
+    norm = posixpath.normpath(rel).lower()
+    return norm in {'.git/config', '.git/info/attributes'} or norm.startswith('.git/hooks/') or norm == '.git/hooks'
+
+
 def _control_plane_shell_mutation(
     root: Path,
     command: str,
@@ -411,7 +438,7 @@ def _control_plane_shell_mutation(
             dynamic_protected = dynamic_protected or _dynamic_target_mentions_control_plane(raw, patterns)
             continue
         rel = safe_relative_path(root, raw)
-        if rel is not None and _control_plane_target(rel, patterns):
+        if rel is not None and (_control_plane_target(rel, patterns) or _git_code_path(rel)):
             protected_targets.append(rel)
     if protected_targets:
         return list(dict.fromkeys(protected_targets)), False
@@ -439,8 +466,15 @@ def _unwrap_shell(chunk: str) -> str:
 
 
 _PROTECTED_REFS = frozenset({'main', 'master', 'refs/heads/main', 'refs/heads/master', 'heads/main', 'heads/master'})
-_BRANCH_REWRITE = frozenset({'-f', '--force', '-m', '-M', '--move', '-c', '-C', '--copy', '-d', '-D', '--delete'})
+_BRANCH_REWRITE = frozenset({'-f', '--force', '-m', '-M', '--move', '-d', '-D', '--delete'})
+_BRANCH_COPY = frozenset({'-c', '-C', '--copy'})
+_CREATE_RESET = frozenset({'-B', '-C', '--force-create'})
 _GIT_GLOBAL_VALUE = frozenset({'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'})
+
+
+def _protected(name: str) -> bool:
+    # Case-folded: on a case-insensitive filesystem Main is main.
+    return name.lstrip('+').lower() in _PROTECTED_REFS
 
 
 def _git_words(argv: list[str]) -> tuple[str | None, list[str]]:
@@ -449,32 +483,78 @@ def _git_words(argv: list[str]) -> tuple[str | None, list[str]]:
     index = 1
     while index < len(argv) and argv[index].startswith('-'):
         index += 2 if argv[index] in _GIT_GLOBAL_VALUE else 1
-    return (argv[index], argv[index + 1:]) if index < len(argv) else (None, [])
+    return (argv[index].lower(), argv[index + 1:]) if index < len(argv) else (None, [])
+
+
+def _split_options(rest: list[str], fused: str) -> list[tuple[str, str | None]]:
+    """(option, attached value) pairs and ('', positional); `-Bmain` and `--move=main` carry their value."""
+    words: list[tuple[str, str | None]] = []
+    for word in rest:
+        if word.startswith('--') and '=' in word:
+            option, value = word.split('=', 1)
+            words.append((option, value))
+        elif word.startswith('-') and not word.startswith('--') and len(word) > 2 and word[1] in fused:
+            words.append((word[:2], word[2:]))
+        elif word.startswith('-'):
+            words.append((word, None))
+        else:
+            words.append(('', word))
+    return words
+
+
+def _ref_move(sub: str, rest: list[str]) -> str | None:
+    words = _split_options(rest, 'BCcfmMdD')
+    options = {option for option, _ in words if option}
+    names = [value for option, value in words if not option and value is not None]
+    attached = [value for option, value in words if option and value]
+    if sub == 'update-ref':
+        if '--stdin' in options:
+            return 'main'
+        skipped, positional = False, []
+        for option, value in words:
+            if option == '-m' and value is None:
+                skipped = True
+            elif not option and value is not None:
+                if skipped:
+                    skipped = False
+                    continue
+                positional.append(value)
+        return next((n for n in positional[:1] if _protected(n)), None)
+    if sub == 'branch':
+        targets = names + attached
+        if options & _BRANCH_REWRITE:
+            return next((n for n in targets if _protected(n)), None)
+        if options & _BRANCH_COPY:
+            return next((n for n in targets[1:2] if _protected(n)), None)
+        return None
+    if sub in {'checkout', 'switch'} or (sub == 'worktree' and names[:1] == ['add']):
+        for index, (option, value) in enumerate(words):
+            if option in _CREATE_RESET or (sub == 'switch' and option in {'-c', '--create'}):
+                value = value if value is not None else (words[index + 1][1] if index + 1 < len(words) else None)
+                if value and _protected(value):
+                    return value
+        return None
+    if sub == 'fetch':
+        for name in names:
+            destination = name.partition(':')[2]
+            if destination and _protected(destination):
+                return destination
+        return None
+    if sub == 'symbolic-ref' and len(names) >= 2 and _protected(names[0]):
+        return names[0]
+    return None
 
 
 def protected_ref_move(command: str) -> str | None:
     """The protected branch a git command moves, renames or deletes locally (#214), else None.
 
     A moved local main changes the base every diff, review and verification compares against.
+    Commits and merges while main is checked out are not covered here.
     """
     for chunk, _ in _chunks_with_operators(command):
         for piece in _command_chunks(_unwrap_shell(chunk)):
             sub, rest = _git_words(_shell_argv(piece))
-            if sub is None:
-                continue
-            options = {word.split('=', 1)[0] for word in rest if word.startswith('-')}
-            names = [word for word in rest if not word.startswith('-')]
-            hit = None
-            if sub == 'update-ref':
-                hit = 'main' if '--stdin' in options else next((n for n in names[:1] if n in _PROTECTED_REFS), None)
-            elif sub == 'branch' and options & _BRANCH_REWRITE:
-                hit = next((n for n in names if n in _PROTECTED_REFS), None)
-            elif sub in {'checkout', 'switch'}:
-                for flag, value in zip(rest, rest[1:]):
-                    if flag in {'-B', '-C', '--force-create'} and value in _PROTECTED_REFS:
-                        hit = value
-            elif sub == 'symbolic-ref' and len(names) >= 2 and names[0] in _PROTECTED_REFS:
-                hit = names[0]
+            hit = _ref_move(sub, rest) if sub else None
             if hit:
                 return hit
     return None

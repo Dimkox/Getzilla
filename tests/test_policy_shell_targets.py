@@ -108,6 +108,59 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 allowed, reason = self.check(root, command)
                 self.assertTrue(allowed, f'{command}: {reason}')
 
+    def test_a_cd_the_tracker_cannot_follow_makes_relative_writes_blind(self):
+        with project_copy() as root:
+            (root / 'docs').mkdir(exist_ok=True)
+            for command in (
+                'pushd docs && popd && rm AGENTS.md',
+                '( cd docs; rm ../AGENTS.md )',
+                '{ cd docs; rm ../AGENTS.md; }',
+                'if cd docs; then rm ../AGENTS.md; fi',
+                'builtin cd docs && rm ../AGENTS.md',
+                'bash -c "cd docs && rm ../AGENTS.md"',
+                'env -C docs rm ../AGENTS.md',
+                'printf x >> .git/config',
+                'cp hook .git/hooks/pre-commit',
+                '(rm AGENTS.md)', 'cd docs && (rm ../AGENTS.md)', '(cd docs); rm AGENTS.md',
+                '{ rm AGENTS.md; }', 'if true; then rm AGENTS.md; fi',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            for command in ('(cd docs && ls)', 'bash -c "cd docs && ls"', 'cat .git/config'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
+    def test_every_spelling_of_a_protected_ref_move_is_refused(self):
+        with project_copy() as root:
+            for command in (
+                'git fetch . HEAD:main', 'git fetch origin +HEAD:refs/heads/main', 'git branch --move=main x',
+                'git checkout -Bmain', 'git checkout --force-create=main', 'git switch -cmain',
+                'git branch -fmain', 'git update-ref -m msg refs/heads/main HEAD', 'git worktree add -B main ../wt',
+                'git checkout -B Main', 'git branch -C feature main',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            for command in (
+                'git branch -c main main-copy', 'git branch --copy main backup', 'git fetch origin main',
+                'git update-ref -m main refs/heads/feature HEAD', 'git worktree add ../wt main',
+                'git branch -D feature/main-fix', 'git branch -m old new',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
+    def test_git_config_reads_and_removals_pass_and_more_code_keys_are_refused(self):
+        with project_copy() as root:
+            for command in ('git config core.pager', 'git config core.hooksPath', 'git config --unset core.hooksPath',
+                            'git config unset core.hooksPath', 'git config get core.editor'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+            for command in ('git config credential.https://x.helper ./h', 'git config core.alternateRefsCommand ./c',
+                            'git config remote.origin.uploadpack ./u', 'git config pager.log ./p',
+                            'git config set core.hooksPath h', 'git config --file .git/config core.editor ./e',
+                            'git config --add filter.x.smudge ./s'):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+
     def test_wrapper_retains_workflow_dispatch_forbidden_invariant(self):
         source = (ROOT / '.getzilla/getzilla/policy.py').read_text(encoding='utf-8')
         self.assertIn('workflow-dispatch', source)
