@@ -189,6 +189,39 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / '.grok-stack').exists())
         self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"sync": 1}\n')
 
+    def test_retirement_relies_on_the_engine_archive_and_a_log_already_moved(self) -> None:
+        # #215: the old engine module is replaced by the engine archive, not a module file, and a sync
+        # log already committed at the new path is kept as it is.
+        self._pre_rename()
+        (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_text('{"old": 1}\n', encoding='utf-8')
+        (self.project / '.getzilla/AGBP_SYNC.log.jsonl').write_text('{"new": 1}\n', encoding='utf-8')
+        self.commit('sync log at both paths')
+        upgrade.sync_project(ROOT, self.project, retire=True)
+        self.assertTrue((self.project / '.getzilla/getzilla.zip').is_file())
+        self.assertFalse((self.project / '.getzilla/getzilla/verification.py').exists())
+        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"new": 1}\n')
+
+    def test_accept_local_with_retire_legacy_removes_the_old_record(self) -> None:
+        self._pre_rename()
+        upgrade.sync_project(ROOT, self.project)
+        git(self.project, 'switch', '--quiet', 'main')
+        git(self.project, 'merge', '--quiet', '--ff-only', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
+        git(self.project, 'branch', '-D', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
+        (self.project / 'ruff.toml').write_text('line-length = 90\n', encoding='utf-8')
+        self.commit('change a kept file')
+        result = upgrade.sync_project(ROOT, self.project, accept=True, retire=True)
+        self.assertIn('kept your current ruff.toml', result)
+        self.assertFalse((self.project / '.grok-stack').exists())
+
+    def test_a_missing_record_alone_does_not_make_an_update_branch(self) -> None:
+        upgrade.sync_project(ROOT, self.project)
+        git(self.project, 'rm', '--quiet', '.getzilla/AGBP_SYNC.json')
+        self.commit('drop the record')
+        head = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+
     def test_dated_evidence_that_names_the_old_engine_does_not_block_retirement(self) -> None:
         self._pre_rename()
         evidence = self.project / 'engineering/changes/20261006-задача-1/evidence/probe.py'
