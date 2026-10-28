@@ -132,8 +132,18 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
         except FileExistsError:
+            try:
+                judged = lock.stat()
+            except FileNotFoundError:
+                continue
             if _stale_lock(lock):
                 try:
+                    # Another waiter may have removed the stale lock and taken a fresh one meanwhile:
+                    # remove only the file that was judged (#215).
+                    current = lock.stat()
+                    if (current.st_ino, current.st_dev, current.st_mtime_ns) != \
+                            (judged.st_ino, judged.st_dev, judged.st_mtime_ns):
+                        continue
                     lock.unlink()
                     continue
                 except FileNotFoundError:
