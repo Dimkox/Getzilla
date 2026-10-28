@@ -67,6 +67,47 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 allowed, reason = self.check(root, command)
                 self.assertTrue(allowed, f'{command}: {reason}')
 
+    def test_code_running_git_config_is_refused(self):
+        # #214: these keys make a later plain `git commit` or `git status` run a program.
+        with project_copy() as root:
+            for command in (
+                'git config core.hooksPath /tmp/h',
+                'git config --local filter.x.clean ./run',
+                'git config core.fsmonitor ./watch',
+                'git config core.sshCommand ./ssh',
+                'git config core.worktree ../other',
+                'git config diff.x.textconv ./conv',
+                'git config alias.ship push',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+                self.assertIn('code-running git config', reason or '')
+            for command in ('git config --get core.hooksPath', 'git config user.name Bot', 'git config --list'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
+    def test_moving_a_local_protected_branch_is_refused(self):
+        with project_copy() as root:
+            for command in (
+                'git update-ref refs/heads/main HEAD',
+                'git update-ref --stdin',
+                'git branch -f main HEAD~1',
+                'git branch -D master',
+                'git checkout -B main',
+                'git switch -C main origin/main',
+                'git symbolic-ref refs/heads/main refs/heads/feature',
+                'cd docs && git branch --force main HEAD',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+                self.assertIn('protected branch', reason or '')
+            for command in (
+                'git branch -f feature HEAD', 'git update-ref refs/heads/feature HEAD', 'git checkout -B topic',
+                'git branch main-copy', 'git symbolic-ref HEAD refs/heads/main', 'git checkout main',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
     def test_wrapper_retains_workflow_dispatch_forbidden_invariant(self):
         source = (ROOT / '.getzilla/getzilla/policy.py').read_text(encoding='utf-8')
         self.assertIn('workflow-dispatch', source)

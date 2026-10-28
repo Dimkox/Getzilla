@@ -1278,10 +1278,22 @@ def _is_authority(token: str) -> bool:
     return name in _AUTHORITY_EXECUTABLES or (name.startswith('git-') and len(name) > 4)
 
 
+_GIT_CONFIG_RUNS_CODE = re.compile(
+    r'(?:alias|include|includeif|filter)\..*'
+    r'|core\.(?:hookspath|fsmonitor|sshcommand|worktree|editor|pager|askpass|gitproxy)'
+    r'|(?:sequence\.editor|diff\.external|credential\.helper|gpg\.program|gpg\.\w+\.program)'
+    r'|(?:diff|merge)\..+\.(?:textconv|command|driver)'
+)
+
+
 def _git_config_defines_command(argv: list[str]) -> bool:
-    """``git config`` writing ``alias.*``/``include*`` (a later bare ``git <alias>`` would run anything)."""
+    """``git config`` writing a key that later runs code or moves the work tree (#214).
+
+    ``alias.*``/``include*`` make a later bare ``git <alias>`` run anything; hooks, filters, editors,
+    fsmonitor and friends run a program inside an innocent-looking ``git commit`` or ``git status``.
+    """
     words = [word.lower() for word in argv[2:]]
-    if not any(word.startswith(('alias.', 'include.', 'includeif.')) for word in words):
+    if not any(_GIT_CONFIG_RUNS_CODE.fullmatch(word.split('=', 1)[0]) for word in words):
         return False
     return not any(word in {'--get', '--get-all', '--get-regexp', '-l', '--list', 'get', 'list'} for word in words)
 
@@ -2638,7 +2650,7 @@ def evaluate_pre_tool(
         authority = analyze_command_authority(command)
         if authority.ambiguous or (authority.actions and not authority.context_proven):
             return False, (
-                'Ambiguous production authority (alias definition, nested or dynamic command): spell the git/gh/'
+                'Ambiguous production authority (alias or code-running git config, nested or dynamic command): spell the git/gh/'
                 'docker/npm operation literally at the top level so it can be matched to an exact grant.'
             )
         for action in authority.actions:

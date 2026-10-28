@@ -438,4 +438,46 @@ def _unwrap_shell(chunk: str) -> str:
 
 
 
+_PROTECTED_REFS = frozenset({'main', 'master', 'refs/heads/main', 'refs/heads/master', 'heads/main', 'heads/master'})
+_BRANCH_REWRITE = frozenset({'-f', '--force', '-m', '-M', '--move', '-c', '-C', '--copy', '-d', '-D', '--delete'})
+_GIT_GLOBAL_VALUE = frozenset({'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'})
+
+
+def _git_words(argv: list[str]) -> tuple[str | None, list[str]]:
+    if not argv or Path(argv[0]).name.lower() not in {'git', 'git.exe'}:
+        return None, []
+    index = 1
+    while index < len(argv) and argv[index].startswith('-'):
+        index += 2 if argv[index] in _GIT_GLOBAL_VALUE else 1
+    return (argv[index], argv[index + 1:]) if index < len(argv) else (None, [])
+
+
+def protected_ref_move(command: str) -> str | None:
+    """The protected branch a git command moves, renames or deletes locally (#214), else None.
+
+    A moved local main changes the base every diff, review and verification compares against.
+    """
+    for chunk, _ in _chunks_with_operators(command):
+        for piece in _command_chunks(_unwrap_shell(chunk)):
+            sub, rest = _git_words(_shell_argv(piece))
+            if sub is None:
+                continue
+            options = {word.split('=', 1)[0] for word in rest if word.startswith('-')}
+            names = [word for word in rest if not word.startswith('-')]
+            hit = None
+            if sub == 'update-ref':
+                hit = 'main' if '--stdin' in options else next((n for n in names[:1] if n in _PROTECTED_REFS), None)
+            elif sub == 'branch' and options & _BRANCH_REWRITE:
+                hit = next((n for n in names if n in _PROTECTED_REFS), None)
+            elif sub in {'checkout', 'switch'}:
+                for flag, value in zip(rest, rest[1:]):
+                    if flag in {'-B', '-C', '--force-create'} and value in _PROTECTED_REFS:
+                        hit = value
+            elif sub == 'symbolic-ref' and len(names) >= 2 and names[0] in _PROTECTED_REFS:
+                hit = names[0]
+            if hit:
+                return hit
+    return None
+
+
 control_plane_shell_mutation = _control_plane_shell_mutation

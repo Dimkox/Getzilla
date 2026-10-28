@@ -20,7 +20,7 @@ from ._policy_legacy import (
     shell_secret_reference as _legacy_shell_secret_reference,
     _COMMAND_SCAN_BYTE_LIMIT as _LEGACY_COMMAND_LIMIT,
 )
-from .shell_targets import control_plane_shell_mutation
+from .shell_targets import control_plane_shell_mutation, protected_ref_move
 
 WORKFLOW_DISPATCH_POLICY = 'workflow-dispatch is forbidden'
 
@@ -128,6 +128,12 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
             'Blocked opaque control-plane shell mutation; split the command or use Edit/Write/apply_patch '
             'so targets are explicit repository-relative paths. Do not create a protected-path grant until '
             'the exact targets are known.' + hint
+        )
+    moved = protected_ref_move(command)
+    if moved:
+        return False, (
+            f'Blocked a local move, rename or delete of protected branch {moved}: diffs, reviews and '
+            'verification compare against it. Work on your own branch; main changes only through a merged PR.'
         )
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.
