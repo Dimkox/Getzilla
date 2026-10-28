@@ -47,6 +47,26 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 allowed, reason = self.check(root, command)
                 self.assertFalse(allowed, f'{command}: {reason}')
 
+    def test_a_cd_moves_the_base_of_later_targets(self):
+        # #214: a target after `cd` is read from the directory the shell is in, not the repository root.
+        with project_copy() as root:
+            (root / 'docs').mkdir(exist_ok=True)
+            (root / 'docs/notes.md').write_text('x', encoding='utf-8')
+            denied = (
+                'cd docs && rm -rf ../.getzilla/config',
+                'cd .grok && rm hooks/_lib.py',
+                'cd docs; rm ../AGENTS.md',
+                'cd docs || rm AGENTS.md',
+                'cd "$X" && rm notes.md',
+                'cd ~ && rm notes.md',
+            )
+            for command in denied:
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            for command in ('cd docs && rm notes.md', 'rm docs/notes.md', 'cd docs && ls'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
     def test_wrapper_retains_workflow_dispatch_forbidden_invariant(self):
         source = (ROOT / '.getzilla/getzilla/policy.py').read_text(encoding='utf-8')
         self.assertIn('workflow-dispatch', source)

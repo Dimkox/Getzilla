@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 import re
 import shlex
 from pathlib import Path
 
 from ._policy_legacy import (
     _command_chunks,
+    _shell_tokens,
     _GLOB_META,
     _SHELL_MUTATION_SIGNAL,
     _SHELL_REDIRECTION,
@@ -259,29 +261,92 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
     return None
 
 
-def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, bool]:
+_CD = frozenset({'cd', 'pushd'})
+
+
+def _chunks_with_operators(command: str) -> list[tuple[str, str]]:
+    """(chunk, operator before it); the first chunk has ''. Malformed text is one chunk."""
+    try:
+        tokens = _shell_tokens(command)
+    except ValueError:
+        return [(command, '')] if command.strip() else []
+    chunks: list[tuple[str, str]] = []
+    start, operator = 0, ''
+    for token in tokens:
+        if token.operator and token.value in {'&&', '||', ';', ';;', ';&', ';;&', '|', '|&', '&', '\n'}:
+            if command[start:token.start].strip():
+                chunks.append((command[start:token.start], operator))
+            start, operator = token.end, token.value
+    if command[start:].strip():
+        chunks.append((command[start:], operator))
+    return chunks
+
+
+def _cd_target(argv: list[str]) -> tuple[bool, str | None]:
+    """(is a cd, its literal directory or None when the shell decides it: no argument, -, ~, $, globs)."""
+    if not argv or argv[0] not in _CD:
+        return False, None
+    args = [arg for arg in argv[1:] if arg not in {'-P', '-L', '--'}]
+    if len(args) != 1 or args[0] == '-' or re.search(r'[$`~*?\[{]', args[0]):
+        return True, None
+    return True, args[0]
+
+
+def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, bool, bool]:
+    """Mutation targets, each read from every directory the command can be in at that point (#214).
+
+    `cd X && cmd` runs cmd in X; `cd X; cmd` runs it in X or, if cd failed, where it was; `cd X || cmd`
+    runs it only where it was. A cd whose directory the shell decides makes later relative targets unknown,
+    reported as the fourth value (blind).
+    """
     targets: list[str] = []
     mutation = False
     unresolved = False
-    for chunk in _command_chunks(command):
+    blind = False
+    bases: set[str] = {''}
+    unknown_base = False
+    pending: tuple[set[str], bool] | None = None
+    for chunk, operator in _chunks_with_operators(command):
+        if pending is not None:
+            moved, moved_unknown = pending
+            if operator == '&&':
+                bases, unknown_base = moved, moved_unknown
+            elif operator != '||':
+                bases, unknown_base = bases | moved, unknown_base or moved_unknown
+            pending = None
         inner = _unwrap_shell(chunk)
+        is_cd, directory = _cd_target(_shell_argv(inner))
+        if is_cd:
+            if directory is None:
+                pending = (set(bases), True)
+            else:
+                pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
+            continue
         for piece in _command_chunks(inner):
+            found: list[str] = []
             redirections = [
                 match.group('target').strip('"\'')
                 for match in _SHELL_REDIRECTION.finditer(piece)
             ]
             if redirections:
                 mutation = True
-                targets.extend(redirections)
+                found.extend(redirections)
             signal = _SHELL_MUTATION_SIGNAL.search(piece) is not None
             argv_targets = _argv_mutation_targets(root, _shell_argv(piece))
             if argv_targets is not None:
                 mutation = True
-                targets.extend(argv_targets)
+                found.extend(argv_targets)
             elif signal:
                 mutation = True
                 unresolved = True
-    return list(dict.fromkeys(targets)), mutation, unresolved
+            for raw in found:
+                if not raw or raw.startswith('/') or any(marker in raw for marker in ('$', '`')):
+                    targets.append(raw)
+                elif unknown_base:
+                    unresolved = blind = True
+                else:
+                    targets.extend(posixpath.join(base, raw) if base else raw for base in sorted(bases))
+    return list(dict.fromkeys(targets)), mutation, unresolved, blind
 
 
 def _control_plane_target(path: str, patterns: list[str]) -> bool:
@@ -336,7 +401,7 @@ def _control_plane_shell_mutation(
     command: str,
     patterns: list[str],
 ) -> tuple[list[str], bool]:
-    raw_targets, mutation, unresolved = _shell_mutation_targets(root, command)
+    raw_targets, mutation, unresolved, blind = _shell_mutation_targets(root, command)
     protected_targets: list[str] = []
     dynamic_protected = False
     for raw in raw_targets:
@@ -350,7 +415,8 @@ def _control_plane_shell_mutation(
             protected_targets.append(rel)
     if protected_targets:
         return list(dict.fromkeys(protected_targets)), False
-    if dynamic_protected:
+    if dynamic_protected or blind:
+        # A write after a cd into a directory the shell decides could land anywhere (#214).
         return [], True
     return [], mutation and unresolved and _opaque_control_plane_reference(root, command, patterns)
 
