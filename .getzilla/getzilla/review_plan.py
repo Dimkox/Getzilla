@@ -132,7 +132,10 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
             # unreadable row, an executable or archive binary, or a binary that is not a regular
             # file stays an incomplete inventory.
             for name in binaries:
-                executable = name.lower().endswith(_EXECUTABLE_BINARY) or b'100755' in modes.get(name, set())
+                # A binary with no extension is a program as often as not, whatever its mode (#215).
+                extensionless = '.' not in name.rsplit('/', 1)[-1].lstrip('.')
+                executable = (name.lower().endswith(_EXECUTABLE_BINARY) or extensionless
+                              or b'100755' in modes.get(name, set()))
                 if modes.get(name) and modes[name] <= {b'100644', b'100755'} and not executable:
                     reason = {'rule': 'BINARY_FILE', 'path': name, 'risk': 'high'}
                     if reason not in reasons:

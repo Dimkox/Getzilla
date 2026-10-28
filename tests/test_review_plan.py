@@ -105,6 +105,12 @@ class ReviewPlanTests(unittest.TestCase):
         self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
         git(self.root, 'rm', '-q', 'assets/native.so')
         self.commit()
+        # A binary without an extension may be a program even with mode 100644 (#215).
+        (self.root / 'assets/tool').write_bytes(b'\x7fELF\0binary')
+        self.commit()
+        self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
+        git(self.root, 'rm', '-q', 'assets/tool')
+        self.commit()
         # Source code that turned binary still cannot be read, so it stays incomplete.
         (self.root / 'app.py').write_bytes(b'\0binary')
         self.commit()

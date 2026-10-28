@@ -175,6 +175,16 @@ def _ledger_reason(action: str) -> str:
     return f'Action {action} denied by repository policy.'
 
 
+def _grants_digest(context: RootContext) -> str | None:
+    root = context.ledger_root
+    if root is None:
+        return None
+    try:
+        return hashlib.sha256((Path(root) / '.getzilla/runtime/approvals.json').read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _denial_fingerprints(
     session: str,
     tool: str,
@@ -187,6 +197,8 @@ def _denial_fingerprints(
         'session_root': str(context.session_root) if context.session_root else None,
         'effective_root': str(context.effective_root) if context.effective_root else None,
         'resolution_status': context.resolution_status,
+        # A grant recorded after a denial makes the retry a new attempt, not a blind repeat.
+        'grants_sha256': _grants_digest(context),
     }
     exact = _fingerprint({
         'session_id': session,

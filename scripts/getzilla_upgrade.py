@@ -313,8 +313,12 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs)
         tree = head_tree(project)
         fresh_record = sync_record(installer, project, tree) if record is None else None
-        if fresh_record is not None:
+        # A fresh empty record alone is not an update: it rides along with the next real change (#215).
+        if fresh_record is not None and (changes or fresh_record != installer.FRESH_SYNC_RECORD):
             changes.append((installer.STACK_SYNC_RECORD, fresh_record, '100644'))
+        if record is not None:
+            # Before the legacy report, so the old record counts as replaced (#215).
+            changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
         # The sync history log moves with the record, so the old stack folder can go.
         old_log = installer.LEGACY_STACK_DIR + '/AGBP_SYNC.log.jsonl'
         if old_log in tree and installer.legacy_to_current_path(old_log) not in tree:
@@ -329,8 +333,6 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         raise UpdateError(f'{exc}{hint}') from exc
     except json.JSONDecodeError as exc:
         raise UpdateError(f'the pre-rename sync record is not valid JSON: {exc}') from exc
-    if record is not None:
-        changes.append((installer.STACK_SYNC_RECORD, record, '100644'))
     historical = [path for path in importers if HISTORICAL_EVIDENCE.match(path)]
     importers = [path for path in importers if path not in historical]
     if retire and legacy and (importers or legacy_kept):

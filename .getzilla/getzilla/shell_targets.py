@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 import re
 import shlex
 from pathlib import Path
 
 from ._policy_legacy import (
     _command_chunks,
+    _shell_tokens,
     _GLOB_META,
     _SHELL_MUTATION_SIGNAL,
     _SHELL_REDIRECTION,
@@ -42,11 +44,21 @@ def _shell_argv(chunk: str) -> list[str]:
         tokens = shlex.split(stripped)
     except ValueError:
         tokens = stripped.split()
+    # A group, subshell or compound keyword runs the command after it: `(rm x)`, `then rm x`.
+    while tokens and (tokens[0] in _SHELL_KEYWORDS or tokens[0][:1] in {'(', '{'}):
+        first = tokens[0].lstrip('({') if tokens[0] not in _SHELL_KEYWORDS else ''
+        tokens = ([first] if first else []) + tokens[1:]
+    if tokens:
+        last = tokens[-1].rstrip(')}')
+        tokens = tokens[:-1] + ([last] if last else [])
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
     while tokens and tokens[0].lower() in _WRAPPERS:
         tokens = tokens[1:]
     return tokens
+
+
+_SHELL_KEYWORDS = frozenset({'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'builtin', 'exec'})
 
 
 def _option_values(
@@ -259,29 +271,123 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
     return None
 
 
-def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, bool]:
+_CD = frozenset({'cd', 'pushd'})
+_DIRECTORY_WORDS = frozenset({'cd', 'pushd', 'popd', 'chdir'})
+_CODE_CD = re.compile(r'(?:^|[\s;&|(){}])(?:cd|pushd|popd|chdir)(?=$|[\s;&|)}])')
+
+
+def _moves_directory(argv: list[str]) -> bool:
+    """A command in command position that changes directory: cd/pushd/popd, `env -C`, or eval of one (#214)."""
+    if not argv:
+        return False
+    name = argv[0]
+    # Also after a case pattern `a)`, a function body `f() {`, `function f {` or `command -p`.
+    for index, word in enumerate(argv):
+        if word in _DIRECTORY_WORDS and (index == 0 or argv[index - 1].endswith((')', '{'))
+                                         or argv[index - 1] in {'command', '-p', 'builtin'}):
+            return True
+    if name == 'env':
+        return any(arg in {'-C', '--chdir'} or arg.startswith(('--chdir=', '-C')) for arg in argv[1:])
+    if name == 'eval':
+        text = ' '.join(argv[1:])
+        return _CODE_CD.search(text) is not None or '$' in text or '`' in text
+    return False
+
+
+def _chunks_with_operators(command: str) -> list[tuple[str, str]]:
+    """(chunk, operator before it); the first chunk has ''. Malformed text is one chunk."""
+    try:
+        tokens = _shell_tokens(command)
+    except ValueError:
+        return [(command, '')] if command.strip() else []
+    chunks: list[tuple[str, str]] = []
+    start, operator = 0, ''
+    for token in tokens:
+        if token.operator and token.value in {'&&', '||', ';', ';;', ';&', ';;&', '|', '|&', '&', '\n'}:
+            if command[start:token.start].strip():
+                chunks.append((command[start:token.start], operator))
+            start, operator = token.end, token.value
+    if command[start:].strip():
+        chunks.append((command[start:], operator))
+    return chunks
+
+
+def _cd_target(argv: list[str]) -> tuple[bool, str | None]:
+    """(is a cd, its literal directory or None when the shell decides it: no argument, -, ~, $, globs)."""
+    if not argv or argv[0] not in _CD:
+        return False, None
+    args = [arg for arg in argv[1:] if arg not in {'-P', '-L', '--'}]
+    # `-`, `pushd +1`/`-1` (a stack rotation), `~`, `$X` and globs: the shell picks the directory.
+    if len(args) != 1 or args[0][:1] in {'-', '+'} or re.search(r'[$`~*?\[{]', args[0]):
+        return True, None
+    return True, args[0]
+
+
+def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, bool, bool]:
+    """Mutation targets, each read from every directory the command can be in at that point (#214).
+
+    `cd X && cmd` runs cmd in X; `cd X; cmd` runs it in X or, if cd failed, where it was; `cd X || cmd`
+    runs it only where it was. A cd whose directory the shell decides makes later relative targets unknown,
+    reported as the fourth value (blind).
+    """
     targets: list[str] = []
     mutation = False
     unresolved = False
-    for chunk in _command_chunks(command):
+    blind = False
+    bases: set[str] = {''}
+    unknown_base = False
+    pending: tuple[set[str], bool] | None = None
+    for chunk, operator in _chunks_with_operators(command):
+        if pending is not None:
+            moved, moved_unknown = pending
+            if operator == '&&':
+                bases, unknown_base = moved, moved_unknown
+            elif operator != '||':
+                bases, unknown_base = bases | moved, unknown_base or moved_unknown
+            pending = None
         inner = _unwrap_shell(chunk)
+        # Only a top-level cd (also quoted, 'cd' or \\cd) is followed; `(cd x)`, `{ cd x; }`, `if cd x` or
+        # a nested shell end or branch elsewhere, so they make later relative targets unknown.
+        try:
+            first = shlex.split(chunk.strip())[:1]
+        except ValueError:
+            first = []
+        plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
+        is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
+        if is_cd and len(_command_chunks(inner)) == 1:
+            if directory is None:
+                pending = (set(bases), True)
+            else:
+                pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
+            continue
         for piece in _command_chunks(inner):
+            if _moves_directory(_shell_argv(piece)):
+                unknown_base = True
+            found: list[str] = []
             redirections = [
                 match.group('target').strip('"\'')
                 for match in _SHELL_REDIRECTION.finditer(piece)
             ]
             if redirections:
                 mutation = True
-                targets.extend(redirections)
+                found.extend(redirections)
             signal = _SHELL_MUTATION_SIGNAL.search(piece) is not None
             argv_targets = _argv_mutation_targets(root, _shell_argv(piece))
             if argv_targets is not None:
                 mutation = True
-                targets.extend(argv_targets)
+                found.extend(argv_targets)
             elif signal:
                 mutation = True
                 unresolved = True
-    return list(dict.fromkeys(targets)), mutation, unresolved
+                blind = blind or unknown_base
+            for raw in found:
+                if not raw or raw.startswith('/') or any(marker in raw for marker in ('$', '`')):
+                    targets.append(raw)
+                elif unknown_base:
+                    unresolved = blind = True
+                else:
+                    targets.extend(posixpath.join(base, raw) if base else raw for base in sorted(bases))
+    return list(dict.fromkeys(targets)), mutation, unresolved, blind
 
 
 def _control_plane_target(path: str, patterns: list[str]) -> bool:
@@ -331,12 +437,19 @@ def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str
     return False
 
 
+def _git_code_path(rel: str) -> bool:
+    """A Git file that makes a later plain git command run a program (#214)."""
+    norm = posixpath.normpath(rel).lower()
+    return (norm in {'.git/config', '.git/config.worktree', '.git/info/attributes', '.git/hooks'}
+            or norm.startswith('.git/hooks/'))
+
+
 def _control_plane_shell_mutation(
     root: Path,
     command: str,
     patterns: list[str],
 ) -> tuple[list[str], bool]:
-    raw_targets, mutation, unresolved = _shell_mutation_targets(root, command)
+    raw_targets, mutation, unresolved, blind = _shell_mutation_targets(root, command)
     protected_targets: list[str] = []
     dynamic_protected = False
     for raw in raw_targets:
@@ -346,11 +459,12 @@ def _control_plane_shell_mutation(
             dynamic_protected = dynamic_protected or _dynamic_target_mentions_control_plane(raw, patterns)
             continue
         rel = safe_relative_path(root, raw)
-        if rel is not None and _control_plane_target(rel, patterns):
+        if rel is not None and (_control_plane_target(rel, patterns) or _git_code_path(rel)):
             protected_targets.append(rel)
     if protected_targets:
         return list(dict.fromkeys(protected_targets)), False
-    if dynamic_protected:
+    if dynamic_protected or blind:
+        # A write after a cd into a directory the shell decides could land anywhere (#214).
         return [], True
     return [], mutation and unresolved and _opaque_control_plane_reference(root, command, patterns)
 
@@ -370,6 +484,107 @@ def _unwrap_shell(chunk: str) -> str:
     return rest
 
 
+
+
+_PROTECTED_REFS = frozenset({'main', 'master', 'refs/heads/main', 'refs/heads/master', 'heads/main', 'heads/master'})
+_BRANCH_REWRITE = frozenset({'-f', '--force', '-m', '-M', '--move', '-d', '-D', '--delete'})
+_BRANCH_COPY = frozenset({'-c', '-C', '--copy'})
+_CREATE_RESET = frozenset({'-B', '-C', '--force-create'})
+_GIT_GLOBAL_VALUE = frozenset({'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'})
+
+
+def _protected(name: str) -> bool:
+    # Case-folded: on a case-insensitive filesystem Main is main.
+    return name.lstrip('+').lower() in _PROTECTED_REFS
+
+
+def _git_words(argv: list[str]) -> tuple[str | None, list[str]]:
+    if not argv or Path(argv[0]).name.lower() not in {'git', 'git.exe'}:
+        return None, []
+    index = 1
+    while index < len(argv) and argv[index].startswith('-'):
+        index += 2 if argv[index] in _GIT_GLOBAL_VALUE else 1
+    return (argv[index].lower(), argv[index + 1:]) if index < len(argv) else (None, [])
+
+
+def _split_options(rest: list[str], fused: str) -> list[tuple[str, str | None]]:
+    """(option, attached value) pairs and ('', positional); `-Bmain` and `--move=main` carry their value."""
+    words: list[tuple[str, str | None]] = []
+    for word in rest:
+        if word.startswith('--') and '=' in word:
+            option, value = word.split('=', 1)
+            words.append((option, value))
+        elif word.startswith('-') and not word.startswith('--') and len(word) > 2 and word[1] in fused:
+            words.append((word[:2], word[2:]))
+        elif word.startswith('-'):
+            words.append((word, None))
+        else:
+            words.append(('', word))
+    return words
+
+
+def _ref_move(sub: str, rest: list[str]) -> str | None:
+    words = _split_options(rest, 'BCcfmMdD')
+    options = {option for option, _ in words if option}
+    names = [value for option, value in words if not option and value is not None]
+    attached = [value for option, value in words if option and value]
+    if sub == 'update-ref':
+        if '--stdin' in options:
+            return 'main'
+        skipped, positional = False, []
+        for option, value in words:
+            if option == '-m' and value is None:
+                skipped = True
+            elif not option and value is not None:
+                if skipped:
+                    skipped = False
+                    continue
+                positional.append(value)
+        return next((n for n in positional[:1] if _protected(n)), None)
+    if sub == 'branch':
+        targets = names + attached
+        if options & _BRANCH_REWRITE:
+            return next((n for n in targets if _protected(n)), None)
+        if options & _BRANCH_COPY:
+            return next((n for n in targets[1:2] if _protected(n)), None)
+        return None
+    if sub in {'checkout', 'switch'} or (sub == 'worktree' and names[:1] == ['add']):
+        for index, (option, value) in enumerate(words):
+            if option in _CREATE_RESET or (sub == 'switch' and option in {'-c', '--create'}):
+                value = value if value is not None else (words[index + 1][1] if index + 1 < len(words) else None)
+                if value and _protected(value):
+                    return value
+        return None
+    if sub in {'fetch', 'pull'}:
+        remote = names[0] if names else ''
+        local = remote in {'', '.'} or '/' in remote or remote.startswith('file:')
+        for spec in names[1:]:
+            source, _, destination = spec.partition(':')
+            forced = spec.startswith('+') or bool(options & {'-f', '--force'})
+            covered = _protected(destination) or (
+                '*' in destination and fnmatch.fnmatch('refs/heads/main', destination.lstrip('+')))
+            same = source.lstrip('+').lower().removeprefix('refs/heads/') == destination.lower().removeprefix('refs/heads/')
+            if destination and covered and (forced or local or not same):
+                return destination
+        return None
+    if sub == 'symbolic-ref' and len(names) >= 2 and _protected(names[0]):
+        return names[0]
+    return None
+
+
+def protected_ref_move(command: str) -> str | None:
+    """The protected branch a git command moves, renames or deletes locally (#214), else None.
+
+    A moved local main changes the base every diff, review and verification compares against.
+    Commits and merges while main is checked out are not covered here.
+    """
+    for chunk, _ in _chunks_with_operators(command):
+        for piece in _command_chunks(_unwrap_shell(chunk)):
+            sub, rest = _git_words(_shell_argv(piece))
+            hit = _ref_move(sub, rest) if sub else None
+            if hit:
+                return hit
+    return None
 
 
 control_plane_shell_mutation = _control_plane_shell_mutation
