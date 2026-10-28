@@ -272,12 +272,22 @@ def _argv_mutation_targets(root: Path, argv: list[str]) -> list[str] | None:
 
 
 _CD = frozenset({'cd', 'pushd'})
-# A directory change the tracker cannot follow: popd, `builtin cd`, a cd inside ( ), { }, if/then,
-# a nested shell, or `env -C`. After one, relative write targets are unknown (#214).
-_CD_ANYWHERE = re.compile(
-    r'(?:^|[\s;&|(){}!])(?:cd|pushd|popd|chdir)(?=$|[\s;&|)}])'
-    r'|\benv\b[^;&|\n]*\s(?:-C|--chdir)(?:\s|=|\S)',
-)
+_DIRECTORY_WORDS = frozenset({'cd', 'pushd', 'popd', 'chdir'})
+_CODE_CD = re.compile(r'(?:^|[\s;&|(){}])(?:cd|pushd|popd|chdir)(?=$|[\s;&|)}])')
+
+
+def _moves_directory(argv: list[str]) -> bool:
+    """A command in command position that changes directory: cd/pushd/popd, `env -C`, or eval of one (#214)."""
+    if not argv:
+        return False
+    name = argv[0]
+    if name in _DIRECTORY_WORDS:
+        return True
+    if name == 'env':
+        return any(arg in {'-C', '--chdir'} or arg.startswith(('--chdir=', '-C')) for arg in argv[1:])
+    if name == 'eval':
+        return _CODE_CD.search(' '.join(argv[1:])) is not None
+    return False
 
 
 def _chunks_with_operators(command: str) -> list[tuple[str, str]]:
@@ -303,7 +313,8 @@ def _cd_target(argv: list[str]) -> tuple[bool, str | None]:
     if not argv or argv[0] not in _CD:
         return False, None
     args = [arg for arg in argv[1:] if arg not in {'-P', '-L', '--'}]
-    if len(args) != 1 or args[0] == '-' or re.search(r'[$`~*?\[{]', args[0]):
+    # `-`, `pushd +1`/`-1` (a stack rotation), `~`, `$X` and globs: the shell picks the directory.
+    if len(args) != 1 or args[0][:1] in {'-', '+'} or re.search(r'[$`~*?\[{]', args[0]):
         return True, None
     return True, args[0]
 
@@ -331,8 +342,13 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
                 bases, unknown_base = bases | moved, unknown_base or moved_unknown
             pending = None
         inner = _unwrap_shell(chunk)
-        # Only a bare top-level cd is followed; `(cd x)`, `{ cd x; }` or `if cd x` end or branch elsewhere.
-        plain = inner == chunk and re.match(r'\s*(?:cd|pushd)\s', chunk) is not None and not re.search(r'[(){}]', chunk)
+        # Only a top-level cd (also quoted, 'cd' or \\cd) is followed; `(cd x)`, `{ cd x; }`, `if cd x` or
+        # a nested shell end or branch elsewhere, so they make later relative targets unknown.
+        try:
+            first = shlex.split(chunk.strip())[:1]
+        except ValueError:
+            first = []
+        plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
         is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
         if is_cd and len(_command_chunks(inner)) == 1:
             if directory is None:
@@ -340,9 +356,9 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             else:
                 pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
             continue
-        if not is_cd and _CD_ANYWHERE.search(inner):
-            unknown_base = True
         for piece in _command_chunks(inner):
+            if _moves_directory(_shell_argv(piece)):
+                unknown_base = True
             found: list[str] = []
             redirections = [
                 match.group('target').strip('"\'')
@@ -420,7 +436,8 @@ def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str
 def _git_code_path(rel: str) -> bool:
     """A Git file that makes a later plain git command run a program (#214)."""
     norm = posixpath.normpath(rel).lower()
-    return norm in {'.git/config', '.git/info/attributes'} or norm.startswith('.git/hooks/') or norm == '.git/hooks'
+    return (norm in {'.git/config', '.git/config.worktree', '.git/info/attributes', '.git/hooks'}
+            or norm.startswith('.git/hooks/'))
 
 
 def _control_plane_shell_mutation(
@@ -534,10 +551,16 @@ def _ref_move(sub: str, rest: list[str]) -> str | None:
                 if value and _protected(value):
                     return value
         return None
-    if sub == 'fetch':
-        for name in names:
-            destination = name.partition(':')[2]
-            if destination and _protected(destination):
+    if sub in {'fetch', 'pull'}:
+        remote = names[0] if names else ''
+        local = remote in {'', '.'} or '/' in remote or remote.startswith('file:')
+        for spec in names[1:]:
+            source, _, destination = spec.partition(':')
+            forced = spec.startswith('+') or bool(options & {'-f', '--force'})
+            covered = _protected(destination) or (
+                '*' in destination and fnmatch.fnmatch('refs/heads/main', destination.lstrip('+')))
+            same = source.lstrip('+').lower().removeprefix('refs/heads/') == destination.lower().removeprefix('refs/heads/')
+            if destination and covered and (forced or local or not same):
                 return destination
         return None
     if sub == 'symbolic-ref' and len(names) >= 2 and _protected(names[0]):

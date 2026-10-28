@@ -130,6 +130,33 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 allowed, reason = self.check(root, command)
                 self.assertTrue(allowed, f'{command}: {reason}')
 
+    def test_a_quoted_cd_is_followed_and_the_word_cd_in_text_is_not_a_cd(self):
+        with project_copy() as root:
+            (root / 'docs').mkdir(exist_ok=True)
+            for command in (
+                "'cd' docs && rm ../AGENTS.md", '"cd" docs && rm ../AGENTS.md', '\\cd docs && rm ../AGENTS.md',
+                'eval "cd docs" && rm ../AGENTS.md', 'pushd docs && pushd +1 && rm AGENTS.md',
+                'printf x >> .git/config.worktree',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            for command in (
+                'echo "use cd here" > notes.txt', 'git commit -m "fix cd parsing" && echo ok > out.txt',
+                'grep -rn cd src > hits.txt',
+            ):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
+    def test_a_fetch_that_fast_forwards_main_from_its_remote_is_a_sync(self):
+        with project_copy() as root:
+            for command in ('git fetch origin main:main', 'git fetch origin "refs/heads/*:refs/remotes/origin/*"'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+            for command in ("git fetch origin '+refs/heads/*:refs/heads/*'", 'git pull origin +HEAD:main',
+                            'git fetch origin feature:main'):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+
     def test_every_spelling_of_a_protected_ref_move_is_refused(self):
         with project_copy() as root:
             for command in (
