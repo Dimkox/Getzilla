@@ -281,12 +281,16 @@ def _moves_directory(argv: list[str]) -> bool:
     if not argv:
         return False
     name = argv[0]
-    if name in _DIRECTORY_WORDS:
-        return True
+    # Also after a case pattern `a)`, a function body `f() {`, `function f {` or `command -p`.
+    for index, word in enumerate(argv):
+        if word in _DIRECTORY_WORDS and (index == 0 or argv[index - 1].endswith((')', '{'))
+                                         or argv[index - 1] in {'command', '-p', 'builtin'}):
+            return True
     if name == 'env':
         return any(arg in {'-C', '--chdir'} or arg.startswith(('--chdir=', '-C')) for arg in argv[1:])
     if name == 'eval':
-        return _CODE_CD.search(' '.join(argv[1:])) is not None
+        text = ' '.join(argv[1:])
+        return _CODE_CD.search(text) is not None or '$' in text or '`' in text
     return False
 
 

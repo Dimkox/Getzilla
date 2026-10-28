@@ -136,6 +136,9 @@ class ShellTargetPolicyTest(unittest.TestCase):
             for command in (
                 "'cd' docs && rm ../AGENTS.md", '"cd" docs && rm ../AGENTS.md', '\\cd docs && rm ../AGENTS.md',
                 'eval "cd docs" && rm ../AGENTS.md', 'pushd docs && pushd +1 && rm AGENTS.md',
+                'case x in x) cd docs;; esac; rm ../AGENTS.md', 'f() { cd docs; }; f && rm ../AGENTS.md',
+                'function f { cd docs; }; f; rm ../AGENTS.md', 'command -p cd docs && rm ../AGENTS.md',
+                'X=cd; eval "$X docs"; rm ../AGENTS.md',
                 'printf x >> .git/config.worktree',
             ):
                 allowed, reason = self.check(root, command)
