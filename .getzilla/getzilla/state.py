@@ -581,6 +581,50 @@ def has_valid_approval(
     return matched
 
 
+def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | None) -> str:
+    """Why no recorded grant covers this action: a hint for the refusal, never an authorization.
+
+    An agent that recorded a grant and was refused again needs the reason, not a bare repeat.
+    """
+    approvals = load_json(approvals_path(root), [])
+    if not isinstance(approvals, list):
+        return ''
+    now = datetime.now(timezone.utc)
+    head = git_head(root) or ''
+    route = (get_active_route(root) or {}).get('route_id')
+    normalized = resource.replace('\\', '/') if resource else None
+    reasons: list[str] = []
+    for approval in approvals:
+        if not isinstance(approval, dict) or approval.get('authorization') != 'delegated-local-grant':
+            continue
+        try:
+            if datetime.fromisoformat(str(approval['expires_at'])) < now:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        actions = set(approval.get('actions') or [])
+        resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
+        if action not in actions and (normalized is None or normalized not in resources):
+            continue
+        if approval.get('scope') != scope:
+            reasons.append(f'a grant for it was recorded with scope {approval.get("scope")}, but this needs scope {scope}')
+        elif action not in actions:
+            reasons.append(f'the {scope} grant names actions {sorted(actions)}, not {action}')
+        elif normalized is not None and normalized not in resources:
+            reasons.append(f'the {scope} grant for {action} names {sorted(resources)}, not {normalized}')
+        elif approval.get('route_id') != route:
+            reasons.append('the grant was recorded under an earlier route (each prompt starts a new one)')
+        elif approval.get('git_head') != head:
+            reasons.append(f'the grant is bound to commit {str(approval.get("git_head"))[:12]}, '
+                           f'but HEAD is now {head[:12]}')
+        else:
+            reasons.append('the grant no longer matches the change, the work tree or this repository')
+    if not reasons:
+        return ''
+    return (f' A recorded grant does not cover it: {reasons[-1]}. Record a new grant with exactly '
+            f'`--action {action}`' + (f' and `--resource {normalized}`' if normalized else '') + ' now, then retry once.')
+
+
 def active_change_path(root: Path) -> Path:
     return root / '.getzilla/runtime/active-change.json'
 

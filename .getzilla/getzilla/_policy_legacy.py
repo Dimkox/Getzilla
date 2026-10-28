@@ -199,8 +199,11 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     if not tool.startswith('mcp__'):
         return False
     server, action = _mcp_server_action(tool)
+    # A host can put namespaces before the tool name (mcp__codex_apps__github__search_issues): the read
+    # verb belongs to the last segment, while a write verb anywhere still makes a write (delete__file).
+    name = action.rsplit('__', 1)[-1]
     known = _MCP_READ_TOOLS.get('github' if _mcp_github_reads(tool) else server, frozenset())
-    if action in known or action in _configured_mcp_reads(root, server):
+    if action in known or name in known or action in _configured_mcp_reads(root, server):
         return False
     if not _ASCII_NAME.fullmatch(action):
         return True  # a look-alike letter must not split a write verb (get_dеlete)
@@ -214,7 +217,10 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
         return True
     if any(word in _CHAIN_WORDS and following not in _READ_VERBS for word, following in zip(tokens, tokens[1:])):
         return True
-    return not (tokens[0] in _READ_VERBS or tokens[-1] in _READ_VERBS)
+    words = [token.lower() for token in _NAME_TOKEN.findall(name)] or tokens
+    if words[0] in _LEADING_WRITE_VERBS:
+        return True
+    return not (words[0] in _READ_VERBS or words[-1] in _READ_VERBS)
 
 
 def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
@@ -2695,9 +2701,11 @@ def evaluate_pre_tool(
                         'for a named target (branch, tag, owner/repo#N, image or package); none could be determined.'
                     )
                 if not has_valid_approval(root, 'production', action=target_action, resource=resource):
+                    from .state import approval_mismatch
                     return False, (
                         f'Production action {target_action} on {resource} requires an exact delegated local grant '
                         'bound to the current SHA.'
+                        + approval_mismatch(root, 'production', action=target_action, resource=resource)
                     )
         from .cost_guard import paid_run_resource
         from .util import runtime_dir
@@ -2805,6 +2813,8 @@ def evaluate_pre_tool(
             if problem:
                 return False, f'MCP side-effect tool {tool} is refused: {problem}.'
         if not has_valid_approval(root, 'external-write', action='external-write', resource=tool):
-            return False, f'MCP side-effect tool {tool} requires an exact delegated external-write grant.'
+            from .state import approval_mismatch
+            return False, (f'MCP side-effect tool {tool} requires an exact delegated external-write grant.'
+                           + approval_mismatch(root, 'external-write', action='external-write', resource=tool))
 
     return True, None

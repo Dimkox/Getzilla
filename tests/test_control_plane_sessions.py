@@ -89,6 +89,21 @@ class ArgvLiteralTests(unittest.TestCase):
                     self.assertTrue(denied(pre(root, 's1', 'Bash', {'command': command})))
 
 
+class GrantRetryTests(unittest.TestCase):
+    def test_a_grant_recorded_after_a_denial_makes_the_retry_a_new_attempt(self) -> None:
+        # The breaker stops blind repeats; a retry after a new grant must show the real reason instead.
+        tool = 'mcp__x__create_record'
+        with project_copy(git=True) as root:
+            prompt(root, 's1', 'Fix the login timeout bug in the auth module')
+            self.assertTrue(denied(pre(root, 's1', tool, {})))
+            repeat = pre(root, 's1', tool, {})
+            self.assertIn('Circuit breaker', json.dumps(repeat, ensure_ascii=False))
+            (root / '.getzilla/runtime/approvals.json').write_text('[]\n', encoding='utf-8')
+            after_grant = pre(root, 's1', tool, {})
+            self.assertTrue(denied(after_grant))
+            self.assertNotIn('Circuit breaker', json.dumps(after_grant, ensure_ascii=False))
+
+
 class ObjectiveTests(unittest.TestCase):
     def test_independent_ambiguous_commands_have_independent_objectives(self) -> None:
         with project_copy(git=True) as root:

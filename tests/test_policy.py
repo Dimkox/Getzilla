@@ -363,14 +363,20 @@ class PolicyTests(unittest.TestCase):
                   'mcp__Claude_Docs__query',
                   # #215: a second action after and/or, run/request after a hyphen, a github look-alike.
                   'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__get_x-run', 'mcp__x__list-request',
-                  'mcp__mygithubtool__run_secret_scanning')
+                  'mcp__mygithubtool__run_secret_scanning',
+                  'mcp__codex_apps__github__create_issue', 'mcp__codex_apps__github__issue_write',
+                  'mcp__codex_apps__x__run_query', 'mcp__codex_apps__github__merge_pull_request')
         reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
                  'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Atlassian_MCP__executeRead',
                  'mcp__claude-code-remote__get_session', 'mcp__claude-code-remote__read_documentation',
                  'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads',
                  'mcp__cloud-run__get_service', 'mcp__x-post__list_items', 'mcp__x__get_check_run',
                  'mcp__x__describe-table', 'mcp__x__records_lookup', 'mcp__x__list_and_get',
-                 'mcp__plugin_github_github__run_secret_scanning', 'Bash', 'Edit')
+                 'mcp__plugin_github_github__run_secret_scanning',
+                 # A host namespace before the tool name (Codex apps): the read verb is in the last segment.
+                 'mcp__codex_apps__github__search_issues', 'mcp__codex_apps__github__get_me',
+                 'mcp__codex_apps__github__list_pull_requests', 'mcp__codex_apps__github__run_secret_scanning',
+                 'Bash', 'Edit')
         for tool in writes:
             with self.subTest(tool=tool):
                 self.assertTrue(mcp_side_effect(tool))
@@ -399,6 +405,26 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(mcp_side_effect(tool, root))
             self.assertTrue(mcp_side_effect('mcp__Ahrefs__management-projects-create', root))
             self.assertTrue(mcp_side_effect('mcp__Other__site-explorer-metrics', root))
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertTrue(allowed, reason)
+
+    def test_a_refusal_says_why_a_recorded_grant_does_not_cover_the_call(self) -> None:
+        # A grant of the wrong kind, tool or target must be named, not left to a blind retry.
+        tool = 'mcp__github__issue_write'
+        with github_project() as root:
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertFalse(allowed)
+            self.assertNotIn('recorded grant', reason or '')
+            add_approval(root, 'production', 'wrong kind', 5, actions=['pull-request-merge'], resources=[tool])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertFalse(allowed)
+            self.assertIn('scope production, but this needs scope external-write', reason or '')
+            add_approval(root, 'external-write', 'wrong tool', 5, actions=['external-write'],
+                         resources=['mcp__github__add_issue_comment'])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertIn("not mcp__github__issue_write", reason or '')
+            self.assertIn('--resource mcp__github__issue_write', reason or '')
+            add_approval(root, 'external-write', 'right', 5, actions=['external-write'], resources=[tool])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
             self.assertTrue(allowed, reason)
 
