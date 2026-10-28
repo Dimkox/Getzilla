@@ -360,13 +360,17 @@ class PolicyTests(unittest.TestCase):
                   'mcp__Ahrefs__management-projects', 'mcp__x__updatedSince', 'mcp__x__createdAt',
                   'mcp__slack-post__message', 'mcp__x__', 'mcp__db__run_query', 'mcp__db__runQuery',
                   'mcp__x__request_download', 'mcp__db__query', 'mcp__x__fetchPage', 'mcp__x__get_d\u0435lete',
-                  'mcp__Claude_Docs__query')
+                  'mcp__Claude_Docs__query',
+                  # #215: a second action after and/or, run/request after a hyphen, a github look-alike.
+                  'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__get_x-run', 'mcp__x__list-request',
+                  'mcp__mygithubtool__run_secret_scanning')
         reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
                  'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Atlassian_MCP__executeRead',
                  'mcp__claude-code-remote__get_session', 'mcp__claude-code-remote__read_documentation',
                  'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads',
                  'mcp__cloud-run__get_service', 'mcp__x-post__list_items', 'mcp__x__get_check_run',
-                 'mcp__x__describe-table', 'mcp__x__records_lookup', 'Bash', 'Edit')
+                 'mcp__x__describe-table', 'mcp__x__records_lookup', 'mcp__x__list_and_get',
+                 'mcp__plugin_github_github__run_secret_scanning', 'Bash', 'Edit')
         for tool in writes:
             with self.subTest(tool=tool):
                 self.assertTrue(mcp_side_effect(tool))

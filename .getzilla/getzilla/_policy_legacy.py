@@ -145,6 +145,7 @@ _READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'lookup', 'describe', 
 # Words that are nouns inside reads (get_check_run, pull_request_read) but writes as the first word
 # (run_query, request_download).
 _LEADING_WRITE_VERBS = frozenset({'run', 'request'})
+_CHAIN_WORDS = frozenset({'and', 'or', 'then'})
 _WRITE_VERBS = frozenset({
     'create', 'update', 'delete', 'remove', 'write', 'modify', 'patch', 'put', 'replace', 'insert', 'upsert',
     'append', 'upload', 'send', 'publish', 'merge', 'revoke', 'grant', 'trash', 'archive', 'close', 'reopen',
@@ -175,7 +176,8 @@ def _mcp_server_action(tool: str) -> tuple[str, str]:
 def _mcp_github(tool: str) -> bool:
     """A GitHub server, also behind a prefix segment (mcp__a__github__create_issue)."""
     parts = tool.split('__')
-    return any('github' in part.lower() for part in parts[1:-1])
+    # Only a server named github (or ..._github, as plugin_github_github): not any name that holds it (#215).
+    return any(part.lower() == 'github' or part.lower().endswith('_github') for part in parts[1:-1])
 
 
 def _configured_mcp_reads(root: Path | None, server: str) -> frozenset[str]:
@@ -199,6 +201,13 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
         return True  # a look-alike letter must not split a write verb (get_dеlete)
     tokens = [token.lower() for token in _NAME_TOKEN.findall(action)]
     if not tokens or tokens[0] in _LEADING_WRITE_VERBS or any(token in _WRITE_VERBS for token in tokens):
+        return True
+    # run/request lead a hyphen segment too (get_x-run); a second action after and/or/then
+    # (list_and_kill, getAndRun) is a write unless it is a read verb (#215).
+    segments = [_NAME_TOKEN.findall(part) for part in action.split('-')[1:]]
+    if any(words and words[0].lower() in _LEADING_WRITE_VERBS for words in segments):
+        return True
+    if any(word in _CHAIN_WORDS and following not in _READ_VERBS for word, following in zip(tokens, tokens[1:])):
         return True
     return not (tokens[0] in _READ_VERBS or tokens[-1] in _READ_VERBS)
 
