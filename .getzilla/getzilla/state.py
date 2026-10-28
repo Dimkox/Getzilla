@@ -621,8 +621,9 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
             reasons.append('the grant no longer matches the change, the work tree or this repository')
     if not reasons:
         return ''
-    return (f' A recorded grant does not cover it: {reasons[-1]}. Record a new grant with exactly '
-            f'`--action {action}`' + (f' and `--resource {normalized}`' if normalized else '') + ' now, then retry once.')
+    return (f' A recorded grant does not cover it: {reasons[-1]}. Another grant is not consent for this one: '
+            f'only with the owner\'s delegation for exactly `--action {action}`'
+            + (f' and `--resource {normalized}`' if normalized else '') + ' record that grant, then retry once.')
 
 
 def active_change_path(root: Path) -> Path:

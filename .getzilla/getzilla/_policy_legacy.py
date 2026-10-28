@@ -202,8 +202,12 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     # A host can put namespaces before the tool name (mcp__codex_apps__github__search_issues): the read
     # verb belongs to the last segment, while a write verb anywhere still makes a write (delete__file).
     name = action.rsplit('__', 1)[-1]
+    namespace = {token.lower() for token in _NAME_TOKEN.findall(action[:-len(name)])}
     known = _MCP_READ_TOOLS.get('github' if _mcp_github_reads(tool) else server, frozenset())
-    if action in known or name in known or action in _configured_mcp_reads(root, server):
+    # An exact read name counts behind a namespace only when no namespace word is a write verb
+    # (delete_repo__run_secret_scanning stays a write).
+    plain_namespace = not namespace & (_WRITE_VERBS | _LEADING_WRITE_VERBS)
+    if action in known or (name in known and plain_namespace) or action in _configured_mcp_reads(root, server):
         return False
     if not _ASCII_NAME.fullmatch(action):
         return True  # a look-alike letter must not split a write verb (get_dеlete)

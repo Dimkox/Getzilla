@@ -365,7 +365,10 @@ class PolicyTests(unittest.TestCase):
                   'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__get_x-run', 'mcp__x__list-request',
                   'mcp__mygithubtool__run_secret_scanning',
                   'mcp__codex_apps__github__create_issue', 'mcp__codex_apps__github__issue_write',
-                  'mcp__codex_apps__x__run_query', 'mcp__codex_apps__github__merge_pull_request')
+                  'mcp__codex_apps__x__run_query', 'mcp__codex_apps__github__merge_pull_request',
+                  # A write verb in a namespace before an exact read name stays a write.
+                  'mcp__github__delete_repo__run_secret_scanning', 'mcp__codex_apps__github__merge__run_secret_scanning',
+                  'mcp__Atlassian_MCP__deleteAll__executeRead', 'mcp__Atlassian_MCP__executeWrite__atlassianUserInfo')
         reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
                  'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Atlassian_MCP__executeRead',
                  'mcp__claude-code-remote__get_session', 'mcp__claude-code-remote__read_documentation',
@@ -424,6 +427,7 @@ class PolicyTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
             self.assertIn("not mcp__github__issue_write", reason or '')
             self.assertIn('--resource mcp__github__issue_write', reason or '')
+            self.assertIn("owner's delegation", reason or '')
             add_approval(root, 'external-write', 'right', 5, actions=['external-write'], resources=[tool])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
             self.assertTrue(allowed, reason)
