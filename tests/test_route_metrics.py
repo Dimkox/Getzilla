@@ -212,13 +212,14 @@ class RecordingTests(unittest.TestCase):
             {'at': stamps[1], 'event': 'verify', 'route_id': 'r1', 'status': 'fail', 'blocking': 2, 'profile': 'standard'},
             {'at': stamps[2], 'event': 'verify', 'route_id': 'r1', 'status': 'pass', 'profile': 'standard'},
         ]) + '\n', encoding='utf-8')
-        (runtime / 'path-hints.json').write_text(json.dumps({'refused': 4, 'hinted': 9}), encoding='utf-8')
+        (runtime / 'path-hints.json').write_text(json.dumps({'refused': 4, 'hinted': 9, 'named': 7, 'edit_unread_refused': 2}), encoding='utf-8')
         (runtime / 'parallel-guard.json').write_text(json.dumps({'chain': 2, 'loop': 1, 'since': 'x'}), encoding='utf-8')
         cli = [sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py')]
         text = subprocess.run([*cli, '--since', '1d'], cwd=self.root, capture_output=True, text=True, check=True).stdout
         self.assertIn('1 route(s)', text)
         self.assertIn('standard', text)
         self.assertIn('4 refused, 9 hinted', text)
+        self.assertIn('the files they name: 7; patches refused because the file was not read first: 2', text)
         self.assertIn('chain 2, loop 1', text)
         data = json.loads(subprocess.run([*cli, '--json', '--since', 'all'], cwd=self.root, capture_output=True,
                                          text=True, check=True).stdout)

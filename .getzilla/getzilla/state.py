@@ -103,12 +103,23 @@ def _release_lock_file(lock: Path) -> None:
             time.sleep(0.05)
 
 
+LOCK_WRITE_GRACE_SECONDS = 2.0
+
+
 def _stale_lock(lock: Path) -> bool:
     try:
         raw = lock.read_text(encoding='utf-8').strip()
         pid = int(raw)
-    except (OSError, ValueError):
+    except OSError:
         return True
+    except ValueError:
+        if raw:
+            return True  # malformed content is never a live holder
+        # The holder creates the file and only then writes its pid: a young empty lock is held.
+        try:
+            return time.time() - lock.stat().st_mtime > LOCK_WRITE_GRACE_SECONDS
+        except OSError:
+            return True
     return not _process_alive(pid)
 
 
