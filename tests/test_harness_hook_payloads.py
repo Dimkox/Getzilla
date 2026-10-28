@@ -155,6 +155,30 @@ class HarnessHookPayloadTests(unittest.TestCase):
         unknown = module.tool_input({'tool_name': 'shell', 'tool_input': {'cmd': 'ls'}})
         self.assertNotIn('command', unknown)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX helper script')
+    def test_root_probe_does_not_run_a_helper_from_the_probed_repository_config(self) -> None:
+        # #215: an agent can make a repository whose own config names an fsmonitor program.
+        import importlib.util
+        import sys
+        import tempfile
+        spec = importlib.util.spec_from_file_location('root_probe_fixture', PROJECT / '.grok/hooks/_lib.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / '.getzilla/config').mkdir(parents=True)
+            (repo / '.getzilla/config/policy.json').write_text('{}\n', encoding='utf-8')
+            marker = Path(tmp) / 'ran'
+            helper = Path(tmp) / 'helper.sh'
+            helper.write_text(f'#!/bin/sh\ntouch {marker}\n', encoding='utf-8')
+            helper.chmod(0o755)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            subprocess.run(['git', '-C', str(repo), 'add', '.getzilla/config/policy.json'], check=True)
+            subprocess.run(['git', '-C', str(repo), 'config', 'core.fsmonitor', str(helper)], check=True)
+            self.assertTrue(module._installed_root(repo))
+            self.assertFalse(marker.exists())
+
     def test_installed_codex_launcher_checks_native_cmd(self) -> None:
         import importlib.util
         import sys
