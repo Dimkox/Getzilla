@@ -378,6 +378,15 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_side_effect(tool))
 
+    def test_a_github_named_server_keeps_the_repository_check_but_not_the_read_list(self) -> None:
+        # #215: github-enterprise is not the GitHub server for reads, but its writes still name owner/repo.
+        from getzilla._policy_legacy import _mcp_github, _mcp_github_reads
+        for server in ('github-enterprise', 'github_mcp', 'my-github', 'mygithubtool'):
+            tool = f'mcp__{server}__create_issue'
+            self.assertTrue(_mcp_github(tool), tool)
+            self.assertFalse(_mcp_github_reads(tool), tool)
+        self.assertTrue(_mcp_github_reads('mcp__plugin_github_github__get_me'))
+
     def test_a_project_can_name_its_own_read_tools_exactly(self) -> None:
         from getzilla.policy import mcp_side_effect
         with github_project() as root:

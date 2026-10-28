@@ -174,9 +174,14 @@ def _mcp_server_action(tool: str) -> tuple[str, str]:
 
 
 def _mcp_github(tool: str) -> bool:
-    """A GitHub server, also behind a prefix segment (mcp__a__github__create_issue)."""
+    """Any server whose name holds github, also behind a prefix segment: its writes name owner/repo (#184)."""
     parts = tool.split('__')
-    # Only a server named github (or ..._github, as plugin_github_github): not any name that holds it (#215).
+    return any('github' in part.lower() for part in parts[1:-1])
+
+
+def _mcp_github_reads(tool: str) -> bool:
+    """Only a server named github (or ..._github, as plugin_github_github) gets the GitHub read list (#215)."""
+    parts = tool.split('__')
     return any(part.lower() == 'github' or part.lower().endswith('_github') for part in parts[1:-1])
 
 
@@ -194,7 +199,7 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     if not tool.startswith('mcp__'):
         return False
     server, action = _mcp_server_action(tool)
-    known = _MCP_READ_TOOLS.get('github' if _mcp_github(tool) else server, frozenset())
+    known = _MCP_READ_TOOLS.get('github' if _mcp_github_reads(tool) else server, frozenset())
     if action in known or action in _configured_mcp_reads(root, server):
         return False
     if not _ASCII_NAME.fullmatch(action):

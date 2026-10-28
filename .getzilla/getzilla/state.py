@@ -123,6 +123,17 @@ def _stale_lock(lock: Path) -> bool:
     return not _process_alive(pid)
 
 
+def _lock_identity(lock: Path) -> tuple[int, int, int, bytes]:
+    info = lock.stat()
+    try:
+        content = lock.read_bytes()
+    except FileNotFoundError:
+        raise
+    except OSError:
+        content = b''
+    return info.st_ino, info.st_dev, info.st_mtime_ns, content
+
+
 @contextmanager
 def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Iterator[None]:
     lock = runtime_dir(root) / f'.{name}.lock'
@@ -133,16 +144,15 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
         except FileExistsError:
             try:
-                judged = lock.stat()
+                judged = _lock_identity(lock)
             except FileNotFoundError:
                 continue
             if _stale_lock(lock):
                 try:
                     # Another waiter may have removed the stale lock and taken a fresh one meanwhile:
-                    # remove only the file that was judged (#215).
-                    current = lock.stat()
-                    if (current.st_ino, current.st_dev, current.st_mtime_ns) != \
-                            (judged.st_ino, judged.st_dev, judged.st_mtime_ns):
+                    # remove only the file that was judged (#215). The pid content tells a fresh lock
+                    # apart even when a freed inode comes back with the same coarse mtime.
+                    if _lock_identity(lock) != judged:
                         continue
                     lock.unlink()
                     continue
