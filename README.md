@@ -38,6 +38,10 @@ The local command guard checks Codex `exec_command.cmd` before policy and workdi
 
 ## The short version
 
+Model continuation currently provides [passive startup status](docs/model-continuation.md).
+Run `getzilla status --model-continuation --harness codex` to inspect the shared policy.
+All six harness adapters remain unqualified; this slice never dispatches a fallback request.
+
 With "vibe coding", you ask an AI for something, it writes the code, and you hope it works. It is fast and fun. You usually find out later what it broke.
 
 Getzilla keeps the fast part and adds a checking part. The AI still builds what you asked for. Before that work joins the real project, it gets checked: tests run, a second AI reviews it, and the required checks and review decide whether it can merge.

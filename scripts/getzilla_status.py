@@ -12,10 +12,14 @@ import argparse
 import json
 import os
 
-argparse.ArgumentParser(
+parser = argparse.ArgumentParser(
     prog='getzilla status',
     description='Print the active route, change package, agents, human gates and evidence gaps as JSON.',
-).parse_args()
+)
+parser.add_argument('--model-continuation', action='store_true', help='Print only passive model continuation status.')
+parser.add_argument('--harness', choices=('grok', 'qwen', 'claude', 'codex', 'gemini', 'copilot'),
+                    help='Identify the native harness; this does not qualify an adapter.')
+args = parser.parse_args()
 
 from getzilla.package_status import collect_worktree, inspect_package, receipt_inputs_unavailable
 from getzilla.receipts import validate_evidence
@@ -23,8 +27,13 @@ from getzilla.human_gates import ARTIFACT_NOTICE, gate_statuses
 from getzilla.agent_lifecycle import watchdog
 from getzilla.state import get_active_change, get_active_route, get_agent_state
 from getzilla.util import find_root
+from getzilla.model_continuation import startup_status
 
 root = find_root()
+continuation = startup_status(root, args.harness or 'unknown')
+if args.model_continuation:
+    print(json.dumps(continuation, ensure_ascii=True, indent=2))
+    raise SystemExit(0)
 # Applies to existing receipt-validation Git reads as well as the new snapshot.
 os.environ['GIT_OPTIONAL_LOCKS'] = '0'
 route = get_active_route(root)
@@ -38,6 +47,7 @@ if route:
         if receipt_inputs_unavailable(package) else validate_evidence(root, route)
     )
 print(json.dumps({
+    'model_continuation': continuation,
     'route': route,
     'change': active,
     'agents': get_agent_state(root),
