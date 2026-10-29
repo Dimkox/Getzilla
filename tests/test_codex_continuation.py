@@ -6,7 +6,9 @@ import asyncio
 import tempfile
 import json
 import time
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla import codex_continuation
@@ -118,6 +120,7 @@ class CodexContinuationTest(unittest.TestCase):
                     await peer.close()
         asyncio.run(exercise())
 
+    @unittest.skipIf(os.name == 'nt', 'durable journal admission is unsupported on Windows')
     def test_real_journal_and_local_jsonl_peer_never_dispatch_unqualified_retry(self):
         async def exercise():
             with tempfile.TemporaryDirectory() as temp:
@@ -147,4 +150,27 @@ class CodexContinuationTest(unittest.TestCase):
                     self.assertNotIn('private', json.dumps(result))
                 finally:
                     await peer.close()
+        asyncio.run(exercise())
+
+    def test_journal_rejects_unsupported_windows_admission(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binding = journal.Binding('chain', 'task', 'owner', 'route', 'session', 'a'*64, 'b'*64, 'c'*64)
+            with patch.object(journal.fsx, 'WINDOWS', True), self.assertRaisesRegex(journal.JournalError, 'durability_unsupported'):
+                journal.create_chain(Path(temp), binding, journal.Usage(1, '0.1'),
+                                     journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX signal behavior')
+    def test_close_is_bounded_when_descendant_retains_stdout(self):
+        async def exercise():
+            with tempfile.TemporaryDirectory() as temp:
+                script = Path(temp) / 'peer.py'
+                script.write_text("import signal,subprocess,sys,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                                  "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'])\n"
+                                  "print('ready', flush=True)\ntime.sleep(3)\n")
+                peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script), timeout=0.1)
+                await peer._process.stdout.readline()
+                started = time.monotonic()
+                with self.assertRaisesRegex(codex_continuation.ProtocolError, 'shutdown_incomplete'):
+                    await peer.close()
+                self.assertLess(time.monotonic() - started, 1)
         asyncio.run(exercise())

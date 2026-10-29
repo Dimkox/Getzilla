@@ -76,8 +76,7 @@ class OwnedJsonlPeer:
             try:
                 self._process.terminate()
             except ProcessLookupError:
-                await self._process.wait()
-                return
+                pass
             try:
                 await asyncio.wait_for(self._process.wait(), self._timeout)
             except asyncio.TimeoutError:
@@ -85,7 +84,13 @@ class OwnedJsonlPeer:
                     self._process.kill()
                 except ProcessLookupError:
                     pass
-                await self._process.wait()
+                try:
+                    await asyncio.wait_for(self._process.wait(), self._timeout)
+                except asyncio.TimeoutError:
+                    # A descendant can retain pipes after the direct child exits.
+                    # Report uncertainty; process cleanup is not an effect fence.
+                    self._process._transport.close()
+                    raise ProtocolError('shutdown_incomplete') from None
 
 
 async def initialize(peer: OwnedJsonlPeer) -> None:
