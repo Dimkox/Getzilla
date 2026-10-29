@@ -56,6 +56,10 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 continue
             def ignore(directory: str, names: list[str]) -> set[str]:
                 omitted = set(shutil.ignore_patterns('__pycache__', '*.pyc')(directory, names))
+                if Path(directory) == PROJECT / '.getzilla/runtime':
+                    # Runtime can contain the fixture destination or a changing review snapshot.
+                    # Exclude it before descending; deleting copied state afterward is too late.
+                    omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
                     omitted.update(name for name in names if name != '__init__.py')
                 return omitted

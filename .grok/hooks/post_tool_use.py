@@ -39,9 +39,29 @@ def main() -> None:
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'PostToolUse',
-            'additionalContext': _path_hint(payload, root),
+            'additionalContext': '\n'.join(filter(None, (_path_hint(payload, root), _progress_hint(payload, root, current)))),
         }
     })
+
+
+def _progress_hint(payload: dict, root, current: str) -> str:
+    """Unsupported/pending outcomes do not become failures; observation never skips other hooks."""
+    if tool_name(payload) != 'Bash':
+        return ''
+    try:
+        from getzilla.path_hints import command_cwd
+        from getzilla.session_progress import observe, scope_id
+        from getzilla.util import git_head
+        data = tool_input(payload)
+        responses = [payload[key] for key in ('tool_response', 'toolResponse', 'tool_result') if key in payload]
+        if not responses or any(value != responses[0] for value in responses[1:]):
+            return ''
+        event = next((payload[key] for key in ('tool_use_id', 'tool_call_id', 'toolCallId') if key in payload), None)
+        scope = scope_id(root, session_id(payload), agent_id(payload), agent_generation(payload))
+        return observe(root, scope, data, command_cwd(root, payload, data), responses[0],
+                       current if git_head(root) else None, event_id=event)
+    except Exception:
+        return 'Getzilla: progress observations unavailable; ordinary authorization still applies.'
 
 
 def _remember_reads(payload: dict, root) -> None:

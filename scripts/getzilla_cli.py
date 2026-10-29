@@ -32,7 +32,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'gate': ('getzilla_gate.py', 'inspect or record delivery gates'),
     'approve': ('getzilla_approve.py', 'materialize an explicitly delegated local grant'),
     'protected-write': ('getzilla_protected_write.py', 'apply an approved protected-path write'),
-    'agent': ('getzilla_agent.py', 'agent heartbeat, checkpoints and watchdog'),
+    'agent': ('getzilla_agent.py', 'agent heartbeat, checkpoints, watchdog and repeated-failure recovery'),
     'architecture': ('getzilla_architecture.py', 'validate, diff and draw the architecture model'),
     'artifacts': ('getzilla_artifacts.py', 'compile workflow framework artifacts'),
     'governance': ('getzilla_governance.py', 'validate governance evidence'),

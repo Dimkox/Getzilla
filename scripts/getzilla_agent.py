@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.agent_lifecycle import ACTIVITIES, CHECKPOINTS, RESULTS, record_terminal_report, update_agent, watchdog
-from getzilla.state import get_agent_state, record_agent_start, record_agent_stop
+from getzilla.state import bind_session, get_agent_state, record_agent_start, record_agent_stop
 from getzilla.util import find_root
 
 
@@ -54,10 +54,28 @@ def parser() -> argparse.ArgumentParser:
         if action == 'watch':
             command.add_argument('--iterations', type=int, required=True)
             command.add_argument('--interval', type=float, default=5)
+    for action in ('progress-inspect', 'progress-recover'):
+        command = commands.add_parser(action)
+        command.add_argument('--session-id', required=True)
+        command.add_argument('--agent-id', default='unknown')
+        command.add_argument('--generation')
+        if action == 'progress-recover':
+            from getzilla.session_progress import REASONS
+            command.add_argument('--loop-id', required=True)
+            command.add_argument('--revision', required=True)
+            command.add_argument('--reason', required=True, choices=sorted(REASONS))
+            command.add_argument('--evidence', required=True, help='New diagnosis; only its hash is stored')
     return result
 
 
 def run(args: argparse.Namespace, root: Path) -> dict | None:
+    if args.action in {'progress-inspect', 'progress-recover'}:
+        from getzilla.session_progress import inspect, recover, scope_id
+        bind_session(args.session_id)
+        scope = scope_id(root, args.session_id, args.agent_id, args.generation)
+        if args.action == 'progress-inspect':
+            return inspect(root, scope)
+        return recover(root, scope, args.loop_id, args.revision, args.reason, args.evidence)
     if args.action in {'watchdog', 'watch'}:
         iterations = getattr(args, 'iterations', 1)
         interval = getattr(args, 'interval', 0)
@@ -96,7 +114,8 @@ def main() -> int:
             print(json.dumps(response, ensure_ascii=True))
         return 0
     except (ValueError, TypeError, OSError, TimeoutError):
-        print(json.dumps({'error': 'lifecycle-operation-rejected'}))
+        category = 'progress' if args.action in {'progress-inspect', 'progress-recover'} else 'lifecycle'
+        print(json.dumps({'error': category + '-operation-rejected'}))
         return 2
 
 

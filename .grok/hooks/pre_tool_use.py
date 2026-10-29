@@ -505,6 +505,23 @@ def _serial_batch(current_tool: str, current_input: dict[str, Any], payload: dic
         return None
 
 
+def _progress_loop(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
+    """Advisory retries are checked only after ordinary policy authorization."""
+    if current_tool != 'Bash' or root is None:
+        return None
+    try:
+        from getzilla.path_hints import command_cwd
+        from getzilla.session_progress import refusal, scope_id
+        scope = scope_id(root, session_id(payload), agent_id(payload), agent_generation(payload))
+        return refusal(root, scope, current_input, command_cwd(root, payload, current_input))
+    except Exception:
+        try:
+            sys.stderr.write('Getzilla: progress observations unavailable; ordinary authorization still applies.\n')
+        except Exception:
+            return None
+        return None
+
+
 def main() -> None:
     try:
         payload = read_payload()
@@ -565,7 +582,8 @@ def main() -> None:
         if allowed:
             miss = (_path_miss(current_tool, current_input, payload, root)
                     or _unread_edit(current_tool, current_input, payload, root)
-                    or _serial_batch(current_tool, current_input, payload, root))
+                    or _serial_batch(current_tool, current_input, payload, root)
+                    or _progress_loop(current_tool, current_input, payload, root))
             emit(permission_output(miss is None, miss))
             return
 
