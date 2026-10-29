@@ -2111,6 +2111,39 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
     return results
 
 
+def _core_output_excerpt(output: str, *, failed: bool) -> str:
+    """Keep bounded structural failure locations without persisting new raw test data."""
+    normalized = re.sub(r'\x1b\[[0-9;]*m', '', output) if failed else output
+    if not failed or not re.search(r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized):
+        return output[-12000:]
+    locations: list[str] = []
+    summaries: list[str] = []
+    omitted = False
+    for line in normalized.splitlines():
+        line = line[:1024].replace('\\', '/')
+        location = re.match(r'^((?:tests/)[A-Za-z0-9_./-]+\.py:[0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
+        node = re.match(r'^(FAILED|ERROR)\s+(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)', line)
+        if location:
+            if len(locations) < 100:
+                locations.append(location.group(1) + (': ' + location.group(2) if location.group(2) else ''))
+            else:
+                omitted = True
+        elif node:
+            if len(summaries) < 20:
+                summaries.append(node.group(1) + ' ' + node.group(2))
+            else:
+                omitted = True
+    trace = '\n'.join(locations)
+    summary = '\n'.join(summaries)
+    if len(trace) > 5500 or len(summary) > 5000:
+        omitted = True
+    parts = ['[sanitized pytest failure locations; values and captured output omitted]',
+             trace[:5500], summary[:5000]]
+    if omitted:
+        parts.append('[additional failure locations omitted]')
+    return '\n'.join(part for part in parts if part)
+
+
 def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -2144,7 +2177,7 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                     results.append(CheckResult(
                         name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f}',
-                        command=process.command, stdout=process.stdout[-12000:],
+                        command=process.command, stdout=_core_output_excerpt(process.stdout, failed=process.returncode != 0),
                         stderr=(process.stderr + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',

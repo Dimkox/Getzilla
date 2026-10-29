@@ -312,6 +312,68 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
+    def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
+        failure = ('================ FAILURES ================\n'
+                   'tests/test_peer.py:174: AssertionError: secret-token-123\n'
+                   'E   AssertionError: secret-token-123\n')
+        output = failure + ('coverage rows\n' * 2000) + 'FAILED tests/test_peer.py::test_close - AssertionError: secret-token-123\n'
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertIn('tests/test_peer.py:174: AssertionError', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('secret-token-123', result)
+        self.assertLessEqual(len(result), 12000)
+
+    def test_failed_core_excerpt_bounds_many_locations_and_omits_controlled_values(self) -> None:
+        output = ('==== ERRORS ====\r\n' +
+                  ''.join(f'tests/test_case_{n}.py:{n}: ValueError: SECRET_{n}\r\n' for n in range(1000)) +
+                  'FAILED tests/test_peer.py::test_close - SECRET\r\n')
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertIn('tests/test_case_0.py:0: ValueError', result)
+        self.assertIn('additional failure locations omitted', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('SECRET', result)
+        self.assertNotIn('\r', result)
+        self.assertLessEqual(len(result), 12000)
+
+    def test_core_excerpt_keeps_existing_output_without_pytest_failure_marker(self) -> None:
+        output = 'safe-output' * 2000
+        self.assertEqual(verification_module._core_output_excerpt(output, failed=False), output[-12000:])
+        self.assertEqual(verification_module._core_output_excerpt(output, failed=True), output[-12000:])
+
+    def test_core_excerpt_removes_ansi_and_unsafe_failure_text(self) -> None:
+        output = ('\x1b[31m==== FAILURES ====\x1b[0m\n'
+                  '\x1b[31mtests/test_peer.py:42: RuntimeError: SECRET\x1b[0m\n'
+                  'FAILED tests/test_peer.py::test_close - SECRET\n')
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
+        self.assertNotIn('SECRET', result)
+        self.assertNotIn('\x1b', result)
+
+    def test_core_excerpt_normalizes_windows_paths(self) -> None:
+        output = ('==== FAILURES ====\r\ntests\\test_peer.py:42: RuntimeError: SECRET\r\n'
+                  'FAILED tests\\test_peer.py::test_close - SECRET\r\n')
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('SECRET', result)
+
+    def test_core_result_records_sanitized_failure_location_before_coverage(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        output = ('==== FAILURES ====\ntests/test_peer.py:174: AssertionError: secret-token-123\n' +
+                  'coverage rows\n' * 2000 + 'FAILED tests/test_peer.py::test_close - secret-token-123\n')
+        core = CoreTestRun(ProcessResult(['pytest'], 1, stdout=output), None, 8, {'engine': 'pytest-xdist'}, {})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tests').mkdir()
+            with patch.object(verification_module, 'selected_workers', return_value=8), \
+                    patch.object(verification_module, 'run_core_tests', return_value=core):
+                checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
+        result = next(check for check in checks if check.name == 'python-unittest')
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('tests/test_peer.py:174: AssertionError', result.stdout)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result.stdout)
+        self.assertNotIn('secret-token-123', result.stdout)
+
     def test_scanner_fixture_keeps_real_checks_and_full_source_negative_control(self) -> None:
         from getzilla.verification import _bandit, _ruff
         with project_copy() as root:
