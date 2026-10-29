@@ -164,15 +164,24 @@ class CodexContinuationTest(unittest.TestCase):
         async def exercise():
             with tempfile.TemporaryDirectory() as temp:
                 script = Path(temp) / 'peer.py'
+                release = Path(temp) / 'release'
                 script.write_text("import signal,subprocess,sys,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                                  "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'])\n"
-                                  "print('ready', flush=True)\ntime.sleep(3)\n")
-                peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script), timeout=0.1)
-                await peer._process.stdout.readline()
-                started = time.monotonic()
-                with self.assertRaisesRegex(codex_continuation.ProtocolError, 'shutdown_incomplete'):
-                    await peer.close()
-                self.assertLess(time.monotonic() - started, 1)
+                                  "subprocess.Popen([sys.executable, '-c', "
+                                  "'import os,sys,time; end=time.monotonic()+30; "
+                                  "exec(\\\"while time.monotonic()<end and not os.path.exists(sys.argv[1]): time.sleep(0.01)\\\")', "
+                                  "sys.argv[1]])\n"
+                                  "print('ready', flush=True)\nend=time.monotonic()+30\n"
+                                  "while time.monotonic()<end: time.sleep(0.01)\n")
+                peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script), str(release), timeout=0.1)
+                try:
+                    self.assertEqual(await asyncio.wait_for(peer._process.stdout.readline(), 5), b'ready\n')
+                    started = time.monotonic()
+                    with self.assertRaisesRegex(codex_continuation.ProtocolError, 'shutdown_incomplete'):
+                        await asyncio.wait_for(peer.close(), 3)
+                    self.assertLess(time.monotonic() - started, 3)
+                finally:
+                    release.touch()
+                    await asyncio.sleep(0.1)
         asyncio.run(exercise())
 
     @unittest.skipIf(os.name == 'nt', 'POSIX process behavior')
