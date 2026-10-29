@@ -249,8 +249,9 @@ def _root_hint(context: Any) -> str:
                 'cd <that repository>, and write long text such as a commit message to a file first.')
     if status == 'cross-root':
         return (f' The command runs in {getattr(context, "effective_root", None)}, but the session is in '
-                f'{getattr(context, "session_root", None)}. Run it as its own command that starts with cd into '
-                'that repository, and record any grant from inside that repository.')
+                f'{getattr(context, "session_root", None)}. Cross-root pushes require a registered linked '
+                'worktree, a literal cd <absolute worktree> && git push command, and its own exact grant. '
+                'Other cross-root actions require a session in the target repository.')
     return ''
 
 
