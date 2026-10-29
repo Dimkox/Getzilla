@@ -17,6 +17,7 @@ Nothing here fetches, pushes or deletes a branch.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -25,7 +26,6 @@ from typing import Any
 from .resource_inventory import RUNTIME, classify
 
 WORKTREES = RUNTIME + '/worktrees'
-DISPOSABLE_PARTS = frozenset({'__pycache__', '.pytest_cache', '.ruff_cache', '.mypy_cache'})
 IN_PROGRESS = ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'sequencer')
 MAX_IGNORED_FILES = 10_000
 MAX_REFLOG = 2_000
@@ -71,10 +71,13 @@ def list_worktrees(root: Path) -> list[dict[str, Any]]:
 
 
 def _disposable(worktree: Path, relative: str) -> bool:
-    is_file = not relative.endswith('/') and not os.path.isdir(worktree / relative)
-    if DISPOSABLE_PARTS & set(Path(relative).parts) or (is_file and relative.endswith('.pyc')):
-        return True
-    return classify(worktree, worktree / relative) == 'ephemeral'
+    path = worktree / relative
+    kind = classify(worktree, path)
+    if kind == 'protected' or not stat.S_ISREG(path.lstat().st_mode):
+        return False
+    # Cache directory names do not establish ownership of their contents. Keep the existing
+    # ordinary bytecode exemption only after protection and file-type checks.
+    return relative.endswith('.pyc') or kind == 'ephemeral'
 
 
 def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
@@ -90,7 +93,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
         else:
             for base, dirs, files in os.walk(folder):
                 links = [name for name in dirs if os.path.islink(os.path.join(base, name))]  # walk lists them as folders
-                dirs[:] = [name for name in dirs if name not in DISPOSABLE_PARTS and name not in links]
+                dirs[:] = [name for name in dirs if name not in links]
                 for name in [*files, *links]:
                     seen += 1
                     if seen > MAX_IGNORED_FILES:

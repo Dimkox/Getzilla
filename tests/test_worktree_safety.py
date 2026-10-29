@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from tests.branch_support import ROOT, commit, env, git
 
-from getzilla.worktree_safety import list_worktrees, plan, remove  # noqa: E402
+from getzilla.worktree_safety import _valuable_ignored, list_worktrees, plan, remove  # noqa: E402
 
 PROCESS_CHECK = Path('/proc/self/cwd').exists()
 
@@ -94,6 +94,9 @@ class WorktreeSafetyTests(unittest.TestCase):
         (path / '__pycache__' / 'app.cpython-313.pyc').write_bytes(b'\0')
         (path / '.getzilla' / 'runtime' / 'par' / 'run-1').mkdir(parents=True)
         (path / '.getzilla' / 'runtime' / 'par' / 'run-1' / 'log').write_text('x')
+        self.assertEqual(_valuable_ignored(path, ['__pycache__/app.cpython-313.pyc',
+                                                '.getzilla/runtime/par/run-1/log']), [])
+        self.assertEqual(_valuable_ignored(path, ['__pycache__/', '.getzilla/runtime/par/']), [])
         self.assertTrue(self.report(path)['removable'], self.report(path)['reasons'])
         (path / '.getzilla' / 'runtime' / 'receipts').mkdir()
         (path / '.getzilla' / 'runtime' / 'receipts' / 'r.json').write_text('{}')
@@ -114,6 +117,59 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertFalse(self.report(path)['removable'])
         self.assertEqual(remove(self.root, str(path))['result'], 'kept')
         self.assertEqual((outside / 'work.txt').read_text(), 'unique')
+
+    def test_protected_evidence_with_cache_names_keeps_the_worktree(self) -> None:
+        for index, relative in enumerate((
+            '.getzilla/runtime/changes/change/evidence/__pycache__/review.json',
+            '.getzilla/runtime/receipts/review.pyc',
+            '.getzilla/runtime/reviews/.pytest_cache/review.md',
+        )):
+            with self.subTest(relative=relative):
+                path = self.add(f'protected-cache-{index}', '-b', f'protected-cache-{index}')
+                evidence = path / relative
+                evidence.parent.mkdir(parents=True)
+                evidence.write_text('unique review evidence')
+                self.assertEqual(_valuable_ignored(path, [relative]), [relative])
+                report = self.report(path)
+                self.assertIn(relative, report['valuable_ignored'])
+                self.assertFalse(report['removable'])
+                self.assertEqual(remove(self.root, str(path))['result'], 'kept')
+                self.assertEqual(evidence.read_text(), 'unique review evidence')
+
+    def test_unknown_files_inside_ignored_cache_directories_keep_the_worktree(self) -> None:
+        for index, cache in enumerate(('__pycache__', '.pytest_cache', '.ruff_cache', '.mypy_cache')):
+            with self.subTest(cache=cache):
+                path = self.add(f'unknown-cache-{index}', '-b', f'unknown-cache-{index}')
+                exclude = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')) / 'info/exclude'
+                exclude.write_text(f'{cache}/\n')
+                relative = f'{cache}/nested/unique-notes.txt'
+                notes = path / relative
+                notes.parent.mkdir(parents=True)
+                notes.write_text('unique user notes')
+                self.assertEqual(_valuable_ignored(path, [relative]), [relative])
+                report = self.report(path)
+                self.assertIn(relative, report['valuable_ignored'])
+                self.assertFalse(report['removable'])
+                self.assertEqual(remove(self.root, str(path))['result'], 'kept')
+                self.assertEqual(notes.read_text(), 'unique user notes')
+
+    def test_bytecode_symlink_in_cache_keeps_the_worktree(self) -> None:
+        path = self.add('linked-bytecode', '-b', 'linked-bytecode')
+        outside = self.base / 'valuable.txt'
+        outside.write_text('unique user notes')
+        cache = path / '__pycache__'
+        cache.mkdir()
+        try:
+            (cache / 'app.pyc').symlink_to(outside)
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        relative = '__pycache__/app.pyc'
+        self.assertEqual(_valuable_ignored(path, [relative]), [relative])
+        report = self.report(path)
+        self.assertIn(relative, report['valuable_ignored'])
+        self.assertFalse(report['removable'])
+        self.assertEqual(remove(self.root, str(path))['result'], 'kept')
+        self.assertEqual(outside.read_text(), 'unique user notes')
 
     def test_locked_outside_and_main_worktrees_are_never_removable(self) -> None:
         locked = self.add('locked', '-b', 'locked')
@@ -192,6 +248,24 @@ class WorktreeSafetyTests(unittest.TestCase):
             report = self.report(path)
         self.assertFalse(report['removable'])
         self.assertIn('check failed: reflog unreadable', report['reasons'])
+
+    def test_bytecode_disappearing_during_inspection_keeps_the_worktree(self) -> None:
+        path = self.add('vanishing-bytecode', '-b', 'vanishing-bytecode')
+        cache = path / '__pycache__'
+        cache.mkdir()
+        bytecode = cache / 'app.pyc'
+        bytecode.write_bytes(b'\0')
+        real_lstat = Path.lstat
+
+        def missing_bytecode(target, *args, **kwargs):
+            if target == bytecode:
+                raise FileNotFoundError('bytecode disappeared during inspection')
+            return real_lstat(target, *args, **kwargs)
+
+        with patch.object(Path, 'lstat', missing_bytecode):
+            report = self.report(path)
+        self.assertFalse(report['removable'])
+        self.assertIn('check failed: bytecode disappeared during inspection', report['reasons'])
 
     def test_an_operation_in_progress_keeps_the_worktree(self) -> None:
         path = self.add('merging', '-b', 'merging')
