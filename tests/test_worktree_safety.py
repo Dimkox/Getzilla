@@ -378,10 +378,13 @@ class WorktreeSafetyTests(unittest.TestCase):
             hidden.add(str(os.getpid()))  # this test process started before the worktree below
             older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
             self.assertIsNotNone(older)
-            self.assertIs(worktree_safety._in_use(path, older + 60), False)
-            self.assertIs(worktree_safety._in_use(path, older + 10), False, 'a 2 s margin, not more')
-            with patch('getzilla.worktree_safety._started_at', return_value=None):
-                self.assertIsNone(worktree_safety._in_use(path, older + 60), 'an unknown start fails closed')
+            # Bound the age checks to the controlled process; the scan above uses a real child.
+            controlled = [Path('/proc') / str(os.getpid())]
+            with patch.object(Path, 'iterdir', side_effect=lambda _: iter(controlled), autospec=True):
+                self.assertIs(worktree_safety._in_use(path, older + 60), False)
+                self.assertIs(worktree_safety._in_use(path, older + 10), False, 'a 2 s margin, not more')
+                with patch('getzilla.worktree_safety._started_at', return_value=None):
+                    self.assertIsNone(worktree_safety._in_use(path, older + 60), 'an unknown start fails closed')
 
     @unittest.skipUnless(PROCESS_CHECK, 'the /proc process scan is Linux only')
     def test_a_process_name_with_brackets_does_not_shift_the_start_field(self) -> None:
