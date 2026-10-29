@@ -11,6 +11,7 @@ import math
 import os
 import re
 import stat
+from decimal import Decimal
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +40,7 @@ class Bounds:
     max_attempts: int
     max_requests: int
     deadline_seconds: float
-    max_cost_usd: float
+    max_cost_usd: Decimal | int
 
 
 @dataclass(frozen=True)
@@ -70,12 +71,12 @@ def _fields(value: Any, fields: set[str]) -> bool:
 
 
 def _positive(value: Any, *, integer: bool = False) -> bool:
-    return (type(value) in ((int,) if integer else (int, float))
+    return (type(value) in ((int,) if integer else (int, float, Decimal))
             and 0 < value <= 1_000_000_000 and math.isfinite(value))
 
 
 def _parse(data: bytes) -> Policy:
-    value = json.loads(data.decode('utf-8'), object_pairs_hook=_object)
+    value = json.loads(data.decode('utf-8'), object_pairs_hook=_object, parse_float=Decimal)
     if (not isinstance(value, dict) or type(value.get('schema_version')) is not int
             or value['schema_version'] != 1 or type(value.get('enabled')) is not bool):
         raise ValueError('schema')
@@ -107,6 +108,9 @@ def _parse(data: bytes) -> Policy:
         raise ValueError('bounds')
     if bounds['max_requests'] < bounds['max_attempts'] or bounds['max_attempts'] > len(candidates):
         raise ValueError('inconsistent_bounds')
+    # Money keeps the exact JSON decimal. Time remains the public float field;
+    # durable consumers floor its duration before constructing deadlines.
+    bounds['deadline_seconds'] = float(bounds['deadline_seconds'])
     return Policy(value['enabled'], tuple(candidates), Bounds(**bounds))
 
 
