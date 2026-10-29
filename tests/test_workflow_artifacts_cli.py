@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
-import multiprocessing
 import os
 import sys
 import tempfile
@@ -11,6 +10,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+from tests.fifo_process import run_fifo_probe
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +28,7 @@ ARTIFACTS = _load("getzilla.workflow_artifacts", ROOT / ".getzilla/getzilla/work
 CLI = _load("workflow_artifacts_cli", ROOT / "scripts/getzilla_artifacts.py")
 
 
-def _run_cli_process(root: str, argv: list[str], queue: multiprocessing.Queue) -> None:
+def _run_cli_process(root: str, argv: list[str]) -> tuple[int, str]:
     output = io.StringIO()
     project = Path(root)
     with (
@@ -37,7 +37,7 @@ def _run_cli_process(root: str, argv: list[str], queue: multiprocessing.Queue) -
         patch.object(CLI, "find_root", lambda *_: project),
         redirect_stdout(output),
     ):
-        queue.put((CLI.main(), output.getvalue()))
+        return CLI.main(), output.getvalue()
 
 
 class WorkflowArtifactsCliTests(unittest.TestCase):
@@ -165,18 +165,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             route = root / ".getzilla/runtime/active-route.json"
             route.unlink()
             os.mkfifo(route)
-            queue: multiprocessing.Queue = multiprocessing.Queue()
-            process = multiprocessing.Process(
-                target=_run_cli_process,
-                args=(str(root), ["compile", "--change-id", change_id], queue),
-            )
-            process.start()
-            process.join(0.5)
-            if process.is_alive():
-                process.terminate()
-                process.join()
-            self.assertFalse(process.is_alive())
-            code, output = queue.get(timeout=1)
+            code, output = run_fifo_probe(_run_cli_process, (str(root), ["compile", "--change-id", change_id]))
             self.assertEqual(code, 1)
             self.assertIn(json.loads(output)["code"], {"file", "io"})
 
