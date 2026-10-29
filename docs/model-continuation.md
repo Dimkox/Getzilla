@@ -1,4 +1,4 @@
-# Model continuation: passive startup slice
+# Model continuation: policy, journal and Codex protocol
 
 Issue [235](https://github.com/Dimkox/Getzilla/issues/235) remains open. This slice loads policy, classifies normalized failures and reports status. It makes no model requests, scans no credentials and changes no native user defaults. No adapter is qualified. A configured policy cannot start continuation.
 
@@ -25,7 +25,7 @@ The [Copilot hook reference](https://docs.github.com/en/copilot/reference/hooks-
 
 `classify_failure` accepts only schema-1 normalized events with `origin:model` and a category. Trusted adapters must establish attempt identity and terminal-event provenance before calling it. An untrusted mapping with those fields establishes neither. Eligible categories are `rate_limit`, `quota_exhausted`, `provider_unavailable`, `inference_transport_failure`, `generation_failure` and `inference_deadline`. Authentication and billing need user action. All other categories stop, including tool/test failures, safety, cancellation, context overflow and task-budget exhaustion. Extra fields, such as a native retry signal, stop until an adapter normalizes a terminal event.
 
-Eligibility never authorizes dispatch. T3/T4/T5/T6b must add durable admission and exact cost accounting, request limits across retries, confirmed checkpoints, tool-effect reconciliation, generation fencing, authorization, destination checks and qualified adapters. Current numeric limits are validated inputs, not a spending ledger. Do not infer provider-switch support from native model selection.
+Eligibility never authorizes dispatch. The offline journal retains attempt, request and cost limits across restarts. A new Codex JSON-lines boundary owns a bounded process, initializes the app-server protocol and correlates turn events with the journal. Unknown event provenance is recorded as unknown, not as a trusted model failure. It never sends a successor turn. Local fake-peer tests do not qualify a native client. Confirmed checkpoints, tool-effect reconciliation, generation fencing, authorization, destination checks and qualified adapters remain required. Do not infer provider-switch support from native model selection.
 
 ## Recovery
 
