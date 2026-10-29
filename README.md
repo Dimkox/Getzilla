@@ -15,6 +15,13 @@ Current source: **2.3.1 source candidate** (unpublished): all work merged to `ma
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
+The [Git platform matrix](docs/git-platforms.md) distinguishes local-checkout compatibility,
+implemented GitHub CI and optional provider adapters. `getzilla git catalog` shows the current
+capabilities; `getzilla git inspect --json` identifies a remote offline. Entire native repositories
+and GitHub mirrors have an experimental adapter: `getzilla components add extra:entire`.
+It supports explicit transport and Trails with scoped grants. Automated merge, session capture
+and hosted end-to-end certification remain unsupported; a listed host never inherits GitHub's CI authority.
+
 The optional [EU AI Act layer](docs/eu-ai-act.md) includes matrix freshness checks, risk records,
 Python and Node transparency adapters, and audit evidence. Run `getzilla compliance scaffold`
 to create an adapter for a registered system on platforms with descriptor-relative file creation.
@@ -154,6 +161,8 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | Deliver | `getzilla approve <scope> --reason "<why>" --action <action> --resource <exact>` | Records a delegated local grant for one exact operation; no wildcard |
 | | `getzilla protected-write --manifest <file>` | Applies an approved write to a protected path |
 | | `getzilla ci --plan\|--write` | Selects the CI gate by repository visibility and writes the pinned public workflow |
+| | `getzilla git catalog\|inspect --json` | Shows the evidence-qualified Git platform catalog or identifies a local remote offline |
+| | `getzilla entire --context <name> status\|clone\|fetch\|push\|trails\|checks` | Optional Entire adapter; explicit grants for writes, no automated merge or session upload |
 | | `getzilla trust-ci init\|status\|github-app\|trust-key` | Sets up and checks a self-hosted Trust CI host |
 | | `getzilla deploy` | Prints, never runs, the publish commands a person runs |
 | Keep clean | `getzilla cleanup inventory` | Lists what Getzilla keeps on disk, with sizes and repository copies; deletes nothing |
