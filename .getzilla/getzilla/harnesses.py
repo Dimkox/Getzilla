@@ -15,6 +15,7 @@ HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
 GENERATED_ROOTS = ('.grok/skills', '.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
 HOOK_SOURCE = '.grok/hooks.json'
+CODEX_HOOK_SOURCE = '.grok/codex-hooks.json'
 AGENT_SOURCE = '.grok/agents'
 SKILL_SOURCE = '.agents/skills'
 CURSOR_SOURCE = '.grok/cursor-rules'
@@ -204,9 +205,12 @@ def render(root: Path) -> dict[str, bytes]:
         'hooks': _hooks_block(events, harness='claude', milliseconds=False),
     })
     out['.claude/CLAUDE.md'] = b'@../AGENTS.md\n'
-    out['.codex/hooks.json'] = _json({
-        'hooks': _hooks_block(events, harness='codex', milliseconds=False, only=CODEX_HOOK_EVENTS),
-    })
+    codex_hooks = _hooks_block(events, harness='codex', milliseconds=False, only=CODEX_HOOK_EVENTS)
+    overlay = root / CODEX_HOOK_SOURCE
+    if overlay.is_file():
+        for event, groups in json.loads(overlay.read_text(encoding='utf-8'))['hooks'].items():
+            codex_hooks.setdefault(event, []).extend(groups)
+    out['.codex/hooks.json'] = _json({'hooks': codex_hooks})
     out['.codex/config.toml'] = b'[features]\ncodex_hooks = true\n'
     out['.gemini/settings.json'] = _json({
         'context': {'fileName': ['AGENTS.md']},

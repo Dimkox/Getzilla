@@ -20,7 +20,7 @@ from ._policy_legacy import (
     shell_secret_reference as _legacy_shell_secret_reference,
     _COMMAND_SCAN_BYTE_LIMIT as _LEGACY_COMMAND_LIMIT,
 )
-from .shell_targets import control_plane_shell_mutation, protected_ref_move
+from .shell_targets import control_plane_shell_mutation, protected_ref_move, is_pip_install, PIP_INSTALL_HINT
 
 WORKFLOW_DISPATCH_POLICY = 'workflow-dispatch is forbidden'
 
@@ -124,6 +124,8 @@ def evaluate_pre_tool(root: Path, event: dict[str, Any]) -> tuple[bool, str | No
         # hooks, so it stays refused; the snapshot tool makes and removes copies instead (#183).
         hint = (' For a review copy, run `getzilla cleanup snapshot <commit>`, edit it with Edit/Write, and '
                 'remove it with `getzilla cleanup snapshot --remove <path>`.') if _legacy.AGENT_SCRATCH in command else ''
+        if is_pip_install(command):
+            hint = PIP_INSTALL_HINT
         return False, (
             'Blocked opaque control-plane shell mutation; split the command or use Edit/Write/apply_patch '
             'so targets are explicit repository-relative paths. Do not create a protected-path grant until '

@@ -1,5 +1,9 @@
 import sys
+import os
+import shutil
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -7,6 +11,133 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool
 from tests._support import project_copy
+
+
+@unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
+class ScratchPipPolicyTest(unittest.TestCase):
+    def setUp(self):
+        # The policy supports system Python paths, while the test runner can live in a CI
+        # tool cache. Inspect this supported interpreter's metadata; never execute it.
+        base_python = Path('/usr/bin/python3')
+        if not base_python.is_file() or not os.access(base_python, os.X_OK):
+            self.skipTest('scratch pip fixture needs /usr/bin/python3 metadata')
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        shutil.copy2(ROOT / '.getzilla/config/policy.json', config)
+        self.requirements = config / 'python-test-requirements.txt'
+        self.requirements.write_text('# tools\npytest==9.1.1\ncoverage==7.15.4\n')
+        self.venv = self.root / '.getzilla/runtime/scratch/tools'
+        (self.venv / 'bin').mkdir(parents=True)
+        self.venv.chmod(0o700)
+        for parent in self.venv.parents:
+            if parent == self.root:
+                break
+            parent.chmod(0o755)
+        (self.venv / 'bin/python').symlink_to(base_python)
+        (self.venv / 'bin/\U0001d70bthon').symlink_to(base_python)
+        (self.venv / 'lib').mkdir()
+        (self.venv / 'lib64').symlink_to('lib', target_is_directory=True)
+        (self.venv / 'pyvenv.cfg').write_text(
+            f'home = {base_python.parent}\n'
+            f'executable = {base_python}\ninclude-system-site-packages = false\n')
+        self.command = ('PIP_CONFIG_FILE=/dev/null .getzilla/runtime/scratch/tools/bin/python -I -m pip '
+                        '--isolated install --only-binary=:all: --no-cache-dir --disable-pip-version-check --ignore-installed '
+                        '-r .getzilla/config/python-test-requirements.txt')
+
+    def check(self, command):
+        return evaluate_pre_tool(self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_pinned_scratch_install_reads_requirements_and_writes_only_venv(self):
+        allowed, reason = self.check(self.command)
+        self.assertTrue(allowed, reason)
+        second = self.root / '.getzilla/config/python-quality-requirements.txt'
+        second.write_text('ruff==0.16.3\nbandit==1.9.4\n')
+        allowed, reason = self.check(self.command + ' -r .getzilla/config/python-quality-requirements.txt')
+        self.assertTrue(allowed, reason)
+
+    def test_fixture_does_not_depend_on_the_test_runner_python_location(self):
+        case = ScratchPipPolicyTest()
+        try:
+            with mock.patch.object(sys, 'executable', '/opt/hostedtoolcache/Python/3.13.17/x64/bin/python'):
+                case.setUp()
+            allowed, reason = case.check(case.command)
+            self.assertTrue(allowed, reason)
+        finally:
+            case.doCleanups()
+
+    def test_unsupported_pip_arguments_and_shell_forms_are_refused(self):
+        variants = [self.command + suffix for suffix in (
+            ' --target .getzilla/config', ' --prefix .grok', ' --root /tmp/root',
+            ' --log AGENTS.md', ' --report README.md', ' --cache-dir .getzilla/config',
+            ' --python /usr/bin/python3', ' -e .', ' .', ' git+https://example.invalid/repo',
+            ' pytest', ' > AGENTS.md', ' && echo done', ' ; echo done', ' --no-binary=:all:',
+            ' --target=.grok', ' --report=README.md', ' --prefix=.getzilla', ' --root=.grok',
+            ' --log=AGENTS.md', ' --cache-dir=.grok', ' -t .grok',
+        )]
+        variants += [self.command.replace(flag, '') for flag in
+                     ('PIP_CONFIG_FILE=/dev/null ', '-I ', '--isolated ', '--only-binary=:all: ',
+                      '--no-cache-dir ', '--ignore-installed ')]
+        variants += [self.command.replace('tools/bin/python', '../tools/bin/python'),
+                     self.command.replace('tools/bin/python', '$VENV/bin/python')]
+        for command in variants:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed, reason)
+
+    def test_nested_requirements_and_non_pins_are_refused(self):
+        for content in ('-r other.txt\n', '--target .grok\n', '-e .\n', 'pytest>=9\n',
+                        'pkg @ https://example.invalid/pkg.whl\n', 'pytest==9.1.1; python_version>="3"\n'):
+            with self.subTest(content=content):
+                self.requirements.write_text(content)
+                self.assertFalse(self.check(self.command)[0])
+
+    def test_venv_directory_escape_is_refused(self):
+        external = self.root / 'external'
+        external.mkdir()
+        (self.venv / 'lib').rmdir()
+        (self.venv / 'lib').symlink_to(external, target_is_directory=True)
+        self.assertFalse(self.check(self.command)[0])
+
+    def test_inline_program_guard_remains(self):
+        self.assertFalse(self.check('python3 -c "open(\'AGENTS.md\', \'w\').write(\'x\')"')[0])
+
+    def test_system_site_and_foreign_interpreters_are_refused(self):
+        cfg = self.venv / 'pyvenv.cfg'
+        original = cfg.read_text()
+        cfg.write_text(original.replace('false', 'true'))
+        self.assertFalse(self.check(self.command)[0])
+        cfg.write_text(original)
+        interpreter = self.venv / 'bin/python'
+        interpreter.unlink()
+        interpreter.symlink_to('/bin/sh')
+        self.assertFalse(self.check(self.command)[0])
+
+    def test_linked_requirements_and_venv_files_are_refused(self):
+        original = self.requirements.read_text()
+        target = self.root / 'pins.txt'
+        target.write_text(original)
+        self.requirements.unlink()
+        self.requirements.symlink_to(target)
+        self.assertFalse(self.check(self.command)[0])
+        self.requirements.unlink()
+        self.requirements.write_text(original)
+        os.link(target, self.venv / 'shared.txt')
+        self.assertFalse(self.check(self.command)[0])
+
+    def test_supported_form_is_explained_when_pip_is_refused(self):
+        allowed, reason = self.check(self.command + ' --prefix .grok')
+        self.assertFalse(allowed)
+        self.assertIn('Supported pip form:', reason)
+
+    def test_shared_venv_and_writable_ancestors_are_refused(self):
+        self.venv.chmod(0o775)
+        self.assertFalse(self.check(self.command)[0])
+        self.venv.chmod(0o700)
+        self.venv.parent.chmod(0o777)
+        self.assertFalse(self.check(self.command)[0])
 
 
 class ShellTargetPolicyTest(unittest.TestCase):

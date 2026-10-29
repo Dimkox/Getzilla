@@ -9,6 +9,15 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then printf \"%s\\n\" \"{\\\"systemMessage\\\":\\\"Entire CLI is enabled but not installed or not on PATH. Installation guide: https://docs.entire.io/cli/installation#installation-methods\\\"}\"; exit 0; fi; exec entire hooks codex session-start'",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -18,6 +27,15 @@
             "type": "command",
             "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','codex'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','codex'];runpy.run_path(str(f),run_name='__main__')\"",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex user-prompt-submit'",
+            "timeout": 30
           }
         ]
       }
@@ -42,6 +60,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex post-tool-use'",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "Stop": [
@@ -51,6 +78,48 @@
             "type": "command",
             "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','codex'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','codex'];runpy.run_path(str(f),run_name='__main__')\"",
             "timeout": 120
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex stop'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex session-end'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex subagent-start'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks codex subagent-stop'",
+            "timeout": 30
           }
         ]
       }
