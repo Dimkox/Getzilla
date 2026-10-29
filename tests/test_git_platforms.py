@@ -35,6 +35,15 @@ class RemoteIdentityTests(unittest.TestCase):
             self.assertEqual((identity.provider, identity.repository), ('github', 'Owner/Repo'))
             self.assertEqual(identity.resource, 'https://github.com/Owner/Repo')
 
+    def test_dot_leading_repository_and_entire_git_suffix_are_supported(self):
+        self.assertEqual(parse_remote('https://github.com/example/.github.git').repository, 'example/.github')
+        for forge in ('et', 'gh'):
+            url = f'entire://aws-us-east-2.entire.io/{forge}/team/repo.git'
+            identity = parse_remote(url)
+            self.assertEqual(identity.repository, 'team/repo')
+            self.assertEqual(identity.clone_url, url)
+            self.assertEqual(identity.resource, url.removesuffix('.git'))
+
     def test_never_accepts_secrets_ambiguous_paths_or_lookalike_entire_hosts(self):
         for url in ['', 'entire://evil.test/et/a/b', 'entire://x.entire.io.evil.test/et/a/b',
                     'entire://token@x.entire.io/et/a/b', 'entire://x.entire.io:443/et/a/b',

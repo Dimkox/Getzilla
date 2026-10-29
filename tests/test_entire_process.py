@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import tempfile
 import threading
@@ -34,11 +35,36 @@ class BoundedProcessTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 3)
 
     def test_timeout_kills_child_group_even_if_parent_exits(self):
-        code = 'import subprocess,sys; subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"])'
-        start = time.monotonic()
-        result = self.run_python(code, timeout=0.2, max_output=1024)
-        self.assertEqual(result.status, 'timeout')
-        self.assertLess(time.monotonic() - start, 2)
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            ready, heartbeat = directory / 'ready', directory / 'survived'
+            child = directory / 'child.py'
+            child.write_text('from pathlib import Path\nimport sys, time\n'
+                             'Path(sys.argv[1]).write_text("ready", encoding="utf-8")\n'
+                             'time.sleep(2)\n'
+                             'Path(sys.argv[2]).write_text("still running", encoding="utf-8")\n', encoding='utf-8')
+            code = 'import os,subprocess,sys; print(os.getpid(),flush=True); subprocess.Popen(sys.argv[1:])'
+            group = None
+            try:
+                start = time.monotonic()
+                result = bounded_run([sys.executable, '-c', code, sys.executable, str(child), str(ready), str(heartbeat)],
+                                     cwd=ROOT, env=os.environ.copy(), timeout=1, max_output=1024)
+                group = int(result.stdout.strip())
+                self.assertNotEqual(group, os.getpgrp())
+                self.assertEqual(result.status, 'timeout')
+                self.assertLess(time.monotonic() - start, 3)
+                self.assertTrue(ready.exists(), 'the descendant must start before its cleanup can be tested')
+                deadline = time.monotonic() + 2.2
+                while not heartbeat.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertFalse(heartbeat.exists(), 'a descendant continued working after the timeout')
+            finally:
+                # A broken implementation must not leak the test child; no /proc visibility assumption.
+                if group is not None and group != os.getpgrp():
+                    try:
+                        os.killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_cancellation_and_missing_program(self):
         cancel = threading.Event()

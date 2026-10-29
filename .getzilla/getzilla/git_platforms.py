@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 CATALOG_DATE = '2026-10-29'
 CAPABILITIES = ('local_input', 'clone', 'fetch', 'push', 'visibility', 'review_requests',
                 'checks', 'webhooks', 'merge', 'lfs', 'submodules', 'session_evidence')
-_SEGMENT = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}\Z')
+_SEGMENT = re.compile(r'[A-Za-z0-9_.-]{1,255}\Z')
 _HOST = re.compile(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\Z')
 _HOSTS = {
     'github.com': 'github', 'ssh.github.com': 'github', 'gitlab.com': 'gitlab',
@@ -86,6 +86,11 @@ def parse_remote(value: str) -> RemoteIdentity | None:
                 or parts[0] not in {'et', 'gh'} or parsed.path != '/' + '/'.join(parts)
                 or any(p.startswith('~') for p in parts)):
             return None
+        # The supported CLI accepts .git decoration but returns a canonical repo name.
+        # Keep the original transport URL separately from that logical identity.
+        parts[-1] = parts[-1].removesuffix('.git')
+        if not parts[-1] or parts[-1] in {'.', '..'}:
+            return None
         mode = 'native' if parts[0] == 'et' else 'mirror'
         resource = f'entire://{host}/' + '/'.join(parts)
         return RemoteIdentity('entire', mode, host, '/'.join(parts[1:]),
@@ -102,7 +107,8 @@ def parse_remote(value: str) -> RemoteIdentity | None:
         provider = 'azure-repos'
     elif re.fullmatch(r'git-codecommit\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?', host):
         provider = 'codecommit'
-    if provider == 'github' and (len(parts) != 2 or (port is not None and not (host == 'ssh.github.com' and port == 443))):
+    if provider == 'github' and (len(parts) != 2 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', parts[0])
+                                or (port is not None and not (host == 'ssh.github.com' and port == 443))):
         return None
     repository = '/'.join(parts)
     resource = f'https://github.com/{repository}' if provider == 'github' else f'{parsed.scheme}://{host}' + (f':{port}' if port else '') + f'/{repository}'

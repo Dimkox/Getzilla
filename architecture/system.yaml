@@ -1835,6 +1835,125 @@
       "sync_or_async": "synchronous",
       "to": "NODE-OSV-ADVISORY-BUCKET",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-APPROVAL"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 0
+      },
+      "from": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "id": "EDGE-ENTIRE-LOCAL-CORE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-ROUTE-POLICY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PR-PROJECTION",
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-ENTIRE-OPERATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "id": "EDGE-ENTIRE-PROVIDER-READ",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-ENTIRE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PR-PROJECTION"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-ENTIRE-OPERATION-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "id": "EDGE-ENTIRE-PROVIDER-WRITE",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-ENTIRE",
+      "type": "publication"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_open",
+        "observable_signal": "SIG-ENTIRE-VERSION-CHECK-FAILURE",
+        "terminal_action": "degrade",
+        "timeout_ms": 2000
+      },
+      "from": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "id": "EDGE-ENTIRE-VERSION-MANIFEST",
+      "network_policy": "external_managed",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-ENTIRE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_open",
+        "observable_signal": "SIG-ENTIRE-VERSION-CHECK-FAILURE",
+        "terminal_action": "degrade",
+        "timeout_ms": 2000
+      },
+      "from": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "id": "EDGE-ENTIRE-VERSION-GITHUB-FALLBACK",
+      "network_policy": "external_managed",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -2934,6 +3053,43 @@
       "secrets": [],
       "trust_domain": "TD-EXTERNAL-PLATFORM",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-ENTIRE-ADAPTER",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/integrations/getzilla_entire",
+        "scripts/getzilla_entire.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-ENTIRE-SESSION"
+      ],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-ENTIRE",
+      "owner": "Entire",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
     }
   ],
   "schema_version": 1,
@@ -2977,6 +3133,10 @@
     {
       "classification": "trust_material",
       "id": "SECRET-PILOT-CODEX"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-ENTIRE-SESSION"
     }
   ],
   "signals": [
@@ -3035,6 +3195,14 @@
     {
       "description": "A single-attempt model or GitHub operation failed or returned an ambiguous result requiring observation-only recovery.",
       "id": "SIG-PILOT-EXTERNAL-FAILURE"
+    },
+    {
+      "description": "Entire adapter operation failed closed; an ambiguous remote write requires manual observation and reconciliation.",
+      "id": "SIG-ENTIRE-OPERATION-FAILURE"
+    },
+    {
+      "description": "Upstream debug event for a failed best-effort public version lookup; the CLI continues without update information and does not expose this as an adapter operation failure. The manifest and GitHub fallback share one 2000 ms budget.",
+      "id": "SIG-ENTIRE-VERSION-CHECK-FAILURE"
     }
   ],
   "trust_domains": [
@@ -3066,7 +3234,7 @@
     {
       "id": "TD-EXTERNAL-PLATFORM",
       "kind": "external_platform",
-      "owner": "GitHub"
+      "owner": "operators of declared external platforms and APIs"
     },
     {
       "id": "TD-PRODUCTION-TRUST",

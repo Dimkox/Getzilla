@@ -1648,6 +1648,7 @@ def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDis
 
 QUALITY_PY_PATHS = (
     '.getzilla/getzilla',
+    '.getzilla/integrations',
     'scripts',
     'tests',
     '.grok/hooks',

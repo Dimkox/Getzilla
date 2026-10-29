@@ -867,6 +867,16 @@
         "SECRET-PILOT-GITHUB"
       ],
       "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT"
+      ],
+      "id": "FIT-ENTIRE-MATERIAL-BOUNDARY",
+      "secret_classes": [
+        "SECRET-ENTIRE-SESSION"
+      ],
+      "severity": "error"
     }
   ],
   "tenant_authorization_policies": [
@@ -893,6 +903,7 @@
       "forbidden_secret_classes": [
         "SECRET-CI-SIGNING",
         "SECRET-DATABASE",
+        "SECRET-ENTIRE-SESSION",
         "SECRET-GITHUB-APP",
         "SECRET-HUMAN-APPROVAL",
         "SECRET-PILOT-CODEX",

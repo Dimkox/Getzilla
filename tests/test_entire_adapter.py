@@ -57,6 +57,10 @@ class FixtureRunner:
 
 class ClientTests(unittest.TestCase):
     def setUp(self):
+        environment = mock.patch.dict(os.environ, {key: value for key, value in os.environ.items()
+                                      if not key.startswith('GIT_')}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -85,6 +89,13 @@ class ClientTests(unittest.TestCase):
         repo = self.client.discover(parse_remote(MIRROR))
         self.assertIsNone(repo.can_push)
         self.assertNotIn('--authoritative', self.runner.calls[-1][0])
+
+    def test_decorated_clone_url_matches_canonical_native_and_mirror_response(self):
+        for url, forge in [(URL, 'et'), (MIRROR, 'gh')]:
+            self.runner.repo['repo'] = f'/{forge}/team/repo'
+            repo = self.client.discover(parse_remote(url + '.git'))
+            self.assertEqual(repo.identity.repository, 'team/repo')
+            self.assertIn(url + '.git', self.runner.calls[-1][0])
 
     def test_exit_zero_logged_out_revoked_or_error_is_refused(self):
         for auth in ({'logged_in': False}, {'logged_in': True, 'login_revoked': True},

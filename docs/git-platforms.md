@@ -96,7 +96,11 @@ mismatched context/server is a refusal.
 Telemetry and automatic update prompts are disabled for adapter child processes.
 Upstream CLI 0.12.2 can still make an unauthenticated version-check request to
 `install.entire.com`, with `api.github.com` as fallback; the available upstream variables
-do not disable that check. Getzilla does not send GitHub token environment variables to
+do not disable that check. That optional lookup shares a two-second budget across both
+origins, can follow HTTPS redirects to other hosts and does not fail the main command
+when update information is unavailable. The architecture model declares these public
+version lookups separately from authenticated repository operations.
+Getzilla does not send GitHub token environment variables to
 the Entire process. Default Git system/global configuration still applies; URL rewrites
 are checked and refused before transport operations.
 Inherited `GIT_DIR`, `GIT_WORK_TREE`, index/config overrides and other `GIT_*` routing

@@ -24,6 +24,15 @@ from tests.test_approval_resources import github_project
 
 
 class GrantIdentityTests(unittest.TestCase):
+    def test_real_github_dot_repository_keeps_existing_grant_binding(self):
+        with github_project() as root:
+            subprocess.run(['git', 'remote', 'set-url', 'origin', 'https://github.com/example/.github.git'],
+                           cwd=root, check=True)
+            grant = state.add_approval(root, 'production', 'fixture user authorization', 5,
+                                       actions=['git-push-branch'], resources=['getzilla/task'])
+            self.assertEqual(grant['repository'], 'example/.github')
+            self.assertTrue(state.has_valid_approval(root, 'production', action='git-push-branch', resource='getzilla/task'))
+
     def test_native_mirror_and_github_grants_are_distinct(self):
         for url, expected in [(URL, URL), (MIRROR, MIRROR),
                               ('git@github.com:Team/Repo.git', 'Team/Repo')]:
@@ -99,6 +108,10 @@ class JournalTests(unittest.TestCase):
 
 class WriteGuardTests(unittest.TestCase):
     def setUp(self):
+        environment = mock.patch.dict(os.environ, {key: value for key, value in os.environ.items()
+                                      if not key.startswith('GIT_')}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
