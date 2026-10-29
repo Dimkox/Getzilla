@@ -242,7 +242,9 @@ class RootContext:
 
     @property
     def sensitive_safe(self) -> bool:
-        return self.effective_root is not None and self.resolution_status in {'session-root', 'effective-root'}
+        return self.effective_root is not None and self.resolution_status in {
+            'session-root', 'effective-root', 'linked-worktree-push',
+        }
 
     @property
     def has_ambiguous_command_evidence(self) -> bool:
@@ -861,6 +863,53 @@ def _installed_root(root: Path) -> bool:
             and Path(top.stdout.strip()).resolve() == root.resolve())
 
 
+def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
+    """Recognize a registered worktree and one successful cd/push, never a grant."""
+    if (not isinstance(command, str) or any(char in command for char in '$`\n\r')
+            or any(key.startswith('GIT_') and key not in {'GIT_PAGER', 'GIT_TERMINAL_PROMPT'}
+                   for key in os.environ)):
+        return False
+    try:
+        tokens = _shell_tokens(command)
+        operators = [index for index, token in enumerate(tokens) if token.operator]
+        if len(operators) != 1 or tokens[operators[0]].value != '&&':
+            return False
+        split = operators[0]
+        before = [token.value for token in tokens[:split]]
+        after = [token.value for token in tokens[split + 1:]]
+        if before[:2] == ['cd', '--']:
+            before.pop(1)
+        if (len(before) != 2 or before[0] != 'cd' or not Path(before[1]).is_absolute()
+                or Path(before[1]).resolve() != target or after[:2] != ['git', 'push']):
+            return False
+
+        def git(root: Path, *args: str) -> str:
+            result = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', str(root), *args],
+                                    capture_output=True, text=True, encoding='utf-8', errors='strict',
+                                    timeout=5, check=True)
+            return result.stdout.strip()
+
+        common = Path(git(session, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve()
+        if Path(git(session, 'rev-parse', '--show-toplevel')).resolve() != session:
+            return False
+        if Path(git(target, 'rev-parse', '--show-toplevel')).resolve() != target:
+            return False
+        if Path(git(target, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve() != common:
+            return False
+        gitdir = Path(git(target, 'rev-parse', '--absolute-git-dir')).resolve()
+        if gitdir.parent != common / 'worktrees' or not (target / '.git').is_file():
+            return False
+        if Path((gitdir / 'gitdir').read_text(encoding='utf-8').strip()).resolve() != target / '.git':
+            return False
+        registered = git(session, 'worktree', 'list', '--porcelain', '-z').split('\0')
+        if f'worktree {target}' not in registered:
+            return False
+        git(target, 'ls-files', '--error-unmatch', '--', '.getzilla/config/policy.json')
+        return True
+    except (OSError, ValueError, UnicodeError, RuntimeError, subprocess.SubprocessError):
+        return False
+
+
 def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str) -> RootContext:
     session_values = {
         key: str(payload[key]) for key in _SESSION_ROOT_ALIASES if payload.get(key) not in (None, '')
@@ -960,6 +1009,9 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
         return RootContext(session_cwd, session_root, command_values, None, 'ambiguous-command-root')
     effective_root = next(iter(command_roots))
     status = 'effective-root' if session_root in (None, effective_root) else 'cross-root'
+    if (status == 'cross-root' and tool == 'Bash' and session_root is not None
+            and _linked_worktree_push(session_root, effective_root, command)):
+        status = 'linked-worktree-push'
     return RootContext(session_cwd, session_root, command_values, effective_root, status)
 
 

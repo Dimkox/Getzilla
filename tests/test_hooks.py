@@ -18,6 +18,65 @@ from tests._support import prepare_review_source, project_copy, run_hook
 
 
 class HookTests(unittest.TestCase):
+    def test_linked_worktree_push_requires_its_own_exact_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'production', actions=['git-push-branch'], resources=['feature'])
+            payload = {
+                'cwd': str(root), 'tool_name': 'Bash',
+                'tool_input': {'command': f'cd {target} && git push origin feature'},
+            }
+            _, data, error = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(data['decision'], 'allow', (data, error))
+
+            for command in (
+                f'cd {target}; git push origin feature',
+                f'cd {target} || git push origin feature',
+                f'cd {target} && git push origin feature && git status',
+                f'cd {target} && GIT_DIR={root}/.git git push origin feature',
+                f'cd {target} && git -C {root} push origin feature',
+                f'git -C {target} push origin feature',
+                f'cd {target} && git push origin feature > output.txt',
+                f'cd {target} && git push origin main',
+            ):
+                with self.subTest(command=command):
+                    _, denied, _ = run_hook(root, 'pre_tool_use.py', {
+                        **payload, 'tool_input': {'command': command},
+                    })
+                    self.assertEqual(denied['decision'], 'deny', denied)
+            (target / 'AGENTS.md').write_text('changed after grant', encoding='utf-8')
+            _, stale, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(stale['decision'], 'deny', stale)
+
+    def test_linked_worktree_cannot_borrow_session_grant_or_git_pointer(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(root, 'production', actions=['git-push-branch'], resources=['feature'])
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'tool_name': 'Bash',
+                'tool_input': {'command': f'cd {target} && git push origin feature'},
+            })
+            self.assertEqual(denied['decision'], 'deny', denied)
+            fake = root / '.getzilla/runtime/scratch/fake'
+            (fake / '.getzilla').mkdir(parents=True)
+            (fake / '.git').write_bytes((target / '.git').read_bytes())
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'tool_name': 'Bash',
+                'tool_input': {'command': f'cd {fake} && git push origin feature'},
+            })
+            self.assertEqual(denied['decision'], 'deny', denied)
+
+    def test_independent_repository_target_grant_does_not_qualify_linked_worktree(self) -> None:
+        with project_copy(git=True) as root, project_copy(git=True) as target:
+            self._grant(target, 'production', actions=['git-push-branch'], resources=['feature'])
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'tool_name': 'Bash',
+                'tool_input': {'command': f'cd {target} && git push origin feature'},
+            })
+            self.assertEqual(denied['decision'], 'deny', denied)
+
     def _grant(self, root: Path, scope: str, *, actions: list[str], resources: list[str] | None = None) -> None:
         subprocess.run(
             ['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
