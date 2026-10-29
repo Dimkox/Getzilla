@@ -17,6 +17,102 @@ from tests.test_model_continuation import enabled_policy
 
 
 class CodexContinuationTest(unittest.TestCase):
+    def test_native_typed_429_with_bound_lifecycle_is_eligible_observation_only(self):
+        state = codex_continuation.TurnObserver('thread', 'turn')
+        for event in (
+            {'method': 'thread/started', 'params': {'thread': {'id': 'thread'}}},
+            {'method': 'thread/status/changed', 'params': {'threadId': 'thread', 'status': {'type': 'active'}}},
+            {'method': 'turn/started', 'params': {'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'inProgress'}}},
+            {'method': 'item/started', 'params': {'threadId': 'thread', 'turnId': 'turn', 'item': {'id': 'm', 'type': 'userMessage'}}},
+            {'method': 'item/completed', 'params': {'threadId': 'thread', 'turnId': 'turn', 'item': {'id': 'm', 'type': 'userMessage'}}},
+            {'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn', 'willRetry': False,
+             'error': {'codexErrorInfo': {'responseTooManyFailedAttempts': {'httpStatusCode': 429}}}}},
+            {'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'failed',
+             'error': {'codexErrorInfo': {'responseTooManyFailedAttempts': {'httpStatusCode': 429}}}}}},
+        ):
+            state.observe(event)
+        self.assertTrue(state.eligible)
+        self.assertFalse(state.dispatch_permitted)
+
+    def test_typed_429_rejects_malformed_or_conflicting_details(self):
+        for info in ({'responseTooManyFailedAttempts': {'httpStatusCode': '429'}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': True}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 401}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 402}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 403}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 500}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': None}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 429}, 'other': {}},
+                     {'responseTooManyFailedAttempts': {'httpStatusCode': 429, 'other': 1}}):
+            with self.subTest(info=info):
+                state = codex_continuation.TurnObserver('thread', 'turn')
+                state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                              'willRetry': False, 'error': {'codexErrorInfo': info}}})
+                state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread',
+                              'turn': {'id': 'turn', 'status': 'failed'}}})
+                self.assertFalse(state.eligible)
+
+    def test_mismatched_terminal_error_or_lifecycle_fails_closed(self):
+        good = {'responseTooManyFailedAttempts': {'httpStatusCode': 429}}
+        for variant in ('different_error', 'stale_thread', 'stale_turn', 'native_retry', 'unknown_event'):
+            with self.subTest(variant=variant):
+                state = codex_continuation.TurnObserver('thread', 'turn')
+                state.observe({'method': 'turn/started', 'params': {
+                    'threadId': 'other' if variant == 'stale_thread' else 'thread',
+                    'turn': {'id': 'other' if variant == 'stale_turn' else 'turn', 'status': 'inProgress'}}})
+                if variant == 'unknown_event':
+                    state.observe({'method': 'new/unknown', 'params': {}})
+                state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                              'willRetry': variant == 'native_retry', 'error': {'codexErrorInfo': good}}})
+                state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {
+                    'id': 'turn', 'status': 'failed', 'error': {'codexErrorInfo':
+                    'unauthorized' if variant == 'different_error' else good}}}})
+                self.assertFalse(state.eligible)
+
+    def test_global_advisory_is_not_authority_and_malformed_advisory_denied(self):
+        typed = {'responseTooManyFailedAttempts': {'httpStatusCode': 429}}
+        for advisory, accepted in (
+            ({'method': 'configWarning', 'params': {'summary': 'synthetic'}}, True),
+            ({'method': 'account/rateLimits/updated', 'params': {'rateLimits': {}}}, True),
+            ({'method': 'remoteControl/status/changed', 'params': {'installationId': 'i', 'serverName': 's', 'status': 'disabled'}}, True),
+            ({'method': 'remoteControl/status/changed', 'params': {'installationId': 'i', 'serverName': 's', 'status': {}}}, False),
+            ({'method': 'configWarning', 'params': {'summary': 3}}, False),
+            ({'id': 9, 'method': 'configWarning', 'params': {'summary': 'synthetic'}}, False),
+        ):
+            with self.subTest(advisory=advisory):
+                state = codex_continuation.TurnObserver('thread', 'turn')
+                state.observe(advisory)
+                state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                              'willRetry': False, 'error': {'codexErrorInfo': typed}}})
+                state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread',
+                              'turn': {'id': 'turn', 'status': 'failed'}}})
+                self.assertEqual(state.eligible, accepted)
+                self.assertFalse(state.dispatch_permitted)
+
+    def test_stale_usage_notification_is_not_ignored(self):
+        state = codex_continuation.TurnObserver('thread', 'turn')
+        state.observe({'method': 'thread/tokenUsage/updated', 'params': {'threadId': 'thread',
+                      'turnId': 'other', 'tokenUsage': {}}})
+        state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                      'willRetry': False, 'error': {'codexErrorInfo': 'rateLimitExceeded'}}})
+        state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread',
+                      'turn': {'id': 'turn', 'status': 'failed'}}})
+        self.assertFalse(state.eligible)
+
+    def test_terminal_snapshot_cannot_hide_a_tool_effect(self):
+        state = codex_continuation.TurnObserver('thread', 'turn')
+        state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                      'willRetry': False, 'error': {'codexErrorInfo': 'rateLimitExceeded'}}})
+        state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {
+            'id': 'turn', 'status': 'failed', 'items': [{'id': 'x', 'type': 'commandExecution'}]}}})
+        self.assertFalse(state.eligible)
+
+    def test_unhashable_item_type_fails_closed(self):
+        state = codex_continuation.TurnObserver('thread', 'turn')
+        state.observe({'method': 'item/started', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                      'item': {'id': 'x', 'type': []}}})
+        self.assertFalse(state.eligible)
+
     def test_not_yet_qualified(self):
         self.assertFalse(codex_continuation.LIVE_QUALIFIED)
 
@@ -96,6 +192,7 @@ class CodexContinuationTest(unittest.TestCase):
                 script = Path(temp) / 'peer.py'
                 script.write_text("import json,sys\nr=json.loads(sys.stdin.readline())\n"
                                   "assert r['method']=='initialize'\n"
+                                  "print(json.dumps({'method':'configWarning','params':{'summary':'synthetic'}}),flush=True)\n"
                                   "print(json.dumps({'id':r['id'],'result':{}}),flush=True)\n"
                                   "r=json.loads(sys.stdin.readline())\n"
                                   "print(json.dumps({'method':r['method'],'params':{}}),flush=True)\n")
