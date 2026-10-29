@@ -11,7 +11,7 @@ import math
 import os
 import re
 import stat
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,7 +148,7 @@ def load_policy(root: Path) -> PolicyLoad:
         policy = _parse(_read(root))
     except FileNotFoundError:
         return PolicyLoad('missing', 'policy_missing')
-    except (OSError, ValueError, RecursionError, OverflowError):
+    except (OSError, ValueError, RecursionError, OverflowError, InvalidOperation):
         return PolicyLoad('invalid', 'policy_invalid')
     return PolicyLoad('configured' if policy.enabled else 'disabled',
                       'policy_configured' if policy.enabled else 'policy_disabled', policy)

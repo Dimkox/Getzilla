@@ -305,6 +305,10 @@ def _store(root: Path, *, create=False):
                         fsx.unlink_at(directory, name)
                     except FileNotFoundError:
                         pass
+            if new_lock:
+                # Publish a durable empty ledger before business validation. A failed
+                # initial publication still leaves the lock and fails closed.
+                save()
             yield chains, save
             check()
     except OSError:

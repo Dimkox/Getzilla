@@ -98,6 +98,11 @@ class ContinuationJournalTest(unittest.TestCase):
         with self.assertRaises(journal.JournalError):
             journal.create_chain(self.root, self.binding, journal.Usage(5, '0.1'), self.budget)
 
+    def test_rejected_first_creation_does_not_prevent_valid_retry(self):
+        with self.assertRaisesRegex(journal.JournalError, 'initial_budget_exhausted'):
+            journal.create_chain(self.root, self.binding, journal.Usage(5, '0.1'), self.budget)
+        self.assertEqual(self.create()['state'], 'active_unknown')
+
     def test_current_epoch_deadline_is_accepted_and_expires(self):
         now = int(datetime.now(timezone.utc).timestamp())
         self.assertGreater(now, 1_000_000_000)
