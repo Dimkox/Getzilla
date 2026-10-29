@@ -863,6 +863,11 @@ def _installed_root(root: Path) -> bool:
             and Path(top.stdout.strip()).resolve() == root.resolve())
 
 
+def _registered_worktree(target: Path, records: list[str]) -> bool:
+    # Git prints forward slashes on Windows; compare native path identities.
+    return any(record.startswith('worktree ') and type(target)(record[9:]) == target for record in records)
+
+
 def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
     """Recognize a registered worktree and one successful cd/push, never a grant."""
     if (not isinstance(command, str) or any(char in command for char in '$`\n\r')
@@ -880,7 +885,9 @@ def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
         if before[:2] == ['cd', '--']:
             before.pop(1)
         if (len(before) != 2 or before[0] != 'cd' or not Path(before[1]).is_absolute()
-                or Path(before[1]).resolve() != target or after[:2] != ['git', 'push']):
+                # Shell logical cd and physical resolve disagree on symlink/.. paths.
+                # Require the spelling itself to name the canonical target.
+                or Path(before[1]) != target or after[:2] != ['git', 'push']):
             return False
 
         def git(root: Path, *args: str) -> str:
@@ -902,7 +909,7 @@ def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
         if Path((gitdir / 'gitdir').read_text(encoding='utf-8').strip()).resolve() != target / '.git':
             return False
         registered = git(session, 'worktree', 'list', '--porcelain', '-z').split('\0')
-        if f'worktree {target}' not in registered:
+        if not _registered_worktree(target, registered):
             return False
         git(target, 'ls-files', '--error-unmatch', '--', '.getzilla/config/policy.json')
         return True

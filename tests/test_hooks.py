@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -18,6 +19,38 @@ from tests._support import prepare_review_source, project_copy, run_hook
 
 
 class HookTests(unittest.TestCase):
+    def test_linked_worktree_registration_uses_native_path_semantics(self) -> None:
+        spec = importlib.util.spec_from_file_location('hook_path_regression', ROOT / '.grok/hooks/_lib.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            target = PureWindowsPath('C:/repo/worktrees/linked')
+            self.assertTrue(module._registered_worktree(target, ['worktree C:/repo/worktrees/linked']))
+            self.assertFalse(module._registered_worktree(target, ['worktree D:/repo/worktrees/linked']))
+            self.assertFalse(module._registered_worktree(target, ['worktree C:/repo/worktrees/other']))
+        finally:
+            sys.modules.pop(spec.name, None)
+
+    def test_linked_worktree_rejects_symlink_parent_spelling(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            child = target / 'child'
+            child.mkdir()
+            alias = root / '.getzilla/runtime/scratch/alias'
+            alias.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                alias.symlink_to(child, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f'Directory symlink unavailable: {error}')
+            self._grant(target, 'production', actions=['git-push-branch'], resources=['feature'])
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'tool_name': 'Bash',
+                'tool_input': {'command': f'cd {alias}/.. && git push origin feature'},
+            })
+            self.assertEqual(denied['decision'], 'deny', denied)
+
     def test_linked_worktree_push_requires_its_own_exact_grant(self) -> None:
         with project_copy(git=True) as root:
             target = root / '.getzilla/runtime/worktrees/linked'
