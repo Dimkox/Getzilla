@@ -1,0 +1,10 @@
+Read-only disk measurement for GitHub issue #168 in ~/projects/getzilla on this host. Do not delete, move, write or change anything. Do not run git commands that write (no fetch, gc, prune or worktree remove). Do not read .env, private keys or credentials.
+
+Report these numbers, using `du -sh` and `du -h --max-depth=1` with `--one-file-system`:
+1. Total size of `.getzilla/runtime` and of `.getzilla/runtime/worktrees`, and the number of entries in `git worktree list`.
+2. Size of `.git` in the main checkout.
+3. For the 3 largest worktrees, the size and the top-level breakdown (`du -h --max-depth=1`). Name the largest folders inside them, for example venv, node_modules, .getzilla/runtime, engineering/changes or build output.
+4. Across all worktrees, the total size of each of these folder names if present: `.venv`, `venv`, `node_modules`, `.getzilla/runtime`, `engineering/changes`, `__pycache__`, `.pytest_cache`, `dist`, `build`.
+5. `df -h` for the filesystems that hold the project and /tmp, and the total size of `/tmp/grok-*`, `/tmp/getzilla-*` and `/tmp/adaptive-*`.
+
+Return a short table with the numbers and the exact commands. Keep total CPU use low (run commands one at a time with `nice -n 19 ionice -c3` when available).
