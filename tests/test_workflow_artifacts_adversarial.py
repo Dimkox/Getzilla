@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-import multiprocessing
 import os
 import stat
 import subprocess
@@ -19,6 +18,7 @@ sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla.receipts import get_receipt, validate_evidence  # noqa: E402
 from getzilla.util import tree_fingerprint  # noqa: E402
+from tests.fifo_process import run_fifo_probe  # noqa: E402
 
 
 def _load_artifacts():
@@ -465,11 +465,12 @@ class NativeStatusTests(unittest.TestCase):
             )
 
 
-def _fifo_reader(root: str, queue: multiprocessing.Queue) -> None:
+def _fifo_reader(root: str) -> str:
     try:
-        queue.put(get_receipt(Path(root), "route", "verification"))
+        get_receipt(Path(root), "route", "verification")
     except Exception as exc:  # pragma: no cover - child result transport
-        queue.put(type(exc).__name__)
+        return type(exc).__name__
+    return 'accepted'
 
 
 class CanonicalReceiptTests(unittest.TestCase):
@@ -512,15 +513,7 @@ class CanonicalReceiptTests(unittest.TestCase):
             if not hasattr(os, "mkfifo"):
                 return  # FIFOs are POSIX-only
             os.mkfifo(path)
-            queue: multiprocessing.Queue = multiprocessing.Queue()
-            process = multiprocessing.Process(target=_fifo_reader, args=(str(root), queue))
-            process.start()
-            process.join(0.5)
-            if process.is_alive():
-                process.terminate()
-                process.join()
-            self.assertFalse(process.is_alive())
-            self.assertEqual(queue.get(timeout=1), "RuntimeError")
+            self.assertEqual(run_fifo_probe(_fifo_reader, (str(root),)), "RuntimeError")
 
 
 class SerializedCasTests(unittest.TestCase):
