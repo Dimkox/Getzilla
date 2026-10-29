@@ -242,6 +242,8 @@ v2.1.1 опубликован 2026-10-03 из PR #238; ZIP и контрольн
 
    heartbeat/progress обновляют локальный agent-state.json; watchdog/watch читают диагностические записи и печатают JSON. По умолчанию предупреждения начинаются после 180 секунд без heartbeat и 600 секунд без полезного checkpoint. Watch ограничен числом итераций; фонового daemon нет. Свежий heartbeat не доказывает продвижение. При зависании: status-request → реальное сообщение контроллера → status-ack после ответа. Для восстановления: interrupt-request → реальное native interrupt → interrupt-ack после наблюдаемого подтверждения → resume → native followup тому же агенту с новой generation. Watchdog сам никого не прерывает и не заменяет writer; подробные команды — engineering/runbooks/local-agent-watchdog.md.
 
+   Отдельный детектор замечает три одинаковых завершённых провала теста, сборки или линтера при неизменном исходном коде. Следующий точный повтор останавливается. `getzilla agent progress-inspect --session-id SESSION` показывает наблюдения; `progress-recover` разрешает одну попытку после новой диагностики. Команды, границы поддержки и восстановление — [session progress](../engineering/runbooks/session-progress.md).
+
 6. Проверяйте результат по файлам и свежему evidence, а не по сообщениям агента:
 
    ```bash
@@ -326,7 +328,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.grok/hooks/`, the canonical source.
 - [`scripts/getzilla_route.py`](../scripts/getzilla_route.py)
 - [`scripts/getzilla_change.py`](../scripts/getzilla_change.py)
-- [`scripts/getzilla_agent.py`](../scripts/getzilla_agent.py) — local heartbeat, progress, bounded watchdog and acknowledged same-task recovery; [operator runbook](../engineering/runbooks/local-agent-watchdog.md)
+- [`scripts/getzilla_agent.py`](../scripts/getzilla_agent.py) — local heartbeat, checkpoints, watchdog and recovery; [watchdog runbook](../engineering/runbooks/local-agent-watchdog.md), [repeated-failure guard](../engineering/runbooks/session-progress.md)
 - [`scripts/getzilla_spec.py`](../scripts/getzilla_spec.py)
 - [`scripts/getzilla_artifacts.py`](../scripts/getzilla_artifacts.py)
 - [`schemas/change-spec.schema.json`](../schemas/change-spec.schema.json)
@@ -546,7 +548,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `status` | `scripts/getzilla_status.py` | Local runtime status: route, change package, evidence gaps, agents |
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
-| `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, progress, bounded watchdog and acknowledged same-task recovery |
+| `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, checkpoints, watchdog, `progress-inspect` and one-shot `progress-recover` |
 | `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
 | `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` |

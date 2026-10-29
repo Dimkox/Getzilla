@@ -1389,6 +1389,14 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue((target / "scripts/getzilla_agent.py").is_file())
             self.assertFalse((target / ".getzilla/runtime/agent-state.json").exists())
             self.assertFalse((target / ".getzilla/runtime/.agents.guard").exists())
+            self.assertFalse((target / ".getzilla/runtime/session-progress.json").exists())
+            self.assertFalse((target / ".getzilla/runtime/.session-progress.guard").exists())
+            progress = subprocess.run(
+                [sys.executable, "scripts/getzilla_agent.py", "progress-inspect", "--session-id", "installed"],
+                cwd=target, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(progress.returncode, 0, progress.stderr)
+            self.assertEqual(json.loads(progress.stdout)["status"], "scope-unavailable")
             command = subprocess.run(
                 [sys.executable, "scripts/getzilla_agent.py", "watchdog"], cwd=target,
                 text=True, capture_output=True, check=False,
