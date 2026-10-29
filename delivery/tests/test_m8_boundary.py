@@ -2,18 +2,18 @@ import unittest
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 
-from getzilla_factory.autonomy import (
-    AutonomyProfileV1,
-    AutonomyTupleV1,
-    CohortEvidenceV1,
-    PromotionRecommendationV1,
-)
 from delivery.tests.synthetic_fixtures import (
     SYNTHETIC_EVALUATION_TIME,
     synthetic_domain_digest,
     synthetic_m8_evidence,
     synthetic_observation,
     synthetic_promotion,
+)
+from getzilla_factory.autonomy import (
+    AutonomyProfileV1,
+    AutonomyTupleV1,
+    CohortEvidenceV1,
+    PromotionRecommendationV1,
 )
 
 from getzilla_delivery.contracts import ContractError

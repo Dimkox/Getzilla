@@ -41,6 +41,8 @@ HISTORICAL_FILES = frozenset(
 LEGACY_AWARE_FILES = frozenset(
     {
         "scripts/install_into.py",
+        "scripts/getzilla_upgrade.py",
+        "tests/test_getzilla_upgrade.py",
         "tests/test_installer.py",
         "tests/test_install_migration.py",
         "tests/test_getzilla_identity.py",

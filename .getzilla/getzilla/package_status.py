@@ -14,6 +14,7 @@ from . import fsx
 from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
 from .receipts import RECEIPT_KINDS
 from .spec import MAX_SPEC_BYTES, SpecError, _bounded_walk, _parse_canonical_json, parse_yaml_subset, validate_spec
+from .state import CLOSED_CHANGE_STATUSES
 from .util import now_utc
 
 MAX_FILE_BYTES = 262_144
@@ -249,10 +250,19 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
             if state['status'] == 'blocked' and not result['required_stage']:
                 # A legal blocked transition always follows implementation; incomplete history is not a waiver.
                 result['required_stage'] = True
-            if state.get('change_id') != change_id or (
-                route and (state.get('route_id') != route.get('route_id') or route.get('change_id', change_id) != change_id)
-            ):
-                add('package_identity_mismatch', f'{relative}/state.json', 'package and route identities differ')
+            if state.get('change_id') != change_id:
+                add('package_identity_mismatch', f'{relative}/state.json',
+                    f"package state names change {state.get('change_id')!r}, the active change is {change_id!r}")
+            elif route and (state.get('route_id') != route.get('route_id') or route.get('change_id', change_id) != change_id):
+                if state['status'] in CLOSED_CHANGE_STATUSES:
+                    # A later prompt started a new route after this package closed (#206); the closed
+                    # package belongs to its own route and does not bind the new route's evidence.
+                    add('package_closed', f'{relative}/state.json',
+                        f"closed package of route {state.get('route_id')!r}; active route is {route.get('route_id')!r}", 'info')
+                else:
+                    add('package_identity_mismatch', f'{relative}/state.json',
+                        f"package is bound to route {state.get('route_id')!r}, the active route is {route.get('route_id')!r}; "
+                        'record the review from that route, or finish the package with getzilla_change.py transition')
         except SpecError:
             add('state_invalid', f'{relative}/state.json', 'package state is malformed or has an invalid stage')
     severity = 'error' if result['required_stage'] else 'expected' if result['stage'] == 'draft' else 'warning'

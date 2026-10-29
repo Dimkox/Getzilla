@@ -60,7 +60,8 @@ class WorkerTests(unittest.TestCase):
 
     def test_dispatches_each_job_to_its_bound_profile(self) -> None:
         calls = []
-        factory = lambda policy, repository: RecordingRunner(policy, calls)
+        def factory(policy, repository):
+            return RecordingRunner(policy, calls)
         store = MemoryStore()
         for index, repository in enumerate(('Dimkox/Getzilla', 'Dimkox/ii-tonya-platform')):
             request = JobRequest(repository, 15, sha('a'), sha(str(index + 2)), 'feat/x', 'main')

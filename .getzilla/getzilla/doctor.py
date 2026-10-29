@@ -111,11 +111,16 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     profile = detect_repo(root)
     items.append(DoctorItem('pass', 'repo-detection', f'{profile.kind}; domains={profile.domains}; signals={profile.signals[:5]}'))
     sample = build_route(root, 'Исправить ошибку в обработчике события Битрикс D7 и добавить PHPUnit тест', 'doctor')
-    if (sample.write_agent == 'bitrix_implementer' and sample.review_agents == ['code_reviewer']
-            and sample.risk_assessment.get('status') == 'provisional'):
-        items.append(DoctorItem('pass', 'adaptive-routing', 'Bitrix route selects specialized agents'))
+    # The project's routing.json may add review floors (test_reviewer, for example), so only the
+    # first reviewer is fixed; the rest belong to the project, not to this self-test.
+    expected = {'write_agent': 'bitrix_implementer', 'first reviewer': 'code_reviewer', 'risk_assessment.status': 'provisional'}
+    actual = {'write_agent': sample.write_agent, 'first reviewer': next(iter(sample.review_agents), None),
+              'risk_assessment.status': sample.risk_assessment.get('status')}
+    differ = [f'{key}: expected {expected[key]!r}, got {actual[key]!r}' for key in expected if actual[key] != expected[key]]
+    if differ:
+        items.append(DoctorItem('fail', 'adaptive-routing', '; '.join(differ)))
     else:
-        items.append(DoctorItem('fail', 'adaptive-routing', str(sample.to_dict())))
+        items.append(DoctorItem('pass', 'adaptive-routing', 'Bitrix route selects specialized agents'))
 
     if not architecture_inputs_present(root):
         items.append(DoctorItem('info', 'architecture-model', 'architecture documents are not present; skipped'))

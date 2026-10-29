@@ -87,7 +87,7 @@ class MigrationTests(unittest.TestCase):
             "claim_model_requests_v1", "start_model_request_dispatch_v1",
             "record_model_request_dispatch_v1", "reconcile_model_requests_v1",
         ):
-            self.assertIn(f"security definer", lowered)
+            self.assertIn("security definer", lowered)
             self.assertIn(f"revoke all on function factory.{name}", lowered)
         self.assertIn("create role factory_result_dispatcher nologin noinherit", lowered)
         self.assertNotIn("create trigger enqueue_native_tool_result", lowered)

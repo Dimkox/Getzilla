@@ -314,7 +314,7 @@ class GitWorkspace:
             checkout_path = Path(
                 tempfile.mkdtemp(prefix=f'trust-ci-{job.job_id[:8]}-', dir=base_directory)
             )
-            os.chmod(checkout_path, 0o755)
+            os.chmod(checkout_path, 0o755)  # nosec B103: the unprivileged sandbox user reads this checkout directory
             config_home = Path(
                 tempfile.mkdtemp(prefix=f'trust-ci-config-{job.job_id[:8]}-', dir=base_directory)
             )

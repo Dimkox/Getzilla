@@ -90,6 +90,28 @@ class ReviewPlanTests(unittest.TestCase):
         current = self.reconcile()
         self.assertEqual(current['risk'], 'high')
         self.assertIn('security_reviewer', current['review_agents'])
+        # A Git-identified binary asset takes the full profile instead of blocking delivery (#209).
+        (self.root / 'assets').mkdir()
+        (self.root / 'assets/logo.png').write_bytes(b'\x89PNG\0binary')
+        self.commit()
+        binary = self.reconcile()
+        self.assertEqual(binary['risk_assessment']['status'], 'complete', binary['risk_assessment']['gaps'])
+        self.assertEqual(binary['risk'], 'high')
+        self.assertEqual(binary['risk_assessment']['profile_candidate'], 'full')
+        self.assertIn({'rule': 'BINARY_FILE', 'path': 'assets/logo.png', 'risk': 'high'}, binary['risk_assessment']['reasons'])
+        # An executable or archive binary stays blocked: it runs or unpacks into code.
+        (self.root / 'assets/native.so').write_bytes(b'\x7fELF\0binary')
+        self.commit()
+        self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
+        git(self.root, 'rm', '-q', 'assets/native.so')
+        self.commit()
+        # A binary without an extension may be a program even with mode 100644 (#215).
+        (self.root / 'assets/tool').write_bytes(b'\x7fELF\0binary')
+        self.commit()
+        self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')
+        git(self.root, 'rm', '-q', 'assets/tool')
+        self.commit()
+        # Source code that turned binary still cannot be read, so it stays incomplete.
         (self.root / 'app.py').write_bytes(b'\0binary')
         self.commit()
         self.assertEqual(self.reconcile()['risk_assessment']['status'], 'incomplete')

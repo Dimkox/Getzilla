@@ -351,20 +351,86 @@ class PolicyTests(unittest.TestCase):
                   'mcp__Ahrefs__social-media-post-update', 'mcp__claude-code-remote__set_session_tags',
                   'mcp__claude-code-remote__add_repo', 'mcp__Gmail__label_message', 'mcp__x__runJob',
                   'mcp__x__page_write', 'mcp__x__records-write', 'mcp__gh__actions_run_trigger',
-                  'mcp__x__delete__file', 'mcp__a__github__create_issue')
+                  'mcp__x__delete__file', 'mcp__a__github__create_issue',
+                  # Every server fails closed (#195): a verb inside a word, after the first token, off
+                  # any list, or no read verb at all is a write.
+                  'mcp__x__bulkCreate', 'mcp__x__doWrite', 'mcp__x__createissue', 'mcp__x__issue_create',
+                  'mcp__x__page_update', 'mcp__x__modify_record', 'mcp__x__pay_invoice', 'mcp__x__refund_order',
+                  'mcp__x__get_or_create_user', 'mcp__x__list_and_delete', 'mcp__Ahrefs__site-explorer-metrics',
+                  'mcp__Ahrefs__management-projects', 'mcp__x__updatedSince', 'mcp__x__createdAt',
+                  'mcp__slack-post__message', 'mcp__x__', 'mcp__db__run_query', 'mcp__db__runQuery',
+                  'mcp__x__request_download', 'mcp__db__query', 'mcp__x__fetchPage', 'mcp__x__get_d\u0435lete',
+                  'mcp__Claude_Docs__query',
+                  # #215: a second action after and/or, run/request after a hyphen, a github look-alike.
+                  'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__get_x-run', 'mcp__x__list-request',
+                  'mcp__mygithubtool__run_secret_scanning',
+                  'mcp__codex_apps__github__create_issue', 'mcp__codex_apps__github__issue_write',
+                  'mcp__codex_apps__x__run_query', 'mcp__codex_apps__github__merge_pull_request',
+                  # A write verb in a namespace before an exact read name stays a write.
+                  'mcp__github__delete_repo__run_secret_scanning', 'mcp__codex_apps__github__merge__run_secret_scanning',
+                  'mcp__Atlassian_MCP__deleteAll__executeRead', 'mcp__Atlassian_MCP__executeWrite__atlassianUserInfo')
         reads = ('mcp__Atlassian_MCP__getJiraIssue', 'mcp__Atlassian_MCP__searchConfluence',
-                 'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Ahrefs__site-explorer-metrics',
-                 'mcp__Ahrefs__management-projects', 'mcp__claude-code-remote__get_session',
-                 'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads', 'mcp__x__updatedSince',
-                 'mcp__x__createdAt', 'mcp__cloud-run__get_service', 'mcp__x-post__list_items',
-                 # Known limit (#195): a write hint only in the server name is not seen.
-                 'mcp__slack-post__message', 'Bash', 'Edit')
+                 'mcp__Atlassian_MCP__atlassianUserInfo', 'mcp__Atlassian_MCP__executeRead',
+                 'mcp__claude-code-remote__get_session', 'mcp__claude-code-remote__read_documentation',
+                 'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads',
+                 'mcp__cloud-run__get_service', 'mcp__x-post__list_items', 'mcp__x__get_check_run',
+                 'mcp__x__describe-table', 'mcp__x__records_lookup', 'mcp__x__list_and_get',
+                 'mcp__plugin_github_github__run_secret_scanning',
+                 # A host namespace before the tool name (Codex apps): the read verb is in the last segment.
+                 'mcp__codex_apps__github__search_issues', 'mcp__codex_apps__github__get_me',
+                 'mcp__codex_apps__github__list_pull_requests', 'mcp__codex_apps__github__run_secret_scanning',
+                 'Bash', 'Edit')
         for tool in writes:
             with self.subTest(tool=tool):
                 self.assertTrue(mcp_side_effect(tool))
         for tool in reads:
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_side_effect(tool))
+
+    def test_a_github_named_server_keeps_the_repository_check_but_not_the_read_list(self) -> None:
+        # #215: github-enterprise is not the GitHub server for reads, but its writes still name owner/repo.
+        from getzilla._policy_legacy import _mcp_github, _mcp_github_reads
+        for server in ('github-enterprise', 'github_mcp', 'my-github', 'mygithubtool'):
+            tool = f'mcp__{server}__create_issue'
+            self.assertTrue(_mcp_github(tool), tool)
+            self.assertFalse(_mcp_github_reads(tool), tool)
+        self.assertTrue(_mcp_github_reads('mcp__plugin_github_github__get_me'))
+
+    def test_a_project_can_name_its_own_read_tools_exactly(self) -> None:
+        from getzilla.policy import mcp_side_effect
+        with github_project() as root:
+            tool = 'mcp__Ahrefs__site-explorer-metrics'
+            self.assertTrue(mcp_side_effect(tool, root))
+            config_path = root / '.getzilla/config/policy.json'
+            config = json.loads(config_path.read_text(encoding='utf-8'))
+            config['mcp_read_tools'] = {'Ahrefs': ['site-explorer-metrics']}
+            config_path.write_text(json.dumps(config), encoding='utf-8')
+            self.assertFalse(mcp_side_effect(tool, root))
+            self.assertTrue(mcp_side_effect('mcp__Ahrefs__management-projects-create', root))
+            self.assertTrue(mcp_side_effect('mcp__Other__site-explorer-metrics', root))
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertTrue(allowed, reason)
+
+    def test_a_refusal_says_why_a_recorded_grant_does_not_cover_the_call(self) -> None:
+        # A grant of the wrong kind, tool or target must be named, not left to a blind retry.
+        tool = 'mcp__github__issue_write'
+        with github_project() as root:
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertFalse(allowed)
+            self.assertNotIn('recorded grant', reason or '')
+            add_approval(root, 'production', 'wrong kind', 5, actions=['pull-request-merge'], resources=[tool])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertFalse(allowed)
+            self.assertIn('scope production, but this needs scope external-write', reason or '')
+            add_approval(root, 'external-write', 'wrong tool', 5, actions=['external-write'],
+                         resources=['mcp__github__add_issue_comment'])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertIn("not mcp__github__issue_write", reason or '')
+            self.assertIn('--resource mcp__github__issue_write', reason or '')
+            self.assertIn("owner's delegation", reason or '')
+            add_approval(root, 'external-write', 'right', 5, actions=['external-write'], resources=[tool])
+            allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
+            self.assertTrue(allowed, reason)
 
     def test_github_write_grants_bind_to_the_local_repository(self) -> None:
         # A grant names only the tool; the call's owner/repo must be the repository it binds (#184).

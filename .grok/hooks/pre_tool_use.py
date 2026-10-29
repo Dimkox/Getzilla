@@ -175,6 +175,16 @@ def _ledger_reason(action: str) -> str:
     return f'Action {action} denied by repository policy.'
 
 
+def _grants_digest(context: RootContext) -> str | None:
+    root = context.ledger_root
+    if root is None:
+        return None
+    try:
+        return hashlib.sha256((Path(root) / '.getzilla/runtime/approvals.json').read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _denial_fingerprints(
     session: str,
     tool: str,
@@ -187,6 +197,8 @@ def _denial_fingerprints(
         'session_root': str(context.session_root) if context.session_root else None,
         'effective_root': str(context.effective_root) if context.effective_root else None,
         'resolution_status': context.resolution_status,
+        # A grant recorded after a denial makes the retry a new attempt, not a blind repeat.
+        'grants_sha256': _grants_digest(context),
     }
     exact = _fingerprint({
         'session_id': session,
@@ -230,9 +242,15 @@ def _root_hint(context: Any) -> str:
     for source, hint in _ROOT_HINTS:
         if source in sources:
             return hint
-    if getattr(context, 'resolution_status', '') == 'ambiguous-command-root':
+    status = getattr(context, 'resolution_status', '')
+    if status == 'ambiguous-command-root':
         return (' Use one literal directory: no $VARIABLES, globs or braces in cd, pushd or git -C, and no two '
-                'repositories in one command.')
+                'repositories in one command. Split it: one command per repository, each starting with '
+                'cd <that repository>, and write long text such as a commit message to a file first.')
+    if status == 'cross-root':
+        return (f' The command runs in {getattr(context, "effective_root", None)}, but the session is in '
+                f'{getattr(context, "session_root", None)}. Run it as its own command that starts with cd into '
+                'that repository, and record any grant from inside that repository.')
     return ''
 
 
@@ -454,6 +472,20 @@ def _path_miss(current_tool: str, current_input: dict[str, Any], payload: dict[s
         return None
 
 
+def _unread_edit(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
+    """A patch that changes an existing file this session never read is refused (getzilla.read_ledger)."""
+    command = current_input.get('command')
+    if current_tool != 'apply_patch' or root is None or not isinstance(command, str):
+        return None
+    try:
+        from getzilla.path_hints import command_cwd
+        from getzilla.read_ledger import refusal
+        return refusal(root, session_id(payload), command, command_cwd(root, payload, current_input))
+    except Exception:
+        # The ledger is a guard against blind edits; when it cannot be read, the patch runs.
+        return None
+
+
 def _serial_batch(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
     """A serial batch of heavy commands is refused with the parallel command (getzilla.parallel)."""
     command = current_input.get('command')
@@ -531,6 +563,7 @@ def main() -> None:
                     raise
         if allowed:
             miss = (_path_miss(current_tool, current_input, payload, root)
+                    or _unread_edit(current_tool, current_input, payload, root)
                     or _serial_batch(current_tool, current_input, payload, root))
             emit(permission_output(miss is None, miss))
             return

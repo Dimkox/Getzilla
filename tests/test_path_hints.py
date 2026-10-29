@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
-from getzilla.path_hints import command_cwd, hint, inspect, refusal, suggestions  # noqa: E402
+from getzilla.path_hints import PROMPT_LOCATE, command_cwd, hint, inspect, prompt_paths, refusal, suggestions  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
 
 MODULE = 'vendor/modules/acme.selector'
@@ -121,10 +121,61 @@ class SuggestionTests(unittest.TestCase):
         stats = json.loads((self.root / '.getzilla/runtime/path-hints.json').read_text(encoding='utf-8'))
         self.assertEqual((stats['refused'], stats['hinted']), (1, 1))
 
+    def test_a_read_that_works_in_a_linked_worktree_is_not_refused(self) -> None:
+        # The agent ran `sed` inside a worker worktree but the hook only saw the main checkout.
+        subprocess.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'base'], cwd=self.root, check=True)
+        worker = self.root / '.getzilla/runtime/scratch/worker-1/worktree'
+        subprocess.run(['git', 'worktree', 'add', '-q', '--detach', str(worker)], cwd=self.root, check=True)
+        (worker / 'deploy').mkdir()
+        (worker / 'deploy' / 'new_release.py').write_text('x\n', encoding='utf-8')
+        self.assertIsNone(refusal(self.root, 'sed -n 1,260p deploy/new_release.py', self.root))
+        message = refusal(self.root, 'sed -n 1,260p deploy/old_release.py', self.root)
+        self.assertIn('none of these paths exist', message)
+
     def test_command_directory_comes_from_the_tool_input_first(self) -> None:
         self.assertEqual(command_cwd(self.root, {'cwd': '/elsewhere'}, {'workdir': MODULE}), self.root / MODULE)
         self.assertEqual(command_cwd(self.root, {'cwd': '/elsewhere'}, {}), Path('/elsewhere'))
         self.assertEqual(command_cwd(self.root, {}, {}), self.root)
+
+
+class PromptPathTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = _repo(Path(tmp.name))
+
+    def test_names_in_a_task_come_back_as_real_paths(self) -> None:
+        text = prompt_paths(self.root, 'Fix SheetController, then lib/Service/CurvePointEvaluator.php and test_sheet')
+        self.assertIn(f'- SheetController: `{MODULE}/lib/SheetController.php`', text)
+        self.assertIn(f'`{MODULE}/lib/CurvePointEvaluator.php`', text)
+        self.assertIn('`tests/php/test_sheet.php`', text)
+        self.assertTrue(text.endswith(PROMPT_LOCATE))
+
+    def test_files_that_use_a_named_class_and_its_tests_are_listed(self) -> None:
+        (self.root / 'vendor/app.php').write_text('<?php new SheetController();\n', encoding='utf-8')
+        (self.root / 'tests/php/test_controller.php').write_text('<?php SheetController::run();\n', encoding='utf-8')
+        (self.root / 'vendor/other.php').write_text('<?php new SheetControllerFactory();\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        text = prompt_paths(self.root, 'Fix SheetController and lib/SheetController.php')
+        self.assertIn('  used in: `vendor/app.php`', text)
+        self.assertIn('  tests: `tests/php/test_controller.php`', text)
+        self.assertNotIn('vendor/other.php', text, 'a longer name is not a use')
+        self.assertEqual(text.count(f'`{MODULE}/lib/SheetController.php`'), 1, 'one file named twice is listed once')
+
+    def test_a_pasted_blob_stays_fast_and_common_words_name_no_file(self) -> None:
+        (self.root / 'pilot').mkdir()
+        (self.root / 'pilot/github.py').write_text('x = 1\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        blob = 'a' * 80_000 + '.' + 'b/' * 20_000 + 'x' * 5000 + '.php ' + 'SheetController'
+        started = time.perf_counter()
+        prompt_paths(self.root, blob)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(prompt_paths(self.root, 'Push to GitHub with JavaScript tests'), PROMPT_LOCATE)
+        self.assertEqual(prompt_paths(self.root, 'Read /etc/passwd.md and ../../x.py'), PROMPT_LOCATE)
+
+    def test_a_task_without_known_names_gets_only_the_locate_rule(self) -> None:
+        self.assertEqual(prompt_paths(self.root, 'Make the README clearer for UnknownWidget'), PROMPT_LOCATE)
+        self.assertEqual(prompt_paths(self.root, ''), PROMPT_LOCATE)
 
 
 def _notes(root: Path) -> None:
@@ -149,6 +200,15 @@ class HookTests(unittest.TestCase):
             self.assertEqual(data['decision'], 'allow', data)
             code, data, _ = run_hook(root, 'pre_tool_use.py', self._payload(root, 'PreToolUse', 'cat notes/install_guidee.md notes/install_guide.md'))
             self.assertEqual(data['decision'], 'allow', data)
+
+    def test_user_prompt_submit_names_the_real_paths(self) -> None:
+        with project_copy(git=True) as root:
+            _notes(root)
+            payload = {'cwd': str(root), 'session_id': 'path-hints', 'hook_event_name': 'UserPromptSubmit',
+                       'prompt': 'Update install_guide before the release'}
+            code, data, stderr = run_hook(root, 'user_prompt_submit.py', payload)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn('`notes/install_guide.md`', data['hookSpecificOutput']['additionalContext'])
 
     def test_post_tool_use_adds_the_hint_beside_the_output(self) -> None:
         with project_copy(git=True) as root:

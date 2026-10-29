@@ -136,24 +136,34 @@ _SHELL_MUTATION_SIGNAL = re.compile(
 )
 _GLOB_META = re.compile(r'[*?[]')
 _HTTP_URL = re.compile(r'https?://[^\s"\']+', re.IGNORECASE)
-# A write verb that starts the action or a `-` token, or a `write` token anywhere. A verb ends at
-# `_`, `-`, an uppercase letter (camelCase) or the end: a verb inside the name, as in issue_write,
-# createJiraIssue or projects-create, used to pass with no grant (#193).
-_VERB_END = r'(?:[_-]|(?=[A-Z])|$)'
-SIDE_EFFECT_TOOL = re.compile(
-    r'(?:^|__|-)(?i:create|update|delete|remove|send|write|publish|deploy|merge|close|execute|apply|archive|trash'
-    r'|move|add|push|resolve|unresolve|enable|disable|fork|request|submit|set|assign|approve|dismiss|cancel|rerun'
-    r'|run|reply|post|comment|upload|edit|rename|transfer|lock|unlock|label|unlabel|mark|untrash|fire|share|copy'
-    r'|insert|append|batch|import|invite|forward|respond|save|generate|manage|star|unstar|reprioritize'
-    r'|transition)' + _VERB_END
-    + r'|(?:^|[_-])(?i:write)' + _VERB_END
-    + r'|^actions_run' + _VERB_END
-)
-# A GitHub server fails closed: a tool is a write unless it is a known read, since server versions add
-# write tools under new verbs (run_workflow, manage_notification_subscription).
-_GITHUB_READ = re.compile(r'^(?:get|list|search|download)_|_read$|^(?:actions|projects)_(?:get|list)$')
-# Reads whose name starts with a write verb.
-_GITHUB_READ_NAMES = frozenset({'run_secret_scanning'})
+# Every MCP server fails closed (#195): a tool is a write unless its name reads as a read. A read
+# starts or ends with a read verb (get_issue, searchConfluence, issue_read) and has no write verb
+# anywhere in it, so get_or_create_x and mark_all_notifications_read stay writes. Any other name,
+# including a verb that is not on a list (modify_x, pay_x, bulkCreate), needs an external-write grant.
+# query and fetch are not reads by default: a database query or an HTTP fetch can write.
+_READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'lookup', 'describe', 'download'})
+# Words that are nouns inside reads (get_check_run, pull_request_read) but writes as the first word
+# (run_query, request_download).
+_LEADING_WRITE_VERBS = frozenset({'run', 'request'})
+_CHAIN_WORDS = frozenset({'and', 'or', 'then'})
+_WRITE_VERBS = frozenset({
+    'create', 'update', 'delete', 'remove', 'write', 'modify', 'patch', 'put', 'replace', 'insert', 'upsert',
+    'append', 'upload', 'send', 'publish', 'merge', 'revoke', 'grant', 'trash', 'archive', 'close', 'reopen',
+    'cancel', 'trigger', 'execute', 'mark', 'set', 'add', 'edit', 'post', 'submit', 'approve', 'transfer',
+    'move', 'rename', 'import', 'invite', 'pay', 'refund', 'clear', 'destroy', 'purge', 'drop', 'reset',
+    'restore', 'assign', 'enable', 'disable', 'start', 'stop', 'accept', 'decline', 'lock', 'unlock',
+    'deploy', 'push', 'apply', 'save', 'star', 'unstar', 'fork', 'resolve', 'unresolve', 'dismiss',
+    'manage', 'transition', 'comment', 'reply', 'label', 'unlabel', 'share', 'forward', 'respond',
+    'rerun', 'untrash', 'fire', 'copy', 'batch', 'generate', 'reprioritize',
+})
+# Exact read tools whose names do not read as reads. A project adds its own per server in
+# .getzilla/config/policy.json under "mcp_read_tools" ({"Server": ["tool", ...]}).
+_MCP_READ_TOOLS = {
+    'github': frozenset({'run_secret_scanning'}),
+    'Atlassian_MCP': frozenset({'atlassianUserInfo', 'executeRead'}),
+}
+_NAME_TOKEN = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+')
+_ASCII_NAME = re.compile(r'[A-Za-z0-9_.-]+')
 _GITHUB_NAME = re.compile(r'[A-Za-z0-9._-]+')
 
 
@@ -163,18 +173,58 @@ def _mcp_server_action(tool: str) -> tuple[str, str]:
     return (parts[1], '__'.join(parts[2:])) if len(parts) > 2 else ('', parts[-1])
 
 
-def mcp_side_effect(tool: str) -> bool:
+def _mcp_github(tool: str) -> bool:
+    """Any server whose name holds github, also behind a prefix segment: its writes name owner/repo (#184)."""
+    parts = tool.split('__')
+    return any('github' in part.lower() for part in parts[1:-1])
+
+
+def _mcp_github_reads(tool: str) -> bool:
+    """Only a server named github (or ..._github, as plugin_github_github) gets the GitHub read list (#215)."""
+    parts = tool.split('__')
+    return any(part.lower() == 'github' or part.lower().endswith('_github') for part in parts[1:-1])
+
+
+def _configured_mcp_reads(root: Path | None, server: str) -> frozenset[str]:
+    if root is None:
+        return frozenset()
+    config = load_json(root / '.getzilla/config/policy.json', {}) or {}
+    reads = config.get('mcp_read_tools') if isinstance(config, dict) else None
+    names = reads.get(server) if isinstance(reads, dict) else None
+    return frozenset(name for name in names if isinstance(name, str)) if isinstance(names, list) else frozenset()
+
+
+def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     """Whether an MCP tool may write and so needs an exact external-write grant."""
     if not tool.startswith('mcp__'):
         return False
     server, action = _mcp_server_action(tool)
-    github = 'github' in server.lower()
-    if github and action in _GITHUB_READ_NAMES:
+    # A host can put namespaces before the tool name (mcp__codex_apps__github__search_issues): the read
+    # verb belongs to the last segment, while a write verb anywhere still makes a write (delete__file).
+    name = action.rsplit('__', 1)[-1]
+    namespace = {token.lower() for token in _NAME_TOKEN.findall(action[:-len(name)])}
+    known = _MCP_READ_TOOLS.get('github' if _mcp_github_reads(tool) else server, frozenset())
+    # An exact read name counts behind a namespace only when no namespace word is a write verb
+    # (delete_repo__run_secret_scanning stays a write).
+    plain_namespace = not namespace & (_WRITE_VERBS | _LEADING_WRITE_VERBS)
+    if action in known or (name in known and plain_namespace) or action in _configured_mcp_reads(root, server):
         return False
-    # The action only: a verb in the server name (cloud-run) must not make every tool a write.
-    if SIDE_EFFECT_TOOL.search(action):
+    if not _ASCII_NAME.fullmatch(action):
+        return True  # a look-alike letter must not split a write verb (get_dеlete)
+    tokens = [token.lower() for token in _NAME_TOKEN.findall(action)]
+    if not tokens or tokens[0] in _LEADING_WRITE_VERBS or any(token in _WRITE_VERBS for token in tokens):
         return True
-    return github and not _GITHUB_READ.search(action)
+    # run/request lead a hyphen segment too (get_x-run); a second action after and/or/then
+    # (list_and_kill, getAndRun) is a write unless it is a read verb (#215).
+    segments = [_NAME_TOKEN.findall(part) for part in action.split('-')[1:]]
+    if any(words and words[0].lower() in _LEADING_WRITE_VERBS for words in segments):
+        return True
+    if any(word in _CHAIN_WORDS and following not in _READ_VERBS for word, following in zip(tokens, tokens[1:])):
+        return True
+    words = [token.lower() for token in _NAME_TOKEN.findall(name)] or tokens
+    if words[0] in _LEADING_WRITE_VERBS:
+        return True
+    return not (words[0] in _READ_VERBS or words[-1] in _READ_VERBS)
 
 
 def _mcp_repository_problem(root: Path, tool_input: Any) -> str | None:
@@ -1238,12 +1288,45 @@ def _is_authority(token: str) -> bool:
     return name in _AUTHORITY_EXECUTABLES or (name.startswith('git-') and len(name) > 4)
 
 
+_GIT_CONFIG_RUNS_CODE = re.compile(
+    r'(?:alias|include|includeif|filter)\..*'
+    r'|core\.(?:hookspath|fsmonitor|sshcommand|worktree|editor|pager|askpass|gitproxy)'
+    r'|(?:sequence\.editor|diff\.external|credential\.helper|gpg\.program|gpg\.\w+\.program)'
+    r'|(?:diff|merge)\..+\.(?:textconv|command|driver)'
+    r'|credential\..*helper|core\.alternaterefscommand|remote\..+\.(?:uploadpack|receivepack)'
+    r'|gpg\.ssh\.defaultkeycommand|(?:mergetool|difftool)\..+\.cmd|pager\..+|sendemail\.sendmailcmd'
+)
+_GIT_CONFIG_VALUE_OPTIONS = frozenset({'-f', '--file', '--blob', '--type', '--default', '--comment', '--value'})
+_GIT_CONFIG_READS = frozenset({'get', 'list', 'get-regexp', 'get-urlmatch', 'get-color', 'get-colorbool',
+                               'unset', 'unset-all', 'remove-section', 'rename-section'})
+_GIT_CONFIG_READ_OPTIONS = frozenset({'--get', '--get-all', '--get-regexp', '-l', '--list', '--unset',
+                                      '--unset-all', '--remove-section', '--get-urlmatch'})
+
+
 def _git_config_defines_command(argv: list[str]) -> bool:
-    """``git config`` writing ``alias.*``/``include*`` (a later bare ``git <alias>`` would run anything)."""
-    words = [word.lower() for word in argv[2:]]
-    if not any(word.startswith(('alias.', 'include.', 'includeif.')) for word in words):
+    """``git config`` writing a key that later runs code or moves the work tree (#214).
+
+    ``alias.*``/``include*`` make a later bare ``git <alias>`` run anything; hooks, filters, editors,
+    fsmonitor and friends run a program inside an innocent-looking ``git commit`` or ``git status``.
+    """
+    words = [word.lower() for word in argv[_git_subcommand(argv)[1] + 1:]]
+    if not any(_GIT_CONFIG_RUNS_CODE.fullmatch(word.split('=', 1)[0]) for word in words):
         return False
-    return not any(word in {'--get', '--get-all', '--get-regexp', '-l', '--list', 'get', 'list'} for word in words)
+    if any(word.split('=', 1)[0] in _GIT_CONFIG_READ_OPTIONS for word in words):
+        return False  # a read, or a removal that takes the program away
+    positional, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+        elif word in _GIT_CONFIG_VALUE_OPTIONS:
+            skip = True
+        elif not word.startswith('-'):
+            positional.append(word)
+    if positional[:1] and positional[0] in _GIT_CONFIG_READS:
+        return False
+    if positional[:1] == ['set']:
+        return True
+    return len(positional) >= 2 or any(word in {'--add', '--replace-all', '-e', '--edit'} for word in words)
 
 
 def _authority_token_is_dynamic(token: str) -> bool:
@@ -2598,7 +2681,7 @@ def evaluate_pre_tool(
         authority = analyze_command_authority(command)
         if authority.ambiguous or (authority.actions and not authority.context_proven):
             return False, (
-                'Ambiguous production authority (alias definition, nested or dynamic command): spell the git/gh/'
+                'Ambiguous production authority (alias or code-running git config, nested or dynamic command): spell the git/gh/'
                 'docker/npm operation literally at the top level so it can be matched to an exact grant.'
             )
         for action in authority.actions:
@@ -2622,9 +2705,11 @@ def evaluate_pre_tool(
                         'for a named target (branch, tag, owner/repo#N, image or package); none could be determined.'
                     )
                 if not has_valid_approval(root, 'production', action=target_action, resource=resource):
+                    from .state import approval_mismatch
                     return False, (
                         f'Production action {target_action} on {resource} requires an exact delegated local grant '
                         'bound to the current SHA.'
+                        + approval_mismatch(root, 'production', action=target_action, resource=resource)
                     )
         from .cost_guard import paid_run_resource
         from .util import runtime_dir
@@ -2721,17 +2806,19 @@ def evaluate_pre_tool(
                 if active:
                     return False, f'Another write agent is already active: {active}'
 
-    if mcp_side_effect(tool):
+    if mcp_side_effect(tool, root):
         from .human_gates import gate_block_reason
 
         gate_reason = gate_block_reason(root, 'external-write', 'external-write', tool)
         if gate_reason:
             return False, gate_reason
-        if 'github' in _mcp_server_action(tool)[0].lower():
+        if _mcp_github(tool):
             problem = _mcp_repository_problem(root, tool_input)
             if problem:
                 return False, f'MCP side-effect tool {tool} is refused: {problem}.'
         if not has_valid_approval(root, 'external-write', action='external-write', resource=tool):
-            return False, f'MCP side-effect tool {tool} requires an exact delegated external-write grant.'
+            from .state import approval_mismatch
+            return False, (f'MCP side-effect tool {tool} requires an exact delegated external-write grant.'
+                           + approval_mismatch(root, 'external-write', action='external-write', resource=tool))
 
     return True, None

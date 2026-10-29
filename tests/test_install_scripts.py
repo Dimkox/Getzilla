@@ -25,7 +25,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from tests._support import offline_mirror
+from tests._support import missing_history, offline_mirror
 
 ROOT = Path(__file__).resolve().parents[1]
 SHELL = ROOT / 'scripts/install.sh'
@@ -142,7 +142,8 @@ class InstallScriptContractTests(unittest.TestCase):
         tag = published['tag']
         resolved = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'refs/tags/{tag}'],
                                   cwd=ROOT, capture_output=True, text=True, check=False)
-        self.assertEqual(resolved.returncode, 0, f'tag {tag} is not available locally; CI checks out with fetch-depth: 0')
+        if resolved.returncode != 0:
+            missing_history(f'tag {tag}')
         self.assertEqual(resolved.stdout.strip(), published['tag_object'])
         for path, record in published['installers'].items():
             blob = subprocess.run(['git', 'cat-file', 'blob', f'{tag}:{path}'], cwd=ROOT,

@@ -22,6 +22,8 @@
 - Lean install: Bitrix and SEO-landing skills come only with their domain (`extra:bitrix`, `extra:seo-landing`, `--extras`), cursor rules belong to `agent:cursor`, and a fresh install puts no hook shims in the repository root (332 → 283 entries on a plain Python repository).
 - Install (#128, #129): the plan shows the real footprint, the engine ships as one archive on fresh installs, and Bitrix agents and Grok briefs travel with their component.
 - `getzilla update` (#132, #135): one command updates Getzilla, writes the new files into the project on a new `getzilla-update-<version>` branch and updates third-party tools; `--accept-local` keeps a changed kept file.
+- `getzilla update` on an existing project (#203): the project's own `ruff.toml`, `bandit.yaml` and `.coveragerc` are kept; a missing sync record is written (moved from `.grok-stack/` when present); old pre-rename files and old-engine importers are listed, and `--retire-legacy` removes the old files; new executable files are named.
+- Ruff and Bandit lint the project's own Python, not only Getzilla's paths; a scan that reads 0 lines is a skip, and Bandit names targets its configuration left unread (#213).
 - Delivery cost (#121, #142, #144): a light lane for small low-risk diffs, scoped grants, runtime evidence instead of report commits, and review plans from the exact diff.
 - Router (#125, #139): risk and complexity come from the task, and pasted material no longer sets high risk, incident or the production gate.
 - `getzilla duplicates` (#171): source-only duplication analysis with optional jscpd.

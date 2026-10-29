@@ -103,13 +103,35 @@ def _release_lock_file(lock: Path) -> None:
             time.sleep(0.05)
 
 
+LOCK_WRITE_GRACE_SECONDS = 2.0
+
+
 def _stale_lock(lock: Path) -> bool:
     try:
         raw = lock.read_text(encoding='utf-8').strip()
         pid = int(raw)
-    except (OSError, ValueError):
+    except OSError:
         return True
+    except ValueError:
+        if raw:
+            return True  # malformed content is never a live holder
+        # The holder creates the file and only then writes its pid: a young empty lock is held.
+        try:
+            return time.time() - lock.stat().st_mtime > LOCK_WRITE_GRACE_SECONDS
+        except OSError:
+            return True
     return not _process_alive(pid)
+
+
+def _lock_identity(lock: Path) -> tuple[int, int, int, bytes]:
+    info = lock.stat()
+    try:
+        content = lock.read_bytes()
+    except FileNotFoundError:
+        raise
+    except OSError:
+        content = b''
+    return info.st_ino, info.st_dev, info.st_mtime_ns, content
 
 
 @contextmanager
@@ -121,8 +143,17 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
         except FileExistsError:
+            try:
+                judged = _lock_identity(lock)
+            except FileNotFoundError:
+                continue
             if _stale_lock(lock):
                 try:
+                    # Another waiter may have removed the stale lock and taken a fresh one meanwhile:
+                    # remove only the file that was judged (#215). The pid content tells a fresh lock
+                    # apart even when a freed inode comes back with the same coarse mtime.
+                    if _lock_identity(lock) != judged:
+                        continue
                     lock.unlink()
                     continue
                 except FileNotFoundError:
@@ -548,6 +579,51 @@ def has_valid_approval(
     if len(kept) != len(approvals):
         dump_json(approvals_path(root), kept)
     return matched
+
+
+def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | None) -> str:
+    """Why no recorded grant covers this action: a hint for the refusal, never an authorization.
+
+    An agent that recorded a grant and was refused again needs the reason, not a bare repeat.
+    """
+    approvals = load_json(approvals_path(root), [])
+    if not isinstance(approvals, list):
+        return ''
+    now = datetime.now(timezone.utc)
+    head = git_head(root) or ''
+    route = (get_active_route(root) or {}).get('route_id')
+    normalized = resource.replace('\\', '/') if resource else None
+    reasons: list[str] = []
+    for approval in approvals:
+        if not isinstance(approval, dict) or approval.get('authorization') != 'delegated-local-grant':
+            continue
+        try:
+            if datetime.fromisoformat(str(approval['expires_at'])) < now:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        actions = set(approval.get('actions') or [])
+        resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
+        if action not in actions and (normalized is None or normalized not in resources):
+            continue
+        if approval.get('scope') != scope:
+            reasons.append(f'a grant for it was recorded with scope {approval.get("scope")}, but this needs scope {scope}')
+        elif action not in actions:
+            reasons.append(f'the {scope} grant names actions {sorted(actions)}, not {action}')
+        elif normalized is not None and normalized not in resources:
+            reasons.append(f'the {scope} grant for {action} names {sorted(resources)}, not {normalized}')
+        elif approval.get('route_id') != route:
+            reasons.append('the grant was recorded under an earlier route (each prompt starts a new one)')
+        elif approval.get('git_head') != head:
+            reasons.append(f'the grant is bound to commit {str(approval.get("git_head"))[:12]}, '
+                           f'but HEAD is now {head[:12]}')
+        else:
+            reasons.append('the grant no longer matches the change, the work tree or this repository')
+    if not reasons:
+        return ''
+    return (f' A recorded grant does not cover it: {reasons[-1]}. Another grant is not consent for this one: '
+            f'only with the owner\'s delegation for exactly `--action {action}`'
+            + (f' and `--resource {normalized}`' if normalized else '') + ' record that grant, then retry once.')
 
 
 def active_change_path(root: Path) -> Path:
