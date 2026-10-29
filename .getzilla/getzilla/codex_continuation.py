@@ -13,7 +13,31 @@ from . import model_continuation_state as journal
 LIVE_QUALIFIED = False
 _ELIGIBLE = {'rateLimitExceeded', 'usageLimitExceeded', 'serverOverloaded', 'internalServerError'}
 _SAFE_ITEMS = {'agentMessage', 'reasoning', 'userMessage'}
+_GLOBAL_ADVISORY = {'configWarning', 'remoteControl/status/changed', 'account/rateLimits/updated'}
 MAX_FRAME = 65536
+
+
+def _eligible_error(value: object) -> bool:
+    if isinstance(value, str):
+        return value in _ELIGIBLE
+    if not isinstance(value, dict) or set(value) != {'responseTooManyFailedAttempts'}:
+        return False
+    detail = value['responseTooManyFailedAttempts']
+    return (isinstance(detail, dict) and set(detail) == {'httpStatusCode'}
+            and type(detail['httpStatusCode']) is int and detail['httpStatusCode'] == 429)
+
+
+def _global_advisory(method: str, params: dict) -> bool:
+    if method == 'configWarning':
+        return isinstance(params.get('summary'), str)
+    if method == 'remoteControl/status/changed':
+        return (isinstance(params.get('installationId'), str)
+                and isinstance(params.get('serverName'), str)
+                and isinstance(params.get('status'), str)
+                and params.get('status') in {'disabled', 'connecting', 'connected', 'errored'})
+    if method == 'account/rateLimits/updated':
+        return isinstance(params.get('rateLimits'), dict)
+    return False
 
 
 class ProtocolError(ValueError):
@@ -101,9 +125,23 @@ async def initialize(peer: OwnedJsonlPeer) -> None:
     """Negotiate the documented app-server protocol without starting a turn."""
     await peer.send({'id': 1, 'method': 'initialize',
                      'params': {'clientInfo': {'name': 'getzilla', 'version': '1'}}})
-    response = await peer.read()
-    if response.get('id') != 1 or not isinstance(response.get('result'), dict) or 'error' in response:
+    async def response():
+        for _ in range(16):
+            frame = await peer.read()
+            if frame.get('id') == 1:
+                if not isinstance(frame.get('result'), dict) or 'error' in frame:
+                    raise ProtocolError('initialization_failed')
+                return
+            method, params = frame.get('method'), frame.get('params')
+            if ('id' in frame or not isinstance(method, str) or method not in _GLOBAL_ADVISORY or not isinstance(params, dict)
+                    or not _global_advisory(method, params)):
+                raise ProtocolError('initialization_failed')
         raise ProtocolError('initialization_failed')
+
+    try:
+        await asyncio.wait_for(response(), peer._timeout)
+    except asyncio.TimeoutError:
+        raise ProtocolError('initialization_failed') from None
     await peer.send({'method': 'initialized', 'params': {}})
 
 
@@ -133,7 +171,30 @@ class TurnObserver:
             # Approval and other server requests cannot prove effects were fenced.
             self._unsafe = True
             return
-        if method == 'error':
+        if method in _GLOBAL_ADVISORY:
+            if not _global_advisory(method, params):
+                self._unsafe = True
+        elif method == 'thread/started':
+            thread = params.get('thread')
+            if not isinstance(thread, dict) or thread.get('id') != self._thread:
+                self._unsafe = True
+        elif method in {'warning', 'thread/status/changed'}:
+            if params.get('threadId') != self._thread:
+                self._unsafe = True
+            elif method == 'warning' and not isinstance(params.get('message'), str):
+                self._unsafe = True
+            elif method == 'thread/status/changed' and not isinstance(params.get('status'), dict):
+                self._unsafe = True
+        elif method == 'thread/tokenUsage/updated':
+            if (params.get('threadId') != self._thread or params.get('turnId') != self._turn
+                    or not isinstance(params.get('tokenUsage'), dict)):
+                self._unsafe = True
+        elif method == 'turn/started':
+            turn = params.get('turn')
+            if (params.get('threadId') != self._thread or not isinstance(turn, dict)
+                    or turn.get('id') != self._turn or turn.get('status') != 'inProgress'):
+                self._unsafe = True
+        elif method == 'error':
             error = params.get('error')
             if (params.get('threadId') != self._thread or params.get('turnId') != self._turn
                     or type(params.get('willRetry')) is not bool or not isinstance(error, dict)):
@@ -150,11 +211,22 @@ class TurnObserver:
                     or turn.get('id') != self._turn or turn.get('status') != 'failed'):
                 self._unsafe = True
                 return
+            terminal_error = turn.get('error')
+            if terminal_error is not None and (not isinstance(terminal_error, dict)
+                    or terminal_error.get('codexErrorInfo') != self._error):
+                self._unsafe = True
+                return
+            items = turn.get('items', [])
+            if (not isinstance(items, list) or any(not isinstance(item, dict)
+                    or not isinstance(item.get('type'), str) or item['type'] not in _SAFE_ITEMS for item in items)):
+                self._unsafe = True
+                return
             self._complete = True
         elif method in {'item/started', 'item/completed'}:
             item = params.get('item')
             if (params.get('threadId') != self._thread or params.get('turnId') != self._turn
-                    or not isinstance(item, dict) or item.get('type') not in _SAFE_ITEMS):
+                    or not isinstance(item, dict) or not isinstance(item.get('type'), str)
+                    or item['type'] not in _SAFE_ITEMS):
                 self._unsafe = True
         else:
             self._unsafe = True
@@ -162,7 +234,7 @@ class TurnObserver:
     @property
     def eligible(self) -> bool:
         return (self._complete and not self._unsafe and not self._native_retry
-                and isinstance(self._error, str) and self._error in _ELIGIBLE)
+                and _eligible_error(self._error))
 
     @property
     def dispatch_permitted(self) -> bool:

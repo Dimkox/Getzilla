@@ -27,6 +27,10 @@ The [Copilot hook reference](https://docs.github.com/en/copilot/reference/hooks-
 
 Eligibility never authorizes dispatch. The offline journal retains attempt, request and cost limits across restarts. A new Codex JSON-lines boundary owns a bounded process, initializes the app-server protocol and correlates turn events with the journal. Unknown event provenance is recorded as unknown, not as a trusted model failure. It never sends a successor turn. Local fake-peer tests do not qualify a native client. Confirmed checkpoints, tool-effect reconciliation, generation fencing, authorization, destination checks and qualified adapters remain required. Do not infer provider-switch support from native model selection.
 
+## Codex synthetic compatibility evidence
+
+An isolated Codex 0.165.0 app-server used a synthetic loopback provider. A failed model A turn with typed HTTP 429 was followed by a model B turn in the same thread. The probe started the second turn itself; it did not use Getzilla dispatch authority. The client still advertised five built-in tools. This proves protocol behavior only, not safe tool fencing or live adapter qualification. The reproducible fixture is `tests/fixtures/codex_loopback_probe.py`; run it only in a disposable container with no external network and no host credentials. Normal lifecycle notifications and the exact typed 429 shape are recognized as observations. Unknown events, mismatched turn identities and conflicting errors fail closed. Journal provenance remains unknown and no successor dispatch is allowed.
+
 ## Recovery
 
 Set `enabled:false` to disable requested continuation. No dispatch exists in this slice. Revert the source change through a reviewed PR to remove passive reporting; preserve consumer configuration and native user settings.
