@@ -314,11 +314,15 @@ def approvals_path(root: Path) -> Path:
 
 
 def _repository_identity(root: Path) -> str:
+    from .git_platforms import parse_remote
+
     remote = git_output(root, 'config', '--get', 'remote.origin.url') or ''
-    match = re.search(r'(?:github\.com[:/])([^/\s]+/[^/\s]+?)(?:\.git)?$', remote.strip())
-    if not match:
-        raise RuntimeError('remote.origin.url must identify a GitHub owner/repository')
-    return match.group(1).removesuffix('.git')
+    identity = parse_remote(remote)
+    if identity is not None and identity.provider == 'github':
+        return identity.repository  # Preserve existing valid GitHub grant bindings.
+    if identity is not None and identity.provider == 'entire':
+        return identity.resource  # Host and /et versus /gh must remain in the binding.
+    raise RuntimeError('remote.origin.url must identify a supported GitHub or Entire repository without credentials')
 
 
 def _active_change_id(root: Path) -> str | None:

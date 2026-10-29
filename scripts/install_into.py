@@ -73,6 +73,8 @@ MANAGED_FILES = (
     "scripts/getzilla_deploy.py",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
+    "scripts/getzilla_git.py",
+    "scripts/getzilla_entire.py",
     "session_start.py",
     "user_prompt_submit.py",
     "pre_tool_use.py",
@@ -207,6 +209,7 @@ ENGINE_ARCHIVE = ".getzilla/getzilla.zip"
 # never receives Bitrix or SEO-landing material. Matched anywhere in a skills path, so every
 # agent's copy belongs to the extra as well as to that agent.
 EXTRA_COMPONENT_PATHS = {
+    "entire": ("/integrations/getzilla_entire/",),
     "bitrix": ("/skills/bitrix-development/", "/agents/bitrix_"),
     "seo-landing": ("/skills/seo-landing/",),
 }

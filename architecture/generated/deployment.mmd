@@ -1,5 +1,6 @@
 flowchart LR
   node_4e78270f61d78ed8["NODE-DOCKER-ENGINE | service | Trust CI operators; compose-described TCP/2375 local executor"]
+  node_0456afc65ddefc44["NODE-ENTIRE | external_system | Entire"]
   node_0a0fe2f046a648e9["NODE-EXTERNAL-HOLDOUT | policy_bundle | external Trust CI policy operators"]
   node_a6c166e55f8e1784["NODE-FACTORY-CONTROL | local_component | local factory operators"]
   node_379217d10ea012c3["NODE-FACTORY-EARNED-AUTONOMY | local_component | local factory operators and human reviewers"]
@@ -22,6 +23,7 @@ flowchart LR
   node_1c3a10ba26a8e80d["NODE-ISOLATED-RUNNER | runner | Trust CI operators"]
   node_3703dbb382efdb0f["NODE-LOCAL-DEMO-TEST-CLIENT | local_component | repository engineering"]
   node_9f1df3a916fb955a["NODE-LOCAL-DEMO-UI | local_component | repository engineering"]
+  node_fdafbab352587936["NODE-LOCAL-ENTIRE-ADAPTER | local_component | repository engineering"]
   node_770cf3a1783e8525["NODE-LOCAL-ROUTE-POLICY | local_component | repository engineering"]
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
@@ -44,6 +46,11 @@ flowchart LR
   node_3703dbb382efdb0f -->|"EDGE-DEMO-TEST-CLIENT-LOOPBACK | dependency | https"| node_9f1df3a916fb955a
   node_9f1df3a916fb955a -->|"EDGE-DEMO-UI-READS-LOCAL-PREFLIGHT | dependency | python_import"| node_770cf3a1783e8525
   node_4e78270f61d78ed8 -->|"EDGE-DOCKER-ISOLATED-RUNNER | deployment | docker_api"| node_1c3a10ba26a8e80d
+  node_fdafbab352587936 -->|"EDGE-ENTIRE-LOCAL-CORE | dependency | filesystem"| node_770cf3a1783e8525
+  node_fdafbab352587936 -->|"EDGE-ENTIRE-PROVIDER-READ | dependency | https"| node_0456afc65ddefc44
+  node_fdafbab352587936 -->|"EDGE-ENTIRE-PROVIDER-WRITE | publication | https"| node_0456afc65ddefc44
+  node_fdafbab352587936 -->|"EDGE-ENTIRE-VERSION-GITHUB-FALLBACK | dependency | https"| node_8b8a8cd21b180532
+  node_fdafbab352587936 -->|"EDGE-ENTIRE-VERSION-MANIFEST | dependency | https"| node_0456afc65ddefc44
   node_fae11f6a95d982dc -->|"EDGE-FACTORY-ADAPTERS-EXECUTION-CORE | data_flow | jsonl"| node_0a087cfaed95a8ad
   node_93915052ae8a2e67 -->|"EDGE-FACTORY-API-CONTROL | control | unix_http"| node_a6c166e55f8e1784
   node_93915052ae8a2e67 -->|"EDGE-FACTORY-API-LANDING-DOGFOOD | control | python_import"| node_340c6123d4df34df
