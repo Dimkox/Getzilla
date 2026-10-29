@@ -25,6 +25,7 @@ from .model_continuation import classify_failure, load_policy
 MAX_BYTES = 512 * 1024
 MAX_CHAINS = 64
 MAX_EVENTS = 256
+MAX_EPOCH_SECONDS = 253402300799  # Last UTC second in year9999; distinct from count limits.
 _ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z')
 _DIGEST = re.compile(r'[a-f0-9]{64}\Z')
 _CATEGORIES = frozenset({'rate_limit', 'quota_exhausted', 'provider_unavailable',
@@ -347,7 +348,9 @@ def _current(root, chain):
 def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:
     bound = _binding(binding)
     usage = _usage(original)
-    if type(budget) is not TaskBudget or not all(_integer(v) for v in (budget.max_attempts, budget.max_requests, budget.deadline_epoch)):
+    if (type(budget) is not TaskBudget
+            or not all(_integer(v) for v in (budget.max_attempts, budget.max_requests))
+            or not _integer(budget.deadline_epoch, MAX_EPOCH_SECONDS)):
         raise JournalError('invalid_task_budget')
     with _store(root, create=True) as (chains, save):
         if any(c['binding']['task_id'] == binding.task_id for c in chains.values()) or binding.chain_id in chains:

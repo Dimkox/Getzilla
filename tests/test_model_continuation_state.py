@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from dataclasses import replace
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -96,6 +97,26 @@ class ContinuationJournalTest(unittest.TestCase):
                 journal.money_micros(value, ceiling=False)
         with self.assertRaises(journal.JournalError):
             journal.create_chain(self.root, self.binding, journal.Usage(5, '0.1'), self.budget)
+
+    def test_current_epoch_deadline_is_accepted_and_expires(self):
+        now = int(datetime.now(timezone.utc).timestamp())
+        self.assertGreater(now, 1_000_000_000)
+        budget = replace(self.budget, deadline_epoch=now + 60)
+        with patch.object(journal.time, 'time', return_value=now):
+            result = journal.create_chain(self.root, self.binding, journal.Usage(1, '0.1'), budget)
+            self.assertEqual(result['state'], 'active_unknown')
+            self.assertEqual(journal.inspect_chain(self.root, self.binding)['limits']['deadline'], now + 60)
+        with patch.object(journal.time, 'time', return_value=now + 60):
+            self.assertEqual(self.terminal()['reason'], 'deadline_exhausted')
+
+    def test_deadline_timestamp_has_separate_closed_bound(self):
+        for deadline in (True, 1.5, 0, -1, 253402300800, '2000000000'):
+            with self.subTest(deadline=deadline), self.assertRaisesRegex(journal.JournalError, 'invalid_task_budget'):
+                journal.create_chain(self.root, self.binding, journal.Usage(1, '0.1'),
+                                     replace(self.budget, deadline_epoch=deadline))
+        with self.assertRaisesRegex(journal.JournalError, 'invalid_task_budget'):
+            journal.create_chain(self.root, self.binding, journal.Usage(1, '0.1'),
+                                 replace(self.budget, max_requests=1_000_000_001))
 
     def test_policy_money_preserves_decimal_ceiling(self):
         raw = json.dumps(self.policy).replace('"max_cost_usd": 1.5', '"max_cost_usd": 1.000000999999999999999999')
