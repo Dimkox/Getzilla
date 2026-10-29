@@ -1,0 +1,7 @@
+# Verifier environment selection and UV refusal guidance
+
+On 2026-10-29, while preparing issue #168, the coordinator ran Factory synchronization without an explicit Python version. Factory's `.python-version` selected Python 3.11 and replaced the reused task environment. An earlier relative `UV_PROJECT_ENVIRONMENT` value also resolved from the Factory project directory instead of the intended repository root. These command choices invalidated the verification environment; they did not prove a product defect or a volume leak.
+
+Two attempted `uv pip install` commands then received opaque policy refusals without the existing supported-pip hint. The parser recognized pip and Python module invocation, but not UV's pip subcommand. The repair adds detection and guidance only. UV installs remain outside the closed supported grammar. Regressions cover both refused forms and confirm that `uv run` and `uv tool` are not classified as pip installs.
+
+The coordinator reported recovery in a fresh owner-only `issue168-py314` environment with explicit Python 3.14.10, the existing wheel-only supported pip form, and Factory synchronization with an absolute environment path and explicit Python version. `pip check` reported no broken requirements. Keep verifier environments task-specific; select the interpreter and destination explicitly, and check them after synchronization. Fresh exact-source verification is still required. This incident is linked to issue #232; broader cleanup work remains in issue #168.

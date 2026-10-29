@@ -476,8 +476,12 @@ PIP_INSTALL_HINT = (
 
 
 def is_pip_install(command: str) -> bool:
+    # UV recognition selects a refusal and its hint, never admission to the closed pip grammar.
     invocations = [_shell_argv(_unwrap_shell(chunk)) for chunk in _command_chunks(command)]
     return any('install' in argv and (re.fullmatch(r'pip(?:3(?:\.\d+)?)?', _command_name(argv)) or
+               (_command_name(argv) == 'uv' and _operands(argv, {
+                   '--directory', '--project', '--config-file', '--cache-dir', '--color', '--allow-insecure-host',
+               })[:2] == ['pip', 'install']) or
                (re.fullmatch(r'python(?:3(?:\.\d+)?)?', _command_name(argv)) and
                 any(argv[index:index + 2] == ['-m', 'pip'] for index in range(len(argv)))))
                for argv in invocations)
