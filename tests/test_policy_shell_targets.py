@@ -132,6 +132,37 @@ class ScratchPipPolicyTest(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn('Supported pip form:', reason)
 
+    def test_uv_pip_installs_stay_denied_with_supported_pip_guidance(self):
+        arguments = (' --python .getzilla/runtime/scratch/tools/bin/python '
+                     '-r .getzilla/config/python-test-requirements.txt')
+        for prefix in ('uv pip install', 'uv --offline pip install',
+                       'uv --directory . pip install', 'uv pip --offline install',
+                       'uv --color never --cache-dir /tmp/uv-cache pip install'):
+            with self.subTest(prefix=prefix):
+                allowed, reason = self.check(prefix + arguments)
+                self.assertFalse(allowed, reason)
+                self.assertIn('Supported pip form:', reason)
+
+    def test_both_reported_uv_forms_remain_denied_with_actionable_guidance(self):
+        prefix = 'uv pip install --python .getzilla/runtime/scratch/pr231-py314/bin/python '
+        for arguments in (
+            '-r .getzilla/config/python-test-requirements.txt -r .getzilla/config/python-quality-requirements.txt',
+            'pytest==9.1.1 pytest-xdist==3.8.0 pytest-cov==7.1.0 coverage==7.15.4 '
+            'jsonschema==4.26.0 ruff==0.16.3 bandit==1.9.4',
+        ):
+            with self.subTest(arguments=arguments):
+                allowed, reason = self.check(prefix + arguments)
+                self.assertFalse(allowed, reason)
+                self.assertIn('Supported pip form:', reason)
+
+    def test_uv_run_tool_and_help_are_not_pip_installs(self):
+        from getzilla.shell_targets import is_pip_install
+
+        for command in ('uv run pip install ruff', 'uv tool install ruff', 'uv help pip install',
+                        'uv --offline tool install ruff', 'uv --directory pip install ruff'):
+            with self.subTest(command=command):
+                self.assertFalse(is_pip_install(command))
+
     def test_shared_venv_and_writable_ancestors_are_refused(self):
         self.venv.chmod(0o775)
         self.assertFalse(self.check(self.command)[0])
