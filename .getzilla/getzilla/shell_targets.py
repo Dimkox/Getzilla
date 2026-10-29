@@ -4,6 +4,8 @@ import fnmatch
 import posixpath
 import re
 import shlex
+import os
+import stat
 from pathlib import Path
 
 from ._policy_legacy import (
@@ -456,11 +458,133 @@ def _git_code_path(rel: str) -> bool:
             or norm.startswith('.git/hooks/'))
 
 
+_PIP_REQUIREMENTS = frozenset({
+    '.getzilla/config/python-test-requirements.txt',
+    '.getzilla/config/python-quality-requirements.txt',
+})
+_PIP_FLAGS = ['-I', '-m', 'pip', '--isolated', 'install', '--only-binary=:all:',
+              '--no-cache-dir', '--disable-pip-version-check', '--ignore-installed']
+PIP_INSTALL_HINT = (
+    ' Supported pip form: PIP_CONFIG_FILE=/dev/null .getzilla/runtime/scratch/<venv>/bin/python '
+    '-I -m pip --isolated install --only-binary=:all: --no-cache-dir --disable-pip-version-check '
+    '--ignore-installed -r .getzilla/config/python-test-requirements.txt '
+    '(optionally also -r .getzilla/config/python-quality-requirements.txt). '
+    'Use an existing owner-only (0700) POSIX venv under non-shared owned directories, '
+    'with no system site packages, only plain pinned requirements, '
+    'and no extra options or shell commands.'
+)
+
+
+def is_pip_install(command: str) -> bool:
+    invocations = [_shell_argv(_unwrap_shell(chunk)) for chunk in _command_chunks(command)]
+    return any('install' in argv and (re.fullmatch(r'pip(?:3(?:\.\d+)?)?', _command_name(argv)) or
+               (re.fullmatch(r'python(?:3(?:\.\d+)?)?', _command_name(argv)) and
+                any(argv[index:index + 2] == ['-m', 'pip'] for index in range(len(argv)))))
+               for argv in invocations)
+
+
+def _plain_file(path: Path, limit: int) -> str:
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > limit:
+        raise ValueError('not a bounded regular file')
+    return path.read_text(encoding='utf-8')
+
+
+def _scratch_pip_targets(root: Path, command: str) -> tuple[list[str], bool] | None:
+    """A closed POSIX install form: requirements are reads, the existing venv is the write target.
+
+    This is target accounting, not a package sandbox. Wheels and their installed code still need
+    normal dependency trust. Config files, source builds and destination overrides are excluded.
+    """
+    if not is_pip_install(command):
+        return None
+    denied: tuple[list[str], bool] = ([], True)
+    # No expansions, redirections, wrappers, extra commands or environment overrides.
+    if os.name == 'nt' or not re.fullmatch(r'[A-Za-z0-9_./:= -]+', command):
+        return denied
+    argv = command.split()
+    if len(argv) < 13 or argv[0] != 'PIP_CONFIG_FILE=/dev/null' or argv[2:11] != _PIP_FLAGS:
+        return denied
+    interpreter = argv[1]
+    if not re.fullmatch(r'\.getzilla/runtime/scratch/[A-Za-z0-9_-]+/bin/python(?:3(?:\.\d+)?)?', interpreter):
+        return denied
+    tail = argv[11:]
+    if len(tail) % 2 or not tail or len(tail) > 4:
+        return denied
+    requirements = tail[1::2]
+    if (any(flag != '-r' for flag in tail[::2]) or len(set(requirements)) != len(requirements)
+            or not set(requirements) <= _PIP_REQUIREMENTS):
+        return denied
+    venv = (root / interpreter).parent.parent
+    try:
+        # Do not treat a scratch-directory symlink as an isolated destination.
+        for path in [venv, *venv.parents]:
+            if path.is_symlink() or not path.is_dir():
+                return denied
+            metadata = path.stat()
+            if metadata.st_uid != os.getuid() or metadata.st_mode & (0o077 if path == venv else 0o022):
+                return denied
+            if path == root:
+                break
+        if (venv / 'bin').is_symlink() or not (venv / 'bin').is_dir():
+            return denied
+        fields = dict(line.split('=', 1) for line in _plain_file(venv / 'pyvenv.cfg', 16384).splitlines()
+                      if '=' in line)
+        fields = {key.strip(): value.strip() for key, value in fields.items()}
+        executable = fields.get('executable', '')
+        if (fields.get('include-system-site-packages') != 'false'
+                or not re.fullmatch(r'/usr/(?:local/)?bin/python(?:3(?:\.\d+)?)?', executable)
+                or fields.get('home') != str(Path(executable).parent)
+                or (root / interpreter).resolve(strict=True) != Path(executable).resolve(strict=True)
+                or not os.access(executable, os.X_OK)):
+            return denied
+        # Existing package directories can redirect pip's writes too. Bound the scan and reject
+        # external links/hardlinks, except the ordinary venv interpreter links to its base Python.
+        visited = 0
+        def fail_walk(error: OSError) -> None:
+            raise error
+
+        for directory, dirs, files in os.walk(venv, followlinks=False, onerror=fail_walk):
+            for name in dirs + files:
+                visited += 1
+                if visited > 20000:
+                    return denied
+                path = Path(directory) / name
+                metadata = path.lstat()
+                if path.is_symlink():
+                    destination = path.resolve(strict=True)
+                    python_link = path.parent == venv / 'bin' and (
+                        re.fullmatch(r'python(?:3(?:\.\d+)?)?', name) or name == '\U0001d70bthon')
+                    if not destination.is_relative_to(venv) and not (
+                            python_link and destination == Path(executable).resolve(strict=True)):
+                        return denied
+                elif stat.S_ISREG(metadata.st_mode):
+                    if metadata.st_nlink != 1:
+                        return denied
+                elif not stat.S_ISDIR(metadata.st_mode):
+                    return denied
+        for relative in requirements:
+            path = root / relative
+            if path.parent.is_symlink() or (root / '.getzilla').is_symlink():
+                return denied
+            pins = [line.strip() for line in _plain_file(path, 16384).splitlines()
+                    if line.strip() and not line.lstrip().startswith('#')]
+            if not pins or not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.]*', pin)
+                                   for pin in pins):
+                return denied
+    except (OSError, ValueError, UnicodeError, RuntimeError):
+        return denied
+    return [venv.relative_to(root).as_posix()], False
+
+
 def _control_plane_shell_mutation(
     root: Path,
     command: str,
     patterns: list[str],
 ) -> tuple[list[str], bool]:
+    pip = _scratch_pip_targets(root, command)
+    if pip is not None:
+        return pip
     raw_targets, mutation, unresolved, blind = _shell_mutation_targets(root, command)
     protected_targets: list[str] = []
     dynamic_protected = False
