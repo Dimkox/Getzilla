@@ -400,7 +400,7 @@ def _pytest_command(workers: int, distribution: str) -> list[str]:
     confcutdir = ['--confcutdir=.'] if os.name == 'nt' else []
     return [sys.executable, '-m', 'pytest', '-c', os.devnull, '-p', 'xdist.plugin', '-p', 'no:cacheprovider',
             '--import-mode=prepend', '--rootdir=.', *confcutdir, '-o', 'python_files=test*.py', '-q', '-n', str(workers),
-            f'--dist={distribution}', '--max-worker-restart=0', '--durations=20', '-ra']
+            f'--dist={distribution}', '--max-worker-restart=0', '--durations=20', '-ra', '--show-capture=no']
 
 
 def _unittest_files(root: Path) -> list[str]:

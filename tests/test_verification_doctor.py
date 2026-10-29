@@ -312,6 +312,106 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
+    def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
+        failure = ('================ FAILURES ================\n'
+                   'tests/test_peer.py:174: AssertionError: secret-token-123\n'
+                   'E   AssertionError: secret-token-123\n')
+        output = failure + ('coverage rows\n' * 2000) + 'FAILED tests/test_peer.py::test_close - AssertionError: secret-token-123\n'
+        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
+        self.assertIn('tests/test_peer.py:174: AssertionError', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('secret-token-123', result)
+        self.assertLessEqual(len(result), 12000)
+
+    def test_failed_core_excerpt_bounds_many_locations_and_omits_controlled_values(self) -> None:
+        output = ('==== ERRORS ====\r\n' +
+                  ''.join(f'tests/test_case_{n}.py:1: ValueError: SECRET_{n}\r\n' for n in range(1000)) +
+                  'FAILED tests/test_peer.py::test_close - SECRET\r\n')
+        trusted = {f'tests/test_case_{n}.py': (1, set()) for n in range(1000)}
+        trusted['tests/test_peer.py'] = (200, {'test_close'})
+        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
+        self.assertIn('tests/test_case_0.py:1: ValueError', result)
+        self.assertIn('additional failure locations omitted', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('SECRET', result)
+        self.assertNotIn('\r', result)
+        self.assertLessEqual(len(result), 12000)
+
+    def test_core_excerpt_keeps_existing_output_without_pytest_failure_marker(self) -> None:
+        output = 'safe-output' * 2000
+        self.assertEqual(verification_module._core_output_excerpt(output, failed=False), output[-12000:])
+        self.assertEqual(verification_module._core_output_excerpt(output, failed=True), output[-12000:])
+
+    def test_core_excerpt_removes_ansi_and_unsafe_failure_text(self) -> None:
+        output = ('\x1b[31m==== FAILURES ====\x1b[0m\n'
+                  '\x1b[31mtests/test_peer.py:42: RuntimeError: SECRET\x1b[0m\n'
+                  'FAILED tests/test_peer.py::test_close - SECRET\n')
+        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
+        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
+        self.assertNotIn('SECRET', result)
+        self.assertNotIn('\x1b', result)
+
+    def test_core_excerpt_normalizes_windows_paths(self) -> None:
+        output = ('==== FAILURES ====\r\ntests\\test_peer.py:42: RuntimeError: SECRET\r\n'
+                  'FAILED tests\\test_peer.py::test_close - SECRET\r\n')
+        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
+        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('SECRET', result)
+
+    def test_core_result_records_sanitized_failure_location_before_coverage(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        output = ('==== FAILURES ====\ntests/test_peer.py:174: AssertionError: secret-token-123\n' +
+                  'coverage rows\n' * 2000 + 'FAILED tests/test_peer.py::test_close - secret-token-123\n')
+        core = CoreTestRun(ProcessResult(['pytest'], 1, stdout=output), None, 8, {'engine': 'pytest-xdist'}, {})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tests').mkdir()
+            with patch.object(verification_module, '_trusted_pytest_metadata', return_value={'tests/test_peer.py': (200, {'test_close'})}), \
+                    patch.object(verification_module, 'selected_workers', return_value=8), \
+                    patch.object(verification_module, 'run_core_tests', return_value=core):
+                checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
+        result = next(check for check in checks if check.name == 'python-unittest')
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('tests/test_peer.py:174: AssertionError', result.stdout)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result.stdout)
+        self.assertNotIn('secret-token-123', result.stdout)
+
+    def test_core_excerpt_rejects_captured_path_and_untrusted_node_spoof(self) -> None:
+        output = ('==== FAILURES ====\n'
+                  'tests/test_peer.py:42: AssertionError\n'
+                  'tests/test_peer.py:43: PRIVATE_SENTINELError\n'
+                  '---- Captured stdout call ----\n'
+                  'tests/test_secret_value.py:123: AssertionError\n'
+                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - AssertionError\n'
+                  '==== short test summary info ====\n'
+                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - secret-token\n'
+                  'FAILED tests/test_peer.py::test_close - AssertionError\n')
+        trusted = {'tests/test_peer.py': (200, {'test_close'})}
+        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
+        self.assertIn('tests/test_peer.py:42: AssertionError', result)
+        self.assertIn('FAILED tests/test_peer.py::test_close', result)
+        self.assertNotIn('PRIVATE_SENTINEL', result)
+        self.assertNotIn('secret_value', result)
+        self.assertNotIn('secret-token', result)
+        self.assertIn('tests/test_peer.py:43', result)
+
+    def test_pytest_metadata_only_trusts_tracked_source_names(self) -> None:
+        path = 'tests/test_verification_doctor.py'
+        output = ('==== FAILURES ====\n' + path + ':320: AssertionError\n'
+                  'FAILED ' + path + '::VerificationTests::test_scanner_fixture_keeps_real_checks_and_full_source_negative_control\n'
+                  'FAILED tests/untracked_secret.py::test_private\n')
+        trusted = verification_module._trusted_pytest_metadata(ROOT, output)
+        self.assertIn(path, trusted)
+        self.assertNotIn('tests/untracked_secret.py', trusted)
+        self.assertIn('VerificationTests::test_scanner_fixture_keeps_real_checks_and_full_source_negative_control', trusted[path][1])
+
+    def test_pytest_runner_suppresses_captured_test_output(self) -> None:
+        from getzilla import python_test_runner
+        with patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
+            command = python_test_runner._pytest_command(2, 'worksteal')
+        self.assertIn('--show-capture=no', command)
+
     def test_scanner_fixture_keeps_real_checks_and_full_source_negative_control(self) -> None:
         from getzilla.verification import _bandit, _ruff
         with project_copy() as root:
