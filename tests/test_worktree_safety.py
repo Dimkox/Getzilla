@@ -267,6 +267,26 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertFalse(report['removable'])
         self.assertIn('check failed: bytecode disappeared during inspection', report['reasons'])
 
+    def test_unreadable_ignored_directory_keeps_the_worktree(self) -> None:
+        path = self.add('unreadable-cache', '-b', 'unreadable-cache')
+        cache = path / '__pycache__'
+        hidden = cache / 'nested'
+        hidden.mkdir(parents=True)
+        notes = hidden / 'unique-notes.txt'
+        notes.write_text('unique user notes')
+        real_scandir = os.scandir
+
+        def unreadable_cache(target):
+            if Path(target) == hidden:
+                raise PermissionError('ignored directory is unreadable')
+            return real_scandir(target)
+
+        with patch('getzilla.worktree_safety.os.scandir', side_effect=unreadable_cache):
+            report = self.report(path)
+        self.assertFalse(report['removable'])
+        self.assertIn('check failed: ignored directory is unreadable', report['reasons'])
+        self.assertEqual(notes.read_text(), 'unique user notes')
+
     def test_an_operation_in_progress_keeps_the_worktree(self) -> None:
         path = self.add('merging', '-b', 'merging')
         git_dir = Path(git(path, 'rev-parse', '--absolute-git-dir'))

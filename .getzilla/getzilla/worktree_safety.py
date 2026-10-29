@@ -82,6 +82,9 @@ def _disposable(worktree: Path, relative: str) -> bool:
 
 def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
     """Ignored files that are not reproducible output; a file Git lists as a folder is opened up."""
+    def unreadable(error: OSError) -> None:
+        raise error  # inspect() keeps the worktree when the scan cannot check every directory.
+
     found: list[str] = []
     seen = 0
     for relative in ignored:
@@ -91,7 +94,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
         if not (relative.endswith('/') and folder.is_dir() and not folder.is_symlink()):
             found.append(relative)
         else:
-            for base, dirs, files in os.walk(folder):
+            for base, dirs, files in os.walk(folder, onerror=unreadable):
                 links = [name for name in dirs if os.path.islink(os.path.join(base, name))]  # walk lists them as folders
                 dirs[:] = [name for name in dirs if name not in links]
                 for name in [*files, *links]:
