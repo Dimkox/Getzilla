@@ -28,6 +28,47 @@ from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER,
 
 
 class HarnessTests(unittest.TestCase):
+    def test_codex_overlay_survives_regeneration_without_replacing_guards(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(ROOT / '.grok', root / '.grok')
+            overlay = {'hooks': {
+                'Stop': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex stop', 'timeout': 30}]}],
+                'SessionEnd': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex session-end', 'timeout': 3}]}],
+            }}
+            (root / '.grok/codex-hooks.json').write_text(json.dumps(overlay), encoding='utf-8')
+            outputs = render(root)
+            hooks = json.loads(outputs['.codex/hooks.json'])['hooks']
+            self.assertEqual(set(hooks), set(CODEX_HOOK_EVENTS) | {'SessionEnd'})
+            self.assertIn('stop_gate.py', hooks['Stop'][0]['hooks'][0]['command'])
+            self.assertEqual(hooks['Stop'][1:], overlay['hooks']['Stop'])
+            self.assertEqual(hooks['SessionEnd'], overlay['hooks']['SessionEnd'])
+            self.assertNotIn(b'entire hooks', outputs['.claude/settings.json'])
+            write(root)
+            self.assertEqual(render(root), outputs)
+            self.assertEqual(drift(root), [])
+            write(root)
+            self.assertEqual((root / '.codex/hooks.json').read_bytes(), outputs['.codex/hooks.json'])
+            (root / '.grok/codex-hooks.json').unlink()
+            baseline = json.loads(render(root)['.codex/hooks.json'])['hooks']
+            self.assertEqual(set(baseline), set(CODEX_HOOK_EVENTS))
+            self.assertNotIn('entire', json.dumps(baseline))
+
+    @unittest.skipIf(os.name == 'nt', 'Entire shell hooks require POSIX sh')
+    def test_entire_missing_cli_is_nonblocking(self):
+        overlay = json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']
+        shell = shutil.which('sh')
+        self.assertIsNotNone(shell)
+        with tempfile.TemporaryDirectory() as empty_path:
+            for event, groups in overlay.items():
+                command = groups[0]['hooks'][0]['command']
+                result = subprocess.run([shell, '-c', command.removeprefix('sh -c ')[1:-1]],
+                                        env={**os.environ, 'PATH': empty_path},
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, (event, result.stderr))
+                if event == 'SessionStart':
+                    self.assertIn('Entire CLI', json.loads(result.stdout)['systemMessage'])
+
     def test_grok_skills_are_rendered_from_the_canonical_sources(self):
         outputs = render(ROOT)
         for source in (ROOT / '.agents/skills').rglob('*'):
@@ -46,12 +87,29 @@ class HarnessTests(unittest.TestCase):
             ('.codex/hooks.json', set(CODEX_HOOK_EVENTS)),
         ):
             hooks = json.loads((ROOT / rel).read_text(encoding='utf-8'))['hooks']
-            self.assertEqual(set(hooks), events, rel)
+            extra = set(json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']) if rel == '.codex/hooks.json' else set()
+            self.assertEqual(set(hooks), events | extra, rel)
             for event in events:
                 command = hooks[event][0]['hooks'][0]['command']
                 script = grok[event][0]['hooks'][0]['command'].split()[1]
                 self.assertIn(script.split('/')[-1], command, (rel, event))
                 self.assertTrue((ROOT / script).is_file(), script)
+
+    def test_entire_is_codex_only_and_each_hook_runs_once(self):
+        expected = {'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop',
+                    'SessionEnd', 'SubagentStart', 'SubagentStop'}
+        overlay = json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']
+        self.assertEqual(set(overlay), expected)
+        outputs = render(ROOT)
+        codex = json.loads(outputs['.codex/hooks.json'])['hooks']
+        for event in expected:
+            additions = [hook for group in codex[event] for hook in group['hooks']
+                         if 'exec entire hooks codex ' in hook['command']]
+            self.assertEqual(additions, overlay[event][0]['hooks'])
+            self.assertEqual(len(additions), 1)
+        self.assertNotIn(b'entire hooks', outputs['.claude/settings.json'])
+        cursor = ROOT / '.cursor/hooks.json'
+        self.assertTrue(not cursor.exists() or 'entire' not in cursor.read_text())
 
     def test_gemini_and_copilot_hooks_use_their_own_event_names(self) -> None:
         grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']

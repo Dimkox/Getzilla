@@ -1,8 +1,40 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
-        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -23,57 +55,8 @@
         ]
       }
     ],
-    "PreToolUse": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/pre_tool_use.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_start.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
     "SubagentStart": [
       {
-        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -85,7 +68,6 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -95,14 +77,24 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
+    "Stop": [
       {
-        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/user_prompt_submit.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
-            "timeout": 20
+            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/stop_gate.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\" || python -c \"import os,pathlib,runpy,sys;t='.grok/hooks/session_end.py';p=pathlib.Path;d=p.cwd();e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());sys.path.insert(0,str(f.parent));sys.argv=[str(f),'--harness','claude'];runpy.run_path(str(f),run_name='__main__')\"",
+            "timeout": 10
           }
         ]
       }
