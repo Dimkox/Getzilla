@@ -1,0 +1,32 @@
+# Model continuation: passive startup slice
+
+Issue [235](https://github.com/Dimkox/Getzilla/issues/235) remains open. This slice loads policy, classifies normalized failures and reports status. It makes no model requests, scans no credentials and changes no native user defaults. No adapter is qualified. A configured policy cannot start continuation.
+
+Run `getzilla status --model-continuation --harness codex` (or `grok`, `qwen`, `claude`, `gemini`, `copilot`). Normal `getzilla status` also includes this status. Without an explicit harness, the CLI reports `unknown`.
+
+## Shared policy
+
+The project file `.getzilla/config/model-continuation.json` ships with `{"schema_version":1,"enabled":false}`. Missing, invalid, disabled and configured states stay distinct. Status never prints candidate identities, paths or parse errors.
+
+An enabled policy requires an ordered `candidates` list of unique `{provider, account_ref, model}` objects and a `bounds` object with all four fields: `max_attempts`, `max_requests`, `deadline_seconds`, `max_cost_usd`. There is no default spend allowance. Supply explicit positive finite limits. Attempts and requests must be integers; attempts cannot exceed candidate count and requests cannot be fewer than attempts. Limits cannot exceed 1,000,000,000; candidate count is 1–64. A disabled policy may retain the same validated chain and bounds.
+
+References are non-secret identifiers of 1–128 ASCII letters, digits, dots, underscores, hyphens or slashes, starting with a letter or digit. Model identifiers also allow colons for provider variants such as `:free`; provider and account references do not. URLs, `..`, `//`, credentials and extra fields are not accepted. An account reference is a name, not a credential. The regular file is limited to 16 KiB. Duplicate keys, symlinks, nonregular files, boolean numbers and nonfinite numbers are rejected. This file is configuration, not a grant or data-transfer approval.
+
+The installer treats this file as managed content. Preserve a consumer override with the existing `.getzilla/AGBP_SYNC.json` `kept_local` and matching `kept_local_sha256` mechanism before an update. The installer does not automatically preserve edits to arbitrary managed configuration. This slice does not change that contract.
+
+## Startup and classification
+
+| Harness | Hook fixture output | Native runtime qualification |
+| --- | --- | --- |
+| Grok, Qwen, Claude, Codex, Gemini | Existing `hookSpecificOutput` SessionStart context | Unqualified |
+| Copilot | Top-level `additionalContext` | Unqualified |
+
+The [Copilot hook reference](https://docs.github.com/en/copilot/reference/hooks-reference#sessionstart--sessionstart), checked on 2026-10-29, specifies the top-level startup context. Generated launchers identify the harness. Payload tests prove serialization and policy selection, not that a specific native version displays the note. Disabled hooks and bare modes cannot report startup status; use the explicit CLI. Hooks remain advisory.
+
+`classify_failure` accepts only schema-1 normalized events with `origin:model` and a category. Trusted adapters must establish attempt identity and terminal-event provenance before calling it. An untrusted mapping with those fields establishes neither. Eligible categories are `rate_limit`, `quota_exhausted`, `provider_unavailable`, `inference_transport_failure`, `generation_failure` and `inference_deadline`. Authentication and billing need user action. All other categories stop, including tool/test failures, safety, cancellation, context overflow and task-budget exhaustion. Extra fields, such as a native retry signal, stop until an adapter normalizes a terminal event.
+
+Eligibility never authorizes dispatch. T3/T4/T5/T6b must add durable admission and exact cost accounting, request limits across retries, confirmed checkpoints, tool-effect reconciliation, generation fencing, authorization, destination checks and qualified adapters. Current numeric limits are validated inputs, not a spending ledger. Do not infer provider-switch support from native model selection.
+
+## Recovery
+
+Set `enabled:false` to disable requested continuation. No dispatch exists in this slice. Revert the source change through a reviewed PR to remove passive reporting; preserve consumer configuration and native user settings.

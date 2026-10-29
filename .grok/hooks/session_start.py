@@ -5,7 +5,8 @@ import os
 import sys
 
 try:
-    from _lib import emit, read_payload, root_from, run_hook
+    from _lib import emit, harness, read_payload, root_from, run_hook
+    from getzilla.model_continuation import startup_note
     from getzilla.router import route_context
     from getzilla.state import get_active_change, get_active_route
 except Exception:
@@ -48,12 +49,18 @@ def main() -> None:
         context = route_context(route) + extra
     else:
         context = 'No active route. Submit a development task to classify work.'
+    context = f'{context} {startup_note(root, harness())}'
     note = _tool_update_note()
     if note:
         context = f'{context} {note}'
     capacity = _capacity_note(root)
     if capacity:
         context = f'{context} {capacity}'
+    # Copilot consumes top-level additionalContext. Other harnesses use the
+    # existing SessionStart envelope. See docs/model-continuation.md.
+    if harness() == 'copilot':
+        emit({'additionalContext': context})
+        return
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'SessionStart',

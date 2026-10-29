@@ -1194,3 +1194,7 @@ Compare old open issue claims against delivered source before treating them as p
 ## 2026-10-23 — Check controller capabilities before process creation
 
 The child interpreter check does not establish controller pidfd support. Check both controller APIs before launch and keep identity-safe signalling unchanged. The negative regression and 21 process/inventory controls passed.
+
+## 2026-10-29 — Keep model IDs separate from account references
+
+Model IDs are opaque provider identifiers, not filesystem paths; existing OpenRouter entries use `:free`. Validate model IDs separately from provider/account references so safe variant suffixes remain valid without accepting URLs. The regression uses an existing repository model ID.
