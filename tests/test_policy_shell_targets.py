@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,11 @@ from tests._support import project_copy
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
 class ScratchPipPolicyTest(unittest.TestCase):
     def setUp(self):
+        # The policy supports system Python paths, while the test runner can live in a CI
+        # tool cache. Inspect this supported interpreter's metadata; never execute it.
+        base_python = Path('/usr/bin/python3')
+        if not base_python.is_file() or not os.access(base_python, os.X_OK):
+            self.skipTest('scratch pip fixture needs /usr/bin/python3 metadata')
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -30,13 +36,13 @@ class ScratchPipPolicyTest(unittest.TestCase):
             if parent == self.root:
                 break
             parent.chmod(0o755)
-        (self.venv / 'bin/python').symlink_to(Path(sys.executable).resolve())
-        (self.venv / 'bin/\U0001d70bthon').symlink_to(Path(sys.executable).resolve())
+        (self.venv / 'bin/python').symlink_to(base_python)
+        (self.venv / 'bin/\U0001d70bthon').symlink_to(base_python)
         (self.venv / 'lib').mkdir()
         (self.venv / 'lib64').symlink_to('lib', target_is_directory=True)
         (self.venv / 'pyvenv.cfg').write_text(
-            f'home = {Path(sys.executable).resolve().parent}\n'
-            f'executable = {Path(sys.executable).resolve()}\ninclude-system-site-packages = false\n')
+            f'home = {base_python.parent}\n'
+            f'executable = {base_python}\ninclude-system-site-packages = false\n')
         self.command = ('PIP_CONFIG_FILE=/dev/null .getzilla/runtime/scratch/tools/bin/python -I -m pip '
                         '--isolated install --only-binary=:all: --no-cache-dir --disable-pip-version-check --ignore-installed '
                         '-r .getzilla/config/python-test-requirements.txt')
@@ -51,6 +57,16 @@ class ScratchPipPolicyTest(unittest.TestCase):
         second.write_text('ruff==0.16.3\nbandit==1.9.4\n')
         allowed, reason = self.check(self.command + ' -r .getzilla/config/python-quality-requirements.txt')
         self.assertTrue(allowed, reason)
+
+    def test_fixture_does_not_depend_on_the_test_runner_python_location(self):
+        case = ScratchPipPolicyTest()
+        try:
+            with mock.patch.object(sys, 'executable', '/opt/hostedtoolcache/Python/3.13.17/x64/bin/python'):
+                case.setUp()
+            allowed, reason = case.check(case.command)
+            self.assertTrue(allowed, reason)
+        finally:
+            case.doCleanups()
 
     def test_unsupported_pip_arguments_and_shell_forms_are_refused(self):
         variants = [self.command + suffix for suffix in (
