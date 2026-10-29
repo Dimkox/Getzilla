@@ -2111,26 +2111,92 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
     return results
 
 
-def _core_output_excerpt(output: str, *, failed: bool) -> str:
+def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
+    """Bind at most 50 reported paths and test identifiers to committed source."""
+    candidates = []
+    for match in re.finditer(r'tests/[A-Za-z0-9_./-]+\.py', output):
+        path = match.group(0)
+        if '..' not in PurePosixPath(path).parts and path not in candidates:
+            candidates.append(path)
+            if len(candidates) >= 50:
+                break
+    if not candidates:
+        return {}
+    tracked = run(['git', 'ls-files', '-z', '--', *candidates], cwd=root, timeout=10)
+    if tracked.returncode:
+        return {}
+    names = set(tracked.stdout.split('\0'))
+    result: dict[str, tuple[int, set[str]]] = {}
+    for path in candidates:
+        if path not in names:
+            continue
+        size = run(['git', 'cat-file', '-s', 'HEAD:' + path], cwd=root, timeout=10)
+        if size.returncode or not size.stdout.strip().isdigit() or int(size.stdout.strip()) > 1_000_000:
+            continue
+        source = run(['git', 'show', 'HEAD:' + path], cwd=root, timeout=10)
+        if source.returncode:
+            continue
+        try:
+            module = ast.parse(source.stdout)
+        except (SyntaxError, ValueError, RecursionError):
+            continue
+        nodes: set[str] = set()
+        for item in module.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
+                nodes.add(item.name)
+            elif isinstance(item, ast.ClassDef):
+                nodes.update(item.name + '::' + child.name for child in item.body
+                             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                             and child.name.startswith('test'))
+        result[path] = (source.stdout.count('\n') + 1, nodes)
+    return result
+
+
+def _core_output_excerpt(output: str, *, failed: bool,
+                         trusted: dict[str, tuple[int, set[str]]] | None = None) -> str:
     """Keep bounded structural failure locations without persisting new raw test data."""
     normalized = re.sub(r'\x1b\[[0-9;]*m', '', output) if failed else output
     if not failed or not re.search(r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized):
         return output[-12000:]
+    trusted = trusted or {}
     locations: list[str] = []
     summaries: list[str] = []
     omitted = False
+    captured = False
+    summary_section = False
+    safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
+                   'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
     for line in normalized.splitlines():
         line = line[:1024].replace('\\', '/')
-        location = re.match(r'^((?:tests/)[A-Za-z0-9_./-]+\.py:[0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
+        if re.match(r'^-{3,}\s*Captured\b', line):
+            captured = True
+            continue
+        if re.match(r'^={3,}\s*short test summary info\s*={3,}', line):
+            captured = False
+            summary_section = True
+            continue
+        if captured:
+            omitted = True
+            continue
+        location = re.match(r'^(tests/[A-Za-z0-9_./-]+\.py):([0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
         node = re.match(r'^(FAILED|ERROR)\s+(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)', line)
-        if location:
+        if location and not summary_section:
+            path, number, error = location.groups()
+            if path not in trusted or not 1 <= int(number) <= trusted[path][0]:
+                continue
             if len(locations) < 100:
-                locations.append(location.group(1) + (': ' + location.group(2) if location.group(2) else ''))
+                locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
             else:
                 omitted = True
         elif node:
+            identity = node.group(2).split('::')
+            path, name = identity[0], '::'.join(identity[1:])
+            if path not in trusted:
+                continue
+            if name and name not in trusted[path][1]:
+                name = ''
             if len(summaries) < 20:
-                summaries.append(node.group(1) + ' ' + node.group(2))
+                summaries.append(node.group(1) + ' ' + path + ('::' + name if name else ''))
             else:
                 omitted = True
     trace = '\n'.join(locations)
@@ -2177,7 +2243,9 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                     results.append(CheckResult(
                         name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f}',
-                        command=process.command, stdout=_core_output_excerpt(process.stdout, failed=process.returncode != 0),
+                        command=process.command, stdout=_core_output_excerpt(
+                            process.stdout, failed=process.returncode != 0,
+                            trusted=_trusted_pytest_metadata(root, process.stdout) if name == 'python-unittest' and process.returncode else None),
                         stderr=(process.stderr + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
