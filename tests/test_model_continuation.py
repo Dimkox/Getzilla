@@ -100,6 +100,11 @@ class ModelContinuationTest(unittest.TestCase):
             self.assertEqual(load_policy(self.root).state, 'invalid')
             self.assertNotIn('SECRET', json.dumps(startup_status(self.root, 'SECRET\n')))
 
+    def test_extreme_numeric_exponent_is_invalid(self):
+        data = json.dumps(enabled_policy()).replace('"max_cost_usd": 1.5', '"max_cost_usd": 1e999999999999999999999')
+        self.path.write_text(data, encoding='utf-8')
+        self.assertEqual(load_policy(self.root).state, 'invalid')
+
     def test_nonregular_file_and_symlink_are_invalid(self):
         self.path.mkdir()
         self.assertEqual(load_policy(self.root).state, 'invalid')

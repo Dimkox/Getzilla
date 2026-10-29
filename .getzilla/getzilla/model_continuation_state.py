@@ -1,0 +1,479 @@
+"""Offline durable continuation records. No record grants dispatch authority.
+
+The private qualification boundary deliberately has no implementation. A future
+adapter must establish fencing, effect reconciliation and current authorization.
+POSIX file and directory fsync are required; Windows admission is unsupported.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import secrets
+import stat
+import time
+from contextlib import ExitStack, contextmanager
+from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, localcontext
+from pathlib import Path
+from typing import Any
+
+from . import fsx
+from .model_continuation import classify_failure, load_policy
+
+MAX_BYTES = 512 * 1024
+MAX_CHAINS = 64
+MAX_EVENTS = 256
+MAX_EPOCH_SECONDS = 253402300799  # Last UTC second in year9999; distinct from count limits.
+_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z')
+_DIGEST = re.compile(r'[a-f0-9]{64}\Z')
+_CATEGORIES = frozenset({'rate_limit', 'quota_exhausted', 'provider_unavailable',
+    'inference_transport_failure', 'generation_failure', 'inference_deadline',
+    'authentication', 'billing', 'cancelled', 'safety_refusal', 'policy_refusal',
+    'tool_failure', 'test_failure', 'unknown', 'context_overflow', 'invalid_request',
+    'unsupported_tool', 'task_budget_exhausted'})
+
+
+class JournalError(ValueError):
+    """A fixed diagnostic code; never includes caller text or filesystem paths."""
+
+
+@dataclass(frozen=True)
+class Binding:
+    chain_id: str
+    task_id: str
+    owner_id: str
+    route_id: str
+    session_id: str
+    workspace_digest: str
+    source_digest: str
+    checkpoint_digest: str
+
+
+@dataclass(frozen=True)
+class Usage:
+    requests: int
+    cost_usd: str
+
+
+@dataclass(frozen=True)
+class TaskBudget:
+    max_attempts: int
+    max_requests: int
+    max_cost_usd: str
+    deadline_epoch: int
+
+
+def money_micros(value: Any, *, ceiling: bool) -> int:
+    """Caps round down, reserved/observed charges round up. Reject binary floats."""
+    if type(value) not in (str, int, Decimal) or len(str(value)) > 128:
+        raise JournalError('invalid_money')
+    try:
+        amount = Decimal(value)
+        if not amount.is_finite() or amount < 0 or amount > Decimal('1000000000'):
+            raise JournalError('invalid_money')
+        with localcontext() as context:
+            context.prec = 160
+            result = int((amount * 1000000).to_integral_value(rounding=ROUND_FLOOR if ceiling else ROUND_CEILING))
+    except (InvalidOperation, OverflowError):
+        raise JournalError('invalid_money') from None
+    if ceiling and result == 0:
+        raise JournalError('empty_cost_limit')
+    return result
+
+
+def _json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False, default=str).encode('utf-8')
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_json(value)).hexdigest()
+
+
+def _pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise JournalError('journal_corrupt')
+        result[key] = value
+    return result
+
+
+def _integer(value: Any, maximum: int = 1_000_000_000) -> bool:
+    return type(value) is int and 0 < value <= maximum
+
+
+def _binding(binding: Binding) -> dict:
+    if type(binding) is not Binding:
+        raise JournalError('invalid_binding')
+    value = asdict(binding)
+    if any(not isinstance(v, str) or not (_DIGEST if k.endswith('_digest') else _ID).fullmatch(v)
+           for k, v in value.items()):
+        raise JournalError('invalid_binding')
+    return value
+
+
+def _usage(usage: Usage) -> dict:
+    if type(usage) is not Usage or not _integer(usage.requests):
+        raise JournalError('unknown_usage')
+    return {'requests': usage.requests, 'cost_micros': money_micros(usage.cost_usd, ceiling=False)}
+
+
+def _policy(root: Path):
+    loaded = load_policy(root)
+    if loaded.policy is None or not loaded.policy.enabled:
+        raise JournalError('policy_revoked')
+    return loaded.policy, _digest(asdict(loaded.policy))
+
+
+def _regular(info):
+    if (fsx.is_link(info) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_mode & 0o177 or info.st_size > MAX_BYTES):
+        raise JournalError('unsafe_file')
+
+
+def _identity(info):
+    return info.st_dev, info.st_ino
+
+
+def _read(directory):
+    try:
+        before = fsx.lstat_at(directory, 'journal.json')
+    except FileNotFoundError:
+        raise JournalError('journal_missing') from None
+    _regular(before)
+    fd = fsx.open_at(directory, 'journal.json', os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        _regular(opened)
+        if _identity(opened) != _identity(before):
+            raise JournalError('journal_replaced')
+        with os.fdopen(os.dup(fd), 'rb') as stream:
+            raw = stream.read(MAX_BYTES + 1)
+        after = os.fstat(fd)
+        if len(raw) > MAX_BYTES or (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise JournalError('journal_changed')
+    finally:
+        os.close(fd)
+    try:
+        envelope = json.loads(raw, object_pairs_hook=_pairs)
+        if set(envelope) != {'schema_version', 'chains', 'checksum'} or type(envelope['schema_version']) is not int or envelope['schema_version'] != 1:
+            raise JournalError('journal_corrupt')
+        chains = envelope['chains']
+        if not isinstance(chains, dict) or len(chains) > MAX_CHAINS or envelope['checksum'] != _digest(chains):
+            raise JournalError('journal_corrupt')
+        for key, chain in chains.items():
+            _validate_chain(key, chain)
+        return chains
+    except (KeyError, TypeError, ValueError, RecursionError):
+        raise JournalError('journal_corrupt') from None
+
+
+def _validate_chain(key, chain):
+    fields = {'binding', 'policy_digest', 'revision', 'generation', 'limits', 'last_time', 'state', 'attempts', 'events'}
+    if not isinstance(chain, dict) or set(chain) != fields or _binding(Binding(**chain['binding']))['chain_id'] != key:
+        raise JournalError('journal_corrupt')
+    if not _DIGEST.fullmatch(chain['policy_digest']) or not _integer(chain['revision']) or not _integer(chain['generation'], 64):
+        raise JournalError('journal_corrupt')
+    limits = chain['limits']
+    if set(limits) != {'attempts', 'requests', 'cost_micros', 'deadline'} or any(not _integer(v, 10**18) for v in limits.values()):
+        raise JournalError('journal_corrupt')
+    attempts = chain['attempts']
+    if not isinstance(attempts, list) or len(attempts) != chain['generation'] or len(attempts) > limits['attempts']:
+        raise JournalError('journal_corrupt')
+    for index, attempt in enumerate(attempts):
+        if set(attempt) != {'candidate', 'requests', 'cost_micros', 'state', 'category'}:
+            raise JournalError('journal_corrupt')
+        if (type(attempt['candidate']) is not int or attempt['candidate'] != index or not _integer(attempt['requests'])
+                or type(attempt['cost_micros']) is not int or not 0 <= attempt['cost_micros'] <= 10**15
+                or attempt['state'] not in {'active_unknown', 'reserved_unknown', 'terminal_unknown'}
+                or attempt['category'] not in _CATEGORIES | {None}):
+            raise JournalError('journal_corrupt')
+    if sum(a['requests'] for a in attempts) > limits['requests'] or sum(a['cost_micros'] for a in attempts) > limits['cost_micros']:
+        raise JournalError('journal_corrupt')
+    if not _integer(chain['last_time'], 10**18) or chain['state'] not in {'open', 'cancelled'}:
+        raise JournalError('journal_corrupt')
+    if not isinstance(chain['events'], dict) or len(chain['events']) > MAX_EVENTS:
+        raise JournalError('journal_corrupt')
+    for event, record in chain['events'].items():
+        if not _ID.fullmatch(event) or set(record) != {'digest', 'result'} or not _DIGEST.fullmatch(record['digest']):
+            raise JournalError('journal_corrupt')
+        result = record['result']
+        if set(result) != {'state', 'reason', 'revision', 'generation', 'dispatch_permitted'} or result['dispatch_permitted'] is not False:
+            raise JournalError('journal_corrupt')
+        if result['state'] not in {'terminal_unknown', 'reserved_unknown'} or result['reason'] != 'recorded':
+            raise JournalError('journal_corrupt')
+        if not _integer(result['revision']) or result['revision'] > chain['revision'] or not _integer(result['generation']) or result['generation'] > chain['generation']:
+            raise JournalError('journal_corrupt')
+
+
+@contextmanager
+def _store(root: Path, *, create=False):
+    if fsx.WINDOWS:
+        raise JournalError('durability_unsupported')
+    try:
+        with ExitStack() as stack:
+            directory = fsx.open_dir(root)
+            stack.callback(fsx.close_dir, directory)
+            bindings = []
+            for name in ('.getzilla', 'runtime', 'model-continuation'):
+                if create:
+                    try:
+                        fsx.mkdir_at(directory, name, 0o700)
+                        fsx.fsync_dir(directory)
+                    except FileExistsError:
+                        pass
+                child = fsx.open_dir_at(directory, name)
+                stack.callback(fsx.close_dir, child)
+                bindings.append((directory, name, child))
+                directory = child
+            info = fsx.fstat_dir(directory)
+            if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise JournalError('unsafe_directory')
+            flags = os.O_RDWR | fsx.O_NOFOLLOW | fsx.O_NONBLOCK
+            new_lock = False
+            try:
+                fd = fsx.open_at(directory, 'lock', flags)
+            except FileNotFoundError:
+                if not create:
+                    raise JournalError('lock_missing') from None
+                try:
+                    fsx.lstat_at(directory, 'journal.json')
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise JournalError('lock_missing')
+                try:
+                    fd = fsx.open_at(directory, 'lock', flags | os.O_CREAT | os.O_EXCL, 0o600)
+                    new_lock = True
+                    os.fsync(fd)
+                    fsx.fsync_dir(directory)
+                except FileExistsError:
+                    fd = fsx.open_at(directory, 'lock', flags)
+            stack.callback(os.close, fd)
+            _regular(os.fstat(fd))
+            deadline = time.monotonic() + 1
+            while True:
+                try:
+                    fsx.lock_file(fd, blocking=False)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise JournalError('lock_busy') from None
+                    time.sleep(0.01)
+            stack.callback(fsx.unlock_file, fd)
+
+            def check():
+                for parent, name, handle in bindings:
+                    named = fsx.lstat_at(parent, name)
+                    if fsx.is_link(named) or _identity(named) != _identity(fsx.fstat_dir(handle)):
+                        raise JournalError('directory_replaced')
+                locked = os.fstat(fd)
+                _regular(locked)
+                if _identity(locked) != _identity(fsx.lstat_at(directory, 'lock')):
+                    raise JournalError('lock_replaced')
+
+            check()
+            try:
+                chains = _read(directory)
+            except JournalError as error:
+                if str(error) != 'journal_missing' or not new_lock:
+                    raise
+                chains = {}
+
+            def save():
+                check()
+                for key, chain in chains.items():
+                    _validate_chain(key, chain)
+                data = _json({'schema_version': 1, 'chains': chains, 'checksum': _digest(chains)})
+                if len(data) > MAX_BYTES:
+                    raise JournalError('capacity_exhausted')
+                name = 'pending-' + secrets.token_hex(12)
+                tmp = fsx.open_at(directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+                try:
+                    with os.fdopen(tmp, 'wb') as stream:
+                        stream.write(data)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    check()
+                    fsx.replace_at(directory, name, directory, 'journal.json')
+                    fsx.fsync_dir(directory)
+                    check()
+                finally:
+                    try:
+                        fsx.unlink_at(directory, name)
+                    except FileNotFoundError:
+                        pass
+            if new_lock:
+                # Publish a durable empty ledger before business validation. A failed
+                # initial publication still leaves the lock and fails closed.
+                save()
+            yield chains, save
+            check()
+    except OSError:
+        raise JournalError('storage_unavailable') from None
+
+
+def _result(chain, state='denied', reason='recorded'):
+    return {'state': state, 'reason': reason, 'revision': chain['revision'],
+            'generation': chain['generation'], 'dispatch_permitted': False}
+
+
+def _chain(chains, binding):
+    expected = _binding(binding)
+    chain = chains.get(binding.chain_id)
+    if chain is None:
+        raise JournalError('chain_missing')
+    if chain['binding'] != expected:
+        raise JournalError('binding_mismatch')
+    return chain
+
+
+def _clock(chain):
+    now = int(time.time())
+    if now < chain['last_time']:
+        return 'clock_uncertain'
+    if now >= chain['limits']['deadline']:
+        return 'deadline_exhausted'
+    return None
+
+
+def _current(root, chain):
+    if chain['state'] != 'open':
+        return 'chain_stopped'
+    try:
+        _, digest = _policy(root)
+    except JournalError:
+        return 'policy_revoked'
+    return 'policy_changed' if digest != chain['policy_digest'] else _clock(chain)
+
+
+def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:
+    bound = _binding(binding)
+    usage = _usage(original)
+    if (type(budget) is not TaskBudget
+            or not all(_integer(v) for v in (budget.max_attempts, budget.max_requests))
+            or not _integer(budget.deadline_epoch, MAX_EPOCH_SECONDS)):
+        raise JournalError('invalid_task_budget')
+    with _store(root, create=True) as (chains, save):
+        if any(c['binding']['task_id'] == binding.task_id for c in chains.values()) or binding.chain_id in chains:
+            raise JournalError('task_already_recorded')
+        if len(chains) >= MAX_CHAINS:
+            raise JournalError('capacity_exhausted')
+        policy, digest = _policy(root)
+        limits = {'attempts': min(policy.bounds.max_attempts, budget.max_attempts),
+                  'requests': min(policy.bounds.max_requests, budget.max_requests),
+                  'cost_micros': min(money_micros(str(policy.bounds.max_cost_usd), ceiling=True), money_micros(budget.max_cost_usd, ceiling=True)),
+                  'deadline': min(int(time.time()) + int(policy.bounds.deadline_seconds), budget.deadline_epoch)}
+        if usage['requests'] > limits['requests'] or usage['cost_micros'] > limits['cost_micros'] or limits['deadline'] <= time.time():
+            raise JournalError('initial_budget_exhausted')
+        chain = {'binding': bound, 'policy_digest': digest, 'limits': limits, 'revision': 1,
+                 'generation': 1, 'last_time': int(time.time()), 'state': 'open', 'events': {},
+                 'attempts': [{'candidate': 0, **usage, 'state': 'active_unknown', 'category': None}]}
+        chains[binding.chain_id] = chain
+        save()
+        return _result(chain, 'active_unknown')
+
+
+def inspect_chain(root: Path, binding: Binding) -> dict:
+    with _store(root) as (chains, _):
+        return _chain(chains, binding)
+
+
+def _event(chain, event_id, content):
+    if not isinstance(event_id, str) or not _ID.fullmatch(event_id):
+        raise JournalError('invalid_event')
+    previous = chain['events'].get(event_id)
+    if previous:
+        return previous['result'] if previous['digest'] == _digest(content) else _result(chain, reason='conflicting_event')
+    if len(chain['events']) >= MAX_EVENTS:
+        return _result(chain, reason='capacity_exhausted')
+    return None
+
+
+def _record(chain, event_id, content, state, save):
+    chain['revision'] += 1
+    chain['last_time'] = int(time.time())
+    result = _result(chain, state)
+    chain['events'][event_id] = {'digest': _digest(content), 'result': result}
+    save()
+    return result
+
+
+def record_terminal(root: Path, binding: Binding, generation: int, event_id: str, category: str) -> dict:
+    if not _integer(generation) or not isinstance(category, str) or category not in _CATEGORIES:
+        raise JournalError('invalid_terminal')
+    content = ['terminal', generation, category]
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        duplicate = _event(chain, event_id, content)
+        if duplicate:
+            return duplicate
+        if generation != chain['generation']:
+            return _result(chain, reason='stale_generation')
+        if chain['attempts'][-1]['state'] == 'terminal_unknown':
+            return _result(chain, reason='already_terminal')
+        chain['attempts'][-1].update(state='terminal_unknown', category=category)
+        return _record(chain, event_id, content, 'terminal_unknown', save)
+
+
+def _qualified_boundary(root, binding, chain) -> bool:
+    """No qualified native adapter/fence/checkpoint/authorization boundary exists."""
+    return False
+
+
+def reserve_next(root: Path, binding: Binding, expected_revision: int, event_id: str, usage: Usage) -> dict:
+    if not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    reservation = _usage(usage)
+    content = ['reserve', expected_revision, reservation]
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        duplicate = _event(chain, event_id, content)
+        if duplicate:
+            return duplicate
+        if expected_revision != chain['revision']:
+            return _result(chain, reason='stale_revision')
+        previous = chain['attempts'][-1]
+        if previous['state'] != 'terminal_unknown':
+            return _result(chain, reason='outcome_unknown')
+        if classify_failure({'schema_version': 1, 'origin': 'model', 'category': previous['category']}) != 'eligible':
+            return _result(chain, reason='failure_not_eligible')
+        if not _qualified_boundary(root, binding, chain):
+            return _result(chain, reason='adapter_not_qualified')
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        limits = chain['limits']
+        if len(chain['attempts']) >= limits['attempts']:
+            return _result(chain, reason='attempts_exhausted')
+        if sum(a['requests'] for a in chain['attempts']) + reservation['requests'] > limits['requests']:
+            return _result(chain, reason='requests_exhausted')
+        if sum(a['cost_micros'] for a in chain['attempts']) + reservation['cost_micros'] > limits['cost_micros']:
+            return _result(chain, reason='cost_exhausted')
+        chain['attempts'].append({'candidate': chain['generation'], **reservation,
+                                  'state': 'reserved_unknown', 'category': None})
+        chain['generation'] += 1
+        return _record(chain, event_id, content, 'reserved_unknown', save)
+
+
+def cancel_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
+    if not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain['state'] == 'cancelled':
+            return _result(chain, 'cancelled')
+        if chain['revision'] != expected_revision:
+            return _result(chain, reason='stale_revision')
+        chain['state'] = 'cancelled'
+        chain['revision'] += 1
+        save()
+        return _result(chain, 'cancelled')
