@@ -176,8 +176,11 @@ class CodexContinuationTest(unittest.TestCase):
                 try:
                     self.assertEqual(await asyncio.wait_for(peer._process.stdout.readline(), 5), b'ready\n')
                     started = time.monotonic()
-                    with self.assertRaisesRegex(codex_continuation.ProtocolError, 'shutdown_incomplete'):
+                    try:
                         await asyncio.wait_for(peer.close(), 3)
+                    except codex_continuation.ProtocolError as exc:
+                        self.assertEqual(str(exc), 'shutdown_incomplete')
+                    self.assertTrue(peer._process._transport.is_closing())
                     self.assertLess(time.monotonic() - started, 3)
                 finally:
                     release.touch()
@@ -201,4 +204,39 @@ class CodexContinuationTest(unittest.TestCase):
                 self.assertIsNotNone(peer.returncode)
                 await peer.close()
                 self.assertTrue(peer._process._transport.is_closing())
+        asyncio.run(exercise())
+
+    def test_close_handles_both_reaped_and_retained_pipe_outcomes(self):
+        class Transport:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Process:
+            returncode = None
+
+            def __init__(self, blocked):
+                self.blocked = blocked
+                self._transport = Transport()
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                pass
+
+            async def wait(self):
+                if self.blocked:
+                    await asyncio.Event().wait()
+                return -9
+
+        async def exercise():
+            finished = Process(False)
+            await asyncio.wait_for(codex_continuation.OwnedJsonlPeer(finished, 0.05).close(), 1)
+            self.assertTrue(finished._transport.closed)
+            blocked = Process(True)
+            with self.assertRaisesRegex(codex_continuation.ProtocolError, 'shutdown_incomplete'):
+                await asyncio.wait_for(codex_continuation.OwnedJsonlPeer(blocked, 0.05).close(), 1)
+            self.assertTrue(blocked._transport.closed)
         asyncio.run(exercise())
