@@ -174,3 +174,22 @@ class CodexContinuationTest(unittest.TestCase):
                     await peer.close()
                 self.assertLess(time.monotonic() - started, 1)
         asyncio.run(exercise())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX process behavior')
+    def test_close_releases_pipes_after_peer_already_exited(self):
+        async def exercise():
+            with tempfile.TemporaryDirectory() as temp:
+                script = Path(temp) / 'peer.py'
+                script.write_text("import subprocess,sys\n"
+                                  "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'])\n"
+                                  "print('ready', flush=True)\n")
+                peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script), timeout=0.1)
+                await peer._process.stdout.readline()
+                for _ in range(50):
+                    if peer.returncode is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertIsNotNone(peer.returncode)
+                await peer.close()
+                self.assertTrue(peer._process._transport.is_closing())
+        asyncio.run(exercise())

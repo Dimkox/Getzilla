@@ -72,25 +72,29 @@ class OwnedJsonlPeer:
             raise ProtocolError('invalid_frame') from None
 
     async def close(self):
-        if self._process.returncode is None:
-            try:
-                self._process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(self._process.wait(), self._timeout)
-            except asyncio.TimeoutError:
+        try:
+            if self._process.returncode is None:
                 try:
-                    self._process.kill()
+                    self._process.terminate()
                 except ProcessLookupError:
                     pass
                 try:
                     await asyncio.wait_for(self._process.wait(), self._timeout)
                 except asyncio.TimeoutError:
-                    # A descendant can retain pipes after the direct child exits.
-                    # Report uncertainty; process cleanup is not an effect fence.
-                    self._process._transport.close()
-                    raise ProtocolError('shutdown_incomplete') from None
+                    try:
+                        self._process.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(self._process.wait(), self._timeout)
+                    except asyncio.TimeoutError:
+                        # A descendant can retain pipes after the direct child exits.
+                        # Report uncertainty; process cleanup is not an effect fence.
+                        raise ProtocolError('shutdown_incomplete') from None
+        finally:
+            # asyncio Process has no public close; release all owned pipe transports
+            # even when the direct process exited before this method was called.
+            self._process._transport.close()
 
 
 async def initialize(peer: OwnedJsonlPeer) -> None:
