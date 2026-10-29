@@ -355,6 +355,18 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
         plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
         is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
         if is_cd and len(_command_chunks(inner)) == 1:
+            # `cd . > AGENTS.md` still truncates the file: the shell opens a redirection in the
+            # directory it is in before cd runs.
+            for match in _SHELL_REDIRECTION.finditer(chunk):
+                raw = match.group('target').strip('"\'')
+                mutation = True
+                if not raw or raw.startswith('/') or any(marker in raw for marker in ('$', '`')):
+                    targets.append(raw)
+                elif unknown_base:
+                    unresolved = blind = True
+                else:
+                    targets.extend(posixpath.join(base, raw) if base else raw for base in sorted(bases))
+            is_cd, directory = _cd_target(_shell_argv(_SHELL_REDIRECTION.sub(' ', inner)))
             if directory is None:
                 pending = (set(bases), True)
             else:
