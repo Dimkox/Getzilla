@@ -21,26 +21,28 @@ class ControlledFixtureTest(unittest.TestCase):
         fixture = Path(__file__).resolve().parent / 'fixtures/codex_loopback_probe.py'
         self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(), controlled_fixture.FIXTURE_SHA256)
 
-    def test_immutable_image_rejects_tampered_fixture_and_cleans_image(self):
+    def test_immutable_image_rejects_tampered_inputs_and_cleans_image(self):
         container_id = 'a' * 64
         image_id = 'sha256:' + 'b' * 64
-        calls = []
+        for hashes in (('wrong', controlled_fixture.CODEX_SHA256), (controlled_fixture.FIXTURE_SHA256, 'wrong')):
+            with self.subTest(hashes=hashes):
+                calls = []
 
-        def command(args, timeout=15):
-            calls.append(args)
-            if args[1] == 'create':
-                return container_id
-            if args[1] == 'commit':
-                return image_id
-            if args[1] == 'start':
-                return 'wrong\n' + controlled_fixture.CODEX_SHA256
-            return ''
+                def command(args, timeout=15):
+                    calls.append(args)
+                    if args[1] == 'create':
+                        return container_id
+                    if args[1] == 'commit':
+                        return image_id
+                    if args[1] == 'start':
+                        return '\n'.join(hashes)
+                    return ''
 
-        with patch.object(controlled_fixture, '_command', side_effect=command):
-            with self.assertRaises(controlled_fixture.FixtureError):
-                controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex')
-        self.assertIn(['docker', 'rm', '-fv', container_id], calls)
-        self.assertIn(['docker', 'image', 'rm', image_id], calls)
+                with patch.object(controlled_fixture, '_command', side_effect=command):
+                    with self.assertRaises(controlled_fixture.FixtureError):
+                        controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex')
+                self.assertIn(['docker', 'rm', '-fv', container_id], calls)
+                self.assertIn(['docker', 'image', 'rm', image_id], calls)
 
     def test_immutable_image_checks_both_hashes_and_returns_content_id(self):
         staging, checker = 'a' * 64, 'c' * 64
@@ -63,6 +65,7 @@ class ControlledFixtureTest(unittest.TestCase):
         self.assertIn(['docker', 'rm', '-fv', checker], calls)
         self.assertNotIn(['docker', 'image', 'rm', image_id], calls)
 
+    @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
     def test_existing_chain_stops_before_container_allocation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
