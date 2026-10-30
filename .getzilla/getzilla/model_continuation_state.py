@@ -207,14 +207,33 @@ def _validate_chain(key, chain):
     if not isinstance(chain['events'], dict) or len(chain['events']) > MAX_EVENTS:
         raise JournalError('journal_corrupt')
     for event, record in chain['events'].items():
-        if not _ID.fullmatch(event) or set(record) != {'digest', 'result'} or not _DIGEST.fullmatch(record['digest']):
+        if (not _ID.fullmatch(event) or not isinstance(record, dict)
+                or set(record) not in ({'digest', 'result'}, {'digest', 'result', 'evidence'})
+                or not _DIGEST.fullmatch(record['digest'])):
             raise JournalError('journal_corrupt')
         result = record['result']
         if set(result) != {'state', 'reason', 'revision', 'generation', 'dispatch_permitted'} or result['dispatch_permitted'] is not False:
             raise JournalError('journal_corrupt')
-        if result['state'] not in {'terminal_unknown', 'reserved_unknown'} or result['reason'] != 'recorded':
+        allowed_states = {'terminal_unknown', 'reserved_unknown'}
+        if chain.get('domain') == 'controlled_fixture_v1':
+            allowed_states.add('fence_recorded')
+        if result['state'] not in allowed_states or result['reason'] != 'recorded':
             raise JournalError('journal_corrupt')
         if not _integer(result['revision']) or result['revision'] > chain['revision'] or not _integer(result['generation']) or result['generation'] > chain['generation']:
+            raise JournalError('journal_corrupt')
+        if 'evidence' in record:
+            evidence = record['evidence']
+            if (chain.get('domain') != 'controlled_fixture_v1' or not isinstance(evidence, dict)
+                    or set(evidence) != {'kind', 'generation', 'container_id', 'checkpoint_digest', 'thread_id'}
+                    or evidence['kind'] != 'controlled_fence_v2' or not _integer(evidence['generation'], 64)
+                    or evidence['generation'] != result['generation'] or event != 'fence_' + str(evidence['generation'])
+                    or result['state'] != 'fence_recorded'
+                    or not isinstance(evidence['container_id'], str) or not _DIGEST.fullmatch(evidence['container_id'])
+                    or not isinstance(evidence['checkpoint_digest'], str) or not _DIGEST.fullmatch(evidence['checkpoint_digest'])
+                    or not isinstance(evidence['thread_id'], str) or not _ID.fullmatch(evidence['thread_id'])
+                    or record['digest'] != _digest(['controlled_fence_v2', evidence['generation'], evidence['container_id'], evidence['checkpoint_digest'], evidence['thread_id']])):
+                raise JournalError('journal_corrupt')
+        elif result['state'] == 'fence_recorded':
             raise JournalError('journal_corrupt')
 
 
@@ -463,7 +482,42 @@ def check_controlled_send(root: Path, binding: Binding, generation: int, expecte
         return None
 
 
-def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int, usage: Usage) -> dict:
+def record_controlled_fence(root: Path, binding: Binding, generation: int, expected_revision: int,
+                            container_id: str, checkpoint_digest: str, thread_id: str) -> dict:
+    """Record synthetic observations; caller facts never grant live authority."""
+    if (not _integer(generation) or not _integer(expected_revision)
+            or not isinstance(container_id, str) or not _DIGEST.fullmatch(container_id)
+            or not isinstance(checkpoint_digest, str) or not _DIGEST.fullmatch(checkpoint_digest)
+            or not isinstance(thread_id, str) or not _ID.fullmatch(thread_id)):
+        raise JournalError('invalid_fence')
+    content = ['controlled_fence_v2', generation, container_id, checkpoint_digest, thread_id]
+    event_id = 'fence_' + str(generation)
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        duplicate = _event(chain, event_id, content)
+        if duplicate:
+            return duplicate
+        if chain['revision'] != expected_revision or chain['generation'] != generation:
+            return _result(chain, reason='stale_revision')
+        if chain['attempts'][-1]['state'] != 'failed':
+            return _result(chain, reason='outcome_unknown')
+        evidence = {'kind': 'controlled_fence_v2', 'generation': generation, 'thread_id': thread_id,
+                    'container_id': container_id, 'checkpoint_digest': checkpoint_digest}
+        return _record(chain, event_id, content, 'fence_recorded', save, evidence=evidence)
+
+
+def reserve_fenced_next(root: Path, binding: Binding, expected_revision: int, usage: Usage,
+                        container_id: str, checkpoint_digest: str) -> dict:
+    return reserve_controlled_next(root, binding, expected_revision, usage,
+                                   fence=(container_id, checkpoint_digest))
+
+
+def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int, usage: Usage, *, fence=None) -> dict:
     """Account a fixture retry without granting authority to send it."""
     if not _integer(expected_revision):
         raise JournalError('invalid_revision')
@@ -477,6 +531,15 @@ def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int
             return {'state': 'denied', 'reason': problem, 'dispatch_permitted': False}
         if chain['revision'] != expected_revision:
             return {'state': 'denied', 'reason': 'stale_revision', 'dispatch_permitted': False}
+        if fence is not None:
+            if (not isinstance(fence, tuple) or len(fence) != 2
+                    or any(not isinstance(value, str) or not _DIGEST.fullmatch(value) for value in fence)):
+                raise JournalError('invalid_fence')
+            record = chain['events'].get('fence_' + str(chain['generation']))
+            evidence = record.get('evidence') if record else None
+            if (not isinstance(evidence, dict) or evidence.get('container_id') != fence[0]
+                    or evidence.get('checkpoint_digest') != fence[1] or record['result']['revision'] != expected_revision):
+                return {'state': 'denied', 'reason': 'fence_mismatch', 'dispatch_permitted': False}
         last = chain['attempts'][-1]
         if last['state'] != 'failed' or classify_failure({'schema_version': 1, 'origin': 'model', 'category': last['category']}) != 'eligible':
             return {'state': 'denied', 'reason': 'failure_not_eligible', 'dispatch_permitted': False}
@@ -517,11 +580,13 @@ def _event(chain, event_id, content):
     return None
 
 
-def _record(chain, event_id, content, state, save):
+def _record(chain, event_id, content, state, save, *, evidence=None):
     chain['revision'] += 1
     chain['last_time'] = int(time.time())
     result = _result(chain, state)
     chain['events'][event_id] = {'digest': _digest(content), 'result': result}
+    if evidence is not None:
+        chain['events'][event_id]['evidence'] = evidence
     save()
     return result
 

@@ -140,10 +140,40 @@ def response(number):
     raise TimeoutError('response timeout')
 
 
+def wait_turn(thread, turn_id):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        event = receive(deadline)
+        params = event.get('params', {})
+        if event.get('method') == 'turn/completed' and params.get('threadId') == thread and params.get('turn', {}).get('id') == turn_id:
+            error = params['turn'].get('error') or {}
+            return {'status': params['turn'].get('status'), 'error_info': error.get('codexErrorInfo'),
+                    'items': params['turn'].get('items', [])}
+    return {'status': 'timeout'}
+
+
 try:
     send({'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'getzilla-fixture', 'version': '1'}}})
     response(1)
     send({'method': 'initialized', 'params': {}})
+    phase = os.environ.get('GETZILLA_FIXTURE_PHASE', '')
+    if phase == 'b':
+        thread = os.environ['GETZILLA_FIXTURE_THREAD']
+        send({'id': 2, 'method': 'thread/resume', 'params': {'threadId': thread, 'cwd': '/work',
+             'model': 'fixture-b', 'modelProvider': 'local_fixture', 'sandbox': 'read-only', 'approvalPolicy': 'never'}})
+        if response(2)['thread']['id'] != thread:
+            raise ValueError('thread mismatch')
+        host_gate({'type': 'before_fenced_b', 'thread': thread})
+        send({'id': 4, 'method': 'turn/start', 'params': {'threadId': thread, 'model': 'fixture-b',
+             'input': [{'type': 'text', 'text': 'Reply with synthetic-ok.', 'text_elements': []}]}})
+        second_turn = response(4)['turn']['id']
+        second = wait_turn(thread, second_turn)
+        if second['status'] != 'completed' or len(observed) != 1 or observed[0]['model'] != 'fixture-b' or server_requests:
+            raise ValueError('fixture continuation failed')
+        print(json.dumps({'type': 'fenced_b_result', 'version': 1, 'nonce': os.environ.get('GETZILLA_FIXTURE_NONCE', ''),
+                          'thread': thread, 'second_turn_id': second_turn, 'second_turn': second,
+                          'events': event_frames, 'synthetic_requests': observed, 'server_requests': server_requests}))
+        sys.exit(0)
     send({'id': 2, 'method': 'thread/start', 'params': {'cwd': '/work', 'model': 'fixture-a',
          'modelProvider': 'local_fixture', 'sandbox': 'read-only', 'approvalPolicy': 'never'}})
     thread = response(2)['thread']['id']
@@ -151,18 +181,7 @@ try:
     send({'id': 3, 'method': 'turn/start', 'params': {'threadId': thread, 'model': 'fixture-a',
          'input': [{'type': 'text', 'text': 'Reply with synthetic-ok.', 'text_elements': []}]}})
     turn = response(3)['turn']['id']
-    def wait_turn(turn_id):
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            event = receive(deadline)
-            params = event.get('params', {})
-            if event.get('method') == 'turn/completed' and params.get('threadId') == thread and params.get('turn', {}).get('id') == turn_id:
-                error = params['turn'].get('error') or {}
-                return {'status': params['turn'].get('status'), 'error_info': error.get('codexErrorInfo'),
-                        'items': params['turn'].get('items', [])}
-        return {'status': 'timeout'}
-
-    first = wait_turn(turn)
+    first = wait_turn(thread, turn)
     second = None
     error_info = first.get('error_info')
     rate = (isinstance(error_info, dict) and set(error_info) == {'responseTooManyFailedAttempts'}
@@ -172,13 +191,20 @@ try:
                        and all(isinstance(item, dict) and item.get('type') in ('userMessage', 'agentMessage', 'reasoning')
                                for item in first['items']))
     if first['status'] == 'failed' and rate and retry_flags == [False] and no_effect_items and not server_requests:
+        if phase == 'a':
+            if len(observed) != 1 or observed[0]['model'] != 'fixture-a':
+                raise ValueError('unexpected requests')
+            print(json.dumps({'type': 'before_b', 'version': 1, 'nonce': os.environ.get('GETZILLA_FIXTURE_NONCE', ''),
+                              'thread': thread, 'turn': turn, 'first': first, 'retry_flags': retry_flags,
+                              'item_types': item_types, 'server_requests': server_requests, 'events': event_frames}))
+            sys.exit(0)
         host_gate({'type': 'before_b', 'thread': thread, 'turn': turn, 'first': first,
                    'retry_flags': retry_flags, 'item_types': item_types, 'server_requests': server_requests,
                    'events': event_frames})
         send({'id': 4, 'method': 'turn/start', 'params': {'threadId': thread, 'model': 'fixture-b',
              'input': [{'type': 'text', 'text': 'Reply with synthetic-ok.', 'text_elements': []}]}})
         second_turn = response(4)['turn']['id']
-        second = wait_turn(second_turn)
+        second = wait_turn(thread, second_turn)
     if (second is None or second['status'] != 'completed' or len(observed) != 2
             or [item['model'] for item in observed] != ['fixture-a', 'fixture-b'] or server_requests):
         raise ValueError('fixture continuation failed')
