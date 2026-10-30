@@ -182,6 +182,11 @@ class NativePeer(OwnedJsonlPeer):
         docker = _docker()
         try:
             volumes = _validate(docker, self._record)
+            state = journal.inspect_chain(self._root, self._binding)
+            pending = journal.record_native_phase(self._root, self._binding, self._generation, state['revision'],
+                                                   self._record['container_id'], 'checkpoint_start')
+            if pending['state'] != 'checkpoint_started':
+                raise ProtocolError('journal_denied')
             fixture._command([docker, 'stop', '--time', '3', self._record['container_id']], timeout=15)
             await asyncio.wait_for(self._process.wait(), self._timeout)
             _validate(docker, self._record, stopped=True)
@@ -243,7 +248,17 @@ async def _start(root, binding, generation, revision, *, timeout=10):
     process = await asyncio.create_subprocess_exec(docker, 'start', '-ai', ident, stdin=asyncio.subprocess.PIPE,
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                                                    limit=MAX_FRAME + 1, env={'PATH': '/usr/bin:/bin'})
-    return NativePeer(process, timeout, root, binding, generation, result['revision'], record)
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        if fence._inspect(docker, ident).get('State', {}).get('Running') is True:
+            break
+        if process.returncode is not None or asyncio.get_running_loop().time() >= deadline:
+            raise ProtocolError('operation_unknown')
+        await asyncio.sleep(0.05)
+    started = journal.record_native_phase(root, binding, generation, result['revision'], ident, 'started')
+    if started['state'] != 'native_started':
+        raise ProtocolError('journal_denied')
+    return NativePeer(process, timeout, root, binding, generation, started['revision'], record)
 
 
 def recover(root, binding, generation, revision):
@@ -254,8 +269,17 @@ def recover(root, binding, generation, revision):
 def _recover(root, binding, generation, revision):
     docker = _docker()
     record = journal.inspect_native_container(root, binding, revision, generation)
+    chain = journal.inspect_chain(root, binding)
+    if 'started_' + str(generation) not in chain['events']:
+        raise ProtocolError('operation_unknown')
+    if ('checkpoint_start_' + str(generation) in chain['events'] and record['checkpoint_digest'] is None):
+        raise ProtocolError('operation_unknown')
     volumes = _validate(docker, record)
     if record['checkpoint_digest'] is None:
+        pending = journal.record_native_phase(root, binding, generation, revision, record['container_id'], 'checkpoint_start')
+        if pending['state'] != 'checkpoint_started':
+            raise ProtocolError('journal_denied')
+        revision = pending['revision']
         fixture._command([docker, 'stop', '--time', '3', record['container_id']], timeout=15)
     _validate(docker, record, stopped=True)
     digest = _digest_checkpoint(docker, 'sha256:' + record['image_id'], volumes, record['owner_nonce'])
@@ -277,6 +301,11 @@ def cleanup(root, binding, generation, revision):
 
 def _cleanup(root, binding, generation, revision):
     docker = _docker()
+    chain = journal.inspect_chain(root, binding)
+    if ('started_' + str(generation) not in chain['events']
+            or ('checkpoint_start_' + str(generation) in chain['events']
+                and 'checkpoint_' + str(generation) not in chain['events'])):
+        raise ProtocolError('operation_unknown')
     transition = journal.claim_native_cleanup(root, binding, generation, revision)
     if transition['state'] != 'cleanup_started':
         raise ProtocolError('journal_denied')
@@ -284,13 +313,15 @@ def _cleanup(root, binding, generation, revision):
     nonce = intent['owner_nonce']
     chain = journal.inspect_chain(root, binding)
     recorded = chain['events'].get('container_' + str(generation), {}).get('evidence', {})
-    for role in ('main', 'helper', 'staging'):
+    for role in ('helper', 'staging', 'main'):
         name = _name(nonce, role)
         containers = fixture._command([docker, 'ps', '-a', '--no-trunc', '--filter',
                                        'name=^/' + name + '$', '--format', '{{.ID}}']).splitlines()
         if len(containers) > 1:
             raise ProtocolError('container_unverified')
         for ident in containers:
+            if role != 'main' or not recorded:
+                raise ProtocolError('resource_identity_unknown')
             if not re.fullmatch(r'[a-f0-9]{64}', ident):
                 raise ProtocolError('container_unverified')
             info = fence._inspect(docker, ident)
@@ -308,10 +339,12 @@ def _cleanup(root, binding, generation, revision):
         details = json.loads(fixture._command([docker, 'volume', 'inspect', name]))
         if len(details) != 1 or details[0].get('Name') != name or (details[0].get('Labels') or {}).get('getzilla.owner') != nonce:
             raise ProtocolError('volume_unverified')
-        fixture._command([docker, 'volume', 'rm', name])
     images = fixture._command([docker, 'image', 'ls', '--no-trunc', '--filter', 'label=getzilla.owner=' + nonce,
                                '--format', '{{.ID}}']).splitlines()
+    expected_image = 'sha256:' + recorded['image_id']
     for image in set(images):
+        if image != expected_image:
+            continue
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
             raise ProtocolError('image_unverified')
         details = json.loads(fixture._command([docker, 'image', 'inspect', image]))
@@ -319,3 +352,5 @@ def _cleanup(root, binding, generation, revision):
                 or (details[0].get('Config', {}).get('Labels') or {}).get('getzilla.owner') != nonce):
             raise ProtocolError('image_unverified')
         fixture._command([docker, 'image', 'rm', image])
+    if listed:
+        raise ProtocolError('manual_volume_cleanup_required')

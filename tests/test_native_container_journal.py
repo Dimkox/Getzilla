@@ -39,6 +39,28 @@ def _hold_operation(root, pipe):
         pipe.recv()
 
 
+def _test_volumes(docker, nonce):
+    from getzilla import controlled_fixture, native_container
+    result = {}
+    for name in native_container._volumes(nonce):
+        value = json.loads(controlled_fixture._command([docker, 'volume', 'inspect', name]))
+        assert len(value) == 1 and value[0]['Name'] == name
+        assert value[0]['Labels']['getzilla.owner'] == nonce
+        result[name] = value[0]
+    return result
+
+
+def _remove_test_volumes(docker, snapshots):
+    from getzilla import controlled_fixture
+    for name, before in snapshots.items():
+        current = json.loads(controlled_fixture._command([docker, 'volume', 'inspect', name]))
+        assert current == [before]
+        users = controlled_fixture._command([docker, 'ps', '-a', '--no-trunc', '--filter', 'volume=' + name,
+                                             '--format', '{{.ID}}'])
+        assert not users
+        controlled_fixture._command([docker, 'volume', 'rm', name])
+
+
 class NativeContainerJournalTest(unittest.TestCase):
     def test_bounded_lock_contention_denies_then_allows_read(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
@@ -207,12 +229,88 @@ class NativeContainerJournalTest(unittest.TestCase):
                 process.terminate()
                 process.join(10)
             with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
-                 patch.object(native_container.fixture, '_command', return_value=''):
-                native_container.cleanup(root, binding, 1, claim['revision'])
+                 patch.object(native_container.fixture, '_command', return_value='') as command:
+                with self.assertRaisesRegex(ProtocolError, 'operation_unknown'):
+                    native_container.cleanup(root, binding, 1, claim['revision'])
+                command.assert_not_called()
             state = journal.inspect_chain(root, binding)
-            self.assertIn('cleanup_1', state['events'])
-            denied = journal.record_native_container(root, binding, 1, state['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
-            self.assertEqual(denied['reason'], 'cleanup_started')
+            self.assertNotIn('cleanup_1', state['events'])
+
+    def test_cleanup_removes_only_recorded_image_identity(self):
+        from getzilla import native_container
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.claim_native_start(root, binding, 1, 1, 'f' * 32)
+            identity = journal.record_native_container(root, binding, 1, claim['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
+            started = journal.record_native_phase(root, binding, 1, identity['revision'], 'd' * 64, 'started')
+            owned, foreign = 'sha256:' + 'e' * 64, 'sha256:' + '1' * 64
+            removed = []
+
+            def command(args, timeout=60):
+                if args[1:3] == ['image', 'ls']:
+                    return owned + '\n' + foreign
+                if args[1:3] == ['image', 'inspect']:
+                    return json.dumps([{'Id': owned, 'Config': {'Labels': {'getzilla.owner': 'f' * 32}}}])
+                if args[1:3] == ['image', 'rm']:
+                    removed.append(args[3])
+                return ''
+
+            with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
+                 patch.object(native_container.fixture, '_command', side_effect=command):
+                native_container.cleanup(root, binding, 1, started['revision'])
+            self.assertEqual(removed, [owned])
+
+    def test_cleanup_refuses_unrecorded_helper_identity(self):
+        from getzilla import native_container
+        from getzilla.codex_continuation import ProtocolError
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.claim_native_start(root, binding, 1, 1, 'f' * 32)
+            identity = journal.record_native_container(root, binding, 1, claim['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
+            started = journal.record_native_phase(root, binding, 1, identity['revision'], 'd' * 64, 'started')
+            calls = []
+
+            def command(args, timeout=60):
+                calls.append(args)
+                return '1' * 64 if args[1:3] == ['ps', '-a'] else ''
+
+            with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
+                 patch.object(native_container.fixture, '_command', side_effect=command):
+                with self.assertRaisesRegex(ProtocolError, 'resource_identity_unknown'):
+                    native_container.cleanup(root, binding, 1, started['revision'])
+            self.assertFalse(any(args[1:3] == ['rm', '-f'] for args in calls))
+
+    def test_interrupted_checkpoint_is_never_replayed_or_cleaned(self):
+        from getzilla import native_container
+        from getzilla.codex_continuation import ProtocolError
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.claim_native_start(root, binding, 1, 1, 'f' * 32)
+            identity = journal.record_native_container(root, binding, 1, claim['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
+            started = journal.record_native_phase(root, binding, 1, identity['revision'], 'd' * 64, 'started')
+            pending = journal.record_native_phase(root, binding, 1, started['revision'], 'd' * 64, 'checkpoint_start')
+            with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
+                 patch.object(native_container.fixture, '_command', return_value='') as command:
+                with self.assertRaisesRegex(ProtocolError, 'operation_unknown'):
+                    native_container.recover(root, binding, 1, pending['revision'])
+                with self.assertRaisesRegex(ProtocolError, 'operation_unknown'):
+                    native_container.cleanup(root, binding, 1, pending['revision'])
+                command.assert_not_called()
 
     def test_mismatched_checkpoint_and_corrupt_identity_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
@@ -224,9 +322,11 @@ class NativeContainerJournalTest(unittest.TestCase):
             journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
             claim = journal.claim_native_start(root, binding, 1, 1, 'f' * 32)
             identity = journal.record_native_container(root, binding, 1, claim['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
-            denied = journal.record_native_checkpoint(root, binding, 1, identity['revision'], '1' * 64, '2' * 64)
+            started = journal.record_native_phase(root, binding, 1, identity['revision'], 'd' * 64, 'started')
+            pending = journal.record_native_phase(root, binding, 1, started['revision'], 'd' * 64, 'checkpoint_start')
+            denied = journal.record_native_checkpoint(root, binding, 1, pending['revision'], '1' * 64, '2' * 64)
             self.assertEqual(denied['reason'], 'container_mismatch')
-            recorded = journal.record_native_checkpoint(root, binding, 1, identity['revision'], 'd' * 64, '2' * 64)
+            recorded = journal.record_native_checkpoint(root, binding, 1, pending['revision'], 'd' * 64, '2' * 64)
             self.assertFalse(recorded['dispatch_permitted'])
             path = root / '.getzilla/runtime/model-continuation/journal.json'
             value = json.loads(path.read_text(encoding='utf-8'))
@@ -272,6 +372,7 @@ class NativeContainerJournalTest(unittest.TestCase):
                 self.assertEqual(recovered['state'], 'container_stopped')
                 self.assertFalse(recovered['dispatch_permitted'])
                 record = journal.inspect_native_container(root, binding, stopped['revision'], 1)
+                snapshots = _test_volumes(docker, record['owner_nonce'])
                 native_container._helper(docker, 'sha256:' + record['image_id'], native_container._volumes(record['owner_nonce']),
                                          record['owner_nonce'], "import os; os.chown('/work',0,0); open('/work/changed', 'w').write('changed')", root=True)
                 with self.assertRaisesRegex(native_container.ProtocolError, 'checkpoint_changed'):
@@ -281,7 +382,7 @@ class NativeContainerJournalTest(unittest.TestCase):
 
                 def fail_once(args, timeout=60):
                     nonlocal failed
-                    if not failed and args[1:3] == ['volume', 'rm']:
+                    if not failed and args[1:3] == ['image', 'rm']:
                         failed = True
                         raise controlled_fixture.FixtureError('injected_failure')
                     return original(args, timeout=timeout)
@@ -290,7 +391,11 @@ class NativeContainerJournalTest(unittest.TestCase):
                     with self.assertRaises(controlled_fixture.FixtureError):
                         native_container.cleanup(root, binding, 1, stopped['revision'])
                 self.assertTrue(failed)
-                native_container.cleanup(root, binding, 1, stopped['revision'])
+                with self.assertRaisesRegex(native_container.ProtocolError, 'manual_volume_cleanup_required'):
+                    native_container.cleanup(root, binding, 1, stopped['revision'])
+                with self.assertRaisesRegex(native_container.ProtocolError, 'manual_volume_cleanup_required'):
+                    native_container.cleanup(root, binding, 1, stopped['revision'])
+                _remove_test_volumes(docker, snapshots)
                 native_container.cleanup(root, binding, 1, stopped['revision'])
 
             try:
@@ -301,7 +406,11 @@ class NativeContainerJournalTest(unittest.TestCase):
                 except journal.JournalError:
                     pass
                 else:
-                    native_container.cleanup(root, binding, 1, intent['revision'])
+                    try:
+                        native_container.cleanup(root, binding, 1, intent['revision'])
+                    except native_container.ProtocolError as error:
+                        if str(error) != 'manual_volume_cleanup_required':
+                            raise
 
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
     def test_coordinator_crash_recovers_owned_container_without_replay(self):
@@ -326,6 +435,11 @@ class NativeContainerJournalTest(unittest.TestCase):
             self.assertEqual(recovered['state'], 'container_stopped')
             self.assertEqual(native_container.recover(root, binding, 1, recovered['revision']), recovered)
             self.assertEqual(len(journal.inspect_chain(root, binding)['attempts']), 1)
+            record = journal.inspect_native_container(root, binding, recovered['revision'], 1)
+            snapshots = _test_volumes(native_container._docker(), record['owner_nonce'])
+            with self.assertRaisesRegex(native_container.ProtocolError, 'manual_volume_cleanup_required'):
+                native_container.cleanup(root, binding, 1, recovered['revision'])
+            _remove_test_volumes(native_container._docker(), snapshots)
             native_container.cleanup(root, binding, 1, recovered['revision'])
 
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
@@ -339,9 +453,10 @@ class NativeContainerJournalTest(unittest.TestCase):
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
             journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
             original = native_container._build
+            built = []
 
             def interrupted(*args):
-                original(*args)
+                built.append(original(*args))
                 raise RuntimeError('interrupted')
 
             with patch.object(native_container, '_build', side_effect=interrupted):
@@ -349,8 +464,14 @@ class NativeContainerJournalTest(unittest.TestCase):
                     asyncio.run(native_container.start(root, binding, 1, 1))
             intent = journal.inspect_native_intent(root, binding, 1)
             self.assertFalse(intent['dispatch_permitted'])
-            native_container.cleanup(root, binding, 1, intent['revision'])
-            native_container.cleanup(root, binding, 1, intent['revision'])
+            with self.assertRaisesRegex(native_container.ProtocolError, 'operation_unknown'):
+                native_container.cleanup(root, binding, 1, intent['revision'])
+            from getzilla import controlled_fixture
+            docker = native_container._docker()
+            details = json.loads(controlled_fixture._command([docker, 'image', 'inspect', built[0]]))
+            self.assertEqual(details[0]['Id'], built[0])
+            self.assertEqual(details[0]['Config']['Labels']['getzilla.owner'], intent['owner_nonce'])
+            controlled_fixture._command([docker, 'image', 'rm', built[0]])
 
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
     def test_cleanup_preserves_foreign_container_with_inherited_image_label(self):
@@ -369,6 +490,7 @@ class NativeContainerJournalTest(unittest.TestCase):
                 peer = await start_offline_container(root, binding, 1, 1)
                 await initialize(peer)
                 record = peer._record
+                snapshots = _test_volumes(docker, record['owner_nonce'])
                 foreign = controlled_fixture._command([docker, 'create', '--network', 'none', 'sha256:' + record['image_id']])
                 try:
                     with self.assertRaises(controlled_fixture.FixtureError):
@@ -379,6 +501,9 @@ class NativeContainerJournalTest(unittest.TestCase):
                     controlled_fixture._command([docker, 'rm', '-f', foreign])
                     peer._process._transport.close()
                     intent = journal.inspect_native_intent(root, binding, 1)
+                    with self.assertRaisesRegex(native_container.ProtocolError, 'manual_volume_cleanup_required'):
+                        native_container.cleanup(root, binding, 1, intent['revision'])
+                    _remove_test_volumes(docker, snapshots)
                     native_container.cleanup(root, binding, 1, intent['revision'])
 
             asyncio.run(run())
@@ -404,4 +529,10 @@ class NativeContainerJournalTest(unittest.TestCase):
                 image = native_container._build(docker, codex, script, nonce)
                 self.assertTrue(image.startswith('sha256:'))
             finally:
-                native_container.cleanup(root, binding, 1, claim['revision'])
+                with self.assertRaisesRegex(native_container.ProtocolError, 'operation_unknown'):
+                    native_container.cleanup(root, binding, 1, claim['revision'])
+                from getzilla import controlled_fixture
+                details = json.loads(controlled_fixture._command([docker, 'image', 'inspect', image]))
+                self.assertEqual(details[0]['Id'], image)
+                self.assertEqual(details[0]['Config']['Labels']['getzilla.owner'], nonce)
+                controlled_fixture._command([docker, 'image', 'rm', image])
