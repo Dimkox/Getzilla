@@ -44,6 +44,19 @@ def _pairs(pairs):
     return result
 
 
+def _container_stopped(info, container_id, image, nonce):
+    """Confirm the owned container is stopped; external effects remain unknown."""
+    try:
+        state = info['State']
+        return (info['Id'] == container_id and info['Image'] == image
+                and info['Config']['Labels'].get('getzilla.owner') == nonce
+                and state['Running'] is False and state['Restarting'] is False
+                and state['Dead'] is False and state['Status'] == 'exited'
+                and type(state['Pid']) is int and state['Pid'] == 0)
+    except (KeyError, TypeError, AttributeError):
+        return False
+
+
 def _reject_constant(_):
     raise FixtureError('invalid_frame')
 
@@ -281,6 +294,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
     image = _immutable_image(docker, fixture, codex)
     mounts = {}
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+            '--label', 'getzilla.owner=' + nonce,
             '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m',
             '--cpus', '2', '--user', '65534:65534', '--tmpfs', CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
             '--tmpfs', '/work:rw,nosuid,nodev,size=64m,mode=1777', '-e', 'HOME=' + CONTAINER_TMP, '-e', 'CODEX_HOME=' + CONTAINER_TMP + '/codex',
@@ -352,6 +366,11 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             raise FixtureError('fixture_failed')
         if process.wait(timeout=15) != 0:
             raise FixtureError('fixture_failed')
+        stopped = json.loads(_command([docker, 'inspect', container_id]))
+        if (not isinstance(stopped, list) or len(stopped) != 1
+                or not _container_stopped(stopped[0], container_id, image, nonce)
+                or not _validate_container(stopped[0], image, mounts, nonce)):
+            raise FixtureError('shutdown_uncertain')
         success = True
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         raise FixtureError('fixture_failed') from None
