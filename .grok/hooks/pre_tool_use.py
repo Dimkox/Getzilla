@@ -250,7 +250,7 @@ def _root_hint(context: Any) -> str:
     if status == 'cross-root':
         return (f' The command runs in {getattr(context, "effective_root", None)}, but the session is in '
                 f'{getattr(context, "session_root", None)}. Cross-root pushes require a registered linked '
-                'worktree, a literal cd <absolute worktree> && git push command, and its own exact grant. '
+                'worktree, a literal target directory or git -C, and its own exact grant. '
                 'Other cross-root actions require a session in the target repository.')
     return ''
 

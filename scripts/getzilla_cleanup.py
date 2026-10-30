@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--temp', help='inventory: temp directory to scan (default: the system temp directory)')
     parser.add_argument('--remove', action='store_true',
                         help='worktrees: remove the removable ones; snapshot: remove the given snapshot')
-    args = parser.parse_args(argv)
+    args = parser.parse_intermixed_args(argv)
     if args.command == 'snapshot':
         return _snapshot(args)
     return _worktrees(args) if args.command == 'worktrees' else _inventory(args)
