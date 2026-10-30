@@ -91,7 +91,6 @@ class ControlledFixtureTest(unittest.TestCase):
             with self.assertRaises(controlled_fixture.FixtureError):
                 controlled_fixture.run(root, binding, budget)
             self.assertEqual(journal.inspect_controlled_chain(root, binding), state)
-
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_CODEX_FIXTURE') == '1', 'requires local pinned Docker image and Codex binary')
     def test_isolated_fixture_failures_preserve_unknown_and_never_restart(self):
         original = journal.record_controlled_terminal
