@@ -868,8 +868,9 @@ def _registered_worktree(target: Path, records: list[str]) -> bool:
     return any(record.startswith('worktree ') and type(target)(record[9:]) == target for record in records)
 
 
-def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
-    """Recognize a registered worktree and one successful cd/push, never a grant."""
+def _linked_worktree_push(session: Path, target: Path, command: Any,
+                          declared_workdirs: dict[str, str]) -> bool:
+    """Recognize a registered worktree and one bounded push, never a grant."""
     if (not isinstance(command, str) or any(char in command for char in '$`\n\r')
             or any(key.startswith('GIT_') and key not in {'GIT_PAGER', 'GIT_TERMINAL_PROMPT'}
                    for key in os.environ)):
@@ -877,17 +878,25 @@ def _linked_worktree_push(session: Path, target: Path, command: Any) -> bool:
     try:
         tokens = _shell_tokens(command)
         operators = [index for index, token in enumerate(tokens) if token.operator]
-        if len(operators) != 1 or tokens[operators[0]].value != '&&':
-            return False
-        split = operators[0]
-        before = [token.value for token in tokens[:split]]
-        after = [token.value for token in tokens[split + 1:]]
-        if before[:2] == ['cd', '--']:
-            before.pop(1)
-        if (len(before) != 2 or before[0] != 'cd' or not Path(before[1]).is_absolute()
-                # Shell logical cd and physical resolve disagree on symlink/.. paths.
-                # Require the spelling itself to name the canonical target.
-                or Path(before[1]) != target or after[:2] != ['git', 'push']):
+        words = [token.value for token in tokens]
+        declared = [value for key, value in declared_workdirs.items() if key in _COMMAND_ROOT_ALIASES]
+        declared_target = bool(declared) and all(Path(value).is_absolute() and Path(value) == target
+                                                  for value in declared)
+        if len(operators) == 1 and tokens[operators[0]].value == '&&':
+            split = operators[0]
+            before, after = words[:split], words[split + 1:]
+            if before[:2] == ['cd', '--']:
+                before.pop(1)
+            safe = (len(before) == 2 and before[0] == 'cd' and Path(before[1]).is_absolute()
+                    and Path(before[1]) == target and after[:2] == ['git', 'push'])
+        elif not operators:
+            safe = ((words[:2] == ['git', 'push'] and declared_target)
+                    or (len(words) >= 4 and words[:2] == ['git', '-C']
+                        and Path(words[2]).is_absolute() and Path(words[2]) == target
+                        and words[3] == 'push'))
+        else:
+            safe = False
+        if not safe:
             return False
 
         def git(root: Path, *args: str) -> str:
@@ -1017,7 +1026,7 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
     effective_root = next(iter(command_roots))
     status = 'effective-root' if session_root in (None, effective_root) else 'cross-root'
     if (status == 'cross-root' and tool == 'Bash' and session_root is not None
-            and _linked_worktree_push(session_root, effective_root, command)):
+            and _linked_worktree_push(session_root, effective_root, command, command_values)):
         status = 'linked-worktree-push'
     return RootContext(session_cwd, session_root, command_values, effective_root, status)
 
