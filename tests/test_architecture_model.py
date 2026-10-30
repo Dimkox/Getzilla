@@ -663,6 +663,8 @@ class ArchitectureModelTests(unittest.TestCase):
                     optional = ({"allowed_dependency_modules"}
                                 if schema_name == "architecture-rules.schema.json"
                                 and object_schema is schema["$defs"]["path_boundary"] else set())
+                    if schema_name == "architecture-system.schema.json" and object_schema is schema["$defs"]["edge"]:
+                        optional.add("secret_classes")
                     self.assertEqual(
                         set(object_schema.get("required", [])),
                         set(object_schema.get("properties", {})) - optional,

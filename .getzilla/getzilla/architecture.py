@@ -587,6 +587,10 @@ def _validate_system_semantics(system: dict[str, Any]) -> None:
             repository_owners[normalized] = node["id"]
     capability_keys: set[str] = set()
     for edge in system["edges"]:
+        if "secret_classes" in edge:
+            if edge["type"] != "secret_flow":
+                raise ArchitectureError(f"edge {edge['id']}: secret classes require secret_flow", code="secret_data")
+            _require_references(edge["secret_classes"], secret_classes, label=f"edge {edge['id']} secret_classes")
         _require_references(
             [edge["from"], edge["to"]], nodes, label=f"edge {edge['id']} endpoints"
         )

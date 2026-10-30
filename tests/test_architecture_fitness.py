@@ -91,6 +91,127 @@ class GitArchitectureRepo:
 class ArchitectureFitnessTests(unittest.TestCase):
     maxDiff = None
 
+    def test_secret_flow_classes_select_only_matching_policy(self):
+        system = _system()
+        system['secret_classes'] = [
+            {'id': 'SECRET-A', 'classification': 'trust_material'},
+            {'id': 'SECRET-B', 'classification': 'trust_material'},
+        ]
+        rules = _rules()
+        rules['secret_flow_policies'] = [
+            {'id': 'RULE-A', 'secret_classes': ['SECRET-A'],
+             'allowed_trust_domains': ['TD-LOCAL'], 'severity': 'error'},
+            {'id': 'RULE-B', 'secret_classes': ['SECRET-B'],
+             'allowed_trust_domains': [], 'severity': 'error'},
+        ]
+        system['edges'][0]['type'] = 'secret_flow'
+        system['edges'][0]['secret_classes'] = ['SECRET-A']
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        with patch.object(FIT, '_model_changed', return_value=True):
+            result = FIT._secret_flows(snapshot, None)
+        self.assertEqual(result.status, 'pass')
+        self.assertFalse(any('RULE-B' in item for item in result.findings))
+        system['edges'][0]['secret_classes'] = ['SECRET-A', 'SECRET-B']
+        with patch.object(FIT, '_model_changed', return_value=True):
+            mixed = FIT._secret_flows(snapshot, None)
+        self.assertEqual(mixed.status, 'fail')
+        self.assertTrue(any('RULE-B' in item for item in mixed.findings))
+        system['edges'][0]['secret_classes'] = ['SECRET-UNKNOWN']
+        with patch.object(FIT, '_model_changed', return_value=True):
+            unknown = FIT._secret_flows(snapshot, None)
+        self.assertEqual(unknown.status, 'fail')
+        del system['edges'][0]['secret_classes']
+        with patch.object(FIT, '_model_changed', return_value=True):
+            legacy = FIT._secret_flows(snapshot, None)
+        self.assertTrue(any('RULE-B' in item for item in legacy.findings))
+
+    def test_classified_flow_requires_every_matching_policy_and_coverage(self):
+        system = _system()
+        system['secret_classes'] = [{'id': 'SECRET-A', 'classification': 'trust_material'},
+                                    {'id': 'SECRET-B', 'classification': 'trust_material'}]
+        system['edges'][0].update(type='secret_flow', secret_classes=['SECRET-A'])
+        rules = _rules()
+        rules['secret_flow_policies'] = [
+            {'id': 'RULE-ALLOW', 'secret_classes': ['SECRET-A'],
+             'allowed_trust_domains': ['TD-LOCAL'], 'severity': 'error'},
+            {'id': 'RULE-DENY', 'secret_classes': ['SECRET-A'],
+             'allowed_trust_domains': [], 'severity': 'error'},
+        ]
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        with patch.object(FIT, '_model_changed', return_value=True):
+            self.assertEqual(FIT._secret_flows(snapshot, None).status, 'fail')
+        system['edges'][0]['secret_classes'] = ['SECRET-B']
+        with patch.object(FIT, '_model_changed', return_value=False):
+            self.assertEqual(FIT._secret_flows(snapshot, None).status, 'fail')
+        rules['secret_flow_policies'] = []
+        self.assertEqual(FIT._secret_flows(snapshot, None).status, 'fail')
+
+    def test_classified_flow_does_not_hide_secret_held_by_node(self):
+        system = _system()
+        system['secret_classes'] = [{'id': 'SECRET-A', 'classification': 'trust_material'},
+                                    {'id': 'SECRET-B', 'classification': 'trust_material'}]
+        system['edges'][0].update(type='secret_flow', secret_classes=['SECRET-A'])
+        system['nodes'][0]['secrets'] = ['SECRET-B']
+        rules = _rules()
+        rules['secret_flow_policies'] = [
+            {'id': 'RULE-A', 'secret_classes': ['SECRET-A'],
+             'allowed_trust_domains': ['TD-LOCAL'], 'severity': 'error'},
+            {'id': 'RULE-B', 'secret_classes': ['SECRET-B'],
+             'allowed_trust_domains': [], 'severity': 'error'},
+        ]
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        with patch.object(FIT, '_model_changed', return_value=True):
+            result = FIT._secret_flows(snapshot, None)
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any('RULE-B' in item and 'NODE-A' in item for item in result.findings))
+
+    def test_secret_flow_class_validation_rejects_unknown_and_wrong_edge(self):
+        system = _system()
+        system['edges'][0]['type'] = 'secret_flow'
+        system['edges'][0]['secret_classes'] = ['SECRET-UNKNOWN']
+        with self.assertRaises(ARCHITECTURE.ArchitectureError):
+            ARCHITECTURE._validate_system_semantics(system)
+        system['secret_classes'] = [{'id': 'SECRET-TEST', 'classification': 'trust_material'}]
+        system['edges'][0]['secret_classes'] = ['SECRET-TEST']
+        system['edges'][0]['type'] = 'control'
+        with self.assertRaises(ARCHITECTURE.ArchitectureError):
+            ARCHITECTURE._validate_system_semantics(system)
+
+    def test_secret_flow_schema_requires_nonempty_unique_classes(self):
+        schema = json.loads((ROOT / 'schemas/architecture-system.schema.json').read_text())
+        system = _system()
+        system['edges'][0]['type'] = 'secret_flow'
+        for invalid in ([], ['SECRET-A', 'SECRET-A'], 'SECRET-A', None):
+            with self.subTest(invalid=invalid):
+                system['edges'][0]['secret_classes'] = invalid
+                with self.assertRaises(ARCHITECTURE.ArchitectureError):
+                    ARCHITECTURE._validate_against_schema(system, schema, label='system')
+
+    def test_classified_secret_flow_load_and_fitness_integration(self):
+        system = _system()
+        system['trust_domains'].append({'id': 'TD-OTHER', 'kind': 'trust_ci_control', 'owner': 'security'})
+        system['secret_classes'] = [{'id': 'SECRET-A', 'classification': 'trust_material'},
+                                    {'id': 'SECRET-B', 'classification': 'trust_material'}]
+        rules = _rules()
+        rules['secret_flow_policies'] = [
+            {'id': 'FIT-A', 'secret_classes': ['SECRET-A'],
+             'allowed_trust_domains': ['TD-LOCAL'], 'severity': 'error'},
+            {'id': 'FIT-B', 'secret_classes': ['SECRET-B'],
+             'allowed_trust_domains': ['TD-OTHER'], 'severity': 'error'},
+        ]
+        repo, base = self._repo(system=system, rules=rules)
+        system['edges'][0].update(type='secret_flow', secret_classes=['SECRET-A'])
+        repo.model(system, rules)
+        head = repo.commit('classify secret edge')
+        result = self._results(self._evaluate(repo, base, head))['secret_flow']
+        self.assertEqual(result.status, 'pass')
+        system['edges'][0]['secret_classes'] = ['SECRET-A', 'SECRET-B']
+        repo.model(system, rules)
+        denied = repo.commit('add forbidden class')
+        result = self._results(self._evaluate(repo, head, denied))['secret_flow']
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any('FIT-B' in item for item in result.findings))
+
     def setUp(self) -> None:
         if FIT is None:
             self.fail("getzilla.architecture_fitness is not implemented")

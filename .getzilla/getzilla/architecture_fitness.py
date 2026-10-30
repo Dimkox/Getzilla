@@ -3235,6 +3235,14 @@ def _background_jobs(
 def _secret_flows(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff) -> FitnessResult:
     rules = snapshot.rules["secret_flow_policies"]
     predicate = "declared secret classes are held or flow across architecture trust domains"
+    governed = set().union(*(set(rule["secret_classes"]) for rule in rules))
+    uncovered = [edge["id"] for edge in snapshot.system["edges"]
+                 if edge["type"] == "secret_flow" and "secret_classes" in edge
+                 and not set(edge["secret_classes"]) <= governed]
+    if uncovered:
+        return _result("secret_flow", status="fail", rules=(rule["id"] for rule in rules),
+                       findings=[f"secret flow has ungoverned classes: {edge}" for edge in uncovered],
+                       predicate=predicate, scope=uncovered)
     if not rules:
         return _not_applicable("secret_flow", predicate, (), "no_declared_rules")
     if not _model_changed(diff):
@@ -3253,7 +3261,9 @@ def _secret_flows(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff) -> Fit
                 if node["trust_domain"] not in allowed:
                     findings.append(f"{rule['id']}: secret held by untrusted node {node['id']}")
         for edge in snapshot.system["edges"]:
-            if edge["type"] == "secret_flow":
+            if edge["type"] == "secret_flow" and (
+                "secret_classes" not in edge or secrets & set(edge["secret_classes"])
+            ):
                 scope.append(edge["id"])
                 if nodes[edge["from"]]["trust_domain"] not in allowed or nodes[edge["to"]]["trust_domain"] not in allowed:
                     findings.append(f"{rule['id']}: secret flow crosses untrusted edge {edge['id']}")
