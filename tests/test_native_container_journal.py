@@ -274,7 +274,7 @@ class NativeContainerJournalTest(unittest.TestCase):
                 if args[1:3] == ['image', 'ls']:
                     return owned + '\n' + foreign
                 if args[1:3] == ['image', 'inspect']:
-                    return json.dumps([{'Id': owned, 'Config': {'Labels': {'getzilla.owner': 'f' * 32}}}])
+                    return json.dumps([{'Id': args[3], 'Config': {'Labels': {'getzilla.owner': 'f' * 32}}}])
                 if args[1:3] == ['image', 'rm']:
                     removed.append(args[3])
                 return ''
@@ -520,6 +520,7 @@ class NativeContainerJournalTest(unittest.TestCase):
                     self.assertEqual(details['Id'], foreign)
                 finally:
                     controlled_fixture._command([docker, 'rm', '-f', foreign])
+                    await asyncio.wait_for(peer._process.wait(), 10)
                     peer._process._transport.close()
                     intent = journal.inspect_native_intent(root, binding, 1)
                     with self.assertRaisesRegex(native_container.ProtocolError, 'manual_volume_cleanup_required'):
