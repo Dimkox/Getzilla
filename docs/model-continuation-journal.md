@@ -36,7 +36,7 @@ Disable the policy to stop reservation. Preserve the journal and unknown outcome
 
 ## Controlled local fixture
 
-`getzilla.controlled_fixture.run` exercises only a synthetic two-model Codex session. It requires a pinned local Docker image and an exact Codex 0.165.0 binary. The image is not downloaded. The inspected container uses `network=none`, read-only root, a non-root user, dropped capabilities and bounded resources. Only the fixture script and Codex binary are mounted read-only. It receives no host journal, credentials or user input.
+`getzilla.controlled_fixture.run` exercises only a synthetic two-model Codex session. It requires a pinned local Docker image and an exact Codex 0.165.0 binary. The image is not downloaded. The host copies the fixture script and binary into a new local image and verifies both hashes inside that image before use. The inspected execution container has no bind mounts. It uses `network=none`, read-only root, a non-root user, dropped capabilities and bounded resources. It receives no host journal, credentials or user input. This assumes the local Docker daemon and pinned base image are trusted.
 
 The host stores fixture accounting separately in `.getzilla/runtime/model-continuation-fixture/`, using the same protected T3 storage primitives. A fixed fixture policy must name `local_fixture/synthetic` candidates `fixture-a` and `fixture-b`. The host records the original usage and consumes its one-shot send state before starting the container. It accepts the next turn only after a correlated terminal 429 with no native retry or observed tool effects, and after recording the next reservation against the same budget. It records success only after the container exits and cleanup succeeds.
 
