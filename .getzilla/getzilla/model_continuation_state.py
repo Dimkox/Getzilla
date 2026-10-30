@@ -214,7 +214,7 @@ def _validate_chain(key, chain):
         result = record['result']
         if set(result) != {'state', 'reason', 'revision', 'generation', 'dispatch_permitted'} or result['dispatch_permitted'] is not False:
             raise JournalError('journal_corrupt')
-        allowed_states = {'terminal_unknown', 'reserved_unknown', 'start_intent', 'container_recorded', 'checkpoint_recorded'}
+        allowed_states = {'terminal_unknown', 'reserved_unknown', 'start_intent', 'container_recorded', 'checkpoint_recorded', 'cleanup_started'}
         if chain.get('domain') == 'controlled_fixture_v1':
             allowed_states.update({'fence_recorded', 'request_consumed'})
         if result['state'] not in allowed_states or result['reason'] != 'recorded':
@@ -225,7 +225,20 @@ def _validate_chain(key, chain):
             evidence = record['evidence']
             if not isinstance(evidence, dict):
                 raise JournalError('journal_corrupt')
-            if evidence.get('kind') == 'native_start_v1':
+            if evidence.get('kind') == 'native_cleanup_v1':
+                intent = chain['events'].get('start_' + str(evidence.get('generation')), {})
+                intent_evidence = intent.get('evidence', {}) if isinstance(intent, dict) else {}
+                if (chain.get('domain') is not None
+                        or set(evidence) != {'kind', 'generation', 'owner_nonce'}
+                        or not _integer(evidence['generation'], 64)
+                        or evidence['generation'] != result['generation']
+                        or event != 'cleanup_' + str(evidence['generation'])
+                        or result['state'] != 'cleanup_started'
+                        or intent_evidence.get('kind') != 'native_start_v1'
+                        or intent_evidence.get('owner_nonce') != evidence['owner_nonce']
+                        or record['digest'] != _digest(['native_cleanup_v1', evidence['generation'], evidence['owner_nonce']])):
+                    raise JournalError('journal_corrupt')
+            elif evidence.get('kind') == 'native_start_v1':
                 if (chain.get('domain') is not None
                         or set(evidence) != {'kind', 'generation', 'owner_nonce'}
                         or not _integer(evidence['generation'], 64)
@@ -290,7 +303,7 @@ def _validate_chain(key, chain):
                     or not isinstance(evidence['thread_id'], str) or not _ID.fullmatch(evidence['thread_id'])
                     or record['digest'] != _digest(['controlled_fence_v2', evidence['generation'], evidence['container_id'], evidence['checkpoint_digest'], evidence['thread_id']])):
                 raise JournalError('journal_corrupt')
-        elif result['state'] in {'fence_recorded', 'start_intent', 'container_recorded', 'checkpoint_recorded'}:
+        elif result['state'] in {'fence_recorded', 'start_intent', 'container_recorded', 'checkpoint_recorded', 'cleanup_started'}:
             raise JournalError('journal_corrupt')
         elif result['state'] == 'request_consumed':
             raise JournalError('journal_corrupt')
@@ -684,6 +697,28 @@ def inspect_native_intent(root: Path, binding: Binding, generation: int) -> dict
         return {**event['evidence'], 'revision': chain['revision'], 'dispatch_permitted': False}
 
 
+def claim_native_cleanup(root: Path, binding: Binding, generation: int, expected_revision: int) -> dict:
+    """Durably forbid further allocation before removing any owned resource."""
+    if not _integer(generation, 64) or not _integer(expected_revision):
+        raise JournalError('invalid_reference')
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') is not None or generation != chain['generation']:
+            raise JournalError('invalid_domain')
+        intent = chain['events'].get('start_' + str(generation), {}).get('evidence', {})
+        if intent.get('kind') != 'native_start_v1':
+            raise JournalError('container_unknown')
+        event = 'cleanup_' + str(generation)
+        content = ['native_cleanup_v1', generation, intent['owner_nonce']]
+        prior = _event(chain, event, content)
+        if prior:
+            return prior
+        if expected_revision != chain['revision']:
+            return _result(chain, reason='stale_reference')
+        evidence = dict(kind='native_cleanup_v1', generation=generation, owner_nonce=intent['owner_nonce'])
+        return _record(chain, event, content, 'cleanup_started', save, evidence=evidence)
+
+
 def record_native_container(root: Path, binding: Binding, generation: int, expected_revision: int,
                             container_id: str, image_id: str, owner_nonce: str) -> dict:
     """Bind an isolated local container before it starts; never authorize dispatch."""
@@ -698,6 +733,8 @@ def record_native_container(root: Path, binding: Binding, generation: int, expec
         chain = _chain(chains, binding)
         if chain.get('domain') is not None:
             raise JournalError('invalid_domain')
+        if 'cleanup_' + str(generation) in chain['events']:
+            return _result(chain, reason='cleanup_started')
         previous = _event(chain, event, content)
         if previous:
             return previous
@@ -745,6 +782,8 @@ def record_native_checkpoint(root: Path, binding: Binding, generation: int, expe
         chain = _chain(chains, binding)
         if chain.get('domain') is not None:
             raise JournalError('invalid_domain')
+        if 'cleanup_' + str(generation) in chain['events']:
+            return _result(chain, reason='cleanup_started')
         prior = _event(chain, event, content)
         if prior:
             return prior

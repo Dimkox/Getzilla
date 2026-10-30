@@ -32,6 +32,13 @@ def _start_then_exit(root, binding, pipe):
     asyncio.run(run())
 
 
+def _hold_operation(root, pipe):
+    from getzilla import native_container
+    with native_container._operation(Path(root)):
+        pipe.send('locked')
+        pipe.recv()
+
+
 class NativeContainerJournalTest(unittest.TestCase):
     def test_bounded_lock_contention_denies_then_allows_read(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
@@ -134,6 +141,78 @@ class NativeContainerJournalTest(unittest.TestCase):
                     asyncio.run(native_container.start(root, binding, 1, 1))
                 self.assertEqual(build.call_count, 1)
             self.assertEqual(journal.inspect_native_intent(root, binding, 1)['revision'], 2)
+
+    def test_cleanup_cannot_race_active_allocator(self):
+        from getzilla import native_container
+        from getzilla.codex_continuation import ProtocolError
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+            executable = root / 'fake-codex'
+            executable.write_bytes(b'native-test-input')
+            entered, release = threading.Event(), threading.Event()
+
+            def paused_build(*args):
+                entered.set()
+                release.wait(5)
+                raise RuntimeError('interrupted')
+
+            def run():
+                try:
+                    asyncio.run(native_container.start(root, binding, 1, 1))
+                except RuntimeError:
+                    pass
+
+            with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
+                 patch.object(native_container.shutil, 'which', return_value=str(executable)), \
+                 patch.object(native_container.fixture, 'CODEX_SHA256', hashlib.sha256(executable.read_bytes()).hexdigest()), \
+                 patch.object(native_container, '_build', side_effect=paused_build), \
+                 patch.object(native_container.fixture, '_command', return_value=''):
+                thread = threading.Thread(target=run)
+                thread.start()
+                try:
+                    self.assertTrue(entered.wait(3))
+                    with self.assertRaisesRegex(ProtocolError, 'native_busy'):
+                        native_container.cleanup(root, binding, 1, 2)
+                finally:
+                    release.set()
+                    thread.join(5)
+
+    def test_operation_lock_survives_process_contention_and_releases_after_crash(self):
+        from getzilla import native_container
+        from getzilla.codex_continuation import ProtocolError
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.claim_native_start(root, binding, 1, 1, 'f' * 32)
+            context = multiprocessing.get_context('spawn')
+            parent, child = context.Pipe()
+            process = context.Process(target=_hold_operation, args=(str(root), child))
+            process.start()
+            try:
+                self.assertTrue(parent.poll(10))
+                self.assertEqual(parent.recv(), 'locked')
+                with self.assertRaisesRegex(ProtocolError, 'native_busy'):
+                    native_container.cleanup(root, binding, 1, claim['revision'])
+            finally:
+                process.terminate()
+                process.join(10)
+            with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
+                 patch.object(native_container.fixture, '_command', return_value=''):
+                native_container.cleanup(root, binding, 1, claim['revision'])
+            state = journal.inspect_chain(root, binding)
+            self.assertIn('cleanup_1', state['events'])
+            denied = journal.record_native_container(root, binding, 1, state['revision'], 'd' * 64, 'e' * 64, 'f' * 32)
+            self.assertEqual(denied['reason'], 'cleanup_started')
 
     def test_mismatched_checkpoint_and_corrupt_identity_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
@@ -272,3 +351,57 @@ class NativeContainerJournalTest(unittest.TestCase):
             self.assertFalse(intent['dispatch_permitted'])
             native_container.cleanup(root, binding, 1, intent['revision'])
             native_container.cleanup(root, binding, 1, intent['revision'])
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
+    def test_cleanup_preserves_foreign_container_with_inherited_image_label(self):
+        from getzilla import controlled_fixture, native_container
+        from getzilla.codex_continuation import initialize, start_offline_container
+        docker = native_container._docker()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+
+            async def run():
+                peer = await start_offline_container(root, binding, 1, 1)
+                await initialize(peer)
+                record = peer._record
+                foreign = controlled_fixture._command([docker, 'create', '--network', 'none', 'sha256:' + record['image_id']])
+                try:
+                    with self.assertRaises(controlled_fixture.FixtureError):
+                        native_container.cleanup(root, binding, 1, peer._revision)
+                    details = native_container.fence._inspect(docker, foreign)
+                    self.assertEqual(details['Id'], foreign)
+                finally:
+                    controlled_fixture._command([docker, 'rm', '-f', foreign])
+                    peer._process._transport.close()
+                    intent = journal.inspect_native_intent(root, binding, 1)
+                    native_container.cleanup(root, binding, 1, intent['revision'])
+
+            asyncio.run(run())
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
+    def test_private_checkout_mode_builds_readable_verified_image(self):
+        from getzilla import native_container
+        docker = native_container._docker()
+        codex = Path(shutil.which('codex')).resolve()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+            nonce = 'f' * 32
+            claim = journal.claim_native_start(root, binding, 1, 1, nonce)
+            script = root / 'fixture.py'
+            shutil.copyfile(ROOT / 'tests/fixtures/codex_loopback_probe.py', script)
+            script.chmod(0o600)
+            try:
+                image = native_container._build(docker, codex, script, nonce)
+                self.assertTrue(image.startswith('sha256:'))
+            finally:
+                native_container.cleanup(root, binding, 1, claim['revision'])

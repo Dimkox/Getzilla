@@ -4,15 +4,52 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import secrets
 import shutil
+import tempfile
 from pathlib import Path
+from contextlib import ExitStack, contextmanager
 
 from . import controlled_fixture as fixture
 from . import fenced_fixture as fence
 from . import model_continuation_state as journal
+from . import fsx
 from .codex_continuation import MAX_FRAME, OwnedJsonlPeer, ProtocolError
+
+
+@contextmanager
+def _operation(root):
+    """Serialize allocation, recovery, close and cleanup across processes."""
+    if fsx.WINDOWS:
+        raise ProtocolError('durability_unsupported')
+    try:
+        with ExitStack() as stack:
+            directory = fsx.open_dir(root)
+            stack.callback(fsx.close_dir, directory)
+            for name in ('.getzilla', 'runtime', 'model-continuation'):
+                child = fsx.open_dir_at(directory, name)
+                stack.callback(fsx.close_dir, child)
+                if journal._identity(fsx.lstat_at(directory, name)) != journal._identity(fsx.fstat_dir(child)):
+                    raise ProtocolError('directory_replaced')
+                directory = child
+            info = fsx.fstat_dir(directory)
+            if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise ProtocolError('unsafe_directory')
+            fd = fsx.open_at(directory, 'native-operation.lock', os.O_RDWR | os.O_CREAT | fsx.O_NOFOLLOW, 0o600)
+            stack.callback(os.close, fd)
+            journal._regular(os.fstat(fd))
+            if journal._identity(os.fstat(fd)) != journal._identity(fsx.lstat_at(directory, 'native-operation.lock')):
+                raise ProtocolError('lock_replaced')
+            try:
+                fsx.lock_file(fd, blocking=False)
+            except BlockingIOError:
+                raise ProtocolError('native_busy') from None
+            stack.callback(fsx.unlock_file, fd)
+            yield
+    except OSError:
+        raise ProtocolError('lock_unavailable') from None
 
 
 def _docker():
@@ -26,11 +63,16 @@ def _volumes(nonce):
     return ['getzilla-native-' + nonce + '-state', 'getzilla-native-' + nonce + '-work']
 
 
+def _name(nonce, role):
+    return 'getzilla-native-' + nonce + '-' + role
+
+
 def _helper(docker, image, volumes, nonce, program, *, root=False):
     mounts = [part for name, target in zip(volumes, ('/state', '/work'))
               for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target + ('' if root else ',readonly'))]
     args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--label', 'getzilla.owner=' + nonce, '--security-opt', 'no-new-privileges',
+            '--name', _name(nonce, 'helper'), '--label', 'getzilla.owner=' + nonce,
+            '--label', 'getzilla.native.role=helper', '--security-opt', 'no-new-privileges',
             '--pids-limit', '64', '--memory', '512m', '--cpus', '2']
     if root:
         args += ['--cap-add', 'CHOWN']
@@ -46,14 +88,21 @@ def _helper(docker, image, volumes, nonce, program, *, root=False):
 
 def _build(docker, codex, script, nonce):
     staging = fixture._command([docker, 'create', '--pull', 'never', '--network', 'none',
-                                '--label', 'getzilla.owner=' + nonce, fixture.IMAGE])
+                                '--name', _name(nonce, 'staging'), '--label', 'getzilla.owner=' + nonce,
+                                '--label', 'getzilla.native.role=staging', fixture.IMAGE])
     if not re.fullmatch(r'[a-f0-9]{64}', staging):
         raise ProtocolError('container_unverified')
     try:
-        fixture._command([docker, 'cp', str(script), staging + ':/fixture.py'])
-        fixture._command([docker, 'cp', str(codex), staging + ':/fixture-codex'])
+        with tempfile.TemporaryDirectory() as temp:
+            script_copy, codex_copy = Path(temp) / 'script', Path(temp) / 'codex'
+            shutil.copyfile(script, script_copy)
+            shutil.copyfile(codex, codex_copy)
+            script_copy.chmod(0o644)
+            codex_copy.chmod(0o755)
+            fixture._command([docker, 'cp', str(script_copy), staging + ':/fixture.py'])
+            fixture._command([docker, 'cp', str(codex_copy), staging + ':/fixture-codex'])
         image = fixture._command([docker, 'commit', '--change', 'LABEL getzilla.owner=' + nonce,
-                                  staging, 'getzilla-native-' + nonce + ':work'])
+                                  '--change', 'LABEL getzilla.native.role=image', staging, 'getzilla-native-' + nonce + ':work'])
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
             raise ProtocolError('image_unverified')
     finally:
@@ -74,7 +123,9 @@ def _validate(docker, record, *, stopped=False):
         host, config, mounts = info['HostConfig'], info['Config'], info['Mounts']
         expected = dict(zip(('/tmp/codex', '/work'), volumes))
         valid = (info['Id'] == ident and info['Image'] == image
+                 and info['Name'] == '/' + _name(nonce, 'main')
                  and config['Labels'].get('getzilla.owner') == nonce
+                 and config['Labels'].get('getzilla.native.role') == 'main'
                  and config['User'] == '65534:65534' and config['Entrypoint'] == ['/fixture-codex']
                  and config['Cmd'] == ['app-server'] and host['NetworkMode'] == 'none'
                  and host['ReadonlyRootfs'] is True and host['Privileged'] is False
@@ -124,6 +175,10 @@ class NativePeer(OwnedJsonlPeer):
         self._revision, self._record = revision, record
 
     async def close(self):
+        with _operation(self._root):
+            return await self._close_owned()
+
+    async def _close_owned(self):
         docker = _docker()
         try:
             volumes = _validate(docker, self._record)
@@ -146,6 +201,11 @@ class NativePeer(OwnedJsonlPeer):
 
 
 async def start(root, binding, generation, revision, *, timeout=10):
+    with _operation(root):
+        return await _start(root, binding, generation, revision, timeout=timeout)
+
+
+async def _start(root, binding, generation, revision, *, timeout=10):
     docker = _docker()
     codex = shutil.which('codex')
     script = Path(__file__).resolve().parents[2] / 'tests/fixtures/codex_loopback_probe.py'
@@ -166,7 +226,8 @@ async def start(root, binding, generation, revision, *, timeout=10):
             raise ProtocolError('container_unverified')
     _helper(docker, image, volumes, nonce, "import os; os.chown('/state',65534,65534); os.chown('/work',65534,65534)", root=True)
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--label', 'getzilla.owner=' + nonce, '--restart', 'no', '--security-opt', 'no-new-privileges',
+            '--name', _name(nonce, 'main'), '--label', 'getzilla.owner=' + nonce,
+            '--label', 'getzilla.native.role=main', '--restart', 'no', '--security-opt', 'no-new-privileges',
             '--pids-limit', '64', '--memory', '512m', '--cpus', '2', '--user', '65534:65534',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m,mode=1777', *fence._mounts(volumes),
             '-e', 'HOME=/tmp', '-e', 'CODEX_HOME=/tmp/codex', '--entrypoint', '/fixture-codex', image, 'app-server']
@@ -186,6 +247,11 @@ async def start(root, binding, generation, revision, *, timeout=10):
 
 
 def recover(root, binding, generation, revision):
+    with _operation(root):
+        return _recover(root, binding, generation, revision)
+
+
+def _recover(root, binding, generation, revision):
     docker = _docker()
     record = journal.inspect_native_container(root, binding, revision, generation)
     volumes = _validate(docker, record)
@@ -205,20 +271,35 @@ def recover(root, binding, generation, revision):
 
 
 def cleanup(root, binding, generation, revision):
+    with _operation(root):
+        return _cleanup(root, binding, generation, revision)
+
+
+def _cleanup(root, binding, generation, revision):
     docker = _docker()
+    transition = journal.claim_native_cleanup(root, binding, generation, revision)
+    if transition['state'] != 'cleanup_started':
+        raise ProtocolError('journal_denied')
     intent = journal.inspect_native_intent(root, binding, generation)
-    if intent['revision'] != revision:
-        raise ProtocolError('stale_reference')
     nonce = intent['owner_nonce']
-    containers = fixture._command([docker, 'ps', '-a', '--no-trunc', '--filter',
-                                   'label=getzilla.owner=' + nonce, '--format', '{{.ID}}']).splitlines()
-    for ident in containers:
-        if not re.fullmatch(r'[a-f0-9]{64}', ident):
+    chain = journal.inspect_chain(root, binding)
+    recorded = chain['events'].get('container_' + str(generation), {}).get('evidence', {})
+    for role in ('main', 'helper', 'staging'):
+        name = _name(nonce, role)
+        containers = fixture._command([docker, 'ps', '-a', '--no-trunc', '--filter',
+                                       'name=^/' + name + '$', '--format', '{{.ID}}']).splitlines()
+        if len(containers) > 1:
             raise ProtocolError('container_unverified')
-        info = fence._inspect(docker, ident)
-        if info.get('Id') != ident or (info.get('Config', {}).get('Labels') or {}).get('getzilla.owner') != nonce:
-            raise ProtocolError('container_unverified')
-        fixture._command([docker, 'rm', '-f', ident])
+        for ident in containers:
+            if not re.fullmatch(r'[a-f0-9]{64}', ident):
+                raise ProtocolError('container_unverified')
+            info = fence._inspect(docker, ident)
+            labels = info.get('Config', {}).get('Labels') or {}
+            if (info.get('Id') != ident or info.get('Name') != '/' + name
+                    or (role == 'main' and recorded and recorded.get('container_id') != ident)
+                    or labels.get('getzilla.owner') != nonce or labels.get('getzilla.native.role') != role):
+                raise ProtocolError('container_unverified')
+            fixture._command([docker, 'rm', '-f', ident])
     listed = fixture._command([docker, 'volume', 'ls', '--filter', 'label=getzilla.owner=' + nonce,
                               '--format', '{{.Name}}']).splitlines()
     if any(name not in _volumes(nonce) for name in listed) or len(set(listed)) != len(listed):
