@@ -57,32 +57,6 @@ class OpenAIModelRequestTest(unittest.TestCase):
                 openai_model_request.dispatch(request)
         connection.assert_not_called()
 
-    def test_https_transport_binds_destination_and_refuses_redirects(self):
-        request = openai_model_request.prepare(self.contract, 'hello')
-        with patch('http.client.HTTPSConnection') as factory:
-            connection = factory.return_value
-            response = connection.getresponse.return_value
-            response.status = 302
-            response.read.return_value = b''
-            with self.assertRaisesRegex(openai_model_request.RequestError, 'redirect_denied'):
-                openai_model_request._post_once(request, 'fake-test-key', 5)
-        factory.assert_called_once_with('api.openai.com', timeout=5)
-        args, kwargs = connection.request.call_args
-        self.assertEqual(args[:2], ('POST', '/v1/responses'))
-        self.assertEqual(kwargs['body'], request.body)
-        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer fake-test-key')
-        connection.close.assert_called_once()
-
-    def test_transport_stops_on_oversized_response(self):
-        request = openai_model_request.prepare(self.contract, 'hello')
-        with patch('http.client.HTTPSConnection') as factory:
-            response = factory.return_value.getresponse.return_value
-            response.status = 200
-            response.read1.side_effect = [b'x' * 65536] * 16 + [b'x']
-            with self.assertRaisesRegex(openai_model_request.RequestError, 'response_too_large'):
-                openai_model_request._post_once(request, 'fake-test-key', 5)
-            factory.return_value.close.assert_called_once()
-
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_live_claim_reserves_before_send_and_is_never_reissued(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
@@ -104,7 +78,7 @@ class OpenAIModelRequestTest(unittest.TestCase):
             self.assertEqual(state['attempts'][0]['state'], 'send_unknown')
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
-    def test_dispatch_consumes_before_sending_and_never_retries(self):
+    def test_dispatch_denies_before_consumption_without_data_admission(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
@@ -116,13 +90,10 @@ class OpenAIModelRequestTest(unittest.TestCase):
             prepared = openai_model_request.prepare(self.contract, 'hello')
             initial = journal.create_model_only_chain(root, binding, self.contract, prepared, journal.TaskBudget(2, 4, '1.5', 2000))
             with patch('http.client.HTTPSConnection') as factory:
-                response = factory.return_value.getresponse.return_value
-                response.status = 200
-                response.read1.side_effect = [b'{}', b'']
-                self.assertEqual(openai_model_request.dispatch(root, binding, self.contract, prepared, 1, initial['revision'], 'fake-test-key'), (200, b'{}'))
-                with self.assertRaises(openai_model_request.RequestError):
+                with self.assertRaisesRegex(openai_model_request.RequestError, 'data_admission_unavailable'):
                     openai_model_request.dispatch(root, binding, self.contract, prepared, 1, initial['revision'], 'fake-test-key')
-                factory.assert_called_once()
+                factory.assert_not_called()
+                self.assertEqual(journal.inspect_chain(root, binding)['attempts'][0]['state'], 'reserved_unknown')
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_changed_request_revocation_expiry_and_racing_claims(self):
@@ -165,49 +136,6 @@ class OpenAIModelRequestTest(unittest.TestCase):
                 with self.assertRaisesRegex(journal.JournalError, 'storage_unavailable'):
                     journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'])
             self.assertFalse(journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'] + 1)['claimed'])
-
-    @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
-    def test_unknown_transport_failure_does_not_reissue_claim(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
-            root = Path(directory)
-            config = root / '.getzilla/config/model-continuation.json'
-            config.parent.mkdir(parents=True)
-            policy = enabled_policy()
-            policy['candidates'][0]['provider'] = 'openai'
-            config.write_text(json.dumps(policy), encoding='utf-8')
-            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
-            request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
-            with patch('http.client.HTTPSConnection') as factory:
-                factory.return_value.request.side_effect = TimeoutError('secret-sentinel')
-                with self.assertRaisesRegex(openai_model_request.RequestError, 'transport_unknown'):
-                    openai_model_request.dispatch(root, binding, self.contract, request, 1, initial['revision'], 'fake-test-key')
-                with self.assertRaisesRegex(openai_model_request.RequestError, 'request_not_admitted'):
-                    openai_model_request.dispatch(root, binding, self.contract, request, 1, initial['revision'], 'fake-test-key')
-                factory.assert_called_once()
-
-    @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
-    def test_revocation_after_claim_prevents_network(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
-            root = Path(directory)
-            config = root / '.getzilla/config/model-continuation.json'
-            config.parent.mkdir(parents=True)
-            policy = enabled_policy()
-            policy['candidates'][0]['provider'] = 'openai'
-            config.write_text(json.dumps(policy), encoding='utf-8')
-            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
-            request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
-            consume = journal.consume_model_only_request
-            def revoke(*args):
-                claim = consume(*args)
-                policy['enabled'] = False
-                config.write_text(json.dumps(policy), encoding='utf-8')
-                return claim
-            with patch.object(journal, 'consume_model_only_request', side_effect=revoke), patch('http.client.HTTPSConnection') as factory:
-                with self.assertRaisesRegex(openai_model_request.RequestError, 'request_not_admitted'):
-                    openai_model_request.dispatch(root, binding, self.contract, request, 1, initial['revision'], 'fake-test-key')
-                factory.assert_not_called()
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_wrong_account_and_insufficient_budget_do_not_create_chain(self):

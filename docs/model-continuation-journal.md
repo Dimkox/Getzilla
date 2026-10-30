@@ -1,6 +1,6 @@
 # Offline continuation journal (issue235 T3)
 
-This slice preserves local attempt and budget records. A separate direct text-only OpenAI API can send one request under the constraints below. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
+This slice preserves local attempt and budget records. Direct model dispatch remains disabled. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
 
 The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 
@@ -36,13 +36,11 @@ Disable the policy to stop reservation. Preserve the journal and unknown outcome
 
 ## Direct model-only OpenAI request
 
-The optional `getzilla.openai_model_request` API prepares one text-only Responses request. It uses the fixed HTTPS origin `api.openai.com` and path `/v1/responses`. It does not accept tools, arbitrary URLs, proxies, redirects or retries. The caller supplies the credential for the configured account; the journal stores no credential or prompt. This API is not connected to native Getzilla startup or automatic model continuation.
+The optional `getzilla.openai_model_request` API prepares a text-only Responses request for accounting. Dispatch refuses before consuming a claim or accessing the network because data admission is not established. The journal stores no credential or prompt. This API is not connected to native Getzilla startup or automatic model continuation.
 
 The caller must supply a versioned contract containing the exact model, account reference, full input token ceiling, output token ceiling, byte limit, price ceilings, rate revision and expiry. The operator must confirm that the input ceiling covers the model's complete input context, including framing, and that both prices cover every applicable charge. These are operator assertions: byte length is not a token count, and the adapter does not verify current provider prices or account ownership. The configured ceiling is not a provider-enforced spending limit. See the [OpenAI token guide](https://developers.openai.com/api/docs/guides/token-counting) and [pricing](https://developers.openai.com/api/docs/pricing).
 
-The adapter bounds socket operations and response reads, but the operating system's DNS resolver can extend the elapsed time before a connection is made. A timeout leaves the request outcome unknown.
-
-T3 reserves the full input and output ceilings before the request, rounds the charge up to micros and applies the stricter task or policy cap. A live-model-only record binds the contract and request digest to the first policy candidate. Its one-shot claim is durable before network access, and the policy and expiry are checked again after the claim. A timeout, lost response, uncertain publication or restart retains the charge and does not reissue the claim. The API does not currently record terminal outcomes or reserve another candidate. It cannot resume a native coding session, reconcile tool effects, or prove a process fence. Its credential/account mapping remains the caller's responsibility.
+T3 reserves the full configured input and output ceilings, rounds the charge up to micros and applies the stricter task or policy cap. A live-model-only record binds the contract and request digest to the first policy candidate. A consumed accounting claim is never reissued. This accounting claim does not authorize data transfer. The API does not record terminal outcomes or reserve another candidate. It cannot resume a native coding session, reconcile tool effects, or prove a process fence. Credential/account matching and data authorization remain unfinished.
 
 ## Controlled local fixture
 
