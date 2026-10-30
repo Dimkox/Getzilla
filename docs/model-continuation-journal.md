@@ -34,6 +34,8 @@ This store has no relationship to Factory PostgreSQL budget grants or PR239 prog
 
 ## Recovery and rollback
 
+The optional `codex_continuation.start_offline_container` entry point starts the pinned native Codex app server inside an owned Docker container with no network or credentials. T3 stores the full container and image identities and an ownership nonce before it starts. A normal close stops the exact verified container and records a digest of its state and work volumes. `native_container.recover` inspects the recorded container after coordinator restart, stops it if needed, and rechecks the volume digest. It never starts a successor or permits live dispatch. Missing or changed resources and uncertain state fail closed. The Docker daemon is part of the trusted boundary; a stopped local container does not establish the outcome of remote effects. The caller must retain the recorded container, image and volumes until recovery is complete. `native_container.cleanup` removes only the validated stopped resources. Roll back through a reviewed revert and retain any unknown-outcome journal.
+
 Disable the policy to stop reservation. Preserve the journal and unknown outcomes. Revert source through a reviewed PR if needed; never delete a ledger to regain attempts or money. No live dispatch path exists to roll back in T3.
 
 ## Controlled local fixture

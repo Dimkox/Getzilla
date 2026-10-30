@@ -214,7 +214,7 @@ def _validate_chain(key, chain):
         result = record['result']
         if set(result) != {'state', 'reason', 'revision', 'generation', 'dispatch_permitted'} or result['dispatch_permitted'] is not False:
             raise JournalError('journal_corrupt')
-        allowed_states = {'terminal_unknown', 'reserved_unknown'}
+        allowed_states = {'terminal_unknown', 'reserved_unknown', 'container_recorded', 'checkpoint_recorded'}
         if chain.get('domain') == 'controlled_fixture_v1':
             allowed_states.update({'fence_recorded', 'request_consumed'})
         if result['state'] not in allowed_states or result['reason'] != 'recorded':
@@ -223,9 +223,41 @@ def _validate_chain(key, chain):
             raise JournalError('journal_corrupt')
         if 'evidence' in record:
             evidence = record['evidence']
-            if chain.get('domain') != 'controlled_fixture_v1' or not isinstance(evidence, dict):
+            if not isinstance(evidence, dict):
                 raise JournalError('journal_corrupt')
-            if evidence.get('kind') == 'controlled_request_v1':
+            if evidence.get('kind') == 'native_container_v1':
+                if (chain.get('domain') is not None
+                        or set(evidence) != {'kind', 'generation', 'container_id', 'image_id', 'owner_nonce'}
+                        or not _integer(evidence['generation'], 64)
+                        or evidence['generation'] != result['generation']
+                        or event != 'container_' + str(evidence['generation'])
+                        or result['state'] != 'container_recorded'
+                        or not isinstance(evidence['container_id'], str) or not _DIGEST.fullmatch(evidence['container_id'])
+                        or not isinstance(evidence['image_id'], str) or not _DIGEST.fullmatch(evidence['image_id'])
+                        or not isinstance(evidence['owner_nonce'], str) or not re.fullmatch(r'[a-f0-9]{32}', evidence['owner_nonce'])
+                        or record['digest'] != _digest(['native_container_v1', evidence['generation'], evidence['container_id'], evidence['image_id'], evidence['owner_nonce']])):
+                    raise JournalError('journal_corrupt')
+            elif evidence.get('kind') == 'native_checkpoint_v1':
+                container_event = chain['events'].get('container_' + str(evidence.get('generation')), {})
+                container_evidence = container_event.get('evidence', {}) if isinstance(container_event, dict) else {}
+                if (chain.get('domain') is not None
+                        or set(evidence) != {'kind', 'generation', 'container_id', 'checkpoint_digest'}
+                        or not _integer(evidence['generation'], 64)
+                        or evidence['generation'] != result['generation']
+                        or event != 'checkpoint_' + str(evidence['generation'])
+                        or result['state'] != 'checkpoint_recorded'
+                        or not isinstance(evidence['container_id'], str) or not _DIGEST.fullmatch(evidence['container_id'])
+                        or not isinstance(evidence['checkpoint_digest'], str) or not _DIGEST.fullmatch(evidence['checkpoint_digest'])
+                        or container_evidence.get('kind') != 'native_container_v1'
+                        or container_evidence.get('container_id') != evidence['container_id']
+                        or not isinstance(container_event.get('result'), dict)
+                        or type(container_event['result'].get('revision')) is not int
+                        or container_event['result']['revision'] >= result['revision']
+                        or record['digest'] != _digest(['native_checkpoint_v1', evidence['generation'], evidence['container_id'], evidence['checkpoint_digest']])):
+                    raise JournalError('journal_corrupt')
+            elif chain.get('domain') != 'controlled_fixture_v1':
+                raise JournalError('journal_corrupt')
+            elif evidence.get('kind') == 'controlled_request_v1':
                 if (set(evidence) != {'kind', 'generation'} or not _integer(evidence['generation'], 64)
                         or evidence['generation'] != result['generation'] or event != 'request_' + str(evidence['generation'])
                         or result['state'] != 'request_consumed'
@@ -241,7 +273,7 @@ def _validate_chain(key, chain):
                     or not isinstance(evidence['thread_id'], str) or not _ID.fullmatch(evidence['thread_id'])
                     or record['digest'] != _digest(['controlled_fence_v2', evidence['generation'], evidence['container_id'], evidence['checkpoint_digest'], evidence['thread_id']])):
                 raise JournalError('journal_corrupt')
-        elif result['state'] == 'fence_recorded':
+        elif result['state'] in {'fence_recorded', 'container_recorded', 'checkpoint_recorded'}:
             raise JournalError('journal_corrupt')
         elif result['state'] == 'request_consumed':
             raise JournalError('journal_corrupt')
@@ -597,6 +629,77 @@ def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int
 def inspect_chain(root: Path, binding: Binding) -> dict:
     with _store(root) as (chains, _):
         return _chain(chains, binding)
+
+
+def record_native_container(root: Path, binding: Binding, generation: int, expected_revision: int,
+                            container_id: str, image_id: str, owner_nonce: str) -> dict:
+    """Bind an isolated local container before it starts; never authorize dispatch."""
+    if (not _integer(generation, 64) or not _integer(expected_revision)
+            or not isinstance(container_id, str) or not _DIGEST.fullmatch(container_id)
+            or not isinstance(image_id, str) or not _DIGEST.fullmatch(image_id)
+            or not isinstance(owner_nonce, str) or not re.fullmatch(r'[a-f0-9]{32}', owner_nonce)):
+        raise JournalError('invalid_container')
+    event = 'container_' + str(generation)
+    content = ['native_container_v1', generation, container_id, image_id, owner_nonce]
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') is not None:
+            raise JournalError('invalid_domain')
+        previous = _event(chain, event, content)
+        if previous:
+            return previous
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            return _result(chain, reason='stale_reference')
+        if chain['attempts'][-1]['state'] != 'active_unknown':
+            return _result(chain, reason='outcome_unknown')
+        evidence = dict(kind='native_container_v1', generation=generation, container_id=container_id,
+                        image_id=image_id, owner_nonce=owner_nonce)
+        return _record(chain, event, content, 'container_recorded', save, evidence=evidence)
+
+
+def inspect_native_container(root: Path, binding: Binding, expected_revision: int, generation: int) -> dict:
+    """Read the durable identity; no returned observation permits dispatch."""
+    with _store(root) as (chains, _):
+        chain = _chain(chains, binding)
+        if chain.get('domain') is not None:
+            raise JournalError('invalid_domain')
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            raise JournalError('stale_reference')
+        event = chain['events'].get('container_' + str(generation))
+        if not event or event.get('evidence', {}).get('kind') != 'native_container_v1':
+            raise JournalError('container_unknown')
+        checkpoint = chain['events'].get('checkpoint_' + str(generation))
+        return {**event['evidence'], 'revision': chain['revision'], 'dispatch_permitted': False,
+                'checkpoint_digest': checkpoint['evidence']['checkpoint_digest'] if checkpoint else None}
+
+
+def record_native_checkpoint(root: Path, binding: Binding, generation: int, expected_revision: int,
+                             container_id: str, checkpoint_digest: str) -> dict:
+    """Record local stopped-volume evidence without qualifying external effects."""
+    if (not _integer(generation, 64) or not _integer(expected_revision)
+            or not isinstance(container_id, str) or not _DIGEST.fullmatch(container_id)
+            or not isinstance(checkpoint_digest, str) or not _DIGEST.fullmatch(checkpoint_digest)):
+        raise JournalError('invalid_checkpoint')
+    event = 'checkpoint_' + str(generation)
+    content = ['native_checkpoint_v1', generation, container_id, checkpoint_digest]
+    with _store(root) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') is not None:
+            raise JournalError('invalid_domain')
+        prior = _event(chain, event, content)
+        if prior:
+            return prior
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            return _result(chain, reason='stale_reference')
+        prior_container = chain['events'].get('container_' + str(generation), {}).get('evidence', {})
+        if prior_container.get('container_id') != container_id:
+            return _result(chain, reason='container_mismatch')
+        evidence = dict(kind='native_checkpoint_v1', generation=generation, container_id=container_id,
+                        checkpoint_digest=checkpoint_digest)
+        return _record(chain, event, content, 'checkpoint_recorded', save, evidence=evidence)
 
 
 def recovery_status(root: Path, binding: Binding, expected_revision: int, expected_generation: int) -> dict:
