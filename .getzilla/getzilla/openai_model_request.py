@@ -1,20 +1,70 @@
 """Build a bounded text-only Responses request and estimate its reservation.
 
-Direct dispatch consumes a durable one-shot claim before one HTTPS request.
+Live dispatch is disabled until the exact data and recipient are authorized.
 The token and rate bounds are operator assertions, not provider price evidence.
 """
 from __future__ import annotations
 
 import json
 import re
-import http.client
-import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, localcontext
 
 
 class RequestError(ValueError):
     """A fixed diagnostic that never includes request text."""
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate_key')
+        result[key] = value
+    return result
+
+
+def classify_response(status: int, body: bytes, *, model: str | None = None) -> str:
+    """Classify only a complete, bounded HTTP response; never inspect text."""
+    if type(status) is not int or type(body) is not bytes or len(body) > 1048576:
+        return 'unknown'
+    try:
+        value = json.loads(body, object_pairs_hook=_unique_object,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError('constant')))
+        if not isinstance(value, dict):
+            return 'unknown'
+        if status == 200 and isinstance(model, str) and model and value.get('object') == 'response' and value.get('status') == 'completed' and value.get('model') == model and value.get('error') is None:
+            output = value.get('output')
+            if not isinstance(output, list) or not output:
+                return 'unknown'
+            saw_message = False
+            for item in output:
+                if not isinstance(item, dict) or item.get('type') not in {'message', 'reasoning'}:
+                    return 'unknown'
+                if item['type'] == 'message':
+                    saw_message = True
+                    content = item.get('content')
+                    if item.get('role') != 'assistant' or not isinstance(content, list) or not content:
+                        return 'unknown'
+                    if any(not isinstance(part, dict) or part.get('type') != 'output_text' or not isinstance(part.get('text'), str) for part in content):
+                        return 'unknown'
+            return 'success' if saw_message else 'unknown'
+        if not isinstance(value.get('error'), dict):
+            return 'unknown'
+        error = value['error']
+        kind, code = error.get('type'), error.get('code')
+        if not isinstance(kind, str) or not isinstance(code, str):
+            return 'unknown'
+        if status in (401, 403) or (status == 429 and code in {'insufficient_quota', 'credit_balance_exhausted',
+                'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'organization_usage_limit_exceeded'}):
+            return 'needs_action'
+        if status == 429 and kind == 'rate_limit_error' and code in {'slow_down', 'rate_limit_exceeded'}:
+            return 'rate_limit'
+        if status == 503 and kind == 'service_unavailable_error' and code == 'server_is_overloaded':
+            return 'provider_unavailable'
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return 'unknown'
+    return 'unknown'
 
 
 @dataclass(frozen=True)
@@ -83,21 +133,72 @@ def prepare(contract: Contract, text: str) -> PreparedRequest:
 
 
 def dispatch(root, binding, contract, request, generation, revision, credential):
-    """Consume a durable model-only request before one HTTPS attempt.
+    """Refuse before a claim or network access until data admission exists."""
+    raise RequestError('data_admission_unavailable')
 
-    This direct text adapter does not authorize native harness continuation.
-    """
+
+def _data_admission_available() -> bool:
+    """No live data-admission boundary is implemented."""
+    return False
+
+
+def start_rotation(root, binding, contracts, text, budget, credentials):
+    """Start a direct text-only chain; no native harness continuation is implied."""
     from . import model_continuation_state as journal
+    if not _data_admission_available():
+        raise RequestError('data_admission_unavailable')
+    if not isinstance(contracts, tuple) or not contracts or len(contracts) > 64 or type(credentials) is not dict:
+        raise RequestError('invalid_rotation')
+    first = contracts[0]
+    request = prepare(first, text)
+    credential = credentials.get(first.account_ref)
     _transport_input(request, credential, 1)
-    claim = journal.consume_model_only_request(root, binding, contract, request, generation, revision)
-    if not claim['claimed']:
-        raise RequestError('request_not_admitted')
-    if not journal.check_model_only_request(root, binding, contract, request, generation, claim['revision']):
-        raise RequestError('request_not_admitted')
-    remaining = claim['deadline'] - journal.time.time()
-    if remaining <= 0:
-        raise RequestError('deadline_exhausted')
-    return _post_once(request, credential, min(remaining, 120))
+    created = journal.create_model_only_chain(root, binding, first, request, budget)
+    return _drive_rotation(root, binding, contracts, text, credentials, first, request,
+                           created['generation'], created['revision'])
+
+
+def resume_rotation(root, binding, contracts, text, credentials):
+    """Resume only a durably failed attempt; unknown sends are never replayed."""
+    from . import model_continuation_state as journal
+    if not _data_admission_available():
+        raise RequestError('data_admission_unavailable')
+    if not isinstance(contracts, tuple) or not contracts or len(contracts) > 64 or type(credentials) is not dict:
+        raise RequestError('invalid_rotation')
+    chain = journal.inspect_chain(root, binding)
+    if chain.get('domain') != 'live_model_only_v1':
+        raise RequestError('invalid_rotation')
+    state = chain['attempts'][-1]['state']
+    if state == 'succeeded':
+        return {'state': 'succeeded', 'body': None}
+    if state != 'failed':
+        return {'state': 'unknown', 'body': None}
+    index = chain['generation']
+    if index >= len(contracts):
+        return {'state': 'exhausted', 'body': None}
+    contract = contracts[index]
+    request = prepare(contract, text)
+    credential = credentials.get(contract.account_ref)
+    _transport_input(request, credential, 1)
+    reserved = journal.reserve_model_only_next(root, binding, contract, request, chain['revision'])
+    if reserved['state'] != 'reserved_unknown':
+        return {'state': reserved['reason'], 'body': None}
+    return _drive_rotation(root, binding, contracts, text, credentials, contract, request,
+                           reserved['generation'], reserved['revision'])
+
+
+def _drive_rotation(root, binding, contracts, text, credentials, contract, request, generation, revision):
+    from . import model_continuation_state as journal
+    try:
+        _, body = dispatch(root, binding, contract, request, generation, revision, credentials[contract.account_ref])
+    except RequestError:
+        return {'state': 'unknown', 'body': None}
+    chain = journal.inspect_chain(root, binding)
+    if chain['attempts'][-1]['state'] == 'succeeded':
+        return {'state': 'succeeded', 'body': body}
+    if chain['attempts'][-1]['state'] == 'failed':
+        return resume_rotation(root, binding, contracts, text, credentials)
+    return {'state': 'unknown', 'body': None}
 
 
 def _transport_input(request: PreparedRequest, credential: str, timeout: float):
@@ -107,38 +208,18 @@ def _transport_input(request: PreparedRequest, credential: str, timeout: float):
         raise RequestError('invalid_transport_input')
 
 
-def _post_once(request: PreparedRequest, credential: str, timeout: float):
-    """One fixed-destination HTTP operation; callers must first consume admission."""
-    _transport_input(request, credential, timeout)
-    connection = http.client.HTTPSConnection('api.openai.com', timeout=timeout)
-    deadline = time.monotonic() + timeout
-    try:
-        connection.request('POST', '/v1/responses', body=request.body,
-            headers={'Authorization': 'Bearer ' + credential, 'Content-Type': 'application/json'})
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RequestError('transport_unknown')
-        sock = connection.sock
-        sock.settimeout(remaining)
-        response = connection.getresponse()
-        if 300 <= response.status < 400:
-            raise RequestError('redirect_denied')
-        chunks = []
-        size = 0
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RequestError('transport_unknown')
-            sock.settimeout(remaining)
-            chunk = response.read1(min(65536, 1048577 - size))
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > 1048576:
-                raise RequestError('response_too_large')
-            chunks.append(chunk)
-        return response.status, b''.join(chunks)
-    except (OSError, http.client.HTTPException):
-        raise RequestError('transport_unknown') from None
-    finally:
-        connection.close()
+def _retry_delay(headers) -> int | None:
+    if not isinstance(headers, list):
+        return None
+    matches = []
+    for item in headers:
+        if not isinstance(item, tuple) or len(item) != 2 or not all(isinstance(v, str) for v in item):
+            return None
+        if item[0].lower() == 'retry-after':
+            matches.append(item[1])
+    if not matches:
+        return 0
+    if len(matches) != 1 or not re.fullmatch(r'[0-9]{1,5}', matches[0]):
+        return None
+    delay = int(matches[0])
+    return delay if delay <= 86400 else None

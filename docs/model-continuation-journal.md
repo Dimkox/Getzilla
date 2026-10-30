@@ -1,6 +1,6 @@
 # Offline continuation journal (issue235 T3)
 
-This slice preserves local attempt and budget records. A separate direct text-only OpenAI API can send one request under the constraints below. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
+This slice preserves local attempt and budget records. Direct model dispatch remains disabled. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
 
 The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 
@@ -36,13 +36,11 @@ Disable the policy to stop reservation. Preserve the journal and unknown outcome
 
 ## Direct model-only OpenAI request
 
-The optional `getzilla.openai_model_request` API prepares one text-only Responses request. It uses the fixed HTTPS origin `api.openai.com` and path `/v1/responses`. It does not accept tools, arbitrary URLs, proxies, redirects or retries. The caller supplies the credential for the configured account; the journal stores no credential or prompt. This API is not connected to native Getzilla startup or automatic model continuation.
+The optional `getzilla.openai_model_request` API prepares a text-only Responses request for accounting. Dispatch refuses before consuming a claim or accessing the network because data admission is not established. The journal stores no credential or prompt. This API is not connected to native Getzilla startup or automatic model continuation.
 
 The caller must supply a versioned contract containing the exact model, account reference, full input token ceiling, output token ceiling, byte limit, price ceilings, rate revision and expiry. The operator must confirm that the input ceiling covers the model's complete input context, including framing, and that both prices cover every applicable charge. These are operator assertions: byte length is not a token count, and the adapter does not verify current provider prices or account ownership. The configured ceiling is not a provider-enforced spending limit. See the [OpenAI token guide](https://developers.openai.com/api/docs/guides/token-counting) and [pricing](https://developers.openai.com/api/docs/pricing).
 
-The adapter bounds socket operations and response reads, but the operating system's DNS resolver can extend the elapsed time before a connection is made. A timeout leaves the request outcome unknown.
-
-T3 reserves the full input and output ceilings before the request, rounds the charge up to micros and applies the stricter task or policy cap. A live-model-only record binds the contract and request digest to the first policy candidate. Its one-shot claim is durable before network access, and the policy and expiry are checked again after the claim. A timeout, lost response, uncertain publication or restart retains the charge and does not reissue the claim. The API does not currently record terminal outcomes or reserve another candidate. It cannot resume a native coding session, reconcile tool effects, or prove a process fence. Its credential/account mapping remains the caller's responsibility.
+T3 reserves the full configured input and output ceilings, rounds the charge up to micros and applies the stricter task or policy cap. A live-model-only record binds the contract and request digest to the first policy candidate. A consumed accounting claim is never reissued. This accounting claim does not authorize data transfer. The API does not record terminal outcomes or reserve another candidate. It cannot resume a native coding session, reconcile tool effects, or prove a process fence. Credential/account matching and data authorization remain unfinished.
 
 ## Controlled local fixture
 
@@ -59,3 +57,5 @@ On restart, a recorded fence can resume B only after the host revalidates the ow
 The fenced fixture also gates each synthetic inference request through its host. The host accepts only the expected fixture model, local Responses path, streaming mode and function-tool descriptors. Before it allows the local synthetic response, T3 consumes the one request already reserved for that attempt. A duplicate, changed policy, invalid request or unknown outcome gets no second allowance. The request event stores only its version and generation; it stores no prompt or credential. Earlier fixture readers that do not recognize this versioned event fail closed. This gate does not forward to a real provider and does not authorize live network access.
 
 To exercise the optional isolated fixture on a machine with the pinned local image and binary, run `GETZILLA_RUN_CODEX_FIXTURE=1 python3 -m unittest tests.test_controlled_fixture` with the installed Codex on `PATH`. The regular unit suite skips this opt-in test. No provider call is required. If the exact local dependencies are missing, the fixture fails closed. Rollback is a reviewed source revert; preserve the fixture journal rather than deleting it to reset a budget.
+
+The experimental model-only journal supports versioned terminal accounting and the next configured model under the same budget. It records only bounded classifications and request digests. A response can authorize a successor only when supplied by a future qualified owned transport; fixture tests supply synthetic responses. Billing, authentication, malformed output and lost responses never switch. Retry-After remains pending until its deadline. On restart, an unknown send is not repeated; a completed attempt returns its status without storing or reconstructing the response text. Direct dispatch and public rotation remain disabled until exact data and account admission is implemented. These APIs do not qualify native CLI continuation.
