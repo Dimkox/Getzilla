@@ -26,6 +26,46 @@ def _volumes(nonce):
     return ['getzilla-native-' + nonce + '-state', 'getzilla-native-' + nonce + '-work']
 
 
+def _helper(docker, image, volumes, nonce, program, *, root=False):
+    mounts = [part for name, target in zip(volumes, ('/state', '/work'))
+              for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target + ('' if root else ',readonly'))]
+    args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+            '--label', 'getzilla.owner=' + nonce, '--security-opt', 'no-new-privileges',
+            '--pids-limit', '64', '--memory', '512m', '--cpus', '2']
+    if root:
+        args += ['--cap-add', 'CHOWN']
+    args += ['--user', '0' if root else '65534:65534', *mounts, '--entrypoint', 'python', image, '-c', program]
+    ident = fixture._command(args)
+    if not re.fullmatch(r'[a-f0-9]{64}', ident):
+        raise ProtocolError('container_unverified')
+    try:
+        return fixture._command([docker, 'start', '-a', ident], timeout=60)
+    finally:
+        fixture._command([docker, 'rm', '-fv', ident])
+
+
+def _build(docker, codex, script, nonce):
+    staging = fixture._command([docker, 'create', '--pull', 'never', '--network', 'none',
+                                '--label', 'getzilla.owner=' + nonce, fixture.IMAGE])
+    if not re.fullmatch(r'[a-f0-9]{64}', staging):
+        raise ProtocolError('container_unverified')
+    try:
+        fixture._command([docker, 'cp', str(script), staging + ':/fixture.py'])
+        fixture._command([docker, 'cp', str(codex), staging + ':/fixture-codex'])
+        image = fixture._command([docker, 'commit', '--change', 'LABEL getzilla.owner=' + nonce,
+                                  staging, 'getzilla-native-' + nonce + ':work'])
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
+            raise ProtocolError('image_unverified')
+    finally:
+        fixture._command([docker, 'rm', '-fv', staging])
+    program = ("import hashlib; from pathlib import Path; "
+               "print(hashlib.sha256(Path('/fixture.py').read_bytes()).hexdigest()); "
+               "print(hashlib.sha256(Path('/fixture-codex').read_bytes()).hexdigest())")
+    if _helper(docker, image, [], nonce, program).splitlines() != [fixture.FIXTURE_SHA256, fixture.CODEX_SHA256]:
+        raise ProtocolError('image_unverified')
+    return image
+
+
 def _validate(docker, record, *, stopped=False):
     ident, nonce = record['container_id'], record['owner_nonce']
     image, volumes = 'sha256:' + record['image_id'], _volumes(nonce)
@@ -69,9 +109,10 @@ def _validate(docker, record, *, stopped=False):
         raise ProtocolError('container_unverified') from None
 
 
-def _digest_checkpoint(docker, image, volumes):
-    first = fence._checkpoint(docker, image, volumes)
-    if first != fence._checkpoint(docker, image, volumes):
+def _digest_checkpoint(docker, image, volumes, nonce):
+    first = _helper(docker, image, volumes, nonce, fence._SCAN).splitlines()
+    if (len(first) != 2 or any(not re.fullmatch(r'[a-f0-9]{64}', item) for item in first)
+            or first != _helper(docker, image, volumes, nonce, fence._SCAN).splitlines()):
         raise ProtocolError('checkpoint_changed')
     return hashlib.sha256(''.join(first).encode('ascii')).hexdigest()
 
@@ -89,10 +130,17 @@ class NativePeer(OwnedJsonlPeer):
             fixture._command([docker, 'stop', '--time', '3', self._record['container_id']], timeout=15)
             await asyncio.wait_for(self._process.wait(), self._timeout)
             _validate(docker, self._record, stopped=True)
-            digest = _digest_checkpoint(docker, 'sha256:' + self._record['image_id'], volumes)
+            digest = _digest_checkpoint(docker, 'sha256:' + self._record['image_id'], volumes, self._record['owner_nonce'])
             _validate(docker, self._record, stopped=True)
-            return journal.record_native_checkpoint(self._root, self._binding, self._generation,
-                                                    self._revision, self._record['container_id'], digest)
+            state = journal.inspect_chain(self._root, self._binding)
+            current = journal.inspect_native_container(self._root, self._binding, state['revision'], self._generation)
+            if current['container_id'] != self._record['container_id']:
+                raise ProtocolError('container_unverified')
+            result = journal.record_native_checkpoint(self._root, self._binding, self._generation,
+                                                      state['revision'], self._record['container_id'], digest)
+            if result['state'] != 'checkpoint_recorded':
+                raise ProtocolError('journal_denied')
+            return result
         finally:
             self._process._transport.close()
 
@@ -107,13 +155,16 @@ async def start(root, binding, generation, revision, *, timeout=10):
     with codex.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != fixture.CODEX_SHA256:
             raise ProtocolError('codex_unqualified')
-    image = fixture._immutable_image(docker, script, str(codex))
     nonce = secrets.token_hex(16)
+    claim = journal.claim_native_start(root, binding, generation, revision, nonce)
+    if not claim['claimed']:
+        raise ProtocolError('journal_denied')
+    image = _build(docker, codex, script, nonce)
     volumes = _volumes(nonce)
     for volume in volumes:
         if fixture._command([docker, 'volume', 'create', '--label', 'getzilla.owner=' + nonce, volume]) != volume:
             raise ProtocolError('container_unverified')
-    fence._helper(docker, image, volumes, "import os; os.chown('/state',65534,65534); os.chown('/work',65534,65534)", root=True)
+    _helper(docker, image, volumes, nonce, "import os; os.chown('/state',65534,65534); os.chown('/work',65534,65534)", root=True)
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--label', 'getzilla.owner=' + nonce, '--restart', 'no', '--security-opt', 'no-new-privileges',
             '--pids-limit', '64', '--memory', '512m', '--cpus', '2', '--user', '65534:65534',
@@ -124,7 +175,7 @@ async def start(root, binding, generation, revision, *, timeout=10):
         raise ProtocolError('container_unverified')
     record = {'container_id': ident, 'image_id': image[7:], 'owner_nonce': nonce}
     _validate(docker, record)
-    result = journal.record_native_container(root, binding, generation, revision, ident, image[7:], nonce)
+    result = journal.record_native_container(root, binding, generation, claim['revision'], ident, image[7:], nonce)
     if result['state'] != 'container_recorded':
         raise ProtocolError('journal_denied')
     _validate(docker, record)
@@ -141,7 +192,7 @@ def recover(root, binding, generation, revision):
     if record['checkpoint_digest'] is None:
         fixture._command([docker, 'stop', '--time', '3', record['container_id']], timeout=15)
     _validate(docker, record, stopped=True)
-    digest = _digest_checkpoint(docker, 'sha256:' + record['image_id'], volumes)
+    digest = _digest_checkpoint(docker, 'sha256:' + record['image_id'], volumes, record['owner_nonce'])
     _validate(docker, record, stopped=True)
     if record['checkpoint_digest'] is None:
         result = journal.record_native_checkpoint(root, binding, generation, revision, record['container_id'], digest)
@@ -154,10 +205,36 @@ def recover(root, binding, generation, revision):
 
 
 def cleanup(root, binding, generation, revision):
-    recover(root, binding, generation, revision)
     docker = _docker()
-    record = journal.inspect_native_container(root, binding, revision, generation)
-    fixture._command([docker, 'rm', record['container_id']])
-    for volume in _volumes(record['owner_nonce']):
-        fixture._command([docker, 'volume', 'rm', volume])
-    fixture._command([docker, 'image', 'rm', 'sha256:' + record['image_id']])
+    intent = journal.inspect_native_intent(root, binding, generation)
+    if intent['revision'] != revision:
+        raise ProtocolError('stale_reference')
+    nonce = intent['owner_nonce']
+    containers = fixture._command([docker, 'ps', '-a', '--no-trunc', '--filter',
+                                   'label=getzilla.owner=' + nonce, '--format', '{{.ID}}']).splitlines()
+    for ident in containers:
+        if not re.fullmatch(r'[a-f0-9]{64}', ident):
+            raise ProtocolError('container_unverified')
+        info = fence._inspect(docker, ident)
+        if info.get('Id') != ident or (info.get('Config', {}).get('Labels') or {}).get('getzilla.owner') != nonce:
+            raise ProtocolError('container_unverified')
+        fixture._command([docker, 'rm', '-f', ident])
+    listed = fixture._command([docker, 'volume', 'ls', '--filter', 'label=getzilla.owner=' + nonce,
+                              '--format', '{{.Name}}']).splitlines()
+    if any(name not in _volumes(nonce) for name in listed) or len(set(listed)) != len(listed):
+        raise ProtocolError('volume_unverified')
+    for name in listed:
+        details = json.loads(fixture._command([docker, 'volume', 'inspect', name]))
+        if len(details) != 1 or details[0].get('Name') != name or (details[0].get('Labels') or {}).get('getzilla.owner') != nonce:
+            raise ProtocolError('volume_unverified')
+        fixture._command([docker, 'volume', 'rm', name])
+    images = fixture._command([docker, 'image', 'ls', '--no-trunc', '--filter', 'label=getzilla.owner=' + nonce,
+                               '--format', '{{.ID}}']).splitlines()
+    for image in set(images):
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
+            raise ProtocolError('image_unverified')
+        details = json.loads(fixture._command([docker, 'image', 'inspect', image]))
+        if (len(details) != 1 or details[0].get('Id') != image
+                or (details[0].get('Config', {}).get('Labels') or {}).get('getzilla.owner') != nonce):
+            raise ProtocolError('image_unverified')
+        fixture._command([docker, 'image', 'rm', image])
