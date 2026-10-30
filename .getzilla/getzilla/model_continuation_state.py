@@ -430,7 +430,7 @@ def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBud
             chain['attempts'][0]['state'] = 'reserved_unknown'
         chains[binding.chain_id] = chain
         save()
-        return _result(chain, 'active_unknown')
+        return _result(chain, 'reserved_unknown' if model_contract is not None and not controlled else 'active_unknown')
 
 
 def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:

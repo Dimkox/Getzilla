@@ -70,6 +70,8 @@ class OpenAIModelRequestTest(unittest.TestCase):
             budget = journal.TaskBudget(2, 4, '1.5', 2000)
             prepared = openai_model_request.prepare(self.contract, 'hello')
             initial = journal.create_model_only_chain(root, binding, self.contract, prepared, budget)
+            self.assertEqual(initial['state'], 'reserved_unknown')
+            self.assertEqual(initial['state'], journal.inspect_chain(root, binding)['attempts'][0]['state'])
             first = journal.consume_model_only_request(root, binding, self.contract, prepared, 1, initial['revision'])
             self.assertTrue(first['claimed'])
             self.assertFalse(journal.consume_model_only_request(root, binding, self.contract, prepared, 1, first['revision'])['claimed'])
