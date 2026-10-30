@@ -599,6 +599,26 @@ def inspect_chain(root: Path, binding: Binding) -> dict:
         return _chain(chains, binding)
 
 
+def recovery_status(root: Path, binding: Binding, expected_revision: int, expected_generation: int) -> dict:
+    """Inspect durable state without granting dispatch or replay."""
+    if not _integer(expected_revision) or not _integer(expected_generation):
+        raise JournalError('invalid_reference')
+    with _store(root) as (chains, _):
+        chain = _chain(chains, binding)
+        if chain.get('domain') is not None:
+            raise JournalError('invalid_domain')
+        if chain['revision'] != expected_revision:
+            return _result(chain, reason='stale_revision')
+        if chain['generation'] != expected_generation:
+            return _result(chain, reason='stale_generation')
+        if chain['state'] == 'cancelled':
+            return _result(chain, 'cancelled')
+        problem = _current(root, chain)
+        if problem:
+            return _result(chain, reason=problem)
+        return _result(chain, chain['attempts'][-1]['state'], 'outcome_unknown')
+
+
 def inspect_controlled_chain(root: Path, binding: Binding) -> dict:
     with _store(root, fixture=True) as (chains, _):
         chain = _chain(chains, binding)

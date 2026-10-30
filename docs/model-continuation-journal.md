@@ -6,6 +6,8 @@ The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 
 - `create_chain(root, Binding, Usage, TaskBudget)` records the original attempt as candidate zero. The ordered policy list includes this original model. Original request/cost usage and task deadline must be supplied; unknown usage fails.
 - `inspect_chain(root, binding)` reads a matching chain. Missing or corrupt state is an error, not a fresh budget.
+- `recovery_status(root, binding, expected_revision, expected_generation)` reads live-journal status under lock and checks the current policy and deadline. It never permits dispatch or replay. It refuses stale references and does not expose bindings or event payloads. The status is a point-in-time observation, not authorization.
+- `codex_continuation.recover_after_restart(...)` exposes this observation to the Codex coordinator without starting a peer.
 - `record_terminal(root, binding, generation, event_id, category)` records a closed normalized category. Terminal inference state leaves tool effects unknown.
 - `reserve_next(root, binding, expected_revision, event_id, Usage)` returns `adapter_not_qualified` in production. Tests patch the private boundary only to exercise persistence. Every result has `dispatch_permitted:false`, including test reservations.
 - `cancel_chain(root, binding, expected_revision)` stops further reservation and retains all expenditure. Cancellation can reduce activity after policy revocation.
