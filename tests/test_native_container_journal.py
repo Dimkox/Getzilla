@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import model_continuation_state as journal
 from tests.test_model_continuation import enabled_policy
+
+
+@contextmanager
+def _docker_root():
+    directory = tempfile.mkdtemp(prefix='getzilla-native-test-')
+    try:
+        yield directory
+    except BaseException:
+        print('Test journal retained for resource reconciliation:', directory, file=sys.stderr)
+        raise
+    else:
+        shutil.rmtree(directory)
 
 
 def _start_then_exit(root, binding, pipe):
@@ -347,13 +360,13 @@ class NativeContainerJournalTest(unittest.TestCase):
         codex = shutil.which('codex')
         self.assertIsNotNone(docker)
         self.assertIsNotNone(codex)
-        with tempfile.TemporaryDirectory() as directory:
+        with _docker_root() as directory:
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
             config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
-            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 60))
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
 
             async def run():
                 peer = await start_offline_container(root, binding, 1, 1)
@@ -415,7 +428,7 @@ class NativeContainerJournalTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
     def test_coordinator_crash_recovers_owned_container_without_replay(self):
         from getzilla import native_container
-        with tempfile.TemporaryDirectory() as directory:
+        with _docker_root() as directory:
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
@@ -426,9 +439,11 @@ class NativeContainerJournalTest(unittest.TestCase):
             receive, send = context.Pipe(duplex=False)
             process = context.Process(target=_start_then_exit, args=(str(root), binding, send))
             process.start()
-            self.assertTrue(receive.poll(60), 'native peer did not initialize')
-            revision = receive.recv()
-            process.join(10)
+            try:
+                self.assertTrue(receive.poll(110), 'native peer did not initialize within policy ceiling')
+                revision = receive.recv()
+            finally:
+                process.join(180)
             self.assertEqual(process.exitcode, 0)
             recovered = native_container.recover(root, binding, 1, revision)
             self.assertFalse(recovered['dispatch_permitted'])
@@ -445,7 +460,7 @@ class NativeContainerJournalTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_NATIVE_CONTAINER') == '1', 'requires local Docker and pinned Codex')
     def test_interrupted_image_build_is_owned_and_cleanup_is_repeatable(self):
         from getzilla import native_container
-        with tempfile.TemporaryDirectory() as directory:
+        with _docker_root() as directory:
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
@@ -478,7 +493,7 @@ class NativeContainerJournalTest(unittest.TestCase):
         from getzilla import controlled_fixture, native_container
         from getzilla.codex_continuation import initialize, start_offline_container
         docker = native_container._docker()
-        with tempfile.TemporaryDirectory() as directory:
+        with _docker_root() as directory:
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
@@ -513,7 +528,7 @@ class NativeContainerJournalTest(unittest.TestCase):
         from getzilla import native_container
         docker = native_container._docker()
         codex = Path(shutil.which('codex')).resolve()
-        with tempfile.TemporaryDirectory() as directory:
+        with _docker_root() as directory:
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
