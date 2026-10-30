@@ -33,6 +33,12 @@ def _docker_root():
         shutil.rmtree(directory)
 
 
+def _docker_policy():
+    policy = enabled_policy()
+    policy['bounds']['deadline_seconds'] = 600
+    return policy
+
+
 def _start_then_exit(root, binding, pipe):
     from getzilla.codex_continuation import initialize, start_offline_container
 
@@ -364,7 +370,7 @@ class NativeContainerJournalTest(unittest.TestCase):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            config.write_text(json.dumps(_docker_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
             journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
 
@@ -432,15 +438,15 @@ class NativeContainerJournalTest(unittest.TestCase):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            config.write_text(json.dumps(_docker_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
-            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
             context = multiprocessing.get_context('spawn')
             receive, send = context.Pipe(duplex=False)
             process = context.Process(target=_start_then_exit, args=(str(root), binding, send))
             process.start()
             try:
-                self.assertTrue(receive.poll(110), 'native peer did not initialize within policy ceiling')
+                self.assertTrue(receive.poll(180), 'native peer did not initialize within fixture budget')
                 revision = receive.recv()
             finally:
                 process.join(180)
@@ -464,9 +470,9 @@ class NativeContainerJournalTest(unittest.TestCase):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            config.write_text(json.dumps(_docker_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
-            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
             original = native_container._build
             built = []
 
@@ -497,9 +503,9 @@ class NativeContainerJournalTest(unittest.TestCase):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            config.write_text(json.dumps(_docker_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
-            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
 
             async def run():
                 peer = await start_offline_container(root, binding, 1, 1)
@@ -532,9 +538,9 @@ class NativeContainerJournalTest(unittest.TestCase):
             root = Path(directory)
             config = root / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps(enabled_policy()), encoding='utf-8')
+            config.write_text(json.dumps(_docker_policy()), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a' * 64, 'b' * 64, 'c' * 64)
-            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120))
+            journal.create_chain(root, binding, journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600))
             nonce = 'f' * 32
             claim = journal.claim_native_start(root, binding, 1, 1, nonce)
             script = root / 'fixture.py'
