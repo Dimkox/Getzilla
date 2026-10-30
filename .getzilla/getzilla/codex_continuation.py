@@ -212,7 +212,8 @@ class TurnObserver:
                 self._unsafe = True
                 return
             terminal_error = turn.get('error')
-            if terminal_error is not None and (not isinstance(terminal_error, dict)
+            if (not isinstance(terminal_error, dict)
+                    or not _eligible_error(terminal_error.get('codexErrorInfo'))
                     or terminal_error.get('codexErrorInfo') != self._error):
                 self._unsafe = True
                 return

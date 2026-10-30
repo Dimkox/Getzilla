@@ -17,6 +17,24 @@ from tests.test_model_continuation import enabled_policy
 
 
 class CodexContinuationTest(unittest.TestCase):
+    def test_eligible_error_requires_matching_terminal_error(self):
+        for terminal_error in (None, {}, {'codexErrorInfo': 'internalServerError'}):
+            with self.subTest(terminal_error=terminal_error):
+                state = codex_continuation.TurnObserver('thread', 'turn')
+                state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                              'willRetry': False, 'error': {'codexErrorInfo': 'rateLimitExceeded'}}})
+                state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {
+                    'id': 'turn', 'status': 'failed', 'error': terminal_error}}})
+                self.assertFalse(state.eligible)
+                self.assertFalse(state.dispatch_permitted)
+
+        state = codex_continuation.TurnObserver('thread', 'turn')
+        state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn', 'willRetry': False,
+                      'error': {'codexErrorInfo': {'responseTooManyFailedAttempts': {'httpStatusCode': 429}}}}})
+        state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {'id': 'turn',
+                      'status': 'failed', 'error': {'codexErrorInfo': {'responseTooManyFailedAttempts': {'httpStatusCode': 429.0}}}}}})
+        self.assertFalse(state.eligible)
+
     def test_native_typed_429_with_bound_lifecycle_is_eligible_observation_only(self):
         state = codex_continuation.TurnObserver('thread', 'turn')
         for event in (
@@ -85,7 +103,7 @@ class CodexContinuationTest(unittest.TestCase):
                 state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
                               'willRetry': False, 'error': {'codexErrorInfo': typed}}})
                 state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread',
-                              'turn': {'id': 'turn', 'status': 'failed'}}})
+                              'turn': {'id': 'turn', 'status': 'failed', 'error': {'codexErrorInfo': typed}}}})
                 self.assertEqual(state.eligible, accepted)
                 self.assertFalse(state.dispatch_permitted)
 
@@ -122,7 +140,7 @@ class CodexContinuationTest(unittest.TestCase):
                       'willRetry': False, 'error': {'message': 'redacted', 'codexErrorInfo': 'rateLimitExceeded'}}})
         self.assertFalse(state.eligible)
         state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread',
-                      'turn': {'id': 'turn', 'status': 'failed'}}})
+                      'turn': {'id': 'turn', 'status': 'failed', 'error': {'codexErrorInfo': 'rateLimitExceeded'}}}})
         self.assertTrue(state.eligible)
         self.assertFalse(state.dispatch_permitted)
 
@@ -233,7 +251,7 @@ class CodexContinuationTest(unittest.TestCase):
                     {'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
                      'willRetry': False, 'error': {'message': 'private', 'codexErrorInfo': 'rateLimitExceeded'}}},
                     {'method': 'turn/completed', 'params': {'threadId': 'thread',
-                     'turn': {'id': 'turn', 'status': 'failed'}}},
+                     'turn': {'id': 'turn', 'status': 'failed', 'error': {'codexErrorInfo': 'rateLimitExceeded'}}}},
                 ]
                 script.write_text('import sys\n' + ''.join('print(' + repr(json.dumps(f)) + ', flush=True)\n' for f in frames))
                 peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script))
