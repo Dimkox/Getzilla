@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 observed = []
+broker_lock = threading.Lock()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -24,11 +25,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         size = int(self.headers.get('Content-Length', '0'))
-        if size > 2000000:
+        if not 0 <= size <= 2000000:
             self.send_error(413)
             return
         body = json.loads(self.rfile.read(size))
         tools = body.get('tools', [])
+        if os.environ.get('GETZILLA_HOST_BROKER') == '1':
+            if os.environ.get('GETZILLA_CONTROLLED_GATE') != '1' or not isinstance(tools, list):
+                self.send_error(403)
+                return
+            nonce = os.environ.get('GETZILLA_FIXTURE_NONCE', '')
+            request = {'type': 'model_request', 'version': 1, 'nonce': nonce, 'model': body.get('model'),
+                       'path': self.path, 'stream': body.get('stream'),
+                       'tool_types': [item.get('type') if isinstance(item, dict) else None for item in tools]}
+            with broker_lock:
+                print(json.dumps(request, separators=(',', ':')), flush=True)
+                reply = json.loads(sys.stdin.readline(65537))
+            if (not isinstance(reply, dict) or set(reply) != {'allow', 'nonce', 'status', 'content_type', 'body'}
+                    or reply['allow'] is not True or reply['nonce'] != nonce or reply['status'] not in (200, 429)
+                    or reply['content_type'] not in ('application/json', 'text/event-stream')
+                    or not isinstance(reply['body'], str) or len(reply['body'].encode()) > 65536):
+                raise ValueError('host refused')
+            observed.append({'model': body.get('model'), 'tool_names': [x.get('name', x.get('type')) for x in tools],
+                             'tool_count': len(tools)})
+            encoded = reply['body'].encode()
+            self.send_response(reply['status'])
+            self.send_header('Content-Type', reply['content_type'])
+            self.send_header('Content-Length', str(len(encoded)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(encoded)
+            self.wfile.flush()
+            return
         observed.append({'model': body.get('model'), 'tool_names': [x.get('name', x.get('type')) for x in tools],
                          'tool_count': len(tools)})
         if body.get('model') == 'fixture-a':

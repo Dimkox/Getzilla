@@ -23,7 +23,7 @@ from .model_continuation import load_policy
 
 IMAGE = 'sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704'
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
-FIXTURE_SHA256 = '52d973d0456a81456a699f8be2cbeaea89dd96934d1d81cc8e0ffb085d3f03d2'
+FIXTURE_SHA256 = '5fba526ae5fc2f899db04961029b0c632ebc928630a959ca9568b1e135c38080'
 MAX_FRAME = 65536
 # This is a private tmpfs inside the verified isolated container, not a host path.
 CONTAINER_TMP = '/tmp'  # nosec B108
@@ -186,6 +186,20 @@ class _Lines:
     def allow(self, nonce):
         try:
             self.process.stdin.write((json.dumps({'allow': True, 'nonce': nonce}, separators=(',', ':')) + '\n').encode())
+            self.process.stdin.flush()
+        except (OSError, ValueError):
+            raise FixtureError('fixture_closed') from None
+
+    def respond(self, nonce, status, content_type, body):
+        if (status not in (200, 429) or content_type not in ('application/json', 'text/event-stream')
+                or not isinstance(body, str)):
+            raise FixtureError('invalid_frame')
+        frame = json.dumps({'allow': True, 'nonce': nonce, 'status': status,
+                            'content_type': content_type, 'body': body}, separators=(',', ':')) + '\n'
+        if len(frame.encode('utf-8')) > MAX_FRAME:
+            raise FixtureError('oversized_output')
+        try:
+            self.process.stdin.write(frame.encode('utf-8'))
             self.process.stdin.flush()
         except (OSError, ValueError):
             raise FixtureError('fixture_closed') from None

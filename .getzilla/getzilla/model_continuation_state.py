@@ -216,14 +216,22 @@ def _validate_chain(key, chain):
             raise JournalError('journal_corrupt')
         allowed_states = {'terminal_unknown', 'reserved_unknown'}
         if chain.get('domain') == 'controlled_fixture_v1':
-            allowed_states.add('fence_recorded')
+            allowed_states.update({'fence_recorded', 'request_consumed'})
         if result['state'] not in allowed_states or result['reason'] != 'recorded':
             raise JournalError('journal_corrupt')
         if not _integer(result['revision']) or result['revision'] > chain['revision'] or not _integer(result['generation']) or result['generation'] > chain['generation']:
             raise JournalError('journal_corrupt')
         if 'evidence' in record:
             evidence = record['evidence']
-            if (chain.get('domain') != 'controlled_fixture_v1' or not isinstance(evidence, dict)
+            if chain.get('domain') != 'controlled_fixture_v1' or not isinstance(evidence, dict):
+                raise JournalError('journal_corrupt')
+            if evidence.get('kind') == 'controlled_request_v1':
+                if (set(evidence) != {'kind', 'generation'} or not _integer(evidence['generation'], 64)
+                        or evidence['generation'] != result['generation'] or event != 'request_' + str(evidence['generation'])
+                        or result['state'] != 'request_consumed'
+                        or record['digest'] != _digest(['controlled_request_v1', evidence['generation']])):
+                    raise JournalError('journal_corrupt')
+            elif (not isinstance(evidence, dict)
                     or set(evidence) != {'kind', 'generation', 'container_id', 'checkpoint_digest', 'thread_id'}
                     or evidence['kind'] != 'controlled_fence_v2' or not _integer(evidence['generation'], 64)
                     or evidence['generation'] != result['generation'] or event != 'fence_' + str(evidence['generation'])
@@ -234,6 +242,8 @@ def _validate_chain(key, chain):
                     or record['digest'] != _digest(['controlled_fence_v2', evidence['generation'], evidence['container_id'], evidence['checkpoint_digest'], evidence['thread_id']])):
                 raise JournalError('journal_corrupt')
         elif result['state'] == 'fence_recorded':
+            raise JournalError('journal_corrupt')
+        elif result['state'] == 'request_consumed':
             raise JournalError('journal_corrupt')
 
 
@@ -462,6 +472,34 @@ def record_controlled_terminal(root: Path, binding: Binding, generation: int, ex
         chain['last_time'] = max(chain['last_time'], int(time.time()))
         save()
         return {'state': state, 'revision': chain['revision'], 'dispatch_permitted': False}
+
+
+def consume_controlled_request(root: Path, binding: Binding, generation: int, expected_revision: int) -> dict:
+    """Consume the one request already charged to a synthetic attempt, once."""
+    if not _integer(generation) or not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    event_id = 'request_' + str(generation)
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        if event_id in chain['events']:
+            return {'claimed': False, 'reason': 'already_consumed', 'dispatch_permitted': False}
+        problem = _current(root, chain)
+        if problem:
+            return {'claimed': False, 'reason': problem, 'dispatch_permitted': False}
+        if chain['generation'] != generation or chain['revision'] != expected_revision:
+            return {'claimed': False, 'reason': 'stale_revision', 'dispatch_permitted': False}
+        if chain['attempts'][-1]['state'] != 'send_unknown':
+            return {'claimed': False, 'reason': 'outcome_unknown', 'dispatch_permitted': False}
+        if chain['attempts'][-1]['requests'] != 1:
+            return {'claimed': False, 'reason': 'request_bound_invalid', 'dispatch_permitted': False}
+        if len(chain['events']) >= MAX_EVENTS:
+            return {'claimed': False, 'reason': 'capacity_exhausted', 'dispatch_permitted': False}
+        evidence = {'kind': 'controlled_request_v1', 'generation': generation}
+        _record(chain, event_id, ['controlled_request_v1', generation], 'request_consumed', save, evidence=evidence)
+        return {'claimed': True, 'reason': 'recorded', 'generation': generation,
+                'revision': chain['revision'], 'dispatch_permitted': False}
 
 
 def check_controlled_send(root: Path, binding: Binding, generation: int, expected_revision: int) -> str | None:
