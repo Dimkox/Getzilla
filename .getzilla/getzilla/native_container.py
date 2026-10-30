@@ -18,6 +18,8 @@ from . import model_continuation_state as journal
 from . import fsx
 from .codex_continuation import MAX_FRAME, OwnedJsonlPeer, ProtocolError
 
+_CONTAINER_RUN = '/run/getzilla'
+
 
 @contextmanager
 def _operation(root):
@@ -61,6 +63,11 @@ def _docker():
 
 def _volumes(nonce):
     return ['getzilla-native-' + nonce + '-state', 'getzilla-native-' + nonce + '-work']
+
+
+def _mounts(volumes):
+    return [part for name, target in zip(volumes, (_CONTAINER_RUN + '/codex', '/work'))
+            for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target)]
 
 
 def _name(nonce, role):
@@ -121,7 +128,7 @@ def _validate(docker, record, *, stopped=False):
     try:
         info = fence._inspect(docker, ident)
         host, config, mounts = info['HostConfig'], info['Config'], info['Mounts']
-        expected = dict(zip(('/tmp/codex', '/work'), volumes))
+        expected = dict(zip((_CONTAINER_RUN + '/codex', '/work'), volumes))
         valid = (info['Id'] == ident and info['Image'] == image
                  and info['Name'] == '/' + _name(nonce, 'main')
                  and config['Labels'].get('getzilla.owner') == nonce
@@ -135,7 +142,7 @@ def _validate(docker, record, *, stopped=False):
                  and host['RestartPolicy'] == {'Name': 'no', 'MaximumRetryCount': 0}
                  and host['PidsLimit'] == 64 and host['Memory'] == 536870912 and host['NanoCpus'] == 2000000000
                  and host['SecurityOpt'] == ['no-new-privileges']
-                 and host['Tmpfs'] == {'/tmp': 'rw,nosuid,nodev,size=64m,mode=1777'}
+                 and host['Tmpfs'] == {_CONTAINER_RUN: 'rw,nosuid,nodev,size=64m,mode=1777'}
                  and host['PidMode'] in ('', 'private') and host['IpcMode'] in ('', 'private')
                  and isinstance(mounts, list) and len(mounts) == 2
                  and all(m['Type'] == 'volume' and m['RW'] is True
@@ -146,7 +153,7 @@ def _validate(docker, record, *, stopped=False):
         valid = (valid and isinstance(env, list)
                  and all(isinstance(item, str) and '=' in item and item.split('=', 1)[0] in allowed for item in env))
         values = dict(item.split('=', 1) for item in env)
-        valid = valid and len(values) == len(env) and values.get('HOME') == '/tmp' and values.get('CODEX_HOME') == '/tmp/codex'
+        valid = valid and len(values) == len(env) and values.get('HOME') == _CONTAINER_RUN and values.get('CODEX_HOME') == _CONTAINER_RUN + '/codex'
         if stopped:
             valid = valid and fixture._container_stopped(info, ident, image, nonce)
         if not valid or not fence._exclusive_volumes(docker, volumes, [ident]):
@@ -234,8 +241,8 @@ async def _start(root, binding, generation, revision, *, timeout=10):
             '--name', _name(nonce, 'main'), '--label', 'getzilla.owner=' + nonce,
             '--label', 'getzilla.native.role=main', '--restart', 'no', '--security-opt', 'no-new-privileges',
             '--pids-limit', '64', '--memory', '512m', '--cpus', '2', '--user', '65534:65534',
-            '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m,mode=1777', *fence._mounts(volumes),
-            '-e', 'HOME=/tmp', '-e', 'CODEX_HOME=/tmp/codex', '--entrypoint', '/fixture-codex', image, 'app-server']
+            '--tmpfs', _CONTAINER_RUN + ':rw,nosuid,nodev,size=64m,mode=1777', *_mounts(volumes),
+            '-e', 'HOME=' + _CONTAINER_RUN, '-e', 'CODEX_HOME=' + _CONTAINER_RUN + '/codex', '--entrypoint', '/fixture-codex', image, 'app-server']
     ident = fixture._command(args)
     if not re.fullmatch(r'[a-f0-9]{64}', ident):
         raise ProtocolError('container_unverified')

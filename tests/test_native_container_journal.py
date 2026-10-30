@@ -81,6 +81,13 @@ def _remove_test_volumes(docker, snapshots):
 
 
 class NativeContainerJournalTest(unittest.TestCase):
+    def test_native_state_uses_private_run_mount(self):
+        from getzilla import native_container
+        mounts = native_container._mounts(['state-volume', 'work-volume'])
+        self.assertIn('type=volume,src=state-volume,dst=/run/getzilla/codex', mounts)
+        self.assertIn('type=volume,src=work-volume,dst=/work', mounts)
+        self.assertFalse(any('/tmp' in mount for mount in mounts))
+
     def test_bounded_lock_contention_denies_then_allows_read(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
             root = Path(directory)
