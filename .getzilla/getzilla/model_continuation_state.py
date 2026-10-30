@@ -172,7 +172,10 @@ def _read(directory):
 
 def _validate_chain(key, chain):
     fields = {'binding', 'policy_digest', 'revision', 'generation', 'limits', 'last_time', 'state', 'attempts', 'events'}
-    if not isinstance(chain, dict) or set(chain) != fields or _binding(Binding(**chain['binding']))['chain_id'] != key:
+    if (not isinstance(chain, dict) or set(chain) not in (fields, fields | {'domain', 'domain_version'})
+            or chain.get('domain', 'live_unqualified') not in {'live_unqualified', 'controlled_fixture_v1'}
+            or ('domain' in chain and (chain['domain'] != 'controlled_fixture_v1' or type(chain['domain_version']) is not int or chain['domain_version'] != 1))
+            or _binding(Binding(**chain['binding']))['chain_id'] != key):
         raise JournalError('journal_corrupt')
     if not _DIGEST.fullmatch(chain['policy_digest']) or not _integer(chain['revision']) or not _integer(chain['generation'], 64):
         raise JournalError('journal_corrupt')
@@ -187,9 +190,16 @@ def _validate_chain(key, chain):
             raise JournalError('journal_corrupt')
         if (type(attempt['candidate']) is not int or attempt['candidate'] != index or not _integer(attempt['requests'])
                 or type(attempt['cost_micros']) is not int or not 0 <= attempt['cost_micros'] <= 10**15
-                or attempt['state'] not in {'active_unknown', 'reserved_unknown', 'terminal_unknown'}
+                or attempt['state'] not in {'active_unknown', 'reserved_unknown', 'terminal_unknown', 'send_unknown', 'failed', 'succeeded'}
                 or attempt['category'] not in _CATEGORIES | {None}):
             raise JournalError('journal_corrupt')
+        if attempt['state'] in {'send_unknown', 'failed', 'succeeded'} and chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('journal_corrupt')
+        if chain.get('domain') == 'controlled_fixture_v1':
+            if index < len(attempts) - 1 and attempt['state'] != 'failed':
+                raise JournalError('journal_corrupt')
+            if (attempt['state'] == 'failed') != (attempt['category'] is not None):
+                raise JournalError('journal_corrupt')
     if sum(a['requests'] for a in attempts) > limits['requests'] or sum(a['cost_micros'] for a in attempts) > limits['cost_micros']:
         raise JournalError('journal_corrupt')
     if not _integer(chain['last_time'], 10**18) or chain['state'] not in {'open', 'cancelled'}:
@@ -209,7 +219,7 @@ def _validate_chain(key, chain):
 
 
 @contextmanager
-def _store(root: Path, *, create=False):
+def _store(root: Path, *, create=False, fixture=False):
     if fsx.WINDOWS:
         raise JournalError('durability_unsupported')
     try:
@@ -217,7 +227,7 @@ def _store(root: Path, *, create=False):
             directory = fsx.open_dir(root)
             stack.callback(fsx.close_dir, directory)
             bindings = []
-            for name in ('.getzilla', 'runtime', 'model-continuation'):
+            for name in ('.getzilla', 'runtime', 'model-continuation-fixture' if fixture else 'model-continuation'):
                 if create:
                     try:
                         fsx.mkdir_at(directory, name, 0o700)
@@ -349,14 +359,14 @@ def _current(root, chain):
     return 'policy_changed' if digest != chain['policy_digest'] else _clock(chain)
 
 
-def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:
+def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget, *, controlled: bool) -> dict:
     bound = _binding(binding)
     usage = _usage(original)
     if (type(budget) is not TaskBudget
             or not all(_integer(v) for v in (budget.max_attempts, budget.max_requests))
             or not _integer(budget.deadline_epoch, MAX_EPOCH_SECONDS)):
         raise JournalError('invalid_task_budget')
-    with _store(root, create=True) as (chains, save):
+    with _store(root, create=True, fixture=controlled) as (chains, save):
         if any(c['binding']['task_id'] == binding.task_id for c in chains.values()) or binding.chain_id in chains:
             raise JournalError('task_already_recorded')
         if len(chains) >= MAX_CHAINS:
@@ -371,14 +381,129 @@ def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudg
         chain = {'binding': bound, 'policy_digest': digest, 'limits': limits, 'revision': 1,
                  'generation': 1, 'last_time': int(time.time()), 'state': 'open', 'events': {},
                  'attempts': [{'candidate': 0, **usage, 'state': 'active_unknown', 'category': None}]}
+        if controlled:
+            chain['domain'] = 'controlled_fixture_v1'
+            chain['domain_version'] = 1
         chains[binding.chain_id] = chain
         save()
         return _result(chain, 'active_unknown')
 
 
+def create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:
+    return _create_chain(root, binding, original, budget, controlled=False)
+
+
+def create_controlled_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget) -> dict:
+    """Create fixture accounting only; this does not authorize any dispatch."""
+    return _create_chain(root, binding, original, budget, controlled=True)
+
+
+def consume_controlled_send(root: Path, binding: Binding, generation: int, expected_revision: int) -> dict:
+    """Persist a one-shot fixture observation; never grants live dispatch."""
+    if not _integer(generation) or not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        if chain['attempts'][-1]['state'] == 'send_unknown':
+            return {'claimed': False, 'reason': 'already_consumed', 'dispatch_permitted': False}
+        problem = _current(root, chain)
+        if problem:
+            return {'claimed': False, 'reason': problem, 'dispatch_permitted': False}
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            return {'claimed': False, 'reason': 'stale_revision', 'dispatch_permitted': False}
+        attempt = chain['attempts'][-1]
+        if attempt['state'] not in {'active_unknown', 'reserved_unknown'}:
+            return {'claimed': False, 'reason': 'outcome_unknown', 'dispatch_permitted': False}
+        attempt['state'] = 'send_unknown'
+        chain['revision'] += 1
+        chain['last_time'] = int(time.time())
+        save()
+        return {'claimed': True, 'reason': 'recorded', 'generation': chain['generation'],
+                'revision': chain['revision'], 'dispatch_permitted': False}
+
+
+def record_controlled_terminal(root: Path, binding: Binding, generation: int, expected_revision: int, category: str) -> dict:
+    """Record fixture facts; callers must establish provenance and effect isolation."""
+    if not _integer(generation) or not _integer(expected_revision) or not isinstance(category, str) or category not in _CATEGORIES | {'success'}:
+        raise JournalError('invalid_terminal')
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            return {'state': 'denied', 'reason': 'stale_revision', 'dispatch_permitted': False}
+        attempt = chain['attempts'][-1]
+        if attempt['state'] != 'send_unknown':
+            return {'state': 'denied', 'reason': 'outcome_unknown', 'dispatch_permitted': False}
+        state = 'succeeded' if category == 'success' else 'failed'
+        attempt.update(state=state, category=None if category == 'success' else category)
+        chain['revision'] += 1
+        chain['last_time'] = max(chain['last_time'], int(time.time()))
+        save()
+        return {'state': state, 'revision': chain['revision'], 'dispatch_permitted': False}
+
+
+def check_controlled_send(root: Path, binding: Binding, generation: int, expected_revision: int) -> str | None:
+    """Recheck an existing fixture claim; never creates or reissues a claim."""
+    if not _integer(generation) or not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    with _store(root, fixture=True) as (chains, _):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        problem = _current(root, chain)
+        if problem:
+            return problem
+        if generation != chain['generation'] or expected_revision != chain['revision']:
+            return 'stale_revision'
+        if chain['attempts'][-1]['state'] != 'send_unknown':
+            return 'outcome_unknown'
+        return None
+
+
+def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int, usage: Usage) -> dict:
+    """Account a fixture retry without granting authority to send it."""
+    if not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    reservation = _usage(usage)
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        problem = _current(root, chain)
+        if problem:
+            return {'state': 'denied', 'reason': problem, 'dispatch_permitted': False}
+        if chain['revision'] != expected_revision:
+            return {'state': 'denied', 'reason': 'stale_revision', 'dispatch_permitted': False}
+        last = chain['attempts'][-1]
+        if last['state'] != 'failed' or classify_failure({'schema_version': 1, 'origin': 'model', 'category': last['category']}) != 'eligible':
+            return {'state': 'denied', 'reason': 'failure_not_eligible', 'dispatch_permitted': False}
+        limits = chain['limits']
+        if (len(chain['attempts']) >= limits['attempts']
+                or sum(a['requests'] for a in chain['attempts']) + reservation['requests'] > limits['requests']
+                or sum(a['cost_micros'] for a in chain['attempts']) + reservation['cost_micros'] > limits['cost_micros']):
+            return {'state': 'denied', 'reason': 'budget_exhausted', 'dispatch_permitted': False}
+        chain['attempts'].append({'candidate': chain['generation'], **reservation, 'state': 'reserved_unknown', 'category': None})
+        chain['generation'] += 1
+        chain['revision'] += 1
+        chain['last_time'] = int(time.time())
+        save()
+        return {'state': 'reserved_unknown', 'generation': chain['generation'], 'revision': chain['revision'], 'dispatch_permitted': False}
+
+
 def inspect_chain(root: Path, binding: Binding) -> dict:
     with _store(root) as (chains, _):
         return _chain(chains, binding)
+
+
+def inspect_controlled_chain(root: Path, binding: Binding) -> dict:
+    with _store(root, fixture=True) as (chains, _):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
+        return chain
 
 
 def _event(chain, event_id, content):
@@ -464,11 +589,13 @@ def reserve_next(root: Path, binding: Binding, expected_revision: int, event_id:
         return _record(chain, event_id, content, 'reserved_unknown', save)
 
 
-def cancel_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
+def _cancel_chain(root: Path, binding: Binding, expected_revision: int, *, fixture: bool) -> dict:
     if not _integer(expected_revision):
         raise JournalError('invalid_revision')
-    with _store(root) as (chains, save):
+    with _store(root, fixture=fixture) as (chains, save):
         chain = _chain(chains, binding)
+        if fixture and chain.get('domain') != 'controlled_fixture_v1':
+            raise JournalError('invalid_domain')
         if chain['state'] == 'cancelled':
             return _result(chain, 'cancelled')
         if chain['revision'] != expected_revision:
@@ -477,3 +604,11 @@ def cancel_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
         chain['revision'] += 1
         save()
         return _result(chain, 'cancelled')
+
+
+def cancel_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
+    return _cancel_chain(root, binding, expected_revision, fixture=False)
+
+
+def cancel_controlled_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
+    return _cancel_chain(root, binding, expected_revision, fixture=True)

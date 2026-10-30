@@ -23,6 +23,11 @@ def _race(root, binding, results):
         results.put(journal.reserve_next(Path(root), binding, 2, 'process-race', journal.Usage(1, '0.2')))
 
 
+def _controlled_race(root, binding, results):
+    with patch.object(journal.time, 'time', return_value=1000):
+        results.put(journal.consume_controlled_send(Path(root), binding, 1, 1))
+
+
 @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
 class ContinuationJournalTest(unittest.TestCase):
     def setUp(self):
@@ -57,6 +62,129 @@ class ContinuationJournalTest(unittest.TestCase):
         self.assertEqual(len(state['attempts']), 1)
         self.assertEqual(state['attempts'][0]['cost_micros'], 100000)
         self.assertFalse(result['dispatch_permitted'])
+
+    def test_controlled_send_claim_is_not_reissued_after_restart(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        first = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        self.assertTrue(first['claimed'])
+        second = journal.consume_controlled_send(self.root, self.binding, 1, 2)
+        self.assertFalse(second['claimed'])
+        self.assertEqual(journal.inspect_controlled_chain(self.root, self.binding)['attempts'][0]['state'], 'send_unknown')
+
+    def test_controlled_claim_race_and_live_boundary(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: journal.consume_controlled_send(self.root, self.binding, 1, 1), range(2)))
+        self.assertEqual(sum(result['claimed'] for result in results), 1)
+        self.assertTrue(all(result['dispatch_permitted'] is False for result in results))
+
+    def test_controlled_claim_race_between_processes(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        context = multiprocessing.get_context('spawn')
+        queue = context.Queue()
+        children = [context.Process(target=_controlled_race, args=(str(self.root), self.binding, queue)) for _ in range(2)]
+        try:
+            for child in children:
+                child.start()
+            results = [queue.get(timeout=15) for _ in children]
+            for child in children:
+                child.join(timeout=15)
+                self.assertEqual(child.exitcode, 0)
+            self.assertEqual(sum(result['claimed'] for result in results), 1)
+        finally:
+            for child in children:
+                if child.is_alive():
+                    child.terminate()
+                    child.join(timeout=5)
+            queue.close()
+
+    def test_controlled_claim_publish_failure_does_not_reissue(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        with patch.object(journal.fsx, 'fsync_dir', side_effect=OSError):
+            with self.assertRaisesRegex(journal.JournalError, 'storage_unavailable'):
+                journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        self.assertFalse(journal.consume_controlled_send(self.root, self.binding, 1, 2)['claimed'])
+
+    def test_live_chain_cannot_acquire_controlled_claim(self):
+        self.create()
+        with self.assertRaises(journal.JournalError):
+            journal.consume_controlled_send(self.root, self.binding, 1, 1)
+
+    def test_fixture_store_does_not_change_live_journal(self):
+        self.create()
+        live = journal.inspect_chain(self.root, self.binding)
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        self.assertTrue(journal.consume_controlled_send(self.root, self.binding, 1, 1)['claimed'])
+        self.assertEqual(journal.inspect_chain(self.root, self.binding), live)
+
+    def test_missing_fixture_journal_does_not_reset_budget(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        (self.root / '.getzilla/runtime/model-continuation-fixture/journal.json').unlink()
+        with self.assertRaisesRegex(journal.JournalError, 'journal_missing'):
+            journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+
+    def test_controlled_budget_failure_reservation_and_success(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        failed = journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'rate_limit')
+        self.assertEqual(failed['state'], 'failed')
+        reserved = journal.reserve_controlled_next(self.root, self.binding, 3, journal.Usage(1, '0.2'))
+        self.assertEqual(reserved['generation'], 2)
+        self.assertTrue(journal.consume_controlled_send(self.root, self.binding, 2, 4)['claimed'])
+        complete = journal.record_controlled_terminal(self.root, self.binding, 2, 5, 'success')
+        self.assertEqual(complete['state'], 'succeeded')
+        self.assertFalse(journal.consume_controlled_send(self.root, self.binding, 2, 6)['claimed'])
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 6, journal.Usage(1, '0'))['reason'], 'failure_not_eligible')
+        state = journal.inspect_controlled_chain(self.root, self.binding)
+        self.assertEqual(sum(a['cost_micros'] for a in state['attempts']), 300000)
+
+    def test_controlled_unknown_revocation_and_budget_fail_closed(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 2, journal.Usage(1, '0.1'))['reason'], 'failure_not_eligible')
+        journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'rate_limit')
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 3, journal.Usage(1, '1.400001'))['reason'], 'budget_exhausted')
+        self.policy['enabled'] = False
+        self.config.write_text(json.dumps(self.policy), encoding='utf-8')
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 3, journal.Usage(1, '0.1'))['reason'], 'policy_revoked')
+        self.assertEqual(len(journal.inspect_controlled_chain(self.root, self.binding)['attempts']), 1)
+
+    def test_controlled_send_rechecks_policy_after_consumption(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        claim = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        self.assertIsNone(journal.check_controlled_send(self.root, self.binding, 1, claim['revision']))
+        self.policy['enabled'] = False
+        self.config.write_text(json.dumps(self.policy), encoding='utf-8')
+        self.assertEqual(journal.check_controlled_send(self.root, self.binding, 1, claim['revision']), 'policy_revoked')
+        self.assertFalse(journal.consume_controlled_send(self.root, self.binding, 1, claim['revision'])['claimed'])
+
+    def test_controlled_terminal_cannot_be_replayed_or_change_binding(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'rate_limit')
+        self.assertEqual(journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'success')['reason'], 'stale_revision')
+        with self.assertRaisesRegex(journal.JournalError, 'binding_mismatch'):
+            journal.reserve_controlled_next(self.root, replace(self.binding, source_digest='d'*64), 3, journal.Usage(1, '0'))
+
+    def test_controlled_non_model_failure_never_reserves(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'tool_failure')
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 3, journal.Usage(1, '0'))['reason'], 'failure_not_eligible')
+
+    def test_controlled_late_terminal_after_cancel_does_not_reopen_chain(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        self.assertEqual(journal.cancel_controlled_chain(self.root, self.binding, 2)['state'], 'cancelled')
+        self.assertEqual(journal.record_controlled_terminal(self.root, self.binding, 1, 3, 'rate_limit')['state'], 'failed')
+        self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 4, journal.Usage(1, '0'))['reason'], 'chain_stopped')
+
+    def test_controlled_late_terminal_never_rolls_clock_back(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        with patch.object(journal.time, 'time', return_value=999):
+            journal.record_controlled_terminal(self.root, self.binding, 1, 2, 'rate_limit')
+            self.assertEqual(journal.reserve_controlled_next(self.root, self.binding, 3, journal.Usage(1, '0'))['reason'], 'clock_uncertain')
 
     def test_private_fake_reservation_survives_restart_and_duplicates(self):
         self.create()

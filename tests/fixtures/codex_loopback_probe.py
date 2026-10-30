@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 observed = []
 
@@ -30,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         tools = body.get('tools', [])
         observed.append({'model': body.get('model'), 'tool_names': [x.get('name', x.get('type')) for x in tools],
                          'tool_count': len(tools)})
-        if len(observed) == 1:
+        if body.get('model') == 'fixture-a':
             payload = json.dumps({'error': {'message': 'synthetic rate limit', 'type': 'rate_limit_error',
                                             'code': 'rate_limit_exceeded'}}).encode()
             self.send_response(429)
@@ -65,6 +66,7 @@ config = [
     'agents.enabled=false', 'web_search="disabled"',
 ]
 args = ['/fixture-codex', 'app-server', '--stdio']
+Path(os.environ.get('CODEX_HOME', '/tmp/codex')).mkdir(mode=0o700, parents=True, exist_ok=True)
 for item in config:
     args += ['-c', item]
 process = subprocess.Popen(args, cwd='/work', stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -78,11 +80,22 @@ retry_flags = []
 event_shapes = []
 error_infos = []
 server_requests = []
+event_frames = []
 
 
 def send(value):
     process.stdin.write((json.dumps(value) + '\n').encode())
     process.stdin.flush()
+
+
+def host_gate(value):
+    if os.environ.get('GETZILLA_CONTROLLED_GATE') != '1':
+        return
+    nonce = os.environ.get('GETZILLA_FIXTURE_NONCE', '')
+    value.update(version=1, nonce=nonce)
+    print(json.dumps(value, separators=(',', ':')), flush=True)
+    if json.loads(sys.stdin.readline(4096)) != {'allow': True, 'nonce': nonce}:
+        raise ValueError('host refused')
 
 
 def receive(deadline):
@@ -99,6 +112,9 @@ def receive(deadline):
     line, buffer = buffer.split(b'\n', 1)
     value = json.loads(line)
     if 'method' in value:
+        event_frames.append(value)
+        if len(event_frames) > 128:
+            raise ValueError('too many events')
         methods.append(value['method'])
         if 'id' in value:
             server_requests.append(value['method'])
@@ -131,6 +147,7 @@ try:
     send({'id': 2, 'method': 'thread/start', 'params': {'cwd': '/work', 'model': 'fixture-a',
          'modelProvider': 'local_fixture', 'sandbox': 'read-only', 'approvalPolicy': 'never'}})
     thread = response(2)['thread']['id']
+    host_gate({'type': 'before_a'})
     send({'id': 3, 'method': 'turn/start', 'params': {'threadId': thread, 'model': 'fixture-a',
          'input': [{'type': 'text', 'text': 'Reply with synthetic-ok.', 'text_elements': []}]}})
     turn = response(3)['turn']['id']
@@ -141,7 +158,8 @@ try:
             params = event.get('params', {})
             if event.get('method') == 'turn/completed' and params.get('threadId') == thread and params.get('turn', {}).get('id') == turn_id:
                 error = params['turn'].get('error') or {}
-                return {'status': params['turn'].get('status'), 'error_info': error.get('codexErrorInfo')}
+                return {'status': params['turn'].get('status'), 'error_info': error.get('codexErrorInfo'),
+                        'items': params['turn'].get('items', [])}
         return {'status': 'timeout'}
 
     first = wait_turn(turn)
@@ -149,17 +167,29 @@ try:
     error_info = first.get('error_info')
     rate = (isinstance(error_info, dict) and set(error_info) == {'responseTooManyFailedAttempts'}
             and error_info['responseTooManyFailedAttempts'].get('httpStatusCode') == 429)
-    no_effect_items = all(item in ('userMessage', 'agentMessage', 'reasoning') for item in item_types)
+    no_effect_items = (all(item in ('userMessage', 'agentMessage', 'reasoning') for item in item_types)
+                       and isinstance(first['items'], list)
+                       and all(isinstance(item, dict) and item.get('type') in ('userMessage', 'agentMessage', 'reasoning')
+                               for item in first['items']))
     if first['status'] == 'failed' and rate and retry_flags == [False] and no_effect_items and not server_requests:
+        host_gate({'type': 'before_b', 'thread': thread, 'turn': turn, 'first': first,
+                   'retry_flags': retry_flags, 'item_types': item_types, 'server_requests': server_requests,
+                   'events': event_frames})
         send({'id': 4, 'method': 'turn/start', 'params': {'threadId': thread, 'model': 'fixture-b',
              'input': [{'type': 'text', 'text': 'Reply with synthetic-ok.', 'text_elements': []}]}})
         second_turn = response(4)['turn']['id']
         second = wait_turn(second_turn)
+    if (second is None or second['status'] != 'completed' or len(observed) != 2
+            or [item['model'] for item in observed] != ['fixture-a', 'fixture-b'] or server_requests):
+        raise ValueError('fixture continuation failed')
     print(json.dumps({'initialize': 'ok', 'thread_start': 'ok', 'first_turn': first, 'second_turn': second,
                       'request_count': len(observed), 'synthetic_requests': observed,
                       'event_methods': methods, 'event_shapes': event_shapes, 'item_types': item_types, 'retry_flags': retry_flags,
                       'error_infos': error_infos, 'server_requests': server_requests,
-                      'network': 'container-none-loopback', 'provider': 'synthetic-local'}))
+                      'network': 'container-none-loopback', 'provider': 'synthetic-local',
+                      'version': 1, 'nonce': os.environ.get('GETZILLA_FIXTURE_NONCE', ''),
+                      'thread': thread, 'turn': turn, 'second_turn_id': second_turn,
+                      'events': event_frames}))
 except Exception as exc:
     print(json.dumps({'result': 'not_qualified', 'failure_type': type(exc).__name__,
                       'request_count': len(observed), 'synthetic_requests': observed, 'event_methods': methods}))

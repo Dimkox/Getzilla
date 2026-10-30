@@ -33,3 +33,13 @@ This store has no relationship to Factory PostgreSQL budget grants or PR239 prog
 ## Recovery and rollback
 
 Disable the policy to stop reservation. Preserve the journal and unknown outcomes. Revert source through a reviewed PR if needed; never delete a ledger to regain attempts or money. No live dispatch path exists to roll back in T3.
+
+## Controlled local fixture
+
+`getzilla.controlled_fixture.run` exercises only a synthetic two-model Codex session. It requires a pinned local Docker image and an exact Codex 0.165.0 binary. The image is not downloaded. The inspected container uses `network=none`, read-only root, a non-root user, dropped capabilities and bounded resources. Only the fixture script and Codex binary are mounted read-only. It receives no host journal, credentials or user input.
+
+The host stores fixture accounting separately in `.getzilla/runtime/model-continuation-fixture/`, using the same protected T3 storage primitives. A fixed fixture policy must name `local_fixture/synthetic` candidates `fixture-a` and `fixture-b`. The host records the original usage and consumes its one-shot send state before starting the container. It accepts the next turn only after a correlated terminal 429 with no native retry or observed tool effects, and after recording the next reservation against the same budget. It records success only after the container exits and cleanup succeeds.
+
+Restarting the same task never sends an unknown or completed attempt again. An ambiguous send or cleanup remains unknown and requires investigation. Each result retains `dispatch_permitted:false`. The fixture journal records synthetic facts only; its domain, its messages and its claim cannot qualify a live adapter or prove a live process is fenced. It does not implement ordinary Getzilla startup switching or qualify any of the six clients.
+
+To exercise the optional isolated fixture on a machine with the pinned local image and binary, run `GETZILLA_RUN_CODEX_FIXTURE=1 python3 -m unittest tests.test_controlled_fixture` with the installed Codex on `PATH`. The regular unit suite skips this opt-in test. No provider call is required. If the exact local dependencies are missing, the fixture fails closed. Rollback is a reviewed source revert; preserve the fixture journal rather than deleting it to reset a budget.
