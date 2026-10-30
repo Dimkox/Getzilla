@@ -23,6 +23,8 @@ from .model_continuation import load_policy
 IMAGE = 'sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704'
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
 MAX_FRAME = 65536
+# This is a private tmpfs inside the verified isolated container, not a host path.
+CONTAINER_TMP = '/tmp'  # nosec B108
 _ENV_KEYS = frozenset({'PATH', 'LANG', 'GPG_KEY', 'PYTHON_VERSION', 'PYTHON_SHA256',
                        'HOME', 'CODEX_HOME', 'GETZILLA_CONTROLLED_GATE', 'GETZILLA_FIXTURE_NONCE'})
 
@@ -54,7 +56,7 @@ def _validate_container(info, image, mounts, nonce):
                 or host['PidsLimit'] != 64 or host['Memory'] != 536870912 or host['NanoCpus'] != 2000000000
                 or host.get('Devices') not in (None, []) or host.get('DeviceRequests') not in (None, [])
                 or host.get('VolumesFrom') not in (None, [])
-                or host['Tmpfs'] != {'/tmp': 'rw,nosuid,nodev,size=64m,mode=1777',
+                or host['Tmpfs'] != {CONTAINER_TMP: 'rw,nosuid,nodev,size=64m,mode=1777',
                                      '/work': 'rw,nosuid,nodev,size=64m,mode=1777'}
                 or host['SecurityOpt'] != ['no-new-privileges']
                 or host['PidMode'] not in ('', 'private') or host['IpcMode'] not in ('', 'private')):
@@ -63,7 +65,7 @@ def _validate_container(info, image, mounts, nonce):
         if not isinstance(env, list) or any(not isinstance(item, str) or '=' not in item or item.split('=', 1)[0] not in _ENV_KEYS for item in env):
             return False
         values = dict(item.split('=', 1) for item in env)
-        if (len(values) != len(env) or values.get('HOME') != '/tmp' or values.get('CODEX_HOME') != '/tmp/codex'
+        if (len(values) != len(env) or values.get('HOME') != CONTAINER_TMP or values.get('CODEX_HOME') != CONTAINER_TMP + '/codex'
                 or values.get('GETZILLA_CONTROLLED_GATE') != '1' or values.get('GETZILLA_FIXTURE_NONCE') != nonce):
             return False
         actual = info['Mounts']
@@ -230,8 +232,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
     mounts = {'/fixture.py': str(fixture), '/fixture-codex': codex}
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m',
-            '--cpus', '2', '--user', '65534:65534', '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m,mode=1777',
-            '--tmpfs', '/work:rw,nosuid,nodev,size=64m,mode=1777', '-e', 'HOME=/tmp', '-e', 'CODEX_HOME=/tmp/codex',
+            '--cpus', '2', '--user', '65534:65534', '--tmpfs', CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
+            '--tmpfs', '/work:rw,nosuid,nodev,size=64m,mode=1777', '-e', 'HOME=' + CONTAINER_TMP, '-e', 'CODEX_HOME=' + CONTAINER_TMP + '/codex',
             '-e', 'GETZILLA_CONTROLLED_GATE=1', '-e', 'GETZILLA_FIXTURE_NONCE=' + nonce,
             '--mount', f'type=bind,src={fixture},dst=/fixture.py,readonly',
             '--mount', f'type=bind,src={codex},dst=/fixture-codex,readonly', IMAGE, 'python', '-u', '/fixture.py']
