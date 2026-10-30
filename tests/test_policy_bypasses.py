@@ -218,6 +218,39 @@ class ProductionActionSpellingTests(_ProjectCase):
             with self.subTest(command=command):
                 self.assert_allowed(command)
 
+    def test_gh_graphql_literal_query_is_a_read(self) -> None:
+        for command in (
+            "gh api graphql -f 'query=query { viewer { login } }'",
+            "gh api --method GET graphql -f 'query=query { viewer { login } }'",
+            "gh api graphql --raw-field 'query=query Read { viewer { login } }'",
+            "gh api -X POST graphql --raw-field='query=query { viewer { login } }'",
+            "gh api graphql -f 'query={ viewer { login } }'",
+            "gh api graphql -f 'query=query { viewer { field(arg: \"mutation\") } }'",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(command)
+
+    def test_gh_graphql_ambiguous_documents_stay_writes(self) -> None:
+        for command in (
+            "gh api graphql -f 'query=mutation { update { id } }'",
+            "gh api --method GET graphql -f 'query=mutation { update { id } }'",
+            "gh api --method GET https://api.github.com/graphql -f 'query=mutation { update { id } }'",
+            "gh api --method GET HTTPS://api.github.com/graphql -f 'query=mutation { update { id } }'",
+            "gh api --method GET 'graphql?query=mutation'",
+            "gh api --method GET 'graphql#query=mutation'",
+            "gh api graphql -f 'query=query { viewer { login } } mutation { update { id } }'",
+            "gh api graphql -f 'query=query { viewer { login }'",
+            "gh api graphql -f 'query=query { viewer { login } }' -f 'query=mutation { update { id } }'",
+            "gh api graphql --input request.json",
+            "gh api graphql -F query=@request.graphql",
+            "gh api graphql -f 'query=subscription { events { id } }'",
+            "gh api graphql -f 'query=query { viewer { login } }' -f operationName=Other",
+            "gh api graphql -f 'query=query { viewer { login } }' --input request.json",
+            "gh api repos/example -f 'query=query { viewer { login } }'",
+        ):
+            with self.subTest(command=command):
+                self.assert_denied(command, 'github-api')
+
     def test_docker_and_npm_publish_spellings(self) -> None:
         for command, action in (
             ('docker image push registry.example/x:1', 'docker-push'),

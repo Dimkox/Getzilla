@@ -1653,6 +1653,42 @@ _GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IG
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
 
 
+def _literal_graphql_query(document: str) -> bool:
+    """Recognize one bounded query, never a mutation or a second operation."""
+    if not document or len(document) > 65536 or any(c in document for c in '$`'):
+        return False
+    token = re.compile(r'\s+|#[^\n]*|"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|[0-9.+-]+|[{}()\[\]!:@=,]')
+    parts = []
+    cursor = 0
+    while cursor < len(document):
+        match = token.match(document, cursor)
+        if not match:
+            return False
+        item = match.group()
+        cursor = match.end()
+        if not item.isspace() and not item.startswith('#'):
+            parts.append(item)
+    if not parts:
+        return False
+    if parts[0] == 'query':
+        parts = parts[1:]
+        if parts and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', parts[0]):
+            parts = parts[1:]
+    if not parts or parts[0] != '{':
+        return False
+    stack: list[str] = []
+    pairs = {'}': '{', ')': '(', ']': '['}
+    for index, item in enumerate(parts):
+        if item in ('{', '(', '['):
+            stack.append(item)
+        elif item in pairs:
+            if not stack or stack.pop() != pairs[item]:
+                return False
+            if not stack and index != len(parts) - 1:
+                return False
+    return not stack and parts[-1] == '}'
+
+
 def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') -> tuple[str, str, str] | None:
     """``(METHOD, host, endpoint)`` of ``gh api <arguments>`` when it writes, else ``None``.
 
@@ -1660,6 +1696,8 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
     """
     method: str | None = None
     fields = False
+    query_fields: list[str] = []
+    other_fields = False
     host = default_host
     endpoint = ''
     index = 0
@@ -1675,22 +1713,32 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
         elif token[:2] in {'-X', '-x'} and len(token) > 2:
             name, value = '-X', token[2:].lstrip('=')
         elif re.match(r'^-[fF]\S', token):
-            name = '-f'
+            name, value = token[:2], token[2:]
         if name in {'-X', '--method'}:
             method = (value or '').strip().upper()
         elif name in _GH_API_FIELD_OPTIONS:
             fields = True
+            if name in {'-f', '--raw-field'} and value is not None and value.startswith('query='):
+                query_fields.append(value[6:])
+            else:
+                other_fields = True
         elif name == '--hostname':
             host = (value or host).lower()
         elif not token.startswith('-') and not endpoint:
             endpoint = token
         index += 1
     method = method or ('POST' if fields else 'GET')
-    if method in _GH_API_READ_METHODS:
-        return None
-    url = re.match(r'^https?://([^/]+)/(.*)$', endpoint)
+    url = re.match(r'^https?://([^/]+)/(.*)$', endpoint, re.IGNORECASE)
     if url:
         host, endpoint = url.group(1).lower(), url.group(2)
+    target = endpoint.lstrip('/')
+    if re.split(r'[?#]', target, maxsplit=1)[0].rstrip('/') == 'graphql':
+        if (target == 'graphql' and method in {'GET', 'POST'} and len(query_fields) == 1 and not other_fields
+                and _literal_graphql_query(query_fields[0])):
+            return None
+        return method, host, target
+    if method in _GH_API_READ_METHODS:
+        return None
     return method, host, endpoint.lstrip('/')
 
 
@@ -1982,7 +2030,8 @@ def _http_write_resource_text(command: str, root: Path | None = None) -> str | N
     if gh_resource:
         return gh_resource
     gh_env = _command_env(command)
-    for argv in _simple_commands(command):
+    simple_commands = list(_simple_commands(command))
+    for argv in simple_commands:
         if argv is None:
             continue
         if argv[0] in {'curl', 'wget'} and _http_tool_write(argv):
@@ -1996,6 +2045,12 @@ def _http_write_resource_text(command: str, root: Path | None = None) -> str | N
     elif re.search(r'\bwget\b', lowered):
         mutation = bool(re.search(r'--method(?:\s|=)(?:post|put|patch|delete)\b|--post-data(?:\s|=)', lowered))
     elif re.search(r'\bgh\b[^\n]*\bapi\b', lowered):
+        # A single statically parsed read must not fall into the textual write fallback.
+        if len(simple_commands) == 1 and simple_commands[0] and simple_commands[0][0] == 'gh':
+            argv = simple_commands[0]
+            positionals, indexes = _positionals(argv, _GH_VALUE_OPTIONS, 2)
+            if positionals[:1] == ['api'] and _gh_api_request(argv[indexes[0] + 1:]) is None:
+                return None
         # Fallback for text shlex cannot tokenize: any explicit non-GET verb or a field.
         verbs = re.findall(r'(?:^|\s)(?:-x|--method)(?:\s*=\s*|\s*)["\']?([a-z]+)', lowered)
         mutation = any(verb not in {'get', 'head'} for verb in verbs) or bool(
