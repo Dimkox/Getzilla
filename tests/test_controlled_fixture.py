@@ -17,6 +17,18 @@ from tests.test_model_continuation import enabled_policy
 
 
 class ControlledFixtureTest(unittest.TestCase):
+    def test_container_stop_requires_exact_owned_exited_process(self):
+        ident = 'a' * 64
+        info = {'Id': ident, 'Image': 'sha256:abc', 'Config': {'Labels': {'getzilla.owner': 'nonce'}},
+                'State': {'Running': False, 'Restarting': False, 'Dead': False, 'Status': 'exited', 'Pid': 0}}
+        self.assertTrue(controlled_fixture._container_stopped(info, ident, 'sha256:abc', 'nonce'))
+        self.assertFalse(controlled_fixture._container_stopped(info, 'b' * 64, 'sha256:abc', 'nonce'))
+        self.assertFalse(controlled_fixture._container_stopped(info, ident, 'sha256:abc', 'other'))
+        for field, value in [('Running', True), ('Restarting', True), ('Dead', True), ('Pid', 12), ('Status', 'running')]:
+            with self.subTest(field=field):
+                altered = dict(info, State=dict(info['State'], **{field: value}))
+                self.assertFalse(controlled_fixture._container_stopped(altered, ident, 'sha256:abc', 'nonce'))
+
     def test_pinned_fixture_hash_matches_source(self):
         fixture = Path(__file__).resolve().parent / 'fixtures/codex_loopback_probe.py'
         self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(), controlled_fixture.FIXTURE_SHA256)
@@ -171,7 +183,8 @@ class ControlledFixtureTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_CODEX_FIXTURE') == '1', 'requires local pinned Docker image and Codex binary')
     def test_isolated_fixture_failures_preserve_unknown_and_never_restart(self):
         original = journal.record_controlled_terminal
-        for stage in ('before_b', 'after_b', 'denied_success'):
+        original_stopped = controlled_fixture._container_stopped
+        for stage in ('before_b', 'after_b', 'denied_success', 'uncertain_stop'):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 config = root / '.getzilla/config/model-continuation.json'
@@ -192,8 +205,11 @@ class ControlledFixtureTest(unittest.TestCase):
                     return original(*args)
 
                 target = 'reserve_controlled_next' if stage == 'before_b' else 'record_controlled_terminal'
-                replacement = journal.JournalError('storage_unavailable') if stage == 'before_b' else record
-                with patch.object(journal, target, side_effect=replacement), self.assertRaises(ValueError):
+                replacement = journal.JournalError('storage_unavailable') if stage == 'before_b' else (
+                    original if stage == 'uncertain_stop' else record)
+                stopped = (lambda *args: False) if stage == 'uncertain_stop' else original_stopped
+                with patch.object(journal, target, side_effect=replacement), \
+                     patch.object(controlled_fixture, '_container_stopped', side_effect=stopped), self.assertRaises(ValueError):
                     controlled_fixture.run(root, binding, budget)
                 state = journal.inspect_controlled_chain(root, binding)
                 self.assertEqual(state['attempts'][-1]['state'], 'failed' if stage == 'before_b' else 'send_unknown')
