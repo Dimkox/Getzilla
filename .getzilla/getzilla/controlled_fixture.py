@@ -10,6 +10,7 @@ import json
 import os
 import re
 import selectors
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ from .model_continuation import load_policy
 
 IMAGE = 'sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704'
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
+FIXTURE_SHA256 = '284f6a00eb5ca5321a6a967d7e51898e6460da346337d8b3dbe4812d424ad5ec'
 MAX_FRAME = 65536
 # This is a private tmpfs inside the verified isolated container, not a host path.
 CONTAINER_TMP = '/tmp'  # nosec B108
@@ -91,6 +93,50 @@ def _command(args, timeout=15):
         return data.decode('utf-8').strip()
     except (OSError, subprocess.SubprocessError, UnicodeError):
         raise FixtureError('container_unavailable') from None
+
+
+def _immutable_image(docker, fixture, codex):
+    """Copy fixture inputs into a content-addressed image and verify both bytes."""
+    staging = None
+    checker = None
+    image = None
+    accepted = False
+    try:
+        staging = _command([docker, 'create', '--pull', 'never', '--network', 'none', IMAGE])
+        if not re.fullmatch(r'[a-f0-9]{64}', staging):
+            raise FixtureError('invalid_container')
+        _command([docker, 'cp', str(fixture), staging + ':/fixture.py'])
+        _command([docker, 'cp', codex, staging + ':/fixture-codex'])
+        image = _command([docker, 'commit', '--change', 'LABEL getzilla.fixture=' + secrets.token_hex(16), staging], timeout=60)
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
+            raise FixtureError('invalid_image')
+        program = ('import hashlib; from pathlib import Path; '
+                   "print(hashlib.sha256(Path('/fixture.py').read_bytes()).hexdigest()); "
+                   "print(hashlib.sha256(Path('/fixture-codex').read_bytes()).hexdigest())")
+        checker = _command([docker, 'create', '--pull', 'never', '--network', 'none', '--read-only',
+                            '--cap-drop', 'ALL', '--entrypoint', 'python', image, '-c', program])
+        if not re.fullmatch(r'[a-f0-9]{64}', checker):
+            raise FixtureError('invalid_container')
+        hashes = _command([docker, 'start', '-a', checker], timeout=60).splitlines()
+        if hashes != [FIXTURE_SHA256, CODEX_SHA256]:
+            raise FixtureError('image_mismatch')
+        accepted = True
+        return image
+    finally:
+        cleanup_failed = False
+        for container in (checker, staging):
+            if isinstance(container, str) and re.fullmatch(r'[a-f0-9]{64}', container):
+                try:
+                    _command([docker, 'rm', '-fv', container])
+                except FixtureError:
+                    cleanup_failed = True
+        if (not accepted or cleanup_failed) and isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image):
+            try:
+                _command([docker, 'image', 'rm', image])
+            except FixtureError:
+                cleanup_failed = True
+        if cleanup_failed:
+            raise FixtureError('cleanup_uncertain') from None
 
 
 class _Lines:
@@ -227,27 +273,34 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
                 raise FixtureError('codex_unqualified')
     except OSError:
         raise FixtureError('fixture_unavailable') from None
-    import secrets
     nonce = secrets.token_hex(16)
-    mounts = {'/fixture.py': str(fixture), '/fixture-codex': codex}
+    try:
+        journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
+    except journal.JournalError:
+        raise FixtureError('fixture_failed') from None
+    image = _immutable_image(docker, fixture, codex)
+    mounts = {}
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m',
             '--cpus', '2', '--user', '65534:65534', '--tmpfs', CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
             '--tmpfs', '/work:rw,nosuid,nodev,size=64m,mode=1777', '-e', 'HOME=' + CONTAINER_TMP, '-e', 'CODEX_HOME=' + CONTAINER_TMP + '/codex',
             '-e', 'GETZILLA_CONTROLLED_GATE=1', '-e', 'GETZILLA_FIXTURE_NONCE=' + nonce,
-            '--mount', f'type=bind,src={fixture},dst=/fixture.py,readonly',
-            '--mount', f'type=bind,src={codex},dst=/fixture-codex,readonly', IMAGE, 'python', '-u', '/fixture.py']
-    container_id = _command(args)
+            image, 'python', '-u', '/fixture.py']
+    try:
+        container_id = _command(args)
+    except FixtureError:
+        _command([docker, 'image', 'rm', image])
+        raise
     if not re.fullmatch(r'[a-f0-9]{64}', container_id):
+        _command([docker, 'image', 'rm', image])
         raise FixtureError('invalid_container')
     process = None
     lines = None
     success = False
     try:
         info = json.loads(_command([docker, 'inspect', container_id]))
-        if not isinstance(info, list) or len(info) != 1 or not _validate_container(info[0], IMAGE, mounts, nonce):
+        if not isinstance(info, list) or len(info) != 1 or not _validate_container(info[0], image, mounts, nonce):
             raise FixtureError('invalid_container')
-        journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
         first = journal.consume_controlled_send(root, binding, 1, 1)
         if not first['claimed']:
             raise FixtureError('claim_denied')
@@ -318,10 +371,11 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
                         stream.close()
                     except OSError:
                         success = False
-        try:
-            _command([docker, 'rm', '-fv', container_id], timeout=15)
-        except FixtureError:
-            success = False
+        for args in ([docker, 'rm', '-fv', container_id], [docker, 'image', 'rm', image]):
+            try:
+                _command(args, timeout=15)
+            except FixtureError:
+                success = False
     if not success:
         raise FixtureError('cleanup_uncertain')
     terminal = journal.record_controlled_terminal(root, binding, 2, second['revision'], 'success')
