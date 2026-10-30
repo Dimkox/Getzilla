@@ -105,6 +105,93 @@ def _cleanup_owned_fixture(root, binding, *, required=False):
 
 
 class ControlledFixtureTest(unittest.TestCase):
+    def test_host_request_requires_exact_fixture_model_and_path(self):
+        frame = {'type': 'model_request', 'version': 1, 'nonce': 'n', 'model': 'fixture-a',
+                 'path': '/v1/responses', 'stream': True, 'tool_types': ['function']}
+        self.assertTrue(fenced_fixture._valid_model_request(frame, 'n', 'fixture-a'))
+        for key, value in (('model', 'fixture-b'), ('path', '/other'), ('stream', False),
+                           ('nonce', 'other'), ('tool_types', ['web_search'])):
+            changed = dict(frame, **{key: value})
+            self.assertFalse(fenced_fixture._valid_model_request(changed, 'n', 'fixture-a'))
+        self.assertFalse(fenced_fixture._valid_model_request(dict(frame, extra='unknown'), 'n', 'fixture-a'))
+
+    @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
+    def test_host_request_claim_denies_duplicate_before_reply(self):
+        class Pipe:
+            replies = 0
+            status = None
+
+            def read(self):
+                return {'type': 'model_request', 'version': 1, 'nonce': 'n', 'model': 'fixture-a',
+                        'path': '/v1/responses', 'stream': True, 'tool_types': ['function']}
+
+            def allow(self, nonce):
+                self.replies += 1
+
+            def respond(self, nonce, status, content_type, body):
+                self.replies += 1
+                self.status = status
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            policy = enabled_policy()
+            policy['candidates'] = [{'provider': 'local_fixture', 'account_ref': 'synthetic', 'model': model}
+                                    for model in ('fixture-a', 'fixture-b')]
+            config.write_text(json.dumps(policy), encoding='utf-8')
+            binding = journal.Binding('fenced-chain', 'fenced-task', 'fixture-owner', 'fixture-route',
+                                      'fixture-session', 'a'*64, 'b'*64, 'c'*64)
+            budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120)
+            journal.create_controlled_chain(root, binding, journal.Usage(1, '0.1'), budget)
+            send = journal.consume_controlled_send(root, binding, 1, 1)
+            pipe = Pipe()
+            changed = dict(policy, enabled=False)
+            config.write_text(json.dumps(changed), encoding='utf-8')
+            with self.assertRaisesRegex(controlled_fixture.FixtureError, 'model_request_denied'):
+                fenced_fixture._admit_model_request(root, binding, pipe, 'n', 1, send['revision'], 'fixture-a')
+            self.assertEqual(pipe.replies, 0)
+            self.assertEqual(journal.inspect_controlled_chain(root, binding)['events'], {})
+            config.write_text(json.dumps(policy), encoding='utf-8')
+            revision = fenced_fixture._admit_model_request(root, binding, pipe, 'n', 1, send['revision'], 'fixture-a')
+            self.assertEqual(pipe.replies, 1)
+            self.assertEqual(pipe.status, 429)
+            with self.assertRaisesRegex(controlled_fixture.FixtureError, 'request_claim_denied'):
+                fenced_fixture._admit_model_request(root, binding, pipe, 'n', 1, revision, 'fixture-a')
+            self.assertEqual(pipe.replies, 1)
+
+    @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
+    def test_host_request_revocation_after_claim_denies_reply(self):
+        class Pipe:
+            replies = 0
+
+            def read(self):
+                return {'type': 'model_request', 'version': 1, 'nonce': 'n', 'model': 'fixture-a',
+                        'path': '/v1/responses', 'stream': True, 'tool_types': ['function']}
+
+            def allow(self, nonce):
+                self.replies += 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            policy = enabled_policy()
+            policy['candidates'] = [{'provider': 'local_fixture', 'account_ref': 'synthetic', 'model': model}
+                                    for model in ('fixture-a', 'fixture-b')]
+            config.write_text(json.dumps(policy), encoding='utf-8')
+            binding = journal.Binding('fenced-chain', 'fenced-task', 'fixture-owner', 'fixture-route',
+                                      'fixture-session', 'a'*64, 'b'*64, 'c'*64)
+            budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120)
+            journal.create_controlled_chain(root, binding, journal.Usage(1, '0.1'), budget)
+            send = journal.consume_controlled_send(root, binding, 1, 1)
+            pipe = Pipe()
+            with patch.object(journal, 'check_controlled_send', return_value='policy_revoked'):
+                with self.assertRaisesRegex(controlled_fixture.FixtureError, 'request_claim_denied'):
+                    fenced_fixture._admit_model_request(root, binding, pipe, 'n', 1, send['revision'], 'fixture-a')
+            self.assertEqual(pipe.replies, 0)
+            self.assertIn('request_1', journal.inspect_controlled_chain(root, binding)['events'])
+
     def test_checkpoint_volumes_reject_unknown_attached_container(self):
         with patch.object(controlled_fixture, '_command', side_effect=['a\n', 'a\n']):
             self.assertTrue(fenced_fixture._exclusive_volumes('docker', ['v1', 'v2'], ['a']))
@@ -177,6 +264,8 @@ class ControlledFixtureTest(unittest.TestCase):
             self.assertLess(steps.index('reserve'), steps.index('create-b'))
             state = journal.inspect_controlled_chain(root, binding)
             self.assertEqual([attempt['state'] for attempt in state['attempts']], ['failed', 'succeeded'])
+            self.assertIn('request_1', state['events'])
+            self.assertIn('request_2', state['events'])
             self.assertEqual(controlled_fixture.run_fenced(root, binding, budget)['state'], 'fixture_succeeded')
 
     @unittest.skipUnless(os.environ.get('GETZILLA_RUN_CODEX_FIXTURE') == '1', 'requires local pinned Docker image and Codex binary')
@@ -366,7 +455,7 @@ class ControlledFixtureTest(unittest.TestCase):
                 state = journal.inspect_controlled_chain(root, binding)
                 self.assertEqual(len(state['attempts']), 1)
                 self.assertEqual(state['attempts'][0]['state'], 'send_unknown')
-                self.assertEqual(state['events'], {})
+                self.assertEqual(set(state['events']), {'request_1'})
                 with self.assertRaises(controlled_fixture.FixtureError):
                     controlled_fixture.run_fenced(root, binding, budget)
             finally:

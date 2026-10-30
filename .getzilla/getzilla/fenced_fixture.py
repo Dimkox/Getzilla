@@ -94,13 +94,14 @@ def _valid(info, ident, image, nonce, volumes, phase, thread):
                 or host['PidMode'] not in ('', 'private') or host['IpcMode'] not in ('', 'private')):
             return False
         env = config['Env']
-        allowed = fixture._ENV_KEYS | {'GETZILLA_FIXTURE_PHASE', 'GETZILLA_FIXTURE_THREAD'}
+        allowed = fixture._ENV_KEYS | {'GETZILLA_FIXTURE_PHASE', 'GETZILLA_FIXTURE_THREAD', 'GETZILLA_HOST_BROKER'}
         if not isinstance(env, list) or any(not isinstance(x, str) or '=' not in x or x.split('=', 1)[0] not in allowed for x in env):
             return False
         values = dict(x.split('=', 1) for x in env)
         if (len(values) != len(env) or values.get('HOME') != fixture.CONTAINER_TMP
                 or values.get('CODEX_HOME') != fixture.CONTAINER_TMP + '/codex'
                 or values.get('GETZILLA_CONTROLLED_GATE') != '1'
+                or values.get('GETZILLA_HOST_BROKER') != '1'
                 or values.get('GETZILLA_FIXTURE_NONCE') != nonce
                 or values.get('GETZILLA_FIXTURE_PHASE') != phase
                 or values.get('GETZILLA_FIXTURE_THREAD', '') != thread):
@@ -152,6 +153,7 @@ def _create(docker, image, volumes, nonce, phase, thread=''):
             *_mounts(volumes), '-e', 'HOME=' + fixture.CONTAINER_TMP,
             '-e', 'CODEX_HOME=' + fixture.CONTAINER_TMP + '/codex',
             '-e', 'GETZILLA_CONTROLLED_GATE=1', '-e', 'GETZILLA_FIXTURE_NONCE=' + nonce,
+            '-e', 'GETZILLA_HOST_BROKER=1',
             '-e', 'GETZILLA_FIXTURE_PHASE=' + phase]
     if thread:
         args += ['-e', 'GETZILLA_FIXTURE_THREAD=' + thread]
@@ -208,6 +210,48 @@ def _valid_second_events(events, thread, turn):
                 turn_started = True
             filtered.append(event)
     return fixture._second_valid(filtered, thread, turn)
+
+
+def _valid_model_request(frame, nonce, model):
+    return (isinstance(frame, dict)
+            and set(frame) == {'type', 'version', 'nonce', 'model', 'path', 'stream', 'tool_types'}
+            and frame['type'] == 'model_request' and type(frame['version']) is int and frame['version'] == 1
+            and frame['nonce'] == nonce and frame['model'] == model and frame['path'] == '/v1/responses'
+            and frame['stream'] is True and isinstance(frame['tool_types'], list)
+            and len(frame['tool_types']) <= 64 and all(item == 'function' for item in frame['tool_types']))
+
+
+def _admit_model_request(root, binding, pipe, nonce, generation, revision, model):
+    frame = pipe.read()
+    if not _valid_model_request(frame, nonce, model):
+        raise fixture.FixtureError('model_request_denied')
+    loaded = load_policy(root)
+    if (loaded.policy is None or not loaded.policy.enabled or type(generation) is not int
+            or not 1 <= generation <= len(loaded.policy.candidates)
+            or loaded.policy.candidates[generation - 1].model != model
+            or loaded.policy.candidates[generation - 1].provider != 'local_fixture'
+            or loaded.policy.candidates[generation - 1].account_ref != 'synthetic'):
+        raise fixture.FixtureError('model_request_denied')
+    claim = journal.consume_controlled_request(root, binding, generation, revision)
+    if not claim['claimed']:
+        raise fixture.FixtureError('request_claim_denied')
+    if journal.check_controlled_send(root, binding, generation, claim['revision']) is not None:
+        raise fixture.FixtureError('request_claim_denied')
+    if model == 'fixture-a':
+        body = json.dumps({'error': {'message': 'synthetic rate limit', 'type': 'rate_limit_error',
+                                     'code': 'rate_limit_exceeded'}})
+        pipe.respond(nonce, 429, 'application/json', body)
+    else:
+        frames = [
+            {'type': 'response.created', 'response': {'id': 'r1'}},
+            {'type': 'response.output_item.done', 'item': {'type': 'message', 'role': 'assistant', 'id': 'm1',
+             'content': [{'type': 'output_text', 'text': 'synthetic-ok'}]}},
+            {'type': 'response.completed', 'response': {'id': 'r1', 'usage': {'input_tokens': 1,
+             'input_tokens_details': None, 'output_tokens': 1, 'output_tokens_details': None, 'total_tokens': 2}}},
+        ]
+        body = ''.join('event: ' + item['type'] + '\ndata: ' + json.dumps(item) + '\n\n' for item in frames)
+        pipe.respond(nonce, 200, 'text/event-stream', body)
+    return claim['revision']
 
 
 def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dict:
@@ -292,6 +336,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             if journal.check_controlled_send(root, binding, 1, first['revision']) is not None:
                 raise fixture.FixtureError('claim_denied')
             pipe_a.allow(nonce)
+            first_revision = _admit_model_request(root, binding, pipe_a, nonce, 1, first['revision'], 'fixture-a')
             frame = pipe_a.read()
             if not fixture._first_valid(frame, nonce) or not re.fullmatch(r'[A-Za-z0-9-]{1,64}', frame['thread']):
                 raise fixture.FixtureError('unreconciled_effect')
@@ -303,7 +348,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             if checkpoint != _checkpoint(docker, image, volumes) or checkpoint[1] != baseline[1]:
                 raise fixture.FixtureError('checkpoint_changed')
             checkpoint_digest = hashlib.sha256((''.join(checkpoint)).encode('ascii')).hexdigest()
-            terminal = journal.record_controlled_terminal(root, binding, 1, first['revision'], 'rate_limit')
+            terminal = journal.record_controlled_terminal(root, binding, 1, first_revision, 'rate_limit')
             recorded = journal.record_controlled_fence(root, binding, 1, terminal['revision'], a, checkpoint_digest, frame['thread'])
             if recorded['state'] != 'fence_recorded':
                 raise fixture.FixtureError('fence_denied')
@@ -372,6 +417,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         if journal.check_controlled_send(root, binding, 2, second['revision']) is not None:
             raise fixture.FixtureError('claim_denied')
         pipe_b.allow(nonce)
+        second_revision = _admit_model_request(root, binding, pipe_b, nonce, 2, second['revision'], 'fixture-b')
         result = pipe_b.read()
         if (result.get('type') != 'fenced_b_result' or result.get('version') != 1 or result.get('nonce') != nonce
                 or result.get('thread') != frame['thread'] or result.get('server_requests') != []
@@ -442,7 +488,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             raise fixture.FixtureError('cleanup_uncertain')
     if not success:
         raise fixture.FixtureError('fixture_failed')
-    terminal = journal.record_controlled_terminal(root, binding, 2, second['revision'], 'success')
+    terminal = journal.record_controlled_terminal(root, binding, 2, second_revision, 'success')
     if terminal.get('state') != 'succeeded':
         raise fixture.FixtureError('terminal_unrecorded')
     return {'state': 'fixture_succeeded', 'dispatch_permitted': False}

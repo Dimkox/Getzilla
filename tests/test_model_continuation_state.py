@@ -28,6 +28,11 @@ def _controlled_race(root, binding, results):
         results.put(journal.consume_controlled_send(Path(root), binding, 1, 1))
 
 
+def _request_race(root, binding, results):
+    with patch.object(journal.time, 'time', return_value=1000):
+        results.put(journal.consume_controlled_request(Path(root), binding, 1, 2))
+
+
 @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
 class ContinuationJournalTest(unittest.TestCase):
     def setUp(self):
@@ -70,6 +75,73 @@ class ContinuationJournalTest(unittest.TestCase):
         second = journal.consume_controlled_send(self.root, self.binding, 1, 2)
         self.assertFalse(second['claimed'])
         self.assertEqual(journal.inspect_controlled_chain(self.root, self.binding)['attempts'][0]['state'], 'send_unknown')
+
+    def test_controlled_request_claim_is_one_shot_and_durable(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        send = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        request = journal.consume_controlled_request(self.root, self.binding, 1, send['revision'])
+        self.assertTrue(request['claimed'])
+        self.assertFalse(request['dispatch_permitted'])
+        duplicate = journal.consume_controlled_request(self.root, self.binding, 1, request['revision'])
+        self.assertFalse(duplicate['claimed'])
+        state = journal.inspect_controlled_chain(self.root, self.binding)
+        self.assertEqual(state['attempts'][0]['requests'], 1)
+        self.assertIn('request_1', state['events'])
+
+    def test_controlled_request_rejects_multi_request_attempt(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(2, '0.1'), self.budget)
+        send = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        denied = journal.consume_controlled_request(self.root, self.binding, 1, send['revision'])
+        self.assertFalse(denied['claimed'])
+        self.assertEqual(denied['reason'], 'request_bound_invalid')
+        self.assertEqual(journal.inspect_controlled_chain(self.root, self.binding)['events'], {})
+
+    def test_tampered_request_claim_is_rejected_on_restart(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        send = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        journal.consume_controlled_request(self.root, self.binding, 1, send['revision'])
+        path = self.root / '.getzilla/runtime/model-continuation-fixture/journal.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['chains'][self.binding.chain_id]['events']['request_1']['evidence']['generation'] = 2
+        value['checksum'] = journal._digest(value['chains'])
+        path.write_text(json.dumps(value), encoding='utf-8')
+        with self.assertRaisesRegex(journal.JournalError, 'journal_corrupt'):
+            journal.inspect_controlled_chain(self.root, self.binding)
+
+    def test_controlled_request_claim_race_and_publish_failure_do_not_reissue(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        send = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: journal.consume_controlled_request(self.root, self.binding, 1, send['revision']), range(2)))
+        self.assertEqual(sum(bool(result['claimed']) for result in results), 1)
+        self.assertFalse(journal.consume_controlled_request(self.root, self.binding, 1, 3)['claimed'])
+
+        other = replace(self.binding, chain_id='chain2', task_id='task2')
+        journal.create_controlled_chain(self.root, other, journal.Usage(1, '0.1'), self.budget)
+        other_send = journal.consume_controlled_send(self.root, other, 1, 1)
+        with patch.object(journal.fsx, 'fsync_dir', side_effect=OSError):
+            with self.assertRaisesRegex(journal.JournalError, 'storage_unavailable'):
+                journal.consume_controlled_request(self.root, other, 1, other_send['revision'])
+        self.assertFalse(journal.consume_controlled_request(self.root, other, 1, 3)['claimed'])
+
+    def test_controlled_request_claim_races_across_processes(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        context = multiprocessing.get_context('spawn')
+        results = context.Queue()
+        processes = [context.Process(target=_request_race, args=(str(self.root), self.binding, results)) for _ in range(2)]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=15)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+                self.fail('request claim worker timed out')
+            self.assertEqual(process.exitcode, 0)
+        claims = [results.get(timeout=5) for _ in processes]
+        self.assertEqual(sum(bool(result['claimed']) for result in claims), 1)
+        self.assertFalse(journal.consume_controlled_request(self.root, self.binding, 1, 3)['claimed'])
 
     def test_fenced_reservation_requires_matching_durable_checkpoint(self):
         journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
