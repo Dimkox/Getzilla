@@ -150,6 +150,12 @@ async def initialize(peer: OwnedJsonlPeer) -> None:
     await peer.send({'method': 'initialized', 'params': {}})
 
 
+async def start_offline_container(root, binding, generation: int, revision: int, *, timeout: float = 10):
+    """Start the owned native peer without network or live dispatch authority."""
+    from . import native_container
+    return await native_container.start(root, binding, generation, revision, timeout=timeout)
+
+
 class TurnObserver:
     """Observe a single owned turn. Unknown and effectful events fail closed."""
 
