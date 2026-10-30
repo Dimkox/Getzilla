@@ -114,6 +114,13 @@
           "const": "from_to",
           "type": "string"
         },
+        "secret_classes": {
+          "items": {"$ref": "#/$defs/id"},
+          "minItems": 1,
+          "maxItems": 256,
+          "type": "array",
+          "uniqueItems": true
+        },
         "failure_behavior": {
           "$ref": "#/$defs/failure_behavior"
         },
