@@ -44,6 +44,11 @@ class ProtocolError(ValueError):
     """Fixed diagnostic without peer output or caller content."""
 
 
+def recover_after_restart(root, binding, expected_revision: int, expected_generation: int) -> dict:
+    """Observe the previous turn without starting a peer or authorizing replay."""
+    return journal.recovery_status(root, binding, expected_revision, expected_generation)
+
+
 def _pairs(pairs):
     result = {}
     for key, value in pairs:
