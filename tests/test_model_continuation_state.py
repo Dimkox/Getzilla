@@ -71,6 +71,53 @@ class ContinuationJournalTest(unittest.TestCase):
         self.assertFalse(second['claimed'])
         self.assertEqual(journal.inspect_controlled_chain(self.root, self.binding)['attempts'][0]['state'], 'send_unknown')
 
+    def test_fenced_reservation_requires_matching_durable_checkpoint(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        first = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        terminal = journal.record_controlled_terminal(self.root, self.binding, 1, first['revision'], 'rate_limit')
+        missing = journal.reserve_fenced_next(self.root, self.binding, terminal['revision'], journal.Usage(1, '0.2'), 'a' * 64, 'b' * 64)
+        self.assertEqual(missing['reason'], 'fence_mismatch')
+        fence = journal.record_controlled_fence(self.root, self.binding, 1, terminal['revision'], 'a' * 64, 'b' * 64, 'thread1')
+        self.assertFalse(fence['dispatch_permitted'])
+        evidence = journal.inspect_controlled_chain(self.root, self.binding)['events']['fence_1']['evidence']
+        self.assertEqual(evidence, {'kind': 'controlled_fence_v2', 'generation': 1, 'thread_id': 'thread1',
+                                    'container_id': 'a' * 64, 'checkpoint_digest': 'b' * 64})
+        self.assertEqual(journal.record_controlled_fence(self.root, self.binding, 1, terminal['revision'], 'a' * 64, 'b' * 64, 'thread1'), fence)
+        conflict = journal.record_controlled_fence(self.root, self.binding, 1, terminal['revision'], 'a' * 64, 'c' * 64, 'thread1')
+        self.assertEqual(conflict['reason'], 'conflicting_event')
+        bad = journal.reserve_fenced_next(self.root, self.binding, fence['revision'], journal.Usage(1, '0.2'), 'a' * 64, 'c' * 64)
+        self.assertEqual(bad['reason'], 'fence_mismatch')
+        good = journal.reserve_fenced_next(self.root, self.binding, fence['revision'], journal.Usage(1, '0.2'), 'a' * 64, 'b' * 64)
+        self.assertEqual(good['state'], 'reserved_unknown')
+        claim = journal.consume_controlled_send(self.root, self.binding, 2, good['revision'])
+        self.assertTrue(claim['claimed'])
+        self.assertFalse(journal.consume_controlled_send(self.root, self.binding, 2, claim['revision'])['claimed'])
+
+    def test_fenced_reservation_rechecks_policy_after_recorded_fence(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        first = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        terminal = journal.record_controlled_terminal(self.root, self.binding, 1, first['revision'], 'rate_limit')
+        fence = journal.record_controlled_fence(self.root, self.binding, 1, terminal['revision'], 'a' * 64, 'b' * 64, 'thread1')
+        self.policy['enabled'] = False
+        self.config.write_text(json.dumps(self.policy), encoding='utf-8')
+        result = journal.reserve_fenced_next(self.root, self.binding, fence['revision'], journal.Usage(1, '0.2'), 'a' * 64, 'b' * 64)
+        self.assertFalse(result['dispatch_permitted'])
+        self.assertIn(result['reason'], ('policy_revoked', 'policy_changed'))
+        self.assertEqual(len(journal.inspect_controlled_chain(self.root, self.binding)['attempts']), 1)
+
+    def test_tampered_fence_evidence_is_rejected_on_restart(self):
+        journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
+        first = journal.consume_controlled_send(self.root, self.binding, 1, 1)
+        terminal = journal.record_controlled_terminal(self.root, self.binding, 1, first['revision'], 'rate_limit')
+        journal.record_controlled_fence(self.root, self.binding, 1, terminal['revision'], 'a' * 64, 'b' * 64, 'thread1')
+        path = self.root / '.getzilla/runtime/model-continuation-fixture/journal.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['chains'][self.binding.chain_id]['events']['fence_1']['evidence']['checkpoint_digest'] = 'c' * 64
+        value['checksum'] = journal._digest(value['chains'])
+        path.write_text(json.dumps(value), encoding='utf-8')
+        with self.assertRaisesRegex(journal.JournalError, 'journal_corrupt'):
+            journal.inspect_controlled_chain(self.root, self.binding)
+
     def test_controlled_claim_race_and_live_boundary(self):
         journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
         with ThreadPoolExecutor(max_workers=2) as pool:

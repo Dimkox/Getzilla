@@ -23,7 +23,7 @@ from .model_continuation import load_policy
 
 IMAGE = 'sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704'
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
-FIXTURE_SHA256 = '284f6a00eb5ca5321a6a967d7e51898e6460da346337d8b3dbe4812d424ad5ec'
+FIXTURE_SHA256 = '52d973d0456a81456a699f8be2cbeaea89dd96934d1d81cc8e0ffb085d3f03d2'
 MAX_FRAME = 65536
 # This is a private tmpfs inside the verified isolated container, not a host path.
 CONTAINER_TMP = '/tmp'  # nosec B108
@@ -93,7 +93,7 @@ def _validate_container(info, image, mounts, nonce):
         return False
 
 
-def _command(args, timeout=15):
+def _command(args, timeout=60):
     try:
         with tempfile.TemporaryFile() as output:
             subprocess.run(args, stdin=subprocess.DEVNULL, stdout=output,
@@ -104,6 +104,10 @@ def _command(args, timeout=15):
         if len(data) > MAX_FRAME:
             raise FixtureError('oversized_output')
         return data.decode('utf-8').strip()
+    except subprocess.TimeoutExpired:
+        raise FixtureError('container_timeout') from None
+    except subprocess.CalledProcessError:
+        raise FixtureError('container_command_failed') from None
     except (OSError, subprocess.SubprocessError, UnicodeError):
         raise FixtureError('container_unavailable') from None
 
@@ -118,8 +122,8 @@ def _immutable_image(docker, fixture, codex):
         staging = _command([docker, 'create', '--pull', 'never', '--network', 'none', IMAGE])
         if not re.fullmatch(r'[a-f0-9]{64}', staging):
             raise FixtureError('invalid_container')
-        _command([docker, 'cp', str(fixture), staging + ':/fixture.py'])
-        _command([docker, 'cp', codex, staging + ':/fixture-codex'])
+        _command([docker, 'cp', str(fixture), staging + ':/fixture.py'], timeout=60)
+        _command([docker, 'cp', codex, staging + ':/fixture-codex'], timeout=60)
         image = _command([docker, 'commit', '--change', 'LABEL getzilla.fixture=' + secrets.token_hex(16), staging], timeout=60)
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
             raise FixtureError('invalid_image')
@@ -401,3 +405,9 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
     if terminal.get('state') != 'succeeded':
         raise FixtureError('terminal_unrecorded')
     return {'state': 'fixture_succeeded', 'dispatch_permitted': False}
+
+
+def run_fenced(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dict:
+    """Run the two-container synthetic fixture; never authorizes live dispatch."""
+    from .fenced_fixture import run as run_two_containers
+    return run_two_containers(root, binding, budget)
