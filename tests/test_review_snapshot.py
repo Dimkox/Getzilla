@@ -191,12 +191,20 @@ class ReviewSnapshotTests(unittest.TestCase):
     def test_cli_creates_and_removes_a_snapshot(self) -> None:
         (self.root / '.getzilla').mkdir(exist_ok=True)  # find_root must stop here, not at an outer project
         cli = [sys.executable, str(ROOT / 'scripts' / 'getzilla_cleanup.py'), 'snapshot']
-        created = json.loads(subprocess.run([*cli, self.second, '--json'], cwd=self.root, capture_output=True,
-                                            text=True, check=True).stdout)
-        self.assertEqual(created['result'], 'created')
-        removed = subprocess.run([*cli, '--remove', created['path']], cwd=self.root, capture_output=True, text=True)
-        self.assertEqual(removed.returncode, 0, removed.stderr)
-        self.assertIn('removed:', removed.stdout)
+        for remove_first in (True, False):
+            with self.subTest(remove_first=remove_first):
+                created = json.loads(subprocess.run([*cli, self.second, '--json'], cwd=self.root, capture_output=True,
+                                                    text=True, check=True).stdout)
+                self.assertEqual(created['result'], 'created')
+                path = created['path']
+                invalid = subprocess.run([*cli, '--remove', path, 'unexpected'], cwd=self.root,
+                                         capture_output=True, text=True)
+                self.assertEqual(invalid.returncode, 2)
+                self.assertTrue(Path(path).is_dir())
+                args = ['--remove', path] if remove_first else [path, '--remove']
+                removed = subprocess.run([*cli, *args], cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(removed.returncode, 0, removed.stderr)
+                self.assertIn('removed:', removed.stdout)
         refused = subprocess.run([*cli, '--remove', str(self.root)], cwd=self.root, capture_output=True, text=True)
         self.assertEqual(refused.returncode, 1)
 
