@@ -197,17 +197,21 @@ class NativeContainerJournalTest(unittest.TestCase):
             executable = root / 'fake-codex'
             executable.write_bytes(b'native-test-input')
             entered, release = threading.Event(), threading.Event()
+            worker_errors = []
 
             def paused_build(*args):
                 entered.set()
-                release.wait(5)
+                release.wait(60)
                 raise RuntimeError('interrupted')
 
             def run():
                 try:
                     asyncio.run(native_container.start(root, binding, 1, 1))
-                except RuntimeError:
-                    pass
+                except RuntimeError as error:
+                    if str(error) != 'interrupted':
+                        worker_errors.append(repr(error))
+                except Exception as error:
+                    worker_errors.append(repr(error))
 
             with patch.object(native_container, '_docker', return_value='/usr/bin/docker'), \
                  patch.object(native_container.shutil, 'which', return_value=str(executable)), \
@@ -217,12 +221,16 @@ class NativeContainerJournalTest(unittest.TestCase):
                 thread = threading.Thread(target=run)
                 thread.start()
                 try:
-                    self.assertTrue(entered.wait(3))
-                    with self.assertRaisesRegex(ProtocolError, 'native_busy'):
-                        native_container.cleanup(root, binding, 1, 2)
+                    entered_ok = entered.wait(30)
+                    if entered_ok:
+                        with self.assertRaisesRegex(ProtocolError, 'native_busy'):
+                            native_container.cleanup(root, binding, 1, 2)
                 finally:
                     release.set()
-                    thread.join(5)
+                    thread.join(30)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(worker_errors, [])
+                self.assertTrue(entered_ok, 'allocator did not reach the checkpoint')
 
     def test_operation_lock_survives_process_contention_and_releases_after_crash(self):
         from getzilla import native_container
