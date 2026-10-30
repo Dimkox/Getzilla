@@ -19,6 +19,101 @@ from tests._support import prepare_review_source, project_copy, run_hook
 
 
 class HookTests(unittest.TestCase):
+    def test_linked_worktree_patch_uses_only_target_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-edit'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'protected-path', actions=['protected-path-write'],
+                        resources=['.grok/hooks/pre_tool_use.py'])
+            file = target / '.grok/hooks/pre_tool_use.py'
+            patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
+            payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
+                       'tool_input': {'input': patch}}
+            _, data, error = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(data['decision'], 'allow', (data, error))
+            other = target / '.grok/hooks/post_tool_use.py'
+            mixed = patch.replace('*** End Patch', f'*** Update File: {other}\n@@\n-a\n+b\n*** End Patch')
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': mixed}})
+            self.assertEqual(denied['decision'], 'deny', denied)
+            mixed_root = patch.replace('*** End Patch', f'*** Update File: {root / "AGENTS.md"}\n@@\n-a\n+b\n*** End Patch')
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': mixed_root}})
+            self.assertEqual(denied['decision'], 'deny', denied)
+            relative_mix = patch.replace('*** End Patch', '*** Update File: AGENTS.md\n@@\n-a\n+b\n*** End Patch')
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': relative_mix}})
+            self.assertEqual(denied['decision'], 'deny', denied)
+            move = patch.replace('@@', f'*** Move to: {target / "other.py"}\n@@', 1)
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': move}})
+            self.assertEqual(denied['decision'], 'deny', denied)
+            set_active_route(target, build_route(target, 'different task', 'other-session').to_dict())
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'session_id': 'other-session'})
+            self.assertEqual(denied['decision'], 'deny', denied)
+            (target / 'AGENTS.md').write_text('changed outside grant', encoding='utf-8')
+            _, stale, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(stale['decision'], 'deny', stale)
+
+    def test_linked_worktree_patch_cannot_use_parent_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-edit'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(root, 'protected-path', actions=['protected-path-write'],
+                        resources=['.getzilla/runtime/worktrees/linked-edit/.grok/hooks/pre_tool_use.py'])
+            file = target / '.grok/hooks/pre_tool_use.py'
+            patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
+            _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
+                'tool_input': {'input': patch},
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_unregistered_worktree_patch_does_not_use_target_grant(self) -> None:
+        with project_copy(git=True) as root:
+            real = root / '.getzilla/runtime/worktrees/real'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(real)], cwd=root, check=True)
+            fake = root / '.getzilla/runtime/worktrees/fake'
+            (fake / '.getzilla').mkdir(parents=True)
+            (fake / '.git').write_bytes((real / '.git').read_bytes())
+            (fake / 'protected.py').write_text('a\n', encoding='utf-8')
+            self._grant(root, 'protected-path', actions=['protected-path-write'],
+                        resources=['.getzilla/runtime/worktrees/fake/protected.py'])
+            patch = f'*** Begin Patch\n*** Update File: {fake / "protected.py"}\n@@\n-a\n+b\n*** End Patch\n'
+            _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'other', 'tool_name': 'apply_patch',
+                'tool_input': {'input': patch},
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_patch_requires_every_target_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-edit'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'protected-path', actions=['protected-path-write'],
+                        resources=['.grok/hooks/pre_tool_use.py', '.grok/hooks/post_tool_use.py'])
+            patch = (f'*** Begin Patch\n*** Update File: {target / ".grok/hooks/pre_tool_use.py"}\n@@\n-a\n+b\n'
+                     f'*** Update File: {target / ".grok/hooks/post_tool_use.py"}\n@@\n-a\n+b\n*** End Patch\n')
+            _, data, error = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
+                'tool_input': {'input': patch},
+            })
+            self.assertEqual(data['decision'], 'allow', (data, error))
+
+    def test_linked_worktree_patch_retry_observes_target_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-edit'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
+                           cwd=target, check=True)
+            set_active_route(target, build_route(target, 'Review exact local operation', 'root-test').to_dict())
+            file = target / '.grok/hooks/pre_tool_use.py'
+            patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
+            payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
+                       'tool_input': {'input': patch}}
+            _, before, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(before['decision'], 'deny', before)
+            add_approval(target, 'protected-path', 'fixture', 5, actions=['protected-path-write'],
+                         resources=['.grok/hooks/pre_tool_use.py'])
+            _, after, error = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(after['decision'], 'allow', (after, error))
+
     def test_linked_worktree_registration_uses_native_path_semantics(self) -> None:
         spec = importlib.util.spec_from_file_location('hook_path_regression', ROOT / '.grok/hooks/_lib.py')
         module = importlib.util.module_from_spec(spec)

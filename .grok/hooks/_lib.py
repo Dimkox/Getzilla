@@ -243,7 +243,7 @@ class RootContext:
     @property
     def sensitive_safe(self) -> bool:
         return self.effective_root is not None and self.resolution_status in {
-            'session-root', 'effective-root', 'linked-worktree-push',
+            'session-root', 'effective-root', 'linked-worktree-push', 'linked-worktree-patch',
         }
 
     @property
@@ -898,7 +898,16 @@ def _linked_worktree_push(session: Path, target: Path, command: Any,
             safe = False
         if not safe:
             return False
+        return _registered_linked_worktree(session, target)
+    except (OSError, ValueError, UnicodeError, RuntimeError, subprocess.SubprocessError):
+        return False
 
+
+def _registered_linked_worktree(session: Path, target: Path) -> bool:
+    """Verify the target's Git registration and policy without granting authority."""
+    if any(key.startswith('GIT_') and key not in {'GIT_PAGER', 'GIT_TERMINAL_PROMPT'} for key in os.environ):
+        return False
+    try:
         def git(root: Path, *args: str) -> str:
             result = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', str(root), *args],
                                     capture_output=True, text=True, encoding='utf-8', errors='strict',
@@ -924,6 +933,26 @@ def _linked_worktree_push(session: Path, target: Path, command: Any,
         return True
     except (OSError, ValueError, UnicodeError, RuntimeError, subprocess.SubprocessError):
         return False
+
+
+def _linked_patch_root(session: Path, command: Any) -> tuple[Path | None, bool]:
+    """Resolve only a literal, single-worktree patch; mixed roots stay denied."""
+    if not isinstance(command, str) or not command.lstrip().startswith('*** Begin Patch'):
+        return None, False
+    paths = re.findall(r'^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$', command, re.MULTILINE)
+    if not paths:
+        return None, False
+    roots = {_recognized_root(Path(raw)) for raw in paths if Path(raw).is_absolute()}
+    worktrees = session / '.getzilla' / 'runtime' / 'worktrees'
+    nested = {root for root in roots if root is not None and root != session and root.is_relative_to(worktrees)}
+    if not nested:
+        return None, False
+    if (any(not Path(raw).is_absolute() for raw in paths) or len(roots) != 1 or len(nested) != 1
+            or re.search(r'^\*\*\* Move to:', command, re.MULTILINE)
+            or any(Path(raw) != Path(raw).resolve() for raw in paths)):
+        return None, True
+    target = next(iter(nested))
+    return (target, False) if _registered_linked_worktree(session, target) else (None, True)
 
 
 def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str) -> RootContext:
@@ -961,6 +990,13 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
     if len(session_roots) > 1 or (session_values and len(session_roots) != 1):
         return RootContext(session_cwd, None, {}, None, 'ambiguous-session-root')
     session_root = next(iter(session_roots), None)
+
+    if tool == 'apply_patch' and session_root is not None:
+        patch_root, ambiguous = _linked_patch_root(session_root, input_data.get('command'))
+        if ambiguous:
+            return RootContext(session_cwd, session_root, {}, None, 'ambiguous-command-root')
+        if patch_root is not None:
+            return RootContext(session_cwd, session_root, {}, patch_root, 'linked-worktree-patch')
 
     command_values = {
         key: str(input_data[key]) for key in _COMMAND_ROOT_ALIASES if input_data.get(key) not in (None, '')
