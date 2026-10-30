@@ -174,10 +174,10 @@ def _validate_chain(key, chain):
     fields = {'binding', 'policy_digest', 'revision', 'generation', 'limits', 'last_time', 'state', 'attempts', 'events'}
     model_fields = fields | {'domain', 'domain_version', 'contract_digest', 'request_digest'}
     if (not isinstance(chain, dict) or set(chain) not in (fields, fields | {'domain', 'domain_version'}, model_fields, model_fields | {'input_digest', 'model_attempts'})
-            or chain.get('domain', 'live_unqualified') not in {'live_unqualified', 'controlled_fixture_v1', 'live_model_only_v1'}
-            or ('domain' in chain and (chain['domain'] not in {'controlled_fixture_v1', 'live_model_only_v1'} or type(chain['domain_version']) is not int or chain['domain_version'] not in ({1, 2} if chain['domain'] == 'live_model_only_v1' else {1})))
-            or (chain.get('domain') == 'live_model_only_v1' and (set(chain) != (model_fields if chain['domain_version'] == 1 else model_fields | {'input_digest', 'model_attempts'}) or not _DIGEST.fullmatch(chain['contract_digest']) or not _DIGEST.fullmatch(chain['request_digest'])))
-            or (chain.get('domain') != 'live_model_only_v1' and ('contract_digest' in chain or 'request_digest' in chain))
+            or chain.get('domain', 'live_unqualified') not in {'live_unqualified', 'controlled_fixture_v1', 'live_model_only_v1', 'fixture_model_rotation_v1'}
+            or ('domain' in chain and (chain['domain'] not in {'controlled_fixture_v1', 'live_model_only_v1', 'fixture_model_rotation_v1'} or type(chain['domain_version']) is not int or chain['domain_version'] not in ({1, 2} if chain['domain'] == 'fixture_model_rotation_v1' else {1})))
+            or (chain.get('domain') in {'live_model_only_v1', 'fixture_model_rotation_v1'} and (set(chain) != (model_fields if chain['domain_version'] == 1 else model_fields | {'input_digest', 'model_attempts'}) or not _DIGEST.fullmatch(chain['contract_digest']) or not _DIGEST.fullmatch(chain['request_digest'])))
+            or (chain.get('domain') not in {'live_model_only_v1', 'fixture_model_rotation_v1'} and ('contract_digest' in chain or 'request_digest' in chain))
             or _binding(Binding(**chain['binding']))['chain_id'] != key):
         raise JournalError('journal_corrupt')
     if not _DIGEST.fullmatch(chain['policy_digest']) or not _integer(chain['revision']) or not _integer(chain['generation'], 64):
@@ -188,11 +188,11 @@ def _validate_chain(key, chain):
     attempts = chain['attempts']
     if not isinstance(attempts, list) or len(attempts) != chain['generation'] or len(attempts) > limits['attempts']:
         raise JournalError('journal_corrupt')
-    if (chain.get('domain') == 'live_model_only_v1' and chain['domain_version'] == 1
+    if (chain.get('domain') in {'live_model_only_v1', 'fixture_model_rotation_v1'} and chain['domain_version'] == 1
             and (chain['generation'] != 1 or chain['events'] or attempts[0]['state'] not in {'reserved_unknown', 'send_unknown'}
                  or attempts[0]['category'] is not None or attempts[0]['requests'] != 1)):
         raise JournalError('journal_corrupt')
-    if chain.get('domain') == 'live_model_only_v1' and chain['domain_version'] == 2:
+    if chain.get('domain') == 'fixture_model_rotation_v1' and chain['domain_version'] == 2:
         records = chain['model_attempts']
         if (chain['events'] or not _DIGEST.fullmatch(chain['input_digest']) or not isinstance(records, list)
                 or len(records) != len(attempts) or any(not isinstance(r, dict) or set(r) != {'contract_digest', 'request_digest', 'retry_not_before'}
@@ -214,7 +214,7 @@ def _validate_chain(key, chain):
                 or attempt['state'] not in {'active_unknown', 'reserved_unknown', 'terminal_unknown', 'send_unknown', 'failed', 'succeeded'}
                 or attempt['category'] not in _CATEGORIES | {None}):
             raise JournalError('journal_corrupt')
-        if attempt['state'] in {'send_unknown', 'failed', 'succeeded'} and chain.get('domain') not in {'controlled_fixture_v1', 'live_model_only_v1'}:
+        if attempt['state'] in {'send_unknown', 'failed', 'succeeded'} and chain.get('domain') not in {'controlled_fixture_v1', 'live_model_only_v1', 'fixture_model_rotation_v1'}:
             raise JournalError('journal_corrupt')
         if chain.get('domain') == 'controlled_fixture_v1':
             if index < len(attempts) - 1 and attempt['state'] != 'failed':
@@ -409,14 +409,14 @@ def _current(root, chain):
     return 'policy_changed' if digest != chain['policy_digest'] else _clock(chain)
 
 
-def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget, *, controlled: bool, model_contract=None, request_digest=None) -> dict:
+def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBudget, *, controlled: bool, model_contract=None, request_digest=None, fixture_model=False) -> dict:
     bound = _binding(binding)
     usage = _usage(original)
     if (type(budget) is not TaskBudget
             or not all(_integer(v) for v in (budget.max_attempts, budget.max_requests))
             or not _integer(budget.deadline_epoch, MAX_EPOCH_SECONDS)):
         raise JournalError('invalid_task_budget')
-    with _store(root, create=True, fixture=controlled) as (chains, save):
+    with _store(root, create=True, fixture=controlled or fixture_model) as (chains, save):
         if any(c['binding']['task_id'] == binding.task_id for c in chains.values()) or binding.chain_id in chains:
             raise JournalError('task_already_recorded')
         if len(chains) >= MAX_CHAINS:
@@ -440,7 +440,7 @@ def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBud
             chain['domain'] = 'controlled_fixture_v1'
             chain['domain_version'] = 1
         elif model_contract is not None:
-            chain.update(domain='live_model_only_v1', domain_version=1,
+            chain.update(domain='fixture_model_rotation_v1' if fixture_model else 'live_model_only_v1', domain_version=1,
                          contract_digest=_digest(asdict(model_contract)), request_digest=request_digest)
             chain['attempts'][0]['state'] = 'reserved_unknown'
         chains[binding.chain_id] = chain
@@ -460,6 +460,14 @@ def create_model_only_chain(root: Path, binding: Binding, contract, prepared, bu
                          model_contract=contract, request_digest=hashlib.sha256(checked.body).hexdigest())
 
 
+def create_fixture_model_chain(root: Path, binding: Binding, contract, prepared, budget: TaskBudget) -> dict:
+    """Reserve synthetic accounting in the separate fixture journal only."""
+    checked, _ = _checked_model_request(contract, prepared)
+    cost = str(Decimal(checked.reserved_cost_micros) / Decimal(1000000))
+    return _create_chain(root, binding, Usage(1, cost), budget, controlled=False,
+                         model_contract=contract, request_digest=hashlib.sha256(checked.body).hexdigest(), fixture_model=True)
+
+
 def _checked_model_request(contract, prepared):
     from . import openai_model_request
     try:
@@ -477,13 +485,22 @@ def _checked_model_request(contract, prepared):
 
 def consume_model_only_request(root: Path, binding: Binding, contract, prepared, generation: int, expected_revision: int) -> dict:
     """Atomically consume a one-shot model-only request; never replay the claim."""
+    return _consume_model_only_request(root, binding, contract, prepared, generation, expected_revision, fixture=False)
+
+
+def consume_fixture_model_request(root: Path, binding: Binding, contract, prepared, generation: int, expected_revision: int) -> dict:
+    """Consume synthetic accounting in the fixture journal only."""
+    return _consume_model_only_request(root, binding, contract, prepared, generation, expected_revision, fixture=True)
+
+
+def _consume_model_only_request(root: Path, binding: Binding, contract, prepared, generation: int, expected_revision: int, *, fixture: bool) -> dict:
     from . import openai_model_request
     if (type(contract) is not openai_model_request.Contract or type(prepared) is not openai_model_request.PreparedRequest
             or type(prepared.body) is not bytes or not _integer(generation) or not _integer(expected_revision)):
         raise JournalError('invalid_revision')
-    with _store(root) as (chains, save):
+    with _store(root, fixture=fixture) as (chains, save):
         chain = _chain(chains, binding)
-        if chain.get('domain') != 'live_model_only_v1':
+        if chain.get('domain') != ('fixture_model_rotation_v1' if fixture else 'live_model_only_v1'):
             raise JournalError('invalid_domain')
         attempt = chain['attempts'][-1]
         if attempt['state'] == 'send_unknown':
@@ -528,9 +545,9 @@ def _record_model_only_response(root: Path, binding: Binding, contract, prepared
     category = openai_model_request.classify_response(status, body, model=contract.model)
     if category == 'needs_action':
         category = 'billing' if status == 429 else 'authentication'
-    with _store(root) as (chains, save):
+    with _store(root, fixture=True) as (chains, save):
         chain = _chain(chains, binding)
-        if chain.get('domain') != 'live_model_only_v1':
+        if chain.get('domain') != 'fixture_model_rotation_v1':
             raise JournalError('invalid_domain')
         if (chain['generation'] != generation or chain['revision'] != revision
                 or chain['attempts'][-1]['state'] != 'send_unknown'
@@ -557,13 +574,13 @@ def _record_model_only_response(root: Path, binding: Binding, contract, prepared
 
 
 def reserve_model_only_next(root: Path, binding: Binding, contract, prepared, expected_revision: int) -> dict:
-    """Reserve the next configured direct model; never issue a send claim here."""
+    """Reserve the next synthetic model in the fixture journal only."""
     checked, input_digest = _checked_model_request(contract, prepared)
     if not _integer(expected_revision):
         raise JournalError('invalid_revision')
-    with _store(root) as (chains, save):
+    with _store(root, fixture=True) as (chains, save):
         chain = _chain(chains, binding)
-        if chain.get('domain') != 'live_model_only_v1' or chain['domain_version'] != 2:
+        if chain.get('domain') != 'fixture_model_rotation_v1' or chain['domain_version'] != 2:
             raise JournalError('invalid_domain')
         problem = _current(root, chain)
         if problem:
@@ -784,6 +801,14 @@ def inspect_controlled_chain(root: Path, binding: Binding) -> dict:
         return chain
 
 
+def inspect_fixture_model_chain(root: Path, binding: Binding) -> dict:
+    with _store(root, fixture=True) as (chains, _):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'fixture_model_rotation_v1':
+            raise JournalError('invalid_domain')
+        return chain
+
+
 def _event(chain, event_id, content):
     if not isinstance(event_id, str) or not _ID.fullmatch(event_id):
         raise JournalError('invalid_event')
@@ -896,3 +921,20 @@ def cancel_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
 
 def cancel_controlled_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
     return _cancel_chain(root, binding, expected_revision, fixture=True)
+
+
+def cancel_fixture_model_chain(root: Path, binding: Binding, expected_revision: int) -> dict:
+    if not _integer(expected_revision):
+        raise JournalError('invalid_revision')
+    with _store(root, fixture=True) as (chains, save):
+        chain = _chain(chains, binding)
+        if chain.get('domain') != 'fixture_model_rotation_v1':
+            raise JournalError('invalid_domain')
+        if chain['state'] == 'cancelled':
+            return _result(chain, 'cancelled')
+        if chain['revision'] != expected_revision:
+            return _result(chain, reason='stale_revision')
+        chain['state'] = 'cancelled'
+        chain['revision'] += 1
+        save()
+        return _result(chain, 'cancelled')

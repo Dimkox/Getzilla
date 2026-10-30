@@ -19,7 +19,7 @@ from tests.test_model_continuation import enabled_policy
 
 def fixture_dispatch(status, body, delay=0):
     def send(root, binding, contract, request, generation, revision, credential):
-        claim = journal.consume_model_only_request(root, binding, contract, request, generation, revision)
+        claim = journal.consume_fixture_model_request(root, binding, contract, request, generation, revision)
         if not claim['claimed']:
             raise openai_model_request.RequestError('request_not_admitted')
         if status is None:
@@ -31,7 +31,7 @@ def fixture_dispatch(status, body, delay=0):
 
 def inspect_consumed_after_restart(root, binding, contract, request, revision, results):
     with patch.object(journal.time, 'time', return_value=1000):
-        results.put(journal.consume_model_only_request(Path(root), binding, contract, request, 2, revision))
+        results.put(journal.consume_fixture_model_request(Path(root), binding, contract, request, 2, revision))
 
 
 class OpenAIModelRequestTest(unittest.TestCase):
@@ -129,6 +129,30 @@ class OpenAIModelRequestTest(unittest.TestCase):
             self.assertEqual(state['attempts'][0]['state'], 'send_unknown')
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
+    def test_synthetic_result_cannot_update_live_model_ledger(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
+            root = Path(directory)
+            config = root / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            policy = enabled_policy()
+            policy['candidates'][0]['provider'] = 'openai'
+            config.write_text(json.dumps(policy), encoding='utf-8')
+            binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
+            request = openai_model_request.prepare(self.contract, 'hello')
+            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'])
+            body = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
+            with self.assertRaises(journal.JournalError):
+                journal._record_model_only_response(root, binding, self.contract, request, 1, claim['revision'], 429, body, 0)
+            self.assertEqual(journal.inspect_chain(root, binding)['attempts'][0]['state'], 'send_unknown')
+            synthetic = journal.create_fixture_model_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            synthetic_claim = journal.consume_fixture_model_request(root, binding, self.contract, request, 1, synthetic['revision'])
+            result = journal._record_model_only_response(root, binding, self.contract, request, 1, synthetic_claim['revision'], 429, body, 0)
+            self.assertEqual(result['state'], 'failed')
+            self.assertEqual(journal.inspect_chain(root, binding)['attempts'][0]['state'], 'send_unknown')
+            self.assertEqual(journal.inspect_fixture_model_chain(root, binding)['attempts'][0]['state'], 'failed')
+
+    @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_dispatch_denies_before_consumption_without_data_admission(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(journal.time, 'time', return_value=1000):
             root = Path(directory)
@@ -152,7 +176,7 @@ class OpenAIModelRequestTest(unittest.TestCase):
             root = Path(directory)
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
             with self.assertRaisesRegex(openai_model_request.RequestError, 'data_admission_unavailable'):
-                openai_model_request.start_rotation(root, binding, (self.contract,), 'hello', journal.TaskBudget(1, 1, '1', 2000), {'work': 'fake-test-key'})
+                openai_model_request.start_fixture_rotation(root, binding, (self.contract,), 'hello', journal.TaskBudget(1, 1, '1', 2000), {'work': 'fake-test-key'})
             self.assertFalse((root / '.getzilla/runtime/model-continuation').exists())
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
@@ -225,8 +249,8 @@ class OpenAIModelRequestTest(unittest.TestCase):
             config.write_text(json.dumps(policy), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
             request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
-            claim = journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'])
+            initial = journal.create_fixture_model_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.consume_fixture_model_request(root, binding, self.contract, request, 1, initial['revision'])
             body = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
             terminal = journal._record_model_only_response(root, binding, self.contract, request, 1, claim['revision'], 429, body, 0)
             other = replace(self.contract, model='model-b')
@@ -239,8 +263,8 @@ class OpenAIModelRequestTest(unittest.TestCase):
             self.assertEqual(next_attempt['generation'], 2)
             self.assertEqual(journal.reserve_model_only_next(root, binding, other, next_request, terminal['revision'])['reason'], 'stale_revision')
             self.assertEqual(journal._record_model_only_response(root, binding, self.contract, request, 1, claim['revision'], 429, body, 0)['reason'], 'stale_revision')
-            self.assertEqual(sum(a['cost_micros'] for a in journal.inspect_chain(root, binding)['attempts']), 6000)
-            second = journal.consume_model_only_request(root, binding, other, next_request, 2, next_attempt['revision'])
+            self.assertEqual(sum(a['cost_micros'] for a in journal.inspect_fixture_model_chain(root, binding)['attempts']), 6000)
+            second = journal.consume_fixture_model_request(root, binding, other, next_request, 2, next_attempt['revision'])
             context = multiprocessing.get_context('spawn')
             results = context.Queue()
             process = context.Process(target=inspect_consumed_after_restart, args=(str(root), binding, other, next_request, second['revision'], results))
@@ -255,7 +279,7 @@ class OpenAIModelRequestTest(unittest.TestCase):
             success = b'{"object":"response","status":"completed","model":"model-b","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}'
             terminal_b = journal._record_model_only_response(root, binding, other, next_request, 2, second['revision'], 200, success, 0)
             self.assertEqual(terminal_b['state'], 'succeeded')
-            self.assertFalse(journal.consume_model_only_request(root, binding, other, next_request, 2, terminal_b['revision'])['claimed'])
+            self.assertFalse(journal.consume_fixture_model_request(root, binding, other, next_request, 2, terminal_b['revision'])['claimed'])
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_fixture_records_429_before_next_reservation(self):
@@ -269,11 +293,11 @@ class OpenAIModelRequestTest(unittest.TestCase):
             config.write_text(json.dumps(policy), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
             request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            initial = journal.create_fixture_model_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
             body = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
             with patch.object(openai_model_request, 'dispatch', side_effect=fixture_dispatch(429, body, 2)):
                 self.assertEqual(openai_model_request.dispatch(root, binding, self.contract, request, 1, initial['revision'], 'fake-test-key'), (429, body))
-            state = journal.inspect_chain(root, binding)
+            state = journal.inspect_fixture_model_chain(root, binding)
             self.assertEqual(state['attempts'][0]['state'], 'failed')
             other = replace(self.contract, model='model-b')
             next_request = openai_model_request.prepare(other, 'hello')
@@ -297,14 +321,14 @@ class OpenAIModelRequestTest(unittest.TestCase):
             success = b'{"object":"response","status":"completed","model":"model-b","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}'
             outcomes = iter([fixture_dispatch(429, failed), fixture_dispatch(200, success)])
             with patch.object(openai_model_request, '_data_admission_available', return_value=True), patch.object(openai_model_request, 'dispatch', side_effect=lambda *args: next(outcomes)(*args)) as send:
-                result = openai_model_request.start_rotation(root, binding, (self.contract, other), 'hello', journal.TaskBudget(2, 4, '1.5', 2000), {'work': 'fake-test-key'})
+                result = openai_model_request.start_fixture_rotation(root, binding, (self.contract, other), 'hello', journal.TaskBudget(2, 4, '1.5', 2000), {'work': 'fake-test-key'})
                 self.assertEqual(result['state'], 'succeeded')
                 self.assertEqual(result['body'], success)
                 self.assertEqual(send.call_count, 2)
-                recovered = openai_model_request.resume_rotation(root, binding, (self.contract, other), 'hello', {'work': 'fake-test-key'})
+                recovered = openai_model_request.resume_fixture_rotation(root, binding, (self.contract, other), 'hello', {'work': 'fake-test-key'})
                 self.assertEqual(recovered['state'], 'succeeded')
                 self.assertEqual(send.call_count, 2)
-            self.assertEqual(sum(a['cost_micros'] for a in journal.inspect_chain(root, binding)['attempts']), 6000)
+            self.assertEqual(sum(a['cost_micros'] for a in journal.inspect_fixture_model_chain(root, binding)['attempts']), 6000)
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_rotation_does_not_retry_unknown_or_billing_response(self):
@@ -321,10 +345,10 @@ class OpenAIModelRequestTest(unittest.TestCase):
                 contracts = (self.contract, replace(self.contract, model='model-b'))
                 status, body, delay = outcome if outcome is not None else (None, b'', 0)
                 with patch.object(openai_model_request, '_data_admission_available', return_value=True), patch.object(openai_model_request, 'dispatch', side_effect=fixture_dispatch(status, body, delay)) as send:
-                    result = openai_model_request.start_rotation(root, binding, contracts, 'hello', journal.TaskBudget(2, 4, '1.5', 2000), {'work': 'fake-test-key'})
+                    result = openai_model_request.start_fixture_rotation(root, binding, contracts, 'hello', journal.TaskBudget(2, 4, '1.5', 2000), {'work': 'fake-test-key'})
                     expected = 'unknown' if case == 'lost' else 'failure_not_eligible'
                     self.assertEqual(result['state'], expected)
-                    self.assertEqual(openai_model_request.resume_rotation(root, binding, contracts, 'hello', {'work': 'fake-test-key'})['state'], expected)
+                    self.assertEqual(openai_model_request.resume_fixture_rotation(root, binding, contracts, 'hello', {'work': 'fake-test-key'})['state'], expected)
                     self.assertEqual(send.call_count, 1)
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
@@ -341,7 +365,7 @@ class OpenAIModelRequestTest(unittest.TestCase):
             contracts = (self.contract, replace(self.contract, model='model-b'))
             failed = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
             with patch.object(openai_model_request, '_data_admission_available', return_value=True), patch.object(openai_model_request, 'dispatch', side_effect=fixture_dispatch(429, failed)) as send:
-                result = openai_model_request.start_rotation(root, binding, contracts, 'hello', journal.TaskBudget(2, 4, '0.005', 2000), {'work': 'fake-test-key'})
+                result = openai_model_request.start_fixture_rotation(root, binding, contracts, 'hello', journal.TaskBudget(2, 4, '0.005', 2000), {'work': 'fake-test-key'})
                 self.assertEqual(result['state'], 'budget_exhausted')
                 self.assertEqual(send.call_count, 1)
 
@@ -356,13 +380,13 @@ class OpenAIModelRequestTest(unittest.TestCase):
             config.write_text(json.dumps(policy), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
             request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
-            claim = journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'])
-            journal.cancel_chain(root, binding, claim['revision'])
+            initial = journal.create_fixture_model_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.consume_fixture_model_request(root, binding, self.contract, request, 1, initial['revision'])
+            journal.cancel_fixture_model_chain(root, binding, claim['revision'])
             body = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
             result = journal._record_model_only_response(root, binding, self.contract, request, 1, claim['revision'], 429, body, 0)
             self.assertEqual(result['reason'], 'stale_revision')
-            self.assertEqual(journal.inspect_chain(root, binding)['state'], 'cancelled')
+            self.assertEqual(journal.inspect_fixture_model_chain(root, binding)['state'], 'cancelled')
 
     @unittest.skipIf(sys.platform == 'win32', 'directory fsync is unsupported on Windows')
     def test_ambiguous_successor_publication_is_not_resent_on_resume(self):
@@ -376,8 +400,8 @@ class OpenAIModelRequestTest(unittest.TestCase):
             config.write_text(json.dumps(policy), encoding='utf-8')
             binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1', 'a'*64, 'b'*64, 'c'*64)
             request = openai_model_request.prepare(self.contract, 'hello')
-            initial = journal.create_model_only_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
-            claim = journal.consume_model_only_request(root, binding, self.contract, request, 1, initial['revision'])
+            initial = journal.create_fixture_model_chain(root, binding, self.contract, request, journal.TaskBudget(2, 4, '1.5', 2000))
+            claim = journal.consume_fixture_model_request(root, binding, self.contract, request, 1, initial['revision'])
             body = b'{"error":{"type":"rate_limit_error","code":"slow_down"}}'
             terminal = journal._record_model_only_response(root, binding, self.contract, request, 1, claim['revision'], 429, body, 0)
             other = replace(self.contract, model='model-b')
@@ -386,7 +410,7 @@ class OpenAIModelRequestTest(unittest.TestCase):
                 with self.assertRaisesRegex(journal.JournalError, 'storage_unavailable'):
                     journal.reserve_model_only_next(root, binding, other, next_request, terminal['revision'])
             with patch.object(openai_model_request, '_data_admission_available', return_value=True), patch.object(openai_model_request, 'dispatch') as send:
-                result = openai_model_request.resume_rotation(root, binding, (self.contract, other), 'hello', {'work': 'fake-test-key'})
+                result = openai_model_request.resume_fixture_rotation(root, binding, (self.contract, other), 'hello', {'work': 'fake-test-key'})
                 self.assertEqual(result['state'], 'unknown')
                 send.assert_not_called()
 

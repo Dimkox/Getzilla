@@ -142,8 +142,8 @@ def _data_admission_available() -> bool:
     return False
 
 
-def start_rotation(root, binding, contracts, text, budget, credentials):
-    """Start a direct text-only chain; no native harness continuation is implied."""
+def start_fixture_rotation(root, binding, contracts, text, budget, credentials):
+    """Exercise synthetic accounting only; no live authority is implied."""
     from . import model_continuation_state as journal
     if not _data_admission_available():
         raise RequestError('data_admission_unavailable')
@@ -153,21 +153,19 @@ def start_rotation(root, binding, contracts, text, budget, credentials):
     request = prepare(first, text)
     credential = credentials.get(first.account_ref)
     _transport_input(request, credential, 1)
-    created = journal.create_model_only_chain(root, binding, first, request, budget)
+    created = journal.create_fixture_model_chain(root, binding, first, request, budget)
     return _drive_rotation(root, binding, contracts, text, credentials, first, request,
                            created['generation'], created['revision'])
 
 
-def resume_rotation(root, binding, contracts, text, credentials):
-    """Resume only a durably failed attempt; unknown sends are never replayed."""
+def resume_fixture_rotation(root, binding, contracts, text, credentials):
+    """Resume only a durably failed fixture; unknown sends are never replayed."""
     from . import model_continuation_state as journal
     if not _data_admission_available():
         raise RequestError('data_admission_unavailable')
     if not isinstance(contracts, tuple) or not contracts or len(contracts) > 64 or type(credentials) is not dict:
         raise RequestError('invalid_rotation')
-    chain = journal.inspect_chain(root, binding)
-    if chain.get('domain') != 'live_model_only_v1':
-        raise RequestError('invalid_rotation')
+    chain = journal.inspect_fixture_model_chain(root, binding)
     state = chain['attempts'][-1]['state']
     if state == 'succeeded':
         return {'state': 'succeeded', 'body': None}
@@ -193,11 +191,11 @@ def _drive_rotation(root, binding, contracts, text, credentials, contract, reque
         _, body = dispatch(root, binding, contract, request, generation, revision, credentials[contract.account_ref])
     except RequestError:
         return {'state': 'unknown', 'body': None}
-    chain = journal.inspect_chain(root, binding)
+    chain = journal.inspect_fixture_model_chain(root, binding)
     if chain['attempts'][-1]['state'] == 'succeeded':
         return {'state': 'succeeded', 'body': body}
     if chain['attempts'][-1]['state'] == 'failed':
-        return resume_rotation(root, binding, contracts, text, credentials)
+        return resume_fixture_rotation(root, binding, contracts, text, credentials)
     return {'state': 'unknown', 'body': None}
 
 
