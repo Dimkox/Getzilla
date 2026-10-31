@@ -143,10 +143,12 @@ class GrantLifecycleTests(unittest.TestCase):
         with github_project() as root:
             add_approval(root, 'protected-path', 'one file', 15,
                          actions=['protected-path-write'], resources=[TARGET])
-            add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
+            add_approval(root, 'production', 'push', 15,
+                         actions=['git-push-branch'], resources=['fix/x'])
+            self.assertTrue(valid(root, 'production', 'fix/x'))
             set_active_route(root, build_route(root, 'Next prompt about something else', 's1').to_dict())
             self.assertTrue(valid(root))
-            self.assertFalse(valid(root, 'production', None))
+            self.assertFalse(valid(root, 'production', 'fix/x'))
 
     def test_a_route_of_another_session_voids_the_grant(self) -> None:
         with github_project() as root:
@@ -270,16 +272,19 @@ class GrantLifecycleTests(unittest.TestCase):
 
     def test_other_scopes_keep_exact_tree_binding(self) -> None:
         with github_project() as root:
-            approval = add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
+            approval = add_approval(root, 'production', 'push', 15,
+                                    actions=['git-push-branch'], resources=['fix/x'])
             self.assertNotIn('binding', approval)
-            self.assertTrue(valid(root, 'production', None))
+            self.assertTrue(valid(root, 'production', 'fix/x'))
             (root / TARGET).parent.mkdir(parents=True, exist_ok=True)
             (root / TARGET).write_text('# any change\n', encoding='utf-8')
-            self.assertFalse(valid(root, 'production', None))
+            self.assertFalse(valid(root, 'production', 'fix/x'))
 
     def test_relaxed_binding_cannot_be_forged_onto_another_scope(self) -> None:
         with github_project() as root:
-            approval = add_approval(root, 'production', 'push', 15, actions=['git-push-branch'])
+            approval = add_approval(root, 'production', 'push', 15,
+                                    actions=['git-push-branch'], resources=['fix/x'])
+            self.assertTrue(valid(root, 'production', 'fix/x'))
             approval['binding'] = 'tree-except-granted-resources'
             approval['resources'] = [TARGET]
             approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
