@@ -1,4 +1,4 @@
-"""Offline original-source shell context controls. No command under test is run."""
+"""Policy inputs stay inert. Installed-Git option controls use isolated public fixtures."""
 from __future__ import annotations
 
 import contextlib
@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -207,6 +208,137 @@ class ShellStatePolicyTests(unittest.TestCase):
             self.check('curl ' + option + ' -X POST -d public https://api.example.test/items', True)
         self.check('curl --noproxy', False)
         self.check('curl --noproxy=* -X POST -d public https://api.example.test/items', False)
+
+    def test_git_format_options_cannot_consume_an_active_output_option(self) -> None:
+        self.check(self.ISSUE, True)
+        for family in ('log', 'show'):
+            for option in ('--pretty', '--format'):
+                for output in ('--output=public-output.txt', '--output public-output.txt'):
+                    prefix = f'git {family} {option} {output} --format=%H --no-patch HEAD'
+                    for separator in ('; ', ' && '):
+                        self.check(prefix + separator + self.ISSUE, False)
+
+    def test_hidden_git_output_cannot_rebind_an_implicit_repository_grant(self) -> None:
+        os.environ.pop('GH_REPO', None)
+        os.environ.pop('GH_HOST', None)
+        review = 'gh pr review 5 --approve'
+        self.grant('github-pr-review:dimkox/getzilla#5')
+        self.check(review, True)
+        self.check(review + ' -R Other/Project', False)
+        config = self.root / '.git/config'
+        before = config.read_bytes()
+        # These remain policy input strings. No protected output or GH command
+        # is executed. The separate CLI tests use new public files only.
+        format_value = shlex.quote('[remote "origin"]%nurl = https://github.com/Other/Project.git')
+        for family in ('log', 'show'):
+            for option in ('--pretty', '--format'):
+                prefix = f'git {family} {option} --output=.git/config --format={format_value} --no-patch HEAD'
+                self.check(prefix + '; ' + review, False)
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_git_attached_format_values_remain_data(self) -> None:
+        for family in ('log', 'show'):
+            for arguments in (
+                '--pretty', '--pretty --no-patch HEAD', '--pretty=oneline --no-patch HEAD',
+                '--format=%H --no-patch HEAD', "--pretty='tformat:--output=public.txt' --no-patch HEAD",
+                "--format='tformat:literal; --output=public.txt' --no-patch HEAD",
+            ):
+                self.check(f'git {family} {arguments}; ' + self.ISSUE, True)
+            self.check(f'git {family} --format %H --no-patch HEAD; ' + self.ISSUE, False)
+
+    def test_git_required_option_values_keep_the_next_word_as_data(self) -> None:
+        # These current Git options really consume a following word, including
+        # an option-looking word. A substring blacklist would reject them.
+        for option in ('-n', '--max-count', '--since', '--until', '--author', '--grep'):
+            self.check(f'git log {option} --output=public.txt --format=%H HEAD; ' + self.ISSUE, True)
+        for arguments in ('-n 1', '-n1', '--max-count=1', '--since=2020-01-01', '--until=2030-01-01',
+                          '--author=Fixture', '--grep=public'):
+            self.check(f'git log {arguments} --format=%H HEAD; ' + self.ISSUE, True)
+
+    def test_other_current_optional_git_flags_never_consume_the_next_option(self) -> None:
+        for family, option in (('log', '--stat'), ('log', '--decorate'), ('show', '--stat'), ('diff', '--stat'),
+                               ('status', '--porcelain'), ('rev-parse', '--abbrev-ref'), ('rev-parse', '--short')):
+            self.check(f'git {family} {option} --output=public.txt; ' + self.ISSUE, False)
+        # Attached variants outside the previous closed inventory stay unsupported.
+        for prefix in ('git log --stat=80', 'git log --decorate=short', 'git diff --stat=80',
+                       'git rev-parse --abbrev-ref=loose HEAD', 'git rev-parse --short=8 HEAD'):
+            self.check(prefix + '; ' + self.ISSUE, False)
+
+
+class GitOptionSemanticsTests(unittest.TestCase):
+    """Run installed Git only in a miniature fixture with new public outputs."""
+
+    def test_installed_git_optional_and_required_option_roles(self) -> None:
+        with tempfile.TemporaryDirectory(prefix='getzilla-git-option-roles-') as temporary:
+            root = Path(temporary)
+
+            def git(*arguments: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(['git', '--no-pager', *arguments], cwd=root,
+                                      capture_output=True, text=True, timeout=10, check=False)
+
+            self.assertEqual(git('init', '-q').returncode, 0)
+            commit = git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+                         '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-q', '-m', 'public')
+            self.assertEqual(commit.returncode, 0, commit.stderr)
+            config = root / '.git/config'
+            before = config.read_bytes()
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            format_value = '[fixture]%nvalue = public'
+            for family in ('log', 'show'):
+                for option in ('--pretty', '--format'):
+                    with self.subTest(family=family, option=option):
+                        output = root / f'{family}-{option[2:]}-public.txt'
+                        self.assertFalse(output.exists())
+                        result = git(family, option, f'--output={output.name}',
+                                     f'--format={format_value}', '--no-patch', 'HEAD')
+                        self.assertTrue(output.is_file(), (result.returncode, result.stderr))
+                        if option == '--pretty':
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            value = git('config', '--file', str(output), '--get', 'fixture.value')
+                            self.assertEqual((value.returncode, value.stdout.strip()), (0, 'public'), value.stderr)
+                        else:
+                            # Bare --format fails after opening/truncating the
+                            # public output. It did not write valid config bytes.
+                            self.assertEqual(result.returncode, 128, result.stderr)
+                            self.assertEqual(output.read_bytes(), b'')
+                            self.assertIn('--format', result.stderr)
+            for option in ('-n', '--max-count', '--since', '--until', '--author', '--grep'):
+                with self.subTest(required_value=option):
+                    output = root / f'{option.lstrip("-")}-public.txt'
+                    result = git('log', option, f'--output={output.name}', '--format=%H', 'HEAD')
+                    self.assertFalse(output.exists(), (result.returncode, result.stderr))
+            for option, value in (('-n', '1'), ('--max-count', '1'), ('--since', 'yesterday'),
+                                   ('--until', 'tomorrow'), ('--author', 'Fixture'), ('--grep', 'public')):
+                with self.subTest(separated_value=option):
+                    result = git('log', option, value, '--format=%H', 'HEAD')
+                    self.assertEqual((result.returncode, result.stdout.strip()), (0, head), result.stderr)
+            for family, option in (('log', '--stat'), ('log', '--decorate'), ('show', '--stat')):
+                with self.subTest(optional_flag=option, family=family):
+                    output = root / f'{family}-{option[2:]}-public.txt'
+                    result = git(family, option, f'--output={output.name}', '--format=tformat:public', '--no-patch', 'HEAD')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output.read_text().strip(), 'public')
+            output = root / 'diff-stat-public.txt'
+            result = git('diff', '--stat', f'--output={output.name}', 'HEAD')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(output.read_bytes(), b'')
+            result = git('status', '--porcelain', '--branch')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith('## '), result.stdout)
+            branch = git('symbolic-ref', '--short', 'HEAD').stdout.strip()
+            result = git('rev-parse', '--abbrev-ref', '--verify', 'HEAD')
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, branch), result.stderr)
+            result = git('rev-parse', '--short', '--verify', 'HEAD')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreaterEqual(len(result.stdout.strip()), 4)
+            self.assertTrue(head.startswith(result.stdout.strip()), result.stdout)
+            for family in ('log', 'show'):
+                for option in ('--pretty', '--format'):
+                    with self.subTest(attached_value=option, family=family):
+                        result = git(family, f'{option}=tformat:--output=literal-public.txt', '--no-patch', 'HEAD')
+                        self.assertEqual((result.returncode, result.stdout.strip()), (0, '--output=literal-public.txt'))
+                        self.assertFalse((root / 'literal-public.txt').exists())
+            self.assertEqual(config.read_bytes(), before)
 
 
 if __name__ == '__main__':

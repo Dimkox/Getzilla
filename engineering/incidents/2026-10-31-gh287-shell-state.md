@@ -9,3 +9,9 @@ The repair requires a closed neutral command and option proof around a mutation.
 The same batch restores the confirmed Linux curl regression. The collector now consumes `--noproxy` as an option value. Existing tests continue to deny secret reads through request bodies and headers. Active shell expansion remains outside mutation admission.
 
 Tests cover the four independent failures at both policy and full-hook layers, the bounded stateful families, literal data positives, command-local environment, read subcommand and option boundaries, and the unchanged curl regressions. Raw commands and intermediate failures stay in private runtime evidence. Independent review and the final qualifying gate belong to the coordinator.
+
+## Rework after the option-arity review
+
+Independent review of the same tree at `e359dcafb684136475007f19724cdf6db3fc4038` found that the Git proof gave optional or attached-only format options the wrong arity. A bare format option could hide an active file-output option from the policy. The previous tests checked known option names but did not compare their argument roles with the installed CLI.
+
+The repair separates required next-word values from attached-only values. Optional attached values admit their bare spelling as a flag; mandatory attached values refuse the bare spelling. The current Git option inventory was audited. Tests preserve format data that resembles options and deny active output options at both policy and full-hook layers with valid grants. Bounded installed-Git controls write only new public fixture files. They distinguish successful bare-pretty output from bare-format failure after empty-file creation. Protected configuration remains unchanged, and no GH or network command executes.

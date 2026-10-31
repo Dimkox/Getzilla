@@ -2318,9 +2318,14 @@ _MULTIPLE_MUTATIONS = 'Multiple external write commands require separate tool ca
 
 def _neutral_options(
     arguments: list[str], *, values: frozenset[str] = frozenset(), flags: frozenset[str] = frozenset(),
+    attached_values: frozenset[str] = frozenset(),
     maximum: int | None = None,
 ) -> bool:
-    """Closed option roles for the specific read command selected by the caller."""
+    """Closed option roles; attached-only values never consume a following word.
+
+    An optional attached value also has its bare spelling in flags. Required
+    attached values omit that spelling, so unsupported bare forms fail closed.
+    """
     operands = index = 0
     while index < len(arguments):
         word = arguments[index]
@@ -2333,9 +2338,12 @@ def _neutral_options(
             option, separator, _value = word.partition('=')
             if not word.startswith('--') and len(word) > 2 and word[:2] in values:
                 option, separator = word[:2], '='
-            if option not in values:
+            if option in attached_values:
+                if not separator:
+                    return False
+            elif option not in values:
                 return False
-            if not separator:
+            elif not separator:
                 index += 1
                 if index >= len(arguments):
                     return False
@@ -2370,16 +2378,18 @@ def _neutral_printf(arguments: list[str]) -> bool:
 
 _NEUTRAL_GIT_OPTIONS = {
     'status': (frozenset(), frozenset({'--short', '-s', '--branch', '-b', '--porcelain', '--porcelain=v1',
-                                     '--porcelain=v2', '--long', '--show-stash', '--no-ahead-behind'})),
-    'log': (frozenset({'-n', '--max-count', '--format', '--pretty', '--since', '--until', '--author', '--grep'}),
+                                     '--porcelain=v2', '--long', '--show-stash', '--no-ahead-behind'}), frozenset()),
+    'log': (frozenset({'-n', '--max-count', '--since', '--until', '--author', '--grep'}),
             frozenset({'--oneline', '--no-patch', '--stat', '--name-only', '--name-status', '--all', '--decorate',
-                       '--no-decorate', '--no-ext-diff', '--no-textconv'})),
+                       '--no-decorate', '--no-ext-diff', '--no-textconv', '--pretty'}),
+            frozenset({'--format', '--pretty'})),
     'diff': (frozenset(), frozenset({'--stat', '--shortstat', '--numstat', '--name-only', '--name-status', '--check',
-                                   '--cached', '--staged', '--quiet', '--exit-code', '--no-ext-diff', '--no-textconv'})),
-    'show': (frozenset({'--format', '--pretty'}), frozenset({'--no-patch', '-s', '--stat', '--name-only',
-                                                         '--name-status', '--no-ext-diff', '--no-textconv'})),
+                                   '--cached', '--staged', '--quiet', '--exit-code', '--no-ext-diff', '--no-textconv'}),
+             frozenset()),
+    'show': (frozenset(), frozenset({'--no-patch', '-s', '--stat', '--name-only', '--name-status',
+                                    '--no-ext-diff', '--no-textconv', '--pretty'}), frozenset({'--format', '--pretty'})),
     'rev-parse': (frozenset(), frozenset({'--show-toplevel', '--show-prefix', '--git-dir', '--git-common-dir',
-                                        '--is-inside-work-tree', '--verify', '--abbrev-ref', '--short'})),
+                                        '--is-inside-work-tree', '--verify', '--abbrev-ref', '--short'}), frozenset()),
 }
 _NEUTRAL_GH_OPTIONS = {
     ('pr', 'view'): (frozenset({'--json'}), frozenset({'--comments', '-c'}), 1),
@@ -2404,8 +2414,8 @@ def _neutral_git(argv: list[str]) -> bool:
         return False
     name, arguments = arguments[0], arguments[1:]
     if name in _NEUTRAL_GIT_OPTIONS:
-        values, flags = _NEUTRAL_GIT_OPTIONS[name]
-        return _neutral_options(arguments, values=values, flags=flags)
+        values, flags, attached_values = _NEUTRAL_GIT_OPTIONS[name]
+        return _neutral_options(arguments, values=values, flags=flags, attached_values=attached_values)
     # These families also write. Only the exact read subcommands are neutral.
     if name == 'config':
         return (len(arguments) == 2 and arguments[0] in {'--get', '--get-all', '--get-regexp'}
