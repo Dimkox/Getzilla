@@ -165,6 +165,54 @@ class PythonScannerPolicyTests(unittest.TestCase):
                 allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
                 self.assertFalse(allowed, reason)
 
+    def test_scanner_secret_operands_follow_possible_shell_directories(self):
+        (self.root / 'nested/deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # Config, report and positional source paths all use the command's directory.
+        operands = (
+            '-c fixture-sensitive.json -- example.py',
+            '-cfixture-sensitive.json -- example.py',
+            '-c=fixture-sensitive.json -- example.py',
+            '--configfile=fixture-sensitive.json -- example.py',
+            '-o fixture-sensitive.json -- example.py',
+            '-ofixture-sensitive.json -- example.py',
+            '--output=fixture-sensitive.json -- example.py',
+            'fixture-sensitive.json',
+            '-- fixture-sensitive.json',
+            '-- -o fixture-sensitive.json',
+        )
+        for prefix in ('cd nested && ', 'cd nested; '):
+            for operand in operands:
+                with self.subTest(prefix=prefix, operand=operand):
+                    command = prefix + 'python3 -m bandit ' + operand
+                    self.assertFalse(self.check(command)[0], command)
+        command = ('cd nested && cd deeper && python3 -m bandit '
+                   '-c../fixture-sensitive.json -- example.py')
+        self.assertFalse(self.check(command)[0], command)
+
+    def test_scanner_directory_controls_keep_public_paths_and_fail_closed_when_unknown(self):
+        (self.root / 'nested').mkdir()
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # The || branch runs from the original directory when cd fails.
+        for command in (
+            'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
+            'cd nested && python3 -m bandit -cpublic.yaml -opublic.json -- example.py',
+            'cd nested && python3 -m bandit -c../public.yaml -- ../example.py',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(self.check(command)[0], command)
+        for command in (
+            'cd "$DESTINATION" && python3 -m bandit -cpublic.yaml -- example.py',
+            'cd "$DESTINATION" && python3 -m bandit -- example.py',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(self.check(command)[0], command)
+        (self.root / '.getzilla/config/policy.json').write_text('{}\n')
+        command = 'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'
+        self.assertTrue(self.check(command)[0], command)
+
 
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
 class ScratchPipPolicyTest(unittest.TestCase):
