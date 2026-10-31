@@ -1,6 +1,6 @@
 # Offline continuation journal (issue235 T3)
 
-This slice preserves local attempt and budget records. It does not dispatch requests. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
+This slice preserves local attempt and budget records. Direct model dispatch remains disabled. All six startup adapters remain unqualified. Issue235 stays open for native adapters, checkpoints, effect reconciliation, fencing and current permission checks.
 
 The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 
@@ -12,11 +12,11 @@ The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 - `reserve_next(root, binding, expected_revision, event_id, Usage)` returns `adapter_not_qualified` in production. Tests patch the private boundary only to exercise persistence. Every result has `dispatch_permitted:false`, including test reservations.
 - `cancel_chain(root, binding, expected_revision)` stops further reservation and retains all expenditure. Cancellation can reduce activity after policy revocation.
 
-Bindings include chain/task/owner/route/session IDs and workspace/source/checkpoint digests. They are trusted caller references, not proof of live source or native provenance. T4/T5 must verify that provenance before any real adapter exists. IDs and category codes are bounded; raw prompts, errors and credentials are not accepted.
+Bindings include chain/task/owner/route/session IDs and workspace/source/checkpoint digests. They are trusted caller references, not proof of live source or native provenance. Native continuation must verify that provenance. IDs and category codes are bounded; raw prompts, errors and credentials are not accepted.
 
 ## Budget and crash behavior
 
-The stricter task or policy cap applies. Each task ID can have only one chain in a repository, even if a caller changes chain ID. Original usage counts; attempts use candidates in order without reuse. Requests can reserve more than one call for a bounded attempt. There is no hidden retry allowance, cost refund, expiration, pruning or automatic recovery API.
+The stricter task or policy cap applies. Each task ID can have only one chain in a repository, even if a caller changes chain ID. Original usage counts; attempts use candidates in order without reuse. Requests can reserve more than one call for a bounded attempt. There is no hidden retry allowance, cost refund, automatic record expiry, pruning or automatic recovery API.
 
 Policy JSON preserves exact decimal money. USD ceilings round down to integer micros; reservations and observed original charges round up. Positive sub-micro ceilings fail. Usage/task money accepts decimal strings, Decimal or integers, never binary floats. Time is conservatively floored to whole seconds. Absolute deadlines and last observation time survive restart. Backward clock observations stop admission. Disabling or materially changing policy stops new reservation; caps are never enlarged in place.
 
