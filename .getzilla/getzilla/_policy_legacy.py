@@ -2151,7 +2151,7 @@ _HTTP_CLIENTS = frozenset({'curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-r
 _CURL_VALUES = _CURL_BODY_OPTIONS | frozenset({
     '-X', '--request', '-H', '--header', '-o', '--output', '-D', '--dump-header', '-w', '--write-out',
     '-A', '--user-agent', '-e', '--referer', '-u', '--user', '-x', '--proxy', '-m', '--max-time',
-    '--connect-timeout', '--retry', '--retry-delay', '--cacert', '--capath', '--cert', '--key', '--url',
+    '--connect-timeout', '--retry', '--retry-delay', '--cacert', '--capath', '--cert', '--key', '--url', '--noproxy',
 })
 _CURL_SWITCHES = frozenset({
     '-f', '-s', '-S', '-L', '-I', '-G', '-i', '-k', '-v', '-4', '-6', '-q', '-g', '-N',
@@ -2302,6 +2302,7 @@ class _MutationAnalysis:
     invocations: tuple[_MutationInvocation, ...]
     reason: str | None = None
     external_unresolved: bool = False
+    context_proven: bool = True
 
 
 _TARGET_ENV = frozenset({'GH_REPO', 'GH_HOST'})
@@ -2313,6 +2314,165 @@ _UNBOUNDED_SHELL_COMMANDS = frozenset({
 })
 _UNRESOLVED_MUTATION = 'External write context is unresolved; use one literal command with an explicit target.'
 _MULTIPLE_MUTATIONS = 'Multiple external write commands require separate tool calls, each with its exact grant.'
+
+
+def _neutral_options(
+    arguments: list[str], *, values: frozenset[str] = frozenset(), flags: frozenset[str] = frozenset(),
+    maximum: int | None = None,
+) -> bool:
+    """Closed option roles for the specific read command selected by the caller."""
+    operands = index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == '--':
+            operands += len(arguments) - index - 1
+            break
+        if not word.startswith('-') or word == '-':
+            operands += 1
+        elif word not in flags:
+            option, separator, _value = word.partition('=')
+            if not word.startswith('--') and len(word) > 2 and word[:2] in values:
+                option, separator = word[:2], '='
+            if option not in values:
+                return False
+            if not separator:
+                index += 1
+                if index >= len(arguments):
+                    return False
+        index += 1
+    return maximum is None or operands <= maximum
+
+
+def _neutral_printf(arguments: list[str]) -> bool:
+    """Printf operands are data only under a literal text, %% or %s format.
+
+    Other formats can assign variables or evaluate arithmetic in supported
+    shells. Variable destinations and escape-generated formats are unmodelled.
+    """
+    if arguments[:1] == ['--']:
+        arguments = arguments[1:]
+    elif arguments and arguments[0].startswith('-'):
+        return False
+    if not arguments:
+        return False
+    format_text = arguments[0]
+    index = 0
+    while index < len(format_text):
+        char = format_text[index]
+        if char in {'%', '\\'}:
+            index += 1
+            allowed = '%s' if char == '%' else 'abefnrtvE\\'
+            if index >= len(format_text) or format_text[index] not in allowed:
+                return False
+        index += 1
+    return True
+
+
+_NEUTRAL_GIT_OPTIONS = {
+    'status': (frozenset(), frozenset({'--short', '-s', '--branch', '-b', '--porcelain', '--porcelain=v1',
+                                     '--porcelain=v2', '--long', '--show-stash', '--no-ahead-behind'})),
+    'log': (frozenset({'-n', '--max-count', '--format', '--pretty', '--since', '--until', '--author', '--grep'}),
+            frozenset({'--oneline', '--no-patch', '--stat', '--name-only', '--name-status', '--all', '--decorate',
+                       '--no-decorate', '--no-ext-diff', '--no-textconv'})),
+    'diff': (frozenset(), frozenset({'--stat', '--shortstat', '--numstat', '--name-only', '--name-status', '--check',
+                                   '--cached', '--staged', '--quiet', '--exit-code', '--no-ext-diff', '--no-textconv'})),
+    'show': (frozenset({'--format', '--pretty'}), frozenset({'--no-patch', '-s', '--stat', '--name-only',
+                                                         '--name-status', '--no-ext-diff', '--no-textconv'})),
+    'rev-parse': (frozenset(), frozenset({'--show-toplevel', '--show-prefix', '--git-dir', '--git-common-dir',
+                                        '--is-inside-work-tree', '--verify', '--abbrev-ref', '--short'})),
+}
+_NEUTRAL_GH_OPTIONS = {
+    ('pr', 'view'): (frozenset({'--json'}), frozenset({'--comments', '-c'}), 1),
+    ('issue', 'view'): (frozenset({'--json'}), frozenset({'--comments', '-c'}), 1),
+    ('repo', 'view'): (frozenset({'--json'}), frozenset(), 1),
+    ('pr', 'list'): (frozenset({'--json', '--limit', '-L', '--state', '-s', '--base', '-B', '--head', '-H',
+                              '--author', '-A', '--label', '-l', '--search', '-S'}), frozenset(), 0),
+    ('issue', 'list'): (frozenset({'--json', '--limit', '-L', '--state', '-s', '--assignee', '-a',
+                                 '--author', '-A', '--label', '-l', '--search', '-S'}), frozenset(), 0),
+    ('pr', 'status'): (frozenset({'--json'}), frozenset(), 0),
+    ('issue', 'status'): (frozenset(), frozenset(), 0),
+    ('pr', 'checks'): (frozenset({'--json'}), frozenset({'--required'}), 1),
+    ('pr', 'diff'): (frozenset(), frozenset({'--stat', '--name-only', '--patch'}), 1),
+}
+
+
+def _neutral_git(argv: list[str]) -> bool:
+    arguments = argv[1:]
+    while arguments and arguments[0] == '--no-pager':
+        arguments = arguments[1:]
+    if not arguments:
+        return False
+    name, arguments = arguments[0], arguments[1:]
+    if name in _NEUTRAL_GIT_OPTIONS:
+        values, flags = _NEUTRAL_GIT_OPTIONS[name]
+        return _neutral_options(arguments, values=values, flags=flags)
+    # These families also write. Only the exact read subcommands are neutral.
+    if name == 'config':
+        return (len(arguments) == 2 and arguments[0] in {'--get', '--get-all', '--get-regexp'}
+                and not arguments[1].startswith('-')) or arguments in [['--list'], ['-l']]
+    if name == 'remote':
+        return arguments in [[], ['-v'], ['--verbose']] or (
+            len(arguments) == 2 and arguments[0] == 'get-url' and not arguments[1].startswith('-')
+        )
+    if name == 'branch':
+        return arguments in [['--show-current'], ['--list']]
+    return False
+
+
+def _neutral_gh(argv: list[str]) -> bool:
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    if words[:1] == ['api']:
+        return _gh_arguments(argv) is not None and _neutral_options(
+            [word for index, word in enumerate(argv[1:], 1) if index != indexes[0]],
+            values=_GH_CASE_GLOBAL_VALUES | frozenset({'-X', '--method', '-H', '--header'}),
+            flags=frozenset({'-i', '--include', '--paginate', '--silent', '--slurp', '--verbose'}), maximum=1,
+        )
+    schema = _NEUTRAL_GH_OPTIONS.get(tuple(words))
+    if schema is None or _gh_ambiguous_command_prefix(argv):
+        return False
+    values, flags, maximum = schema
+    return _neutral_options(
+        [word for index, word in enumerate(argv[1:], 1) if index not in indexes],
+        values=values | _GH_CASE_GLOBAL_VALUES, flags=flags, maximum=maximum,
+    )
+
+
+def _neutral_command(argv: list[str], root: Path | None) -> bool:
+    """Prove a bounded non-mutation command; a data argument family is not proof.
+
+    Unknown builtins, dispatchers and read-family options can change persistent
+    variables, executable resolution or repository configuration. Refuse them
+    around a mutation instead of trying to enumerate all state-writing names.
+    """
+    name, arguments = argv[0], argv[1:]
+    if name == 'printf':
+        return _neutral_printf(arguments)
+    if name in {'echo', 'true', 'false'}:
+        return True
+    if name == 'pwd':
+        return arguments in [[], ['-L'], ['-P']]
+    if name == 'cat':
+        return _neutral_options(arguments, flags=frozenset({'-A', '-b', '-e', '-E', '-n', '-s', '-t', '-T', '-u', '-v',
+                                                          '--show-all', '--number', '--number-nonblank',
+                                                          '--show-ends', '--show-tabs', '--squeeze-blank'}))
+    if name == 'git':
+        return _neutral_git(argv)
+    if name == 'gh':
+        return _neutral_gh(argv)
+    if name in {'cd', 'pushd'}:
+        if arguments[:1] == ['--']:
+            arguments = arguments[1:]
+        if root is None or len(arguments) != 1 or not arguments[0] or arguments[0].startswith('-'):
+            return False
+        if name == 'pushd' and arguments[0].startswith('+'):
+            return False  # directory-stack selection is not a literal path
+        # This exception does not grant a second root. The existing root guard
+        # still resolves the complete original command, including symlinks.
+        try:
+            return (root / arguments[0]).resolve().is_relative_to(root.resolve())
+        except (OSError, RuntimeError, ValueError):
+            return False
+    return False
 
 
 def _argv_mutation(argv: list[str], root: Path | None, env: dict[str, str]) -> _MutationInvocation | None:
@@ -2385,11 +2545,12 @@ def _mutation_analysis(
     except ValueError:
         external = bool(_MUTATION_WORDS.search(command))
         risky = external or _AUTHORITY_WORDS.search(command)
-        return _MutationAnalysis((), _UNRESOLVED_MUTATION if risky else None, external)
+        return _MutationAnalysis((), _UNRESOLVED_MUTATION if risky else None, external, False)
     uncertain = any(word.operator and word.value not in {'&&', ';', '\n'}
                     and '<' not in word.value and '>' not in word.value for word in words)
     invocations: list[_MutationInvocation] = []
-    unresolved = external_unresolved = target_env_effect = False
+    unresolved = external_unresolved = False
+    context_proven = not uncertain
     inherited = inherited if inherited is not None else {key: os.environ[key] for key in _TARGET_ENV if key in os.environ}
     for chunk in _command_chunks(command):
         lexical = _shell_tokens(chunk)
@@ -2397,13 +2558,14 @@ def _mutation_analysis(
         assignments, raw_argv = _leading_env(raw_argv)
         env = {**inherited, **assignments}
         if not raw_argv:
-            target_env_effect = target_env_effect or bool(_TARGET_ENV & assignments.keys())
+            context_proven = False  # assignment-only commands can write through inherited attributes
             continue
         argv, bounded = _bounded_command(raw_argv)
         if _executable_name(raw_argv[0]) == 'env':
             wrapper_env, _ = _leading_env(raw_argv[1:])
             env.update(wrapper_env)
         if not argv:
+            context_proven = False
             found = _unproven_mutations(chunk)
             unresolved = unresolved or bool(found)
             external_unresolved = external_unresolved or any(item.external for item in found)
@@ -2417,6 +2579,8 @@ def _mutation_analysis(
             invocations.extend(nested.invocations)
             unresolved = unresolved or nested.reason is not None
             external_unresolved = external_unresolved or nested.external_unresolved
+            context_proven = context_proven and nested.context_proven
+            context_proven = context_proven and not any(word.operator or word.opaque for word in lexical)
             if nested.invocations and (ambiguous_redirect or any(word.opaque for word in lexical)):
                 unresolved = True
             continue
@@ -2426,20 +2590,16 @@ def _mutation_analysis(
             unresolved = unresolved or not bounded or ambiguous_redirect or any(word.opaque for word in lexical)
             unresolved = unresolved or mutation.external == 'direct-http-write'
         else:
-            # Known data/read commands keep leading assignments local to that invocation.
-            # Unknown commands and special builtins can alter the surrounding shell state.
-            if name not in _DATA_ARGUMENT_EXECUTABLES:
-                target_env_effect = target_env_effect or bool(_TARGET_ENV & assignments.keys())
-            if name in {'export', 'unset', 'set', 'declare', 'typeset', 'readonly', 'env'}:
-                target_env_effect = target_env_effect or any(word.split('=', 1)[0] in _TARGET_ENV for word in argv[1:])
+            context_proven = context_proven and bounded and _neutral_command(argv, root)
+            context_proven = context_proven and not any(word.operator or word.opaque for word in lexical)
             found = _unproven_mutations(chunk)
             unresolved = unresolved or bool(found)
             external_unresolved = external_unresolved or any(item.external for item in found)
-    if unresolved or (invocations and (uncertain or target_env_effect)):
-        return _MutationAnalysis(tuple(invocations), _UNRESOLVED_MUTATION, external_unresolved)
+    if unresolved or (invocations and (uncertain or not context_proven)):
+        return _MutationAnalysis(tuple(invocations), _UNRESOLVED_MUTATION, external_unresolved, False)
     if len(invocations) > 1:
         return _MutationAnalysis(tuple(invocations), _MULTIPLE_MUTATIONS)
-    return _MutationAnalysis(tuple(invocations))
+    return _MutationAnalysis(tuple(invocations), context_proven=context_proven)
 
 
 def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
