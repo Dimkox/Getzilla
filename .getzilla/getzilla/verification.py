@@ -34,7 +34,11 @@ from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShe
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 from .stacks import load_registry, stack_checks
 from .state import get_active_change, get_active_route, update_route
-from .python_test_runner import ProcessResult, RunCancelled, RunnerError, _cancellation, execute, run_core_tests, run_named_tests, selected_workers
+from .python_test_runner import (
+    DEFAULT_CORE_CPU_RESERVE, DEFAULT_CORE_WORKER_CAP, TIMEOUT as CORE_TEST_TIMEOUT,
+    ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
+    execute, run_core_tests, run_named_tests,
+)
 from .util import (
     find_tool,
     tool_search_path,
@@ -281,6 +285,7 @@ def _architecture_check(
             "base_kind": "commit",
             "fitness_evidence_digest": fitness.evidence_digest,
             "fitness_status": fitness.status,
+            "fitness_results": [asdict(item) for item in fitness.results],
             "generated_artifact_digests": artifact_digests(rendered),
             "head_kind": "worktree",
             "repository_inventory_digest": diff.repository_inventory_digest,
@@ -2115,7 +2120,7 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
 def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
     """Bind at most 50 reported paths and test identifiers to committed source."""
     candidates = []
-    for match in re.finditer(r'tests/[A-Za-z0-9_./-]+\.py', output):
+    for match in re.finditer(r'tests/[A-Za-z0-9_./-]+\.py', output.replace('\\', '/')):
         path = match.group(0)
         if '..' not in PurePosixPath(path).parts and path not in candidates:
             candidates.append(path)
@@ -2227,9 +2232,8 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
         return results
     if (root / 'tests').is_dir():
         try:
-            workers = selected_workers(root)
-            if workers is None and mode in {'pr', 'release'}:
-                workers = selected_workers(root) if (root / '.getzilla-test-runner.json').exists() else 2
+            selection = core_worker_selection(root, mode)
+            workers = selection.workers
             core = run_core_tests(root, mode, workers) if workers is not None else None
         except RunnerError as exc:
             results.append(CheckResult('python-unittest', 'fail', str(exc)))
@@ -2241,16 +2245,32 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
             for name, process in [('python-unittest', core.tests), ('coverage', core.coverage)]:
                 if process is not None:
                     backend = core.versions.get('engine', 'pytest-xdist' if workers else 'unittest')
+                    diagnostic = process.stderr
+                    if name == 'python-unittest' and process.terminal_state == 'timeout':
+                        diagnostic += (
+                            '\nInspect the measured CPU allocation, then run a fresh full gate with '
+                            'GETZILLA_TEST_WORKERS=N python3 scripts/getzilla_verify.py --mode pr '
+                            '(N must fit the available task allocation). This failed run is not reusable evidence.'
+                        )
                     results.append(CheckResult(
                         name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
-                        f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f}',
+                        f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
+                        f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
                         command=process.command, stdout=_core_output_excerpt(
                             process.stdout, failed=process.returncode != 0,
                             trusted=_trusted_pytest_metadata(root, process.stdout) if name == 'python-unittest' and process.returncode else None),
-                        stderr=(process.stderr + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
+                        stderr=(diagnostic + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
                                   'requested_workers': str(requested_workers),
+                                  'actual_workers': str(workers),
+                                  'selection_source': selection.source,
+                                  'observed_capacity': selection.capacity,
+                                  'default_worker_cap': DEFAULT_CORE_WORKER_CAP if selection.source == 'default' else None,
+                                  'default_cpu_reserve': DEFAULT_CORE_CPU_RESERVE if selection.source == 'default' else None,
+                                  'backend': backend,
+                                  'test_timeout_seconds': CORE_TEST_TIMEOUT,
+                                  'terminal_state': process.terminal_state,
                                   'versions': json.dumps(core.versions, sort_keys=True),
                                   'coverage': json.dumps(core.coverage_metadata, sort_keys=True)}],
                     ))

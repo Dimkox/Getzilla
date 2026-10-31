@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.util import find_tool
+from getzilla.python_test_runner import WorkerSelection
 from getzilla.doctor import run_doctor
 from getzilla import architecture as architecture_module
 from getzilla import receipts as receipts_module
@@ -346,6 +347,15 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(verification_module._core_output_excerpt(output, failed=False), output[-12000:])
         self.assertEqual(verification_module._core_output_excerpt(output, failed=True), output[-12000:])
 
+    def test_core_excerpt_caps_locations_before_output_character_limit(self) -> None:
+        output = '==== FAILURES ====\n' + ''.join(f'tests/t.py:{n}: ValueError\n' for n in range(1, 102))
+        self.assertLess(len(output), 5500)
+        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/t.py': (101, set())})
+        self.assertEqual(sum(line.startswith('tests/t.py:') for line in result.splitlines()), 100)
+        self.assertIn('tests/t.py:100: ValueError', result)
+        self.assertNotIn('tests/t.py:101:', result)
+        self.assertIn('additional failure locations omitted', result)
+
     def test_core_excerpt_removes_ansi_and_unsafe_failure_text(self) -> None:
         output = ('\x1b[31m==== FAILURES ====\x1b[0m\n'
                   '\x1b[31mtests/test_peer.py:42: RuntimeError: SECRET\x1b[0m\n'
@@ -372,7 +382,7 @@ class VerificationTests(unittest.TestCase):
             root = Path(temporary)
             (root / 'tests').mkdir()
             with patch.object(verification_module, '_trusted_pytest_metadata', return_value={'tests/test_peer.py': (200, {'test_close'})}), \
-                    patch.object(verification_module, 'selected_workers', return_value=8), \
+                    patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(8, 'configuration')), \
                     patch.object(verification_module, 'run_core_tests', return_value=core):
                 checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
         result = next(check for check in checks if check.name == 'python-unittest')
@@ -381,17 +391,40 @@ class VerificationTests(unittest.TestCase):
         self.assertIn('FAILED tests/test_peer.py::test_close', result.stdout)
         self.assertNotIn('secret-token-123', result.stdout)
 
+    def test_core_result_normalizes_windows_paths_before_real_metadata_binding(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        path = 'tests/test_verification_doctor.py'
+        node = 'VerificationTests::test_pytest_metadata_only_trusts_tracked_source_names'
+        for separator in ('/', '\\'):
+            with self.subTest(separator=separator):
+                reported_path = path.replace('/', separator)
+                output = (f'==== FAILURES ====\r\n{reported_path}:320: AssertionError: PRIVATE_VALUE\r\n'
+                          f'FAILED {reported_path}::{node} - PRIVATE_VALUE\r\n'
+                          f'FAILED tests{separator}untracked_private.py::test_secret\r\n')
+                core = CoreTestRun(ProcessResult(['pytest'], 1, stdout=output), None, 2, {'engine': 'pytest-xdist'}, {})
+                with patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(2, 'configuration')), \
+                        patch.object(verification_module, 'run_core_tests', return_value=core):
+                    checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+                result = next(check for check in checks if check.name == 'python-unittest')
+                self.assertEqual(result.status, 'fail')
+                self.assertIn(path + ':320: AssertionError', result.stdout)
+                self.assertIn('FAILED ' + path + '::' + node, result.stdout)
+                self.assertNotIn('PRIVATE_VALUE', result.stdout)
+                self.assertNotIn('untracked_private', result.stdout)
+
     def test_core_excerpt_rejects_captured_path_and_untrusted_node_spoof(self) -> None:
         output = ('==== FAILURES ====\n'
                   'tests/test_peer.py:42: AssertionError\n'
                   'tests/test_peer.py:43: PRIVATE_SENTINELError\n'
                   '---- Captured stdout call ----\n'
+                  'tests/test_peer.py:99: AssertionError\n'
+                  'FAILED tests/test_peer.py::test_captured - AssertionError\n'
                   'tests/test_secret_value.py:123: AssertionError\n'
                   'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - AssertionError\n'
                   '==== short test summary info ====\n'
                   'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - secret-token\n'
                   'FAILED tests/test_peer.py::test_close - AssertionError\n')
-        trusted = {'tests/test_peer.py': (200, {'test_close'})}
+        trusted = {'tests/test_peer.py': (200, {'test_close', 'test_captured'})}
         result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
         self.assertIn('tests/test_peer.py:42: AssertionError', result)
         self.assertIn('FAILED tests/test_peer.py::test_close', result)
@@ -399,6 +432,8 @@ class VerificationTests(unittest.TestCase):
         self.assertNotIn('secret_value', result)
         self.assertNotIn('secret-token', result)
         self.assertIn('tests/test_peer.py:43', result)
+        self.assertNotIn('tests/test_peer.py:99', result)
+        self.assertNotIn('::test_captured', result)
 
     def test_pytest_metadata_only_trusts_tracked_source_names(self) -> None:
         path = 'tests/test_verification_doctor.py'
@@ -1356,6 +1391,42 @@ class VerificationTests(unittest.TestCase):
             for key in ('schema_digest', 'system_digest', 'rules_digest', 'architecture_digest', 'architecture_evidence_digest'):
                 self.assertRegex(metadata[key], r'^[0-9a-f]{64}$')
             self.assertEqual(len(metadata['generated_artifact_digests']), 5)
+
+    def test_architecture_report_retains_individual_failed_fitness_results(self) -> None:
+        from getzilla.architecture_fitness import ApplicabilityEvidence, FitnessReport, FitnessResult
+
+        failed = FitnessResult(
+            category='code_budget', status='fail', rule_ids=('RULE-BUDGET-001',),
+            findings=('owned source exceeds the rule budget',),
+            applicability=ApplicabilityEvidence(
+                predicate='owned source changed', scanned_scope=('factory/src/service.py',),
+                reason_code='changed-owned-source', inventory_digest='c' * 64,
+            ),
+        )
+        fitness = FitnessReport(
+            results=(failed,), status='fail', pre_risk='green', escalation='none', post_risk='green',
+            triggers=(), exemption_state='none', required_scopes=(), evidence_digest='f' * 64,
+        )
+        with project_copy(git=True) as root:
+            self._adopt_architecture(root)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
+            route = build_route(root, 'Review current architecture', 's1').to_dict()
+            # This tests the verifier's evidence boundary, not the fitness scanner.
+            with patch.object(verification_module, 'evaluate_fitness', return_value=fitness):
+                result, evidence = verification_module._architecture_check(root, route)
+
+        self.assertEqual(result.status, 'fail', result.summary)
+        self.assertEqual(evidence['fitness_status'], 'fail')
+        retained = json.loads(json.dumps(evidence.get('fitness_results')))
+        self.assertEqual(retained, [{
+            'category': 'code_budget', 'status': 'fail', 'rule_ids': ['RULE-BUDGET-001'],
+            'findings': ['owned source exceeds the rule budget'],
+            'applicability': {'predicate': 'owned source changed',
+                              'scanned_scope': ['factory/src/service.py'],
+                              'reason_code': 'changed-owned-source', 'inventory_digest': 'c' * 64},
+        }])
+        self.assertTrue(any(item.get('code') == 'architecture-fitness' for item in result.details))
 
     def test_verify_unconfigured_is_compatible_but_adopted_deletion_fails(self) -> None:
         with project_copy(git=True) as root:
@@ -2479,7 +2550,7 @@ class FailFastVerificationTests(unittest.TestCase):
                 (root / rel).write_text('# dispatch fixture\n')
             with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'ok')), \
                  patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'no non-test python paths')), \
-                 patch.object(verification_module, 'selected_workers', return_value=None), \
+                 patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(None, 'consumer')), \
                  patch.object(verification_module, 'run_core_tests', return_value=None), \
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \
                  patch.dict(os.environ, {}, clear=False):

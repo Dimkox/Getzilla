@@ -1384,6 +1384,13 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
         return action, True
     if executable == 'gh' and _gh_command(normalized) in {('alias', 'set'), ('alias', 'import')}:
         return action, True
+    if executable == 'gh':
+        if _gh_ambiguous_command_prefix(argv):
+            return action, True
+        if _gh_argument_context(argv) is not None:
+            parsed = _gh_arguments(argv)
+            if parsed is None or (parsed.command != ('api',) and any('$' in word or '`' in word for word in argv)):
+                return action, True
     if executable == 'git':
         selector_index = _git_selector_index(argv)
         if selector_index >= len(argv):
@@ -1653,6 +1660,167 @@ _GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IG
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
 
 
+_GH_CASE_GLOBAL_VALUES = frozenset({'-R', '--repo', '--hostname'})
+_GH_BODY_VALUES = frozenset({'-b', '--body', '-F', '--body-file'})
+_GH_CREATE_VALUES = _GH_BODY_VALUES | frozenset({
+    '-t', '--title', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-p', '--project', '-T', '--template',
+})
+_GH_EDIT_VALUES = _GH_BODY_VALUES | frozenset({
+    '-t', '--title', '-m', '--milestone', '--add-assignee', '--remove-assignee', '--add-label', '--remove-label',
+    '--add-project', '--remove-project',
+})
+# A bounded set of documented mutation contexts. Other gh commands keep their existing policy.
+# Values are case-sensitive: review -r and merge -m are flags, but create -r/-m consume data.
+_GH_ARGUMENT_SCHEMAS = {
+    ('pr', 'create'): (_GH_CREATE_VALUES | {'-B', '--base', '-H', '--head', '-r', '--reviewer'},
+                       frozenset({'-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose',
+                                  '-e', '--editor', '-w', '--web', '--dry-run', '--no-maintainer-edit'}), 0),
+    ('issue', 'create'): (_GH_CREATE_VALUES, frozenset({'-e', '--editor', '-w', '--web'}), 0),
+    ('pr', 'edit'): (_GH_EDIT_VALUES | {'-B', '--base', '--add-reviewer', '--remove-reviewer'},
+                    frozenset({'--remove-milestone'}), 1),
+    ('issue', 'edit'): (_GH_EDIT_VALUES, frozenset({'--remove-milestone'}), 1),
+    ('pr', 'comment'): (_GH_BODY_VALUES, frozenset({'-e', '--editor', '-w', '--web', '--edit-last',
+                                                 '--create-if-none', '--delete-last', '--yes'}), 1),
+    ('issue', 'comment'): (_GH_BODY_VALUES, frozenset({'-e', '--editor', '-w', '--web', '--edit-last',
+                                                    '--create-if-none', '--delete-last', '--yes'}), 1),
+    ('pr', 'review'): (_GH_BODY_VALUES, frozenset({'-a', '--approve', '-c', '--comment', '-r', '--request-changes'}), 1),
+    ('pr', 'merge'): (_GH_BODY_VALUES | {'-A', '--author-email', '-t', '--subject', '--match-head-commit'},
+                     frozenset({'--admin', '--auto', '--disable-auto', '-d', '--delete-branch',
+                                '-m', '--merge', '-r', '--rebase', '-s', '--squash'}), 1),
+    ('api',): (_GH_API_VALUE_OPTIONS, frozenset({'--allow-escape-sequences', '-i', '--include', '--paginate',
+                                               '--silent', '--slurp', '--verbose'}), 1),
+}
+
+
+@dataclass(frozen=True)
+class _GhArguments:
+    command: tuple[str, ...]
+    operands: tuple[str, ...]
+    options: tuple[tuple[str, str], ...]
+    flags: frozenset[str]
+
+
+def _gh_argument_context(argv: list[str]) -> tuple[tuple[str, ...], tuple[int, ...]] | None:
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    command = tuple(word.lower() for word in words)
+    if command[:1] == ('api',):
+        command, indexes = ('api',), indexes[:1]
+    elif command in {('pr', 'new'), ('issue', 'new')}:
+        command = (command[0], 'create')
+    if command in _GH_ARGUMENT_SCHEMAS:
+        return command, tuple(indexes)
+    return None
+
+
+def _gh_ambiguous_command_prefix(argv: list[str]) -> bool:
+    """Only known global options may precede the command words we classify."""
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    boundary = indexes[0] if words[:1] == ['api'] else indexes[-1] if indexes else len(argv)
+    index = 1
+    while index < boundary:
+        token = argv[index]
+        if token in _GH_CASE_GLOBAL_VALUES:
+            if index + 1 >= len(argv):
+                return True
+            index += 2
+            continue
+        if (token.startswith('--repo=') or token.startswith('--hostname=')
+                or (token.startswith('-R') and len(token) > 2)):
+            index += 1
+            continue
+        if token.startswith('-') and token not in {'-h', '--help', '--version'}:
+            return True
+        index += 1
+    return False
+
+
+def _gh_arguments(argv: list[str]) -> _GhArguments | None:
+    """Consume known gh option values once; ``None`` means unmodelled or ambiguous.
+
+    This consumes argv from the existing shell lexer. Short clusters and unknown
+    flags stay unsupported, and a hyphen-leading option value is always data.
+    """
+    context = _gh_argument_context(argv)
+    if context is None:
+        return None
+    command, command_indexes = context
+    values, switches, maximum = _GH_ARGUMENT_SCHEMAS[command]
+    values = values | _GH_CASE_GLOBAL_VALUES
+    options: list[tuple[str, str]] = []
+    flags: set[str] = set()
+    operands: list[str] = []
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if index in command_indexes:
+            index += 1
+            continue
+        if token == '--':
+            operands.extend(argv[index + 1:])
+            break
+        if not token.startswith('-') or token == '-':
+            operands.append(token)
+            index += 1
+            continue
+        name, separator, value = token.partition('=')
+        if name not in values and name not in switches and token[:2] in values:
+            name, separator, value = token[:2], '=', token[2:].removeprefix('=')
+        if name in values:
+            if not separator:
+                index += 1
+                if index >= len(argv) or index in command_indexes:
+                    return None
+                value = argv[index]
+            if command == ('api',):
+                name = {'-R': '--repo', '-F': '--field', '-f': '--raw-field'}.get(name, name)
+            else:
+                name = {'-R': '--repo', '-b': '--body', '-F': '--body-file'}.get(name, name)
+            if name in {'--repo', '--hostname', '--body', '--body-file', '--input'} and any(
+                seen == name for seen, _ in options
+            ):
+                return None
+            options.append((name, value))
+        elif name in switches or name in {'-h', '--help'}:
+            if separator and value.lower() not in {'true', 'false', 't', 'f', '1', '0'}:
+                return None
+            flags.add(name)
+        else:
+            return None
+        index += 1
+    dynamic_operand = any(
+        ('$' in word or '`' in word) if command == ('api',) else _authority_token_is_dynamic(word)
+        for word in operands
+    )
+    if len(operands) > maximum or dynamic_operand:
+        return None
+    selected = dict(options)
+    if '--body' in selected and '--body-file' in selected:
+        return None
+    if '--repo' in selected and not re.fullmatch(r'(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', selected['--repo']):
+        return None
+    if '--hostname' in selected and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?', selected['--hostname']):
+        return None
+    parsed = _GhArguments(command, tuple(operands), tuple(options), frozenset(flags))
+    if any(not path or _authority_token_is_dynamic(path) for path in _gh_file_operands(parsed)):
+        return None
+    return parsed
+
+
+def _gh_file_operands(parsed: _GhArguments) -> list[str]:
+    """Actual file consumers; API typed fields and literal text have different roles."""
+    paths: list[str] = []
+    for name, value in parsed.options:
+        if name in {'--body-file', '--input'} or (
+            parsed.command == ('pr', 'create') and name in {'-T', '--template'}
+        ):
+            paths.append(value)
+        elif parsed.command == ('api',) and name == '--field':
+            _, separator, field = value.partition('=')
+            if separator and field.startswith('@'):
+                paths.append(field[1:])
+    return paths
+
+
 def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') -> tuple[str, str, str] | None:
     """``(METHOD, host, endpoint)`` of ``gh api <arguments>`` when it writes, else ``None``.
 
@@ -1696,6 +1864,10 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
 
 def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
     """Target host of a gh command: ``--hostname`` flag, else ``GH_HOST`` from the prefix."""
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selected = dict(parsed.options).get('--hostname') if parsed else None
+        return (selected or (env or {}).get('GH_HOST', '')).lower() or None
     for index, word in enumerate(argv):
         if word == '--hostname' and index + 1 < len(argv):
             return argv[index + 1].lower()
@@ -1708,6 +1880,10 @@ def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
 
 def _gh_repo_flag(argv: list[str]) -> str | None:
     """Value of gh's ``-R``/``--repo`` in any pflag spelling: ``-R x``, ``-Rx``, ``-R=x``, ``--repo x``, ``--repo=x``."""
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selected = dict(parsed.options).get('--repo') if parsed else ''
+        return selected.lower() if selected is not None else None
     for index, word in enumerate(argv):
         if word in {'-R', '--repo'}:
             return argv[index + 1].lower() if index + 1 < len(argv) else ''
@@ -1747,9 +1923,13 @@ def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | Non
 
 def _gh_pull_request(argv: list[str], index: int, root: Path | None, env: dict[str, str] | None = None) -> str | None:
     """``owner/repo#N`` for the PR a ``gh pr <command>`` names after ``argv[index]``, or ``None``."""
-    selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
-        '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
-    }), 1)
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selectors = list(parsed.operands) if parsed else []
+    else:
+        selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
+            '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
+        }), 1)
     if not selectors:
         return None
     url = _GITHUB_PULL_URL.match(selectors[0])
@@ -1892,7 +2072,8 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
             resource = _gh_pull_request(argv, indexes[1], root, env)
             # gh pr merge --admin bypasses branch protection; a plain merge grant must not
             # authorize it, so the target is a distinct resource that only an explicit grant names.
-            if resource is not None and any(w == '--admin' or w.startswith('--admin=') for w in lowered):
+            parsed = _gh_arguments(argv)
+            if resource is not None and parsed is not None and '--admin' in parsed.flags:
                 resource = f'{resource}!admin'
         elif action == 'github-release' and len(positionals) > 2:
             resource = f'{_gh_repository(argv, root, env)}@{argv[indexes[2]]}'
@@ -1951,8 +2132,14 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
     The repository is ``-R``/``--repo``, else ``GH_REPO``, else ``.`` (the current repository);
     a non-default ``GH_HOST`` qualifies it, so an env override never matches a default grant.
     """
+    if _gh_ambiguous_command_prefix(argv):
+        return 'gh:'
+    context = _gh_argument_context(argv)
+    parsed = _gh_arguments(argv) if context is not None else None
+    if context is not None and (parsed is None or (parsed.command != ('api',) and any('$' in word or '`' in word for word in argv))):
+        return 'gh:'  # existing grant normalization forbids category-only resources
     if any('$' in word or '`' in word for word in argv):
-        return None  # a dynamic selector is ambiguous authority, not a grantable exact target
+        return None
     lowered = [word.lower() for word in argv]
     positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
     if not positionals or positionals[0] in _GH_READ_GROUPS or (len(positionals) > 1 and positionals[1] in _GH_READ_COMMANDS):
@@ -1961,11 +2148,14 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
         return None  # `gh pr` alone prints help
     if _production_action(['gh', *lowered[1:]]) or tuple(positionals) == ('pr', 'review'):
         return None
-    operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS, 8)
+    if parsed is not None:
+        operands = list(parsed.operands)
+    else:
+        operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS | {'-R'}, 8)
     repository = _gh_repo_flag(argv)
     if repository is None:
         repository = (env or {}).get('GH_REPO', '').lower() or '.'
-    host = (env or {}).get('GH_HOST', '').lower()
+    host = _gh_host(argv, env) if parsed is not None else (env or {}).get('GH_HOST', '').lower()
     if host and host != 'github.com':
         repository = f'{host}/{repository}'
     return f'gh:{repository} ' + ' '.join([*positionals, *operands])
@@ -2457,6 +2647,10 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
         return None
     if name == 'curl':
         return _curl_path_words(rest)
+    if name == 'gh':
+        parsed = _gh_arguments(argv)
+        if parsed is not None:
+            return _gh_file_operands(parsed)
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:

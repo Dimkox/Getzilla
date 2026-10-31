@@ -28,6 +28,8 @@ PINS = {'pytest': '9.1.1', 'pytest-xdist': '3.8.0', 'pytest-cov': '7.1.0', 'cove
 CONFIG = '.getzilla-test-runner.json'
 TIMEOUT = 900
 OUTPUT_LIMIT = 2 * 1024 * 1024
+DEFAULT_CORE_WORKER_CAP = 6
+DEFAULT_CORE_CPU_RESERVE = 2
 
 
 class RunnerError(ValueError):
@@ -45,8 +47,37 @@ def _closed_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def selected_workers(root: Path) -> int | None:
     """No opt-in means the existing consumer runner remains authoritative."""
+    return core_worker_selection(root, 'fast').workers
+
+
+@dataclass(frozen=True)
+class WorkerSelection:
+    workers: int | None
+    source: str
+    capacity: int | None = None
+
+
+def _automatic_capacity() -> int:
+    """A live bounded ceiling, not a reservation of CPU, PID or memory capacity."""
+    try:
+        available = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available = 0
+    if available <= 0:
+        available = os.cpu_count() or 1
+    selected = min(28, max(1, available))
+    if sys.platform == 'linux':
+        quota = linux_quota_capacity()
+        if quota is not None:
+            selected = min(selected, quota)
+    return selected
+
+
+def core_worker_selection(root: Path, mode: str) -> WorkerSelection:
+    """Keep explicit requests compatible; reserve bounded PR/release defaults."""
     path = root / CONFIG
     value: object = None
+    source = 'consumer'
     if path.exists() or path.is_symlink():
         try:
             attributes = path.stat()
@@ -60,6 +91,7 @@ def selected_workers(root: Path) -> int | None:
             value = config['workers']
             if value != 'auto' and (type(value) is not int or not 0 <= value <= 64):
                 raise RunnerError('workers must be auto or an integer from 0 to 64')
+            source = 'configuration'
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise RunnerError('unreadable test runner configuration') from exc
     override = os.environ.get('GETZILLA_TEST_WORKERS')
@@ -69,26 +101,21 @@ def selected_workers(root: Path) -> int | None:
         value = override if override == 'auto' else int(override)
         if value != 'auto' and value > 64:
             raise RunnerError('GETZILLA_TEST_WORKERS exceeds 64')
-    if value is None:
-        return None
+        source = 'environment'
+    if value is None and mode not in {'pr', 'release'}:
+        return WorkerSelection(None, source)
     if os.environ.get('_GETZILLA_TEST_CHILD') == '1':
-        return 0
+        return WorkerSelection(0, 'child')
+    if value is None:
+        capacity = _automatic_capacity()
+        return WorkerSelection(min(DEFAULT_CORE_WORKER_CAP, max(1, capacity - DEFAULT_CORE_CPU_RESERVE)),
+                               'default', capacity)
     if value == 'auto':
         if not _parallel_process_cleanup_supported():
-            return 0
-        try:
-            available = len(os.sched_getaffinity(0))
-        except (AttributeError, OSError):
-            available = 0
-        if available <= 0:
-            available = os.cpu_count() or 1
-        selected = min(28, max(1, available))
-        if sys.platform == 'linux':
-            quota = linux_quota_capacity()
-            if quota is not None:
-                selected = min(selected, quota)
-        return selected
-    return int(value)
+            return WorkerSelection(0, source)
+        capacity = _automatic_capacity()
+        return WorkerSelection(capacity, source, capacity)
+    return WorkerSelection(int(value), source)
 
 
 @dataclass
@@ -312,7 +339,7 @@ def _environment(root: Path, data_file: Path) -> dict[str, str]:
     # Test children write temporary files inside this run's folder, so the run's own cleanup also
     # removes what a killed or timed-out child left behind (#168).
     scratch = data_file.parent / 'tmp'
-    scratch.mkdir(exist_ok=True)
+    scratch.mkdir(mode=0o700, exist_ok=True)
     environment = {
         key: value for key, value in os.environ.items()
         if not key.startswith(('PYTEST_', 'COVERAGE_', 'COV_CORE_'))
@@ -416,8 +443,10 @@ def _read_limited(path: Path) -> str:
         return f'{type(exc).__name__}: {exc}'
 
 
-def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, workers: int, environment: dict[str, str]) -> ProcessResult:
-    test_files = _unittest_files(root)
+def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, workers: int, environment: dict[str, str], *,
+                                test_files: list[str] | None = None) -> ProcessResult:
+    if test_files is None:
+        test_files = _unittest_files(root)
     command = [
         sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
         '-m', 'unittest', 'discover', '-s', 'tests', '-p', '<test-file>',
@@ -570,7 +599,9 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             if measured:
                 command = [sys.executable, '-m', 'coverage', 'run', f'--rcfile={config}', *command[1:]]
         if workers and engine == 'coverage-unittest-parallel':
-            tests = _parallel_coverage_unittest(root, config, data_file, workers, environment)
+            test_files = _unittest_files(root)
+            workers = min(workers, len(test_files))
+            tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
         else:
             tests = execute(command, root, environment)
         retained['tests'] = tests

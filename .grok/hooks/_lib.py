@@ -21,7 +21,9 @@ if str(STACK) not in sys.path:
 
 from getzilla import fsx
 from getzilla._policy_legacy import (
+    PROTECTED_BRANCHES,
     _executable_name,
+    _http_write_resource,
     _nested_commands,
     _shell_tokens,
     _simple_commands,
@@ -244,6 +246,7 @@ class RootContext:
     def sensitive_safe(self) -> bool:
         return self.effective_root is not None and self.resolution_status in {
             'session-root', 'effective-root', 'linked-worktree-push', 'linked-worktree-patch',
+            'linked-worktree-pr-create',
         }
 
     @property
@@ -903,6 +906,94 @@ def _linked_worktree_push(session: Path, target: Path, command: Any,
         return False
 
 
+_PR_CREATE_VALUES = {
+    '-R': '--repo', '-H': '--head', '-B': '--base', '-t': '--title', '-b': '--body', '-F': '--body-file',
+    '--repo': '--repo', '--head': '--head', '--base': '--base', '--title': '--title',
+    '--body': '--body', '--body-file': '--body-file',
+}
+_PR_CREATE_FLAGS = frozenset({'--draft', '-d', '--fill', '-f', '--fill-first', '--fill-verbose',
+                              '--no-maintainer-edit'})
+
+
+def _pr_create_options(words: list[str]) -> dict[str, str] | None:
+    """A closed, literal PR-create spelling; option values stay data."""
+    if words[:3] != ['gh', 'pr', 'create']:
+        return None
+    options: dict[str, str] = {}
+    index = 3
+    while index < len(words):
+        token = words[index]
+        if token in _PR_CREATE_FLAGS:
+            options[token] = ''
+        else:
+            name, separator, value = token.partition('=')
+            # Existing path/secret policy sees separated short operands and long '=value' forms.
+            # Do not newly admit attached -F filenames across roots until that parser models them.
+            if token.startswith('-F') and token != '-F':
+                return None
+            if name not in _PR_CREATE_VALUES and token[:2] in _PR_CREATE_VALUES:
+                name, separator, value = token[:2], '=', token[2:].removeprefix('=')
+            if name not in _PR_CREATE_VALUES:
+                return None
+            name = _PR_CREATE_VALUES[name]
+            if name in options:
+                return None
+            if not separator:
+                index += 1
+                if index == len(words):
+                    return None
+                value = words[index]
+            options[name] = value
+        index += 1
+    if ('--body' in options and '--body-file' in options) or options.get('--body-file') == '-':
+        return None
+    return options
+
+
+def _linked_worktree_pr_create(session: Path, target: Path, command: Any,
+                               declared_workdirs: dict[str, str]) -> bool:
+    """Resolve one own-worktree PR create; its exact external grant is checked by policy."""
+    if (not isinstance(command, str) or any(char in command for char in '$`\n\r')
+            or any(key in os.environ for key in ('GH_REPO', 'GH_HOST'))):
+        return False
+    try:
+        tokens = _shell_tokens(command)
+        if any(_shell_word_is_opaque(command[token.start:token.end], token) for token in tokens
+               if not token.operator):
+            return False
+        operators = [index for index, token in enumerate(tokens) if token.operator]
+        words = [token.value for token in tokens]
+        declared = [value for key, value in declared_workdirs.items() if key in _COMMAND_ROOT_ALIASES]
+        if any(not Path(value).is_absolute() or Path(value) != target for value in declared):
+            return False
+        if len(operators) == 1 and tokens[operators[0]].value == '&&':
+            split = operators[0]
+            before, words = words[:split], words[split + 1:]
+            if before[:2] == ['cd', '--']:
+                before.pop(1)
+            if (len(before) != 2 or before[0] != 'cd' or not Path(before[1]).is_absolute()
+                    or Path(before[1]) != target):
+                return False
+        elif operators or not declared:
+            return False
+        options = _pr_create_options(words)
+        if (options is None or not options.get('--head')
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+', options.get('--repo', ''))
+                or not _registered_linked_worktree(session, target)):
+            return False
+        from getzilla.state import _repository_identity
+        current = subprocess.run(
+            ['git', '-c', 'core.fsmonitor=false', '-C', str(target), 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+            capture_output=True, text=True, encoding='utf-8', errors='strict', timeout=5, check=True,
+        ).stdout.strip()
+        # --head skips gh's implicit push/fork; only this worktree's own branch qualifies.
+        return (current not in PROTECTED_BRANCHES and options['--head'] == current
+                and options['--repo'].lower() == _repository_identity(target).lower()
+                and _http_write_resource(command, target) == f'gh:{options["--repo"].lower()} pr create')
+    except (OSError, ValueError, UnicodeError, RuntimeError, subprocess.SubprocessError):
+        return False
+
+
 def _registered_linked_worktree(session: Path, target: Path) -> bool:
     """Verify the target's Git registration and policy without granting authority."""
     if any(key.startswith('GIT_') and key not in {'GIT_PAGER', 'GIT_TERMINAL_PROMPT'} for key in os.environ):
@@ -1061,9 +1152,11 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
         return RootContext(session_cwd, session_root, command_values, None, 'ambiguous-command-root')
     effective_root = next(iter(command_roots))
     status = 'effective-root' if session_root in (None, effective_root) else 'cross-root'
-    if (status == 'cross-root' and tool == 'Bash' and session_root is not None
-            and _linked_worktree_push(session_root, effective_root, command, command_values)):
-        status = 'linked-worktree-push'
+    if status == 'cross-root' and tool == 'Bash' and session_root is not None:
+        if _linked_worktree_push(session_root, effective_root, command, command_values):
+            status = 'linked-worktree-push'
+        elif _linked_worktree_pr_create(session_root, effective_root, command, command_values):
+            status = 'linked-worktree-pr-create'
     return RootContext(session_cwd, session_root, command_values, effective_root, status)
 
 
