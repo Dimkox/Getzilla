@@ -1,21 +1,13 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+Read the [security model](docs/SECURITY.md) for threats, trust boundaries, keys, review evidence and failure handling.
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+Use the [published releases](https://github.com/Dimkox/Getzilla/releases) to identify released versions, their exact source and documented fixes. The `main` branch may contain unpublished changes. This page does not promise a support period for any release.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Use GitHub's private vulnerability reporting channel if it is enabled for this repository. Otherwise, ask the maintainer for a private reporting channel before sharing sensitive details.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Include the affected release or commit, the affected component, expected behavior and observed impact. Do not put credentials, private data or executable exploit instructions in a public issue. Ordinary non-sensitive defects can use [GitHub issues](https://github.com/Dimkox/Getzilla/issues).
