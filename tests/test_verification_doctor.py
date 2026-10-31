@@ -292,17 +292,27 @@ def _install_tool(bindir: Path, name: str, body: str) -> None:
     else:
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
+class _PathTools:
+    def __init__(self, tools: dict[str, str]) -> None:
+        self.tools = tools
+        self._scope = None
 
-@contextlib.contextmanager
-def _PathTools(tools: dict[str, str]):
-    with tempfile.TemporaryDirectory(prefix='getzilla-tools-') as temporary:
-        bindir = Path(temporary)
-        for name, body in tools.items():
-            _install_tool(bindir, name, body)
-        # Fixture executables must win in both discovery and subprocess launch.
-        with patch.dict(os.environ, {'PATH': f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}'}), \
-                patch.object(util_module, 'environment_scripts_dir', return_value=None):
-            yield bindir
+    def __enter__(self) -> Path:
+        with contextlib.ExitStack() as scope:
+            bindir = Path(scope.enter_context(tempfile.TemporaryDirectory(prefix='getzilla-tools-')))
+            for name, body in self.tools.items():
+                _install_tool(bindir, name, body)
+            # Keep unrelated installed tools, but let this fixture's explicit tools win.
+            original_search_path = util_module.tool_search_path()
+            scope.enter_context(patch.object(util_module, 'environment_scripts_dir', return_value=None))
+            scope.enter_context(patch.object(util_module, 'user_tool_dirs', return_value=[]))
+            scope.enter_context(patch.dict(os.environ, {'PATH': f'{bindir}{os.pathsep}{original_search_path}'}))
+            self._scope = scope.pop_all()
+            return bindir
+
+    def __exit__(self, *exc) -> None:
+        if self._scope is not None:
+            self._scope.close()
 
 
 class VerificationTests(unittest.TestCase):
@@ -405,6 +415,57 @@ class VerificationTests(unittest.TestCase):
         with patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
             command = python_test_runner._pytest_command(2, 'worksteal')
         self.assertIn('--show-capture=no', command)
+
+    @unittest.skipUnless(os.name == 'posix', 'fixture executables use POSIX shebangs')
+    def test_fixture_tools_override_virtualenv_tools_and_restore_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ambient = Path(tmp)
+            _install_tool(ambient, 'bandit', '#!/usr/bin/env python3\nprint("ambient")\n')
+            _install_tool(ambient, 'fixture-ambient-tool', '#!/usr/bin/env python3\nprint("kept")\n')
+            original_path = os.environ.get('PATH')
+            with patch.object(util_module, 'environment_scripts_dir', return_value=ambient), \
+                    patch.object(util_module, 'user_tool_dirs', return_value=[]):
+                with _PathTools({'bandit': '#!/usr/bin/env python3\nprint("fixture")\n'}) as fixture:
+                    self.assertEqual(Path(find_tool('bandit')), fixture / 'bandit')
+                    result = subprocess.run([find_tool('bandit')], capture_output=True, text=True, check=True)
+                    self.assertEqual(result.stdout.strip(), 'fixture')
+                    self.assertEqual(Path(find_tool('fixture-ambient-tool')), ambient / 'fixture-ambient-tool')
+                self.assertEqual(Path(find_tool('bandit')), ambient / 'bandit')
+            self.assertEqual(os.environ.get('PATH'), original_path)
+
+    def test_synthetic_fixture_owns_scanner_inputs_and_restores_outer_environment(self) -> None:
+        from getzilla.known_vulns import scan
+        from getzilla.verification import _opengrep
+        ambient = {'GETZILLA_OSV_ONLINE': '1', 'GETZILLA_OSV_DB': '/ambient-osv-mirror'}
+        with patch.dict(os.environ, ambient):
+            with project_copy() as root:
+                self.assertFalse('GETZILLA_OSV_ONLINE' in os.environ)
+                self.assertFalse('GETZILLA_OSV_DB' in os.environ)
+                self.assertFalse((root / '.getzilla/sast/rules').exists())
+                result = _opengrep(root)
+                self.assertEqual((result.status, result.summary), ('skip', 'no OpenGrep rules installed'))
+                (root / 'requirements.txt').write_text('fixture-package==1.0\n', encoding='utf-8')
+                self.assertEqual(scan(root)['status'], 'skip')
+                # A test can still opt in explicitly and use the real OSV query pipeline.
+                os.environ['GETZILLA_OSV_ONLINE'] = '1'
+                requests = []
+
+                def fetch(url, body):
+                    query = json.loads(body)
+                    requests.append((url, query))
+                    return json.dumps({'results': [{} for _ in query['queries']]}).encode('utf-8')
+
+                self.assertEqual(scan(root, fetch=fetch)['status'], 'pass')
+                self.assertEqual(len(requests), 1)
+                self.assertIn('fixture-package', {
+                    query['package']['name'] for query in requests[0][1]['queries']
+                })
+            for key, value in ambient.items():
+                self.assertEqual(os.environ[key], value)
+            with full_project_copy() as root:
+                self.assertTrue((root / '.getzilla/sast/rules').is_dir())
+                for key, value in ambient.items():
+                    self.assertEqual(os.environ[key], value)
 
     def test_scanner_fixture_keeps_real_checks_and_full_source_negative_control(self) -> None:
         from getzilla.verification import _bandit, _ruff
