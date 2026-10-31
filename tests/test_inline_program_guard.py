@@ -152,6 +152,29 @@ class InlineProgramGuardTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(self.denied(command), command)
 
+    def test_wrapped_bandit_outputs_reach_native_policy_without_short_config(self):
+        for command in ('nice python3 -m unittest', "sh -c 'python3 -m unittest'"):
+            self.assertFalse(self.denied(command), command)
+        for config in ('', '--configfile bandit.yaml '):
+            for output in ('-o AGENTS.md', '-oAGENTS.md'):
+                inner = 'python3 -m bandit ' + config + output + ' -- example.py'
+                self.assertTrue(self.denied(inner), 'Direct protected output control')
+                for command in ('nice ' + inner, 'sh -c ' + shlex.quote(inner)):
+                    with self.subTest(command=command):
+                        self.assertNotIn('command.inline-program', hooks._command_directory_aliases(command))
+                        self.assertTrue(self.denied(command), command)
+
+    def test_attached_scanner_paths_reach_native_secret_policy(self):
+        for option in ('-cpublic.yaml', '-opublic.json', '-c.env.example', '-o.env.example'):
+            command = 'python3 -m bandit ' + option + ' -- example.py'
+            self.assertFalse(self.denied(command), command)
+        for option in ('-c .env', '-c.env', '-c=.env', '--configfile=.env',
+                       '-o .env', '-o.env', '-o=.env', '--output=.env'):
+            with self.subTest(option=option):
+                command = 'python3 -m bandit ' + option + ' -- example.py'
+                self.assertNotIn('command.inline-program', hooks._command_directory_aliases(command))
+                self.assertTrue(self.denied(command), command)
+
     def test_lexical_stream_and_descriptor_aliases_fail_closed(self):
         paths = (
             "/dev/./stdin", "/dev//stdin", "/dev/../dev/stdin", "//dev/stdin", "///dev/stdin",

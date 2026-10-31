@@ -9,15 +9,21 @@ import stat
 from pathlib import Path
 
 from ._policy_legacy import (
+    _Budget,
+    _BudgetExceeded,
     _command_chunks,
+    _configured_patterns,
+    _secret_reference,
+    _simple_commands,
     _shell_tokens,
     _GLOB_META,
     _SHELL_MUTATION_SIGNAL,
     _SHELL_REDIRECTION,
     _UNWRAP_SHELL,
     _WRAPPERS,
+    DEFAULT_SECRET_READ,
 )
-from .util import safe_relative_path
+from .util import load_json, safe_relative_path
 
 def _normalize_repo_path(value: str) -> str:
     normalized = value.replace('\\', '/')
@@ -181,7 +187,7 @@ def _python_module_arguments(argv: list[str]) -> tuple[str, list[str], bool] | N
     return None
 
 
-def _bandit_shell_targets(command: str) -> tuple[list[str], bool] | None:
+def _bandit_shell_targets(root: Path, command: str) -> tuple[list[str], bool] | None:
     """Account for the bounded Bandit CLI used by verification, not arbitrary Python program arguments.
 
     Config/source operands are inputs; -o/--output opens a report. Unknown options,
@@ -193,12 +199,18 @@ def _bandit_shell_targets(command: str) -> tuple[list[str], bool] | None:
         return None
     selected = _python_module_arguments([token.value for token in tokens])
     if selected is None or selected[0] != 'bandit':
+        # Existing normalization discovers literal wrappers; it grants no scanner exception to them.
+        for argv in _simple_commands(command):
+            wrapped = _python_module_arguments(argv) if argv else None
+            if wrapped is not None and wrapped[0] == 'bandit':
+                return [], True
         return None
     unresolved = selected[2] or '\\' in command or any(
         token.operator or token.expansion or re.search(r'[$`~*?\[\]{}%\^#\x00]', token.value)
         for token in tokens
     )
     targets: list[str] = []
+    attached_paths: list[str] = []
     arguments = selected[1]
     value_options = {'-c': 'input', '--configfile': 'input', '-f': 'format', '--format': 'format',
                      '-o': 'output', '--output': 'output'}
@@ -220,6 +232,8 @@ def _bandit_shell_targets(command: str) -> tuple[list[str], bool] | None:
                 index += 1
         elif argument[:2] in {'-c', '-f', '-o'} and not argument.startswith('--'):
             option, value = argument[:2], argument[2:]
+            if option in {'-c', '-o'}:
+                attached_paths.append(value)
         else:
             unresolved = True
             continue
@@ -228,6 +242,19 @@ def _bandit_shell_targets(command: str) -> tuple[list[str], bool] | None:
         elif value_options[option] == 'output' and value != '-':
             targets.append(value)
         elif value_options[option] == 'format' and value != 'json':
+            unresolved = True
+    if attached_paths and not unresolved:
+        # The downstream generic secret parser sees the unsplit short option, not this literal path.
+        config = load_json(root / '.getzilla/config/policy.json', {}) or {}
+        patterns = _configured_patterns(
+            config if isinstance(config, dict) else {}, 'secret_read_paths', DEFAULT_SECRET_READ,
+        )
+        try:
+            budget = _Budget()
+            unresolved = any(
+                _secret_reference(root, path, patterns, expand=False, budget=budget) for path in attached_paths
+            )
+        except _BudgetExceeded:
             unresolved = True
     return targets, bool(unresolved)
 
@@ -478,9 +505,10 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             if redirections:
                 mutation = True
                 found.extend(redirections)
-            scanner = _bandit_shell_targets(piece) if inner == chunk else None
+            scanner = _bandit_shell_targets(root, piece)
             if scanner is not None:
                 scanner_targets, scanner_unresolved = scanner
+                scanner_unresolved = scanner_unresolved or inner != chunk
                 found.extend(scanner_targets)
                 mutation = mutation or bool(scanner_targets) or scanner_unresolved
                 unresolved = unresolved or scanner_unresolved

@@ -1,6 +1,7 @@
 import sys
 import os
 import shutil
+import shlex
 import tempfile
 import unittest
 from unittest import mock
@@ -132,6 +133,37 @@ class PythonScannerPolicyTests(unittest.TestCase):
                 allowed, reason = self.check('python3 -m bandit -c bandit.yaml -- example.py ' + suffix)
                 self.assertFalse(allowed)
                 self.assertIn('shell mutation targeting AGENTS.md;', reason)
+
+    def test_wrapped_bandit_outputs_are_refused_without_short_config(self):
+        for command in ('nice python3 -m unittest', "sh -c 'python3 -m unittest'"):
+            self.assertTrue(self.check(command)[0], command)
+        for config in ('', '--configfile bandit.yaml '):
+            for output in ('-o AGENTS.md', '-oAGENTS.md'):
+                inner = 'python3 -m bandit ' + config + output + ' -- example.py'
+                self.assertFalse(self.check(inner)[0], 'Direct protected output control')
+                for command in ('nice ' + inner, 'sh -c ' + shlex.quote(inner)):
+                    with self.subTest(command=command):
+                        allowed, reason = self.check(command)
+                        self.assertFalse(allowed, reason)
+
+    def test_attached_scanner_paths_keep_secret_policy(self):
+        for option in ('-cpublic.yaml', '-opublic.json', '-c.env.example', '-o.env.example'):
+            allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+            self.assertTrue(allowed, reason)
+        for option in ('-c .env', '-c.env', '-c=.env', '--configfile=.env',
+                       '-o .env', '-o.env', '-o=.env', '--output=.env'):
+            with self.subTest(option=option):
+                allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+                self.assertFalse(allowed, reason)
+
+    def test_attached_scanner_paths_use_configured_secret_patterns(self):
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["fixture-sensitive.json"]}\n')
+        for option in ('-c fixture-sensitive.json', '-cfixture-sensitive.json',
+                       '-o fixture-sensitive.json', '-ofixture-sensitive.json'):
+            with self.subTest(option=option):
+                allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+                self.assertFalse(allowed, reason)
 
 
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
