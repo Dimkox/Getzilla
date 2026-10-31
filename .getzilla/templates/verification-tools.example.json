@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "id": "browser-acceptance",
+      "tool": "playwright",
+      "enabled": false,
+      "commands": [["node", "node_modules/@playwright/test/cli.js", "test", "tests/e2e", "--reporter=json", "--forbid-only", "--workers=2"]],
+      "timeout_seconds": 300
+    },
+    {
+      "id": "api-contract",
+      "tool": "schemathesis",
+      "enabled": false,
+      "commands": [["schemathesis", "run", "http://127.0.0.1:8000/openapi.json", "--report-json-path", "{report}"]],
+      "timeout_seconds": 300
+    },
+    {
+      "id": "python-properties",
+      "tool": "hypothesis",
+      "enabled": false,
+      "commands": [["{python}", "-m", "pytest", "tests/properties", "-m", "hypothesis", "--junitxml={report}"]],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "javascript-properties",
+      "tool": "fast-check",
+      "enabled": false,
+      "commands": [["node", "node_modules/vitest/vitest.mjs", "run", "tests/properties", "--reporter=junit", "--outputFile={report}", "--maxWorkers=2"]],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "python-mutations",
+      "tool": "mutmut",
+      "enabled": false,
+      "commands": [["mutmut", "run", "--max-children", "2"], ["mutmut", "export-cicd-stats"]],
+      "timeout_seconds": 900
+    },
+    {
+      "id": "javascript-mutations",
+      "tool": "strykerjs",
+      "enabled": false,
+      "commands": [["node", "node_modules/@stryker-mutator/core/bin/stryker.js", "run", "--reporters", "json", "--concurrency", "2"]],
+      "timeout_seconds": 900
+    },
+    {
+      "id": "container-integration",
+      "tool": "testcontainers-python",
+      "enabled": false,
+      "commands": [["{python}", "-m", "pytest", "tests/integration", "--junitxml={report}"]],
+      "timeout_seconds": 300
+    }
+  ]
+}

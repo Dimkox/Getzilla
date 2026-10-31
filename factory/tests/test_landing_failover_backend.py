@@ -11,9 +11,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator
 
 from getzilla_factory.landing_observation import FALLBACK_CATEGORIES, LandingProviderObservation
-from getzilla_factory.landing_contracts import LandingInputV1, LandingProviderEvidenceV2
+from getzilla_factory.landing_contracts import LandingInputV1, LandingProviderEvidenceV2, landing_digest
 from getzilla_factory.landing_failover_contracts import validate_receipt
 from getzilla_factory.landing_service import LandingJobRecord
 from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
@@ -45,14 +46,34 @@ class BackendObservationTests(unittest.TestCase):
                                                 profile_digest=profile.profile_digest)
             actor = Actor("tenant-1", "operator", frozenset({"landing:submit", "landing:read"}), frozenset({TARGET_REPOSITORY_ID}))
             token = "a" * 32
-            auth = Authenticator({token: actor})
+            read_token = 'r' * 32
+            submit_token = 's' * 32
+            auth = Authenticator({token: actor,
+                                  read_token: replace(actor, scopes=frozenset({'landing:read'})),
+                                  submit_token: replace(actor, scopes=frozenset({'landing:submit'}))})
             app = create_app(None, auth, landing_service=service, landing_only=True, execution_enabled=False)
             with TestClient(app) as client:
                 headers = {"Authorization": "Bearer " + token, "X-Correlation-ID": "cap-test", "X-Repository-ID": TARGET_REPOSITORY_ID}
-                capability = client.get("/v2/landing-backend", headers=headers)
+                capability = client.get("/v3/landing-backend", headers=headers)
                 self.assertEqual(200, capability.status_code)
-                self.assertEqual(profile.profile_digest, capability.json()["profile_digest"])
-                self.assertEqual(401, client.get("/v2/landing-backend", headers={**headers, "Authorization": "Bearer bad"}).status_code)
+                document = capability.json()
+                self.assertEqual(2, document['schema_version'])
+                self.assertEqual(profile.profile_digest, document["profile_digest"])
+                self.assertEqual(landing_digest('landing-backend-v2',
+                                               {key: value for key, value in document.items() if key != 'digest'}),
+                                 document['digest'])
+                schema = json.loads((Path(__file__).parents[1] /
+                                     'contracts/jsonschema/landing-backend-capability.v2.schema.json').read_text(encoding='utf-8'))
+                Draft202012Validator(schema).validate(document)
+                legacy = client.get('/v2/landing-backend', headers=headers)
+                self.assertEqual(409, legacy.status_code)
+                self.assertNotIn('profile', legacy.json())
+                self.assertEqual('cap-test', legacy.headers['X-Correlation-ID'])
+                for route in ('/v2/landing-backend', '/v3/landing-backend'):
+                    self.assertEqual(401, client.get(route, headers={**headers, 'Authorization': 'Bearer bad'}).status_code)
+                    self.assertEqual(403, client.get(route, headers={**headers, 'X-Repository-ID': 'other-repository'}).status_code)
+                    for limited_token in (read_token, submit_token):
+                        self.assertEqual(403, client.get(route, headers={**headers, 'Authorization': 'Bearer ' + limited_token}).status_code)
                 submit_headers = {**headers, "Idempotency-Key": "backend-test", "Content-Type": "text/plain",
                                   "X-Exact-Base-SHA": TARGET_BASE_SHA, "X-Exact-Base-Tree": TARGET_BASE_TREE,
                                   "X-Expected-Actor-ID": actor.actor_id, "X-Expected-Profile-Digest": "0" * 64}

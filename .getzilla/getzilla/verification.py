@@ -57,6 +57,7 @@ from .verification_scope import (
     is_valid_inventory_path,
     select_docs_state_scope,
 )
+from .verification_tools import planned_checks as planned_tool_checks
 
 
 @dataclass
@@ -2869,6 +2870,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
+    state.stage = 'verification-tools'
+    for name, callback in planned_tool_checks(root, mode, make=CheckResult):
+        cancellation.check()
+        dispatch.run(name, callback)
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:

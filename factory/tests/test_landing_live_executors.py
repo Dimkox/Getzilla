@@ -20,7 +20,7 @@ import httpx
 
 from getzilla_factory import landing_live_executors as live
 from getzilla_factory.contracts import canonical_json
-from getzilla_factory.landing_contracts import decode_provider_evidence
+from getzilla_factory.landing_contracts import decode_provider_evidence, landing_digest
 from getzilla_factory.landing_http import HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingNormalizer
 from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
 from getzilla_factory.settings import SettingsError
@@ -371,7 +371,7 @@ class GrokReasoningUsageTests(unittest.TestCase):
                 with self.assertRaisesRegex(LandingProviderError, "executor_usage"):
                     executor.run(_request(executor))
 
-    def test_all_enabled_qwen_profile_digests_retain_existing_bindings(self):
+    def test_qwen_profile_upgrade_changes_only_pdf_identity(self):
         expected = {
             "qwen": "63bee9e18255cbbbe940f94e96e130f6fffb103147d8cf1baf9cfa09595091be",
             "qwen-intl": "2616a276a5a6257515dc30e40d27fe32a667aa7d75f8205990c567166116de08",
@@ -381,7 +381,14 @@ class GrokReasoningUsageTests(unittest.TestCase):
         for profile_id, digest in expected.items():
             with self.subTest(profile=profile_id):
                 profile = HttpLandingProfile.for_provider(profile_id, available=True)
-                self.assertEqual(digest, profile.profile_digest)
+                facts = profile.to_facts()
+                legacy_pdf_digest = "55d527a6fbaa3e54340cb0fba9764c4b3682610b38c6b4d7555304b9432454ae"
+                self.assertEqual("6.21.4", facts["pdf_parser_version"])
+                self.assertNotEqual(legacy_pdf_digest, facts["pdf_decoder_digest"])
+                legacy_facts = {**facts, "pdf_parser_version": "6.18.1",
+                                "pdf_decoder_digest": legacy_pdf_digest}
+                self.assertEqual(digest, landing_digest("http-profile", legacy_facts))
+                self.assertNotEqual(digest, profile.profile_digest)
 
     def test_retained_grok_v1_v2_evidence_preserves_old_identity_and_counts(self):
         # Frozen synthetic envelopes created with the pre-repair adapter at e7e8ad1.
@@ -835,28 +842,16 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
         self.assertNotIn("invalid_api_key", output.getvalue())
 
     def test_profile_facts_keep_the_backend_capability_contract_shape(self):
-        # The v1 contract declares profiles as a closed enum of exact fact objects. The fitness
-        # comparator cannot represent object-valued enum members, so the file is frozen and a new
-        # profile cannot be added to the enum until issue #104 lands. Guard what stays guardable:
-        # declared profiles stay real and byte-equal to their table facts, and an undeclared
-        # profile must emit exactly the fact shape (key set and per-key JSON types) of a declared
-        # sibling, so the new intl omni cannot drift from the grammar the contract describes.
+        # The current contract binds every profile to its parser version and worker bytes.
         import json
         schema = json.loads((Path(live.__file__).parents[2]
-                             / "contracts/jsonschema/landing-backend-capability.v1.schema.json").read_text())
+                             / "contracts/jsonschema/landing-backend-capability.v2.schema.json").read_text())
         declared = {item["profile_id"]: item for item in schema["properties"]["profile"]["enum"]}
-        self.assertEqual(set(), set(declared) - set(HTTP_PROFILES))
+        self.assertEqual(set(HTTP_PROFILES), set(declared))
         for profile_id in HTTP_PROFILES:
             with self.subTest(profile=profile_id):
                 facts = HttpLandingProfile.for_provider(profile_id, available=True).to_facts()
-                if profile_id in declared:
-                    self.assertEqual(declared[profile_id], facts)
-                    continue
-                twins = [item for item in declared.values() if sorted(item) == sorted(facts)]
-                self.assertTrue(twins, "undeclared profile must reuse a declared fact shape exactly")
-                twin = twins[0]
-                for key, value in facts.items():
-                    self.assertEqual(type(twin[key]).__name__, type(value).__name__, key)
+                self.assertEqual(declared[profile_id], facts)
                 self.assertEqual(1, facts["schema_version"])
 
     def test_probe_failure_output_clamps_unknown_category_and_invalid_status(self):

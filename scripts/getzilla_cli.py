@@ -28,6 +28,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'change': ('getzilla_change.py', 'manage engineering change packages'),
     'spec': ('getzilla_spec.py', 'validate typed change specifications'),
     'verify': ('getzilla_verify.py', 'run route-selected verification and record a receipt'),
+    'test-tools': ('getzilla_verification_tools.py', 'catalog, plan and run optional executable verification tools'),
     'review': ('getzilla_review.py', 'record an independent review receipt'),
     'gate': ('getzilla_gate.py', 'inspect or record delivery gates'),
     'approve': ('getzilla_approve.py', 'materialize an explicitly delegated local grant'),

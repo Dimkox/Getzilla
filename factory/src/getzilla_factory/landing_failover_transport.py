@@ -52,7 +52,7 @@ class UnixLandingBackend:
         if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.geteuid():
             raise BackendRejected("socket_identity")
         try:
-            return self._exchange("GET", "/v2/landing-backend", expected=200, timeout_seconds=2)
+            return self._exchange("GET", "/v3/landing-backend", expected=200, timeout_seconds=2)
         except BackendTimeout:
             raise BackendUnavailable("capability_timeout") from None
         except BackendAmbiguous as exc:

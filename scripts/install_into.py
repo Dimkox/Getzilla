@@ -62,6 +62,7 @@ MANAGED_FILES = (
     "scripts/getzilla_spec.py",
     "scripts/getzilla_artifacts.py",
     "scripts/getzilla_verify.py",
+    "scripts/getzilla_verification_tools.py",
     "scripts/getzilla_audit_bundle.py",
     "scripts/getzilla_compliance.py",
     "scripts/getzilla_vulns.py",

@@ -29,8 +29,8 @@ STATUS_FIELDS = {"schema_version", "source", "state", "revision", "reason_code",
 
 
 def backend_capability(profile, actor_id, repository_id, base_sha, base_tree):
-    return sealed("landing-backend-v1", {
-        "schema_version": 1, "actor_id": actor_id, "repository_id": repository_id,
+    return sealed("landing-backend-v2", {
+        "schema_version": 2, "actor_id": actor_id, "repository_id": repository_id,
         "exact_base_sha": base_sha, "exact_base_tree": base_tree,
         "profile": profile.to_facts(), "profile_digest": profile.profile_digest, "attempt_protocol": 1,
     })
