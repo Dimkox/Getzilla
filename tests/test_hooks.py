@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.receipts import write_receipt
 from getzilla.router import build_route
-from getzilla.state import add_approval, get_active_route, set_active_route
+from getzilla.state import add_approval, approvals_path, get_active_route, set_active_route
 import subprocess
 
 from tests._support import prepare_review_source, project_copy, run_hook
@@ -272,6 +274,310 @@ class HookTests(unittest.TestCase):
                 'tool_input': {'command': f'cd {target} && git push origin feature'},
             })
             self.assertEqual(denied['decision'], 'deny', denied)
+
+    def test_linked_worktree_pr_create_uses_only_its_exact_target_grant(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            command = ('gh pr create --repo Dimkox/Getzilla --head feature --base main '
+                       '--title "Fix linked worktree" --body "Review the bounded change"')
+            for tool, arguments in (
+                ('Bash', {'command': f'cd {target} && {command}'}),
+                ('Bash', {'command': f'cd -- {target} && {command}'}),
+                ('Bash', {'command': command, 'workdir': str(target)}),
+                ('exec_command', {'cmd': command, 'workdir': str(target)}),
+            ):
+                with self.subTest(tool=tool, arguments=arguments):
+                    _, data, error = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': tool,
+                        'tool_input': arguments,
+                    })
+                    self.assertEqual(data['decision'], 'allow', (data, error))
+
+    def test_linked_worktree_pr_create_keeps_literal_body_values_and_files(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            body = target / '.getzilla/runtime/scratch/pr body.md'
+            body.parent.mkdir(parents=True)
+            body.write_text('Bounded fixture body.\n', encoding='utf-8')
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            commands = (
+                'gh pr create --repo=Dimkox/Getzilla --head=feature --fill --draft',
+                'gh pr create -RDimkox/Getzilla -Hfeature -Bmain -t "Quoted title" -b "Quoted body"',
+                'gh pr create --repo Dimkox/Getzilla --head feature --title "A literal example" '
+                '--body "Text; && || | > are data, as is git push origin main"',
+                f'gh pr create --repo Dimkox/Getzilla --head feature --title Fixture --body-file "{body}"',
+                'gh pr create --repo Dimkox/Getzilla --head feature --title Fixture '
+                '-F ".getzilla/runtime/scratch/pr body.md"',
+            )
+            for command in commands:
+                with self.subTest(command=command):
+                    _, data, error = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash',
+                        'tool_input': {'command': command, 'workdir': str(target)},
+                    })
+                    self.assertEqual(data['decision'], 'allow', (data, error))
+
+    def test_linked_worktree_pr_create_cannot_borrow_parent_or_wrong_resource_grants(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(root, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            set_active_route(target, build_route(target, 'Target fixture route', 'root-test').to_dict())
+            payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                'command': 'gh pr create --repo Dimkox/Getzilla --head feature --fill', 'workdir': str(target),
+            }}
+            _, absent, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(absent['decision'], 'deny', absent)
+            add_approval(target, 'external-write', 'fixture wrong resource', 5, actions=['external-write'],
+                         resources=['gh:dimkox/getzilla issue create'])
+            _, wrong, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(wrong['decision'], 'deny', wrong)
+            add_approval(target, 'external-write', 'fixture exact resource', 5, actions=['external-write'],
+                         resources=['gh:dimkox/getzilla pr create'])
+            _, exact, error = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(exact['decision'], 'allow', (exact, error))
+
+    def test_linked_worktree_pr_create_rejects_repo_flags_inside_quoted_data(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:other/project pr create'])
+            _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                    'command': 'gh pr create --body "-Rother/project" --title Fixture '
+                               '--repo Dimkox/Getzilla --head feature',
+                    'workdir': str(target),
+                },
+            })
+            self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_pr_create_rejects_stale_route_tree_head_and_expiry(self) -> None:
+        for changed in ('route', 'tree', 'head', 'expiry'):
+            with self.subTest(changed=changed), project_copy(git=True) as root:
+                target = root / '.getzilla/runtime/worktrees/linked-pr'
+                subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+                self._grant(target, 'external-write', actions=['external-write'],
+                            resources=['gh:dimkox/getzilla pr create'])
+                payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                    'command': 'gh pr create --repo Dimkox/Getzilla --head feature --fill', 'workdir': str(target),
+                }}
+                _, before, error = run_hook(root, 'pre_tool_use.py', payload)
+                self.assertEqual(before['decision'], 'allow', (before, error))
+                if changed == 'route':
+                    set_active_route(target, build_route(target, 'A different task', 'root-test').to_dict())
+                elif changed == 'tree':
+                    (target / 'AGENTS.md').write_text('changed after grant', encoding='utf-8')
+                elif changed == 'head':
+                    subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'new fixture head'], cwd=target, check=True)
+                else:
+                    path = approvals_path(target)
+                    approvals = json.loads(path.read_text(encoding='utf-8'))
+                    for approval in approvals:
+                        approval['expires_at'] = '2000-01-01T00:00:00+00:00'
+                    path.write_text(json.dumps(approvals), encoding='utf-8')
+                _, denied, _ = run_hook(root, 'pre_tool_use.py', payload)
+                self.assertEqual(denied['decision'], 'deny', denied)
+
+    def test_linked_worktree_pr_create_respects_the_hook_session_route(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            set_active_route(target, build_route(target, 'Another session task', 'other-session').to_dict())
+            for session, expected in (('root-test', 'allow'), ('other-session', 'deny')):
+                with self.subTest(session=session):
+                    _, data, error = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': session, 'tool_name': 'exec_command', 'tool_input': {
+                            'cmd': 'gh pr create --repo Dimkox/Getzilla --head feature --fill', 'workdir': str(target),
+                        },
+                    })
+                    self.assertEqual(data['decision'], expected, (data, error))
+
+    def test_linked_worktree_pr_create_rejects_shell_composition_and_foreign_selectors(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            command = 'gh pr create --repo Dimkox/Getzilla --head feature --fill'
+            rejected = (
+                f'cd {target}; {command}', f'cd {target} || {command}',
+                f'cd {target} && {command} && git status', f'{command} | cat', f'{command} > output.txt',
+                f'{command}\ngit status', f'env {command}', f'sudo {command}', f'bash -lc "{command}"',
+                f'cd {target} && GIT_DIR={root}/.git {command}', f'GH_REPO=other/project {command}',
+                f'GH_HOST=other.example {command}', f'git -C {target} -c "alias.pr=!{command}" pr',
+                command.replace('Dimkox/Getzilla', 'other/project'),
+                command.replace('--repo Dimkox/Getzilla', ''),
+                command.replace('--head feature', ''), command.replace('--head feature', '--head main'),
+                command.replace('--head feature', '--head another'),
+                command.replace('--head feature', '--head other:feature'),
+                f'{command} --head feature', f'{command} --repo Dimkox/Getzilla',
+                f'{command} --repo other/project', f'{command} --head another',
+                f'{command} --unknown-flag', f'{command} --editor', f'{command} --web',
+                f'{command} --body-file -', f'{command} --body-file .env',
+                f'{command} --body "$(git status)"', f'{command} --title `pwd`',
+                f'{command} --body *', f'{command} --body-file <(cat .env)',
+                command.replace('--repo Dimkox/Getzilla', '--body "--repo Dimkox/Getzilla"'),
+                command.replace('--head feature', '--title "--head feature"'),
+            )
+            for candidate in rejected:
+                with self.subTest(command=candidate):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash',
+                        'tool_input': {'command': candidate, 'workdir': str(target)},
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_pr_create_does_not_admit_other_github_writes(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'], resources=[
+                'gh:dimkox/getzilla pr create', 'gh:dimkox/getzilla issue create',
+                'gh:dimkox/getzilla pr edit 1', 'github-api:POST api.github.com/repos/Dimkox/Getzilla/pulls',
+            ])
+            add_approval(target, 'production', 'fixture adjacent actions', 5,
+                         actions=['pull-request-merge', 'github-release', 'git-push-branch'],
+                         resources=['Dimkox/Getzilla#1', 'Dimkox/Getzilla@v1', 'main'])
+            for command in (
+                'gh issue create --repo Dimkox/Getzilla --title Fixture --body Fixture',
+                'gh pr edit 1 --repo Dimkox/Getzilla --title Fixture',
+                'gh pr merge 1 --repo Dimkox/Getzilla --squash',
+                'gh release create v1 --repo Dimkox/Getzilla',
+                'gh api repos/Dimkox/Getzilla/pulls -f title=Fixture', 'git push origin main',
+            ):
+                with self.subTest(command=command):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash',
+                        'tool_input': {'command': command, 'workdir': str(target)},
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_pr_create_rejects_inherited_git_and_github_overrides(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            for name, value in (
+                ('GIT_DIR', str(root / '.git')), ('GIT_WORK_TREE', str(root)),
+                ('GIT_CONFIG_COUNT', '0'), ('GH_REPO', 'other/project'), ('GH_HOST', 'other.example'),
+            ):
+                with self.subTest(variable=name), patch.dict(os.environ, {name: value}):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                            'command': 'gh pr create --repo Dimkox/Getzilla --head feature --fill',
+                            'workdir': str(target),
+                        },
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_pr_create_rejects_fake_unregistered_and_independent_roots(self) -> None:
+        with project_copy(git=True) as root, project_copy(git=True) as independent:
+            self._grant(independent, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            fake = root / '.getzilla/runtime/worktrees/fake'
+            (fake / '.getzilla').mkdir(parents=True)
+            (fake / '.git').write_bytes((target / '.git').read_bytes())
+            gitdir = Path(subprocess.run(['git', 'rev-parse', '--absolute-git-dir'], cwd=target,
+                                        check=True, capture_output=True, text=True).stdout.strip())
+            for location, head in ((fake, 'feature'), (independent, 'main'), (target, 'feature')):
+                if location == target:
+                    (gitdir / 'gitdir').write_text(str(fake / '.git'), encoding='utf-8')
+                with self.subTest(location=location):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                            'command': f'gh pr create --repo Dimkox/Getzilla --head {head} --fill',
+                            'workdir': str(location),
+                        },
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+                    self.assertIn('cross-root', data.get('reason', ''))
+
+    def test_linked_worktree_pr_create_rejects_relative_symlink_and_mixed_directories(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            (target / 'child').mkdir()
+            alias = root / '.getzilla/runtime/scratch/alias'
+            alias.parent.mkdir(parents=True)
+            try:
+                alias.symlink_to(target / 'child', target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f'Directory symlink unavailable: {error}')
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            command = 'gh pr create --repo Dimkox/Getzilla --head feature --fill'
+            for arguments in (
+                {'command': command, 'workdir': str(target.relative_to(root))},
+                {'command': f'cd {target.relative_to(root)} && {command}'},
+                {'command': command, 'workdir': str(alias / '..')},
+                {'command': f'cd {alias}/.. && {command}'},
+                {'command': command, 'workdir': str(target), 'cwd': str(root)},
+                {'command': f'cd {root} && {command}', 'workdir': str(target)},
+            ):
+                with self.subTest(arguments=arguments):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': arguments,
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+
+    def test_linked_worktree_pr_create_keeps_body_file_secret_guards(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/linked-pr'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
+            (target / '.env').write_text('SYNTHETIC_TEST_VALUE=fixture\n', encoding='utf-8')
+            self._grant(target, 'external-write', actions=['external-write'],
+                        resources=['gh:dimkox/getzilla pr create'])
+            # --body is literal text; it does not read the similarly named file.
+            _, literal, _ = run_hook(root, 'pre_tool_use.py', {
+                'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                    'command': 'gh pr create --repo Dimkox/Getzilla --head feature --title Fixture --body ".env"',
+                    'workdir': str(target),
+                },
+            })
+            self.assertEqual(literal['decision'], 'allow', literal)
+            for option in ('--body-file .env', '--body-file=.env', '-F.env', '-F .env'):
+                with self.subTest(option=option):
+                    _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                        'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                            'command': f'gh pr create --repo Dimkox/Getzilla --head feature --title Fixture {option}',
+                            'workdir': str(target),
+                        },
+                    })
+                    self.assertEqual(data['decision'], 'deny', data)
+                    if option != '-F.env':  # Attached -F is outside the bounded spelling.
+                        self.assertIn('secret', data.get('reason', '').lower())
+
+    def test_linked_worktree_pr_create_rejects_protected_and_detached_heads(self) -> None:
+        for branch in ('main', 'master', 'detached'):
+            with self.subTest(branch=branch), project_copy(git=True) as root:
+                subprocess.run(['git', 'branch', '-m', 'fixture-base'], cwd=root, check=True)
+                target = root / '.getzilla/runtime/worktrees/linked-pr'
+                subprocess.run(['git', 'worktree', 'add', '-qb', branch, str(target)], cwd=root, check=True)
+                if branch == 'detached':
+                    subprocess.run(['git', 'checkout', '--detach', '-q'], cwd=target, check=True)
+                self._grant(target, 'external-write', actions=['external-write'],
+                            resources=['gh:dimkox/getzilla pr create'])
+                _, data, _ = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
+                        'command': f'gh pr create --repo Dimkox/Getzilla --head {branch} --fill',
+                        'workdir': str(target),
+                    },
+                })
+                self.assertEqual(data['decision'], 'deny', data)
 
     def _grant(self, root: Path, scope: str, *, actions: list[str], resources: list[str] | None = None) -> None:
         subprocess.run(
@@ -910,6 +1216,7 @@ class HookTests(unittest.TestCase):
                 'npm "$ACTION"',
                 'gh "$GROUP" merge 1',
                 'gh pr "$ACTION" 1',
+                'gh pr view "$NUMBER"',
             )
             for index, command in enumerate(unsafe_selectors):
                 with self.subTest(command=command):
@@ -920,7 +1227,11 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    if command.startswith('gh '):
+                        self.assertIn('Sensitive action external-write', data['reason'])
+                        self.assertIn('ambiguous-command-root', data['reason'])
+                    else:
+                        self.assertIn('ambiguous-sensitive-shell', data['reason'])
 
             self._grant(root, 'production', actions=['git-push-branch'], resources=['feature'])
             command = 'printf ok\ngit push origin "$REFS"'
@@ -936,7 +1247,7 @@ class HookTests(unittest.TestCase):
                 'git status "$PATH"',
                 "bash -lc 'git status \"$PATH\"'",
                 'printf ok\ngit status "$PATH"',
-                'gh pr view "$NUMBER"',
+                'gh pr view "5"',
                 'docker inspect "$IMAGE"',
                 'npm view "$PACKAGE"',
                 'git push origin feature',

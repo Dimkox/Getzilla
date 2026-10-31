@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .resource_inventory import RUNTIME
+from .util import dump_json
 from .worktree_safety import WorktreeError, _git, list_worktrees
 
 SNAPSHOTS = RUNTIME + '/snapshots'
@@ -45,14 +46,63 @@ def create(root: Path, revision: str) -> Path:
     name = f'{commit[:12]}-{secrets.token_hex(3)}'
     path = base / name
     marker = base / f'{name}.json'
-    marker.write_text(json.dumps({'schema_version': SCHEMA, 'commit': commit, 'created_at': time.time(),
-                                  'pid': os.getpid()}) + '\n', encoding='utf-8', newline='\n')
+    data = {'schema_version': SCHEMA, 'commit': commit, 'created_at': time.time(),
+            'pid': os.getpid(), 'creation_state': 'creating', 'phase': 'worktree-add'}
+    try:
+        path.mkdir(mode=0o700)
+    except OSError as exc:
+        raise WorktreeError(f'snapshot directory reservation failed: {type(exc).__name__}') from exc
+    identity = path.lstat()
+    marker_created = False
+    try:
+        with marker.open('x', encoding='utf-8', newline='\n') as handle:
+            marker_created = True
+            handle.write(json.dumps(data) + '\n')
+    except OSError as exc:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+        if marker_created:
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise WorktreeError(f'snapshot owner marker creation failed: {type(exc).__name__}') from exc
+    phase = 'worktree-add'
     try:
         _git(root, 'worktree', 'add', '--quiet', '--detach', str(path), commit)
-    except WorktreeError:
-        marker.unlink(missing_ok=True)
-        raise
+        phase = 'finalize-marker'
+        data.update(creation_state='ready', phase='complete')
+        dump_json(marker, data)
+    except (WorktreeError, OSError) as exc:
+        discarded = _discard_empty_creation(root, path, marker, identity)
+        if not discarded:
+            data.update(creation_state='failed', phase=phase)
+            try:
+                dump_json(marker, data)
+            except OSError:
+                pass  # Atomic replacement leaves the original ownership record intact.
+        outcome = 'no snapshot resource remains' if discarded else f'ownership retained for {path}'
+        raise WorktreeError(f'snapshot creation failed during {phase}; {outcome}: {exc}') from exc
     return path
+
+
+def _discard_empty_creation(root: Path, path: Path, marker: Path, identity: os.stat_result) -> bool:
+    """Discard only the empty, unregistered directory reserved by this creation."""
+    try:
+        if any(os.path.abspath(item['path']) == str(path) for item in list_worktrees(root)):
+            return False
+        if os.path.lexists(path):
+            current = path.lstat()
+            if (current.st_dev, current.st_ino, current.st_mode) != (
+                    identity.st_dev, identity.st_ino, identity.st_mode):
+                return False
+            path.rmdir()
+        marker.unlink(missing_ok=True)
+        return True
+    except (OSError, WorktreeError):
+        return False
 
 
 def _marker(base: Path, name: str) -> dict[str, Any] | None:

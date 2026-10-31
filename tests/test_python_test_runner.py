@@ -470,7 +470,153 @@ class PythonTestCapacityTests(unittest.TestCase):
                 self.assertEqual(selected_workers(root), expected)
 
 
+class CoreWorkerAllocationTests(unittest.TestCase):
+    @staticmethod
+    def core_checks(root, mode='pr'):
+        # Replace only the expensive test subprocess boundary; selection and reporting stay real.
+        def run(_root, _mode, workers):
+            return python_test_runner.CoreTestRun(
+                python_test_runner.ProcessResult(['core', str(workers)], 0), None,
+                workers, {'engine': 'pytest-xdist' if workers else 'unittest'}, {},
+            )
+
+        with patch.object(verification, 'run_core_tests', side_effect=run) as runner:
+            results = verification._core_python_checks(root, mode, False, keep_going=False)
+        return results, runner
+
+    def test_pr_and_release_default_uses_live_bounded_capacity(self):
+        for mode in ('pr', 'release'):
+            for affinity, quota, capacity, expected in ((26, 26, 26, 6), (7, None, 7, 5), (26, 4, 4, 2),
+                                                        (3, None, 3, 1), (2, None, 2, 1), (26, 1, 1, 1)):
+                with self.subTest(mode=mode, affinity=affinity, quota=quota), fixture() as root, \
+                     patch.object(os, 'sched_getaffinity', return_value=set(range(affinity)), create=True), \
+                     patch.object(sys, 'platform', 'linux'), \
+                     patch.object(python_test_runner, 'linux_quota_capacity', return_value=quota):
+                    (root / python_test_runner.CONFIG).unlink()
+                    checks, runner = self.core_checks(root, mode)
+                    self.assertEqual(runner.call_args.args[2], expected)
+                    detail = checks[0].details[0]
+                    self.assertEqual(detail.get('selection_source'), 'default')
+                    self.assertEqual(detail.get('requested_workers'), str(expected))
+                    self.assertEqual(detail.get('actual_workers'), str(expected))
+                    self.assertEqual(detail.get('observed_capacity'), capacity)
+                    self.assertEqual(detail.get('default_worker_cap'), 6)
+                    self.assertEqual(detail.get('default_cpu_reserve'), 2)
+
+    def test_unconfigured_private_child_never_starts_a_pr_pool(self):
+        with fixture() as root, patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1'}), \
+             patch.object(python_test_runner, 'linux_quota_capacity', side_effect=AssertionError('capacity read')):
+            (root / python_test_runner.CONFIG).unlink()
+            self.assertIsNone(selected_workers(root))
+            checks, runner = self.core_checks(root)
+            self.assertEqual(runner.call_args.args[2], 0)
+            self.assertEqual(checks[0].details[0].get('selection_source'), 'child')
+
+    def test_explicit_worker_selection_keeps_precedence_and_diagnostics(self):
+        for configured, override, expected, source in (
+            (4, None, 4, 'configuration'), (4, '3', 3, 'environment'),
+            (64, None, 64, 'configuration'), (4, '0', 0, 'environment'),
+        ):
+            with self.subTest(configured=configured, override=override), fixture(workers=configured) as root, \
+                 patch.dict(os.environ, {} if override is None else {'GETZILLA_TEST_WORKERS': override}), \
+                 patch.object(python_test_runner, 'linux_quota_capacity', side_effect=AssertionError('capacity read')):
+                checks, runner = self.core_checks(root)
+                self.assertEqual(runner.call_args.args[2], expected)
+                self.assertEqual(checks[0].details[0].get('selection_source'), source)
+        with fixture(workers=True) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '3', '_GETZILLA_TEST_CHILD': '1'}):
+            checks, runner = self.core_checks(root)
+            self.assertEqual(checks[0].status, 'fail')
+            self.assertIn('workers must be', checks[0].summary)
+            runner.assert_not_called()
+
+    def test_explicit_auto_keeps_its_existing_policy_in_pr_mode(self):
+        with fixture(workers='auto') as root, \
+             patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
+             patch.object(sys, 'platform', 'linux'), \
+             patch.object(python_test_runner, 'linux_quota_capacity', return_value=4), \
+             patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
+            checks, runner = self.core_checks(root)
+            self.assertEqual(runner.call_args.args[2], 4)
+            self.assertEqual(checks[0].details[0].get('observed_capacity'), 4)
+            self.assertEqual(checks[0].details[0].get('selection_source'), 'configuration')
+            self.assertIsNone(checks[0].details[0].get('default_cpu_reserve'))
+
+    @unittest.skipUnless(os.name == 'posix', 'fixture uses POSIX proc/cgroup paths')
+    def test_default_unknown_linux_limits_use_one_worker(self):
+        with fixture() as root, capacity_files(root, {}, cpus=26):
+            (root / python_test_runner.CONFIG).unlink()
+            checks, runner = self.core_checks(root)
+            self.assertEqual(runner.call_args.args[2], 1)
+            self.assertEqual(checks[0].details[0].get('observed_capacity'), 1)
+
+    def test_invalid_config_cannot_be_hidden_by_environment_or_default(self):
+        for contents in ('{"schema_version":1,"workers":2,"workers":0}', ' ' * 4097, '{'):
+            with self.subTest(contents=contents[:50]), fixture() as root, \
+                 patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '0'}):
+                (root / python_test_runner.CONFIG).write_text(contents)
+                checks, runner = self.core_checks(root)
+                self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+                runner.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'symlink creation needs native Windows privileges')
+    def test_symlink_config_cannot_be_hidden_by_environment(self):
+        with fixture() as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '0'}):
+            config = root / python_test_runner.CONFIG
+            config.rename(root / 'actual-config')
+            config.symlink_to('actual-config')
+            checks, runner = self.core_checks(root)
+            self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+            runner.assert_not_called()
+
+    def test_timeout_reports_budget_and_fresh_full_gate_without_retry(self):
+        with fixture(workers=0) as root:
+            (root / '.coveragerc').write_text('[run]\nbranch = True\nsource = subject\n')
+            test_invocations = []
+
+            def controlled_execute(command, _root, environment, **_kwargs):
+                if command[3] == 'run':
+                    test_invocations.append(command)
+                    Path(environment['COVERAGE_FILE']).write_bytes(b'partial coverage')
+                    return python_test_runner.ProcessResult(
+                        command, 124, stderr='test process timeout', seconds=900.1, terminal_state='timeout',
+                    )
+                if command[3] == 'json':
+                    Path(command[-1]).write_text(json.dumps({
+                        'meta': {'branch_coverage': True}, 'files': {'subject.py': {}}, 'totals': {},
+                    }))
+                return python_test_runner.ProcessResult(command, 0)
+
+            with patch.object(python_test_runner, 'execute', side_effect=controlled_execute):
+                checks = {check.name: check for check in verification._core_python_checks(
+                    root, 'pr', False, keep_going=False)}
+            self.assertEqual(len(test_invocations), 1)
+            self.assertEqual(checks['python-unittest'].status, 'fail')
+            self.assertEqual(checks['coverage'].status, 'fail')
+            self.assertEqual(checks['python-unittest'].details[0].get('test_timeout_seconds'), 900)
+            self.assertEqual(checks['python-unittest'].details[0].get('terminal_state'), 'timeout')
+            self.assertIn('GETZILLA_TEST_WORKERS=', checks['python-unittest'].stderr)
+            self.assertIn('--mode pr', checks['python-unittest'].stderr)
+            self.assertIn('fresh', checks['python-unittest'].stderr)
+
+
 class PythonTestRunnerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'POSIX directory permission contract')
+    def test_child_scratch_is_private_under_permissive_umask(self):
+        for ambient in (0o000, 0o002, 0o022):
+            with self.subTest(umask=oct(ambient)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                previous = os.umask(ambient)
+                try:
+                    environment = python_test_runner._environment(root, root / '.coverage')
+                finally:
+                    os.umask(previous)
+                scratch = root / 'tmp'
+                self.assertEqual(scratch.stat().st_mode & 0o777, 0o700)
+                for variable in ('TMPDIR', 'TMP', 'TEMP'):
+                    self.assertEqual(environment[variable], str(scratch))
+                (scratch / 'child-output').write_text('owned output', encoding='utf-8')
+                self.assertEqual((scratch / 'child-output').read_text(encoding='utf-8'), 'owned output')
+
     def test_child_scope_does_not_inherit_controller_override(self) -> None:
         code = (
             'import json, os\nfrom pathlib import Path\n'
@@ -706,6 +852,9 @@ class PythonTestRunnerTests(unittest.TestCase):
             self.assertEqual(len(list(root.glob('result-*'))), 4)
             self.assertEqual(len({p.read_text() for p in root.glob('result-*')}), 1)
             self.assertIn('unittest-degraded', result.details[0]['versions'])
+            self.assertEqual(result.details[0]['backend'], 'unittest-degraded')
+            self.assertEqual(result.details[0]['requested_workers'], '2')
+            self.assertEqual(result.details[0]['actual_workers'], '0')
 
     # Retained PR135 regressions originate at 7a7851af5d11e8ce5c3af23ab46214ae7ae4cdc8.
     def test_non_posix_cleanup_capability_degrades_core_and_trust_before_launch(self) -> None:
@@ -773,7 +922,9 @@ class PythonTestRunnerTests(unittest.TestCase):
                     raise AssertionError(f'unexpected dependency pin check: {name}')
                 return real_version(name)
 
-            def fake_parallel(_root, _config, data_file, workers, _environment):
+            def fake_parallel(_root, _config, data_file, workers, _environment, *, test_files):
+                self.assertEqual(workers, 1)
+                self.assertEqual(test_files, ['test_sample.py'])
                 data_file.write_bytes(b'current-run-coverage')
                 return python_test_runner.ProcessResult(['parallel-coverage'], 0, seconds=0.01)
 
@@ -795,7 +946,7 @@ class PythonTestRunnerTests(unittest.TestCase):
                 core = python_test_runner.run_core_tests(root, 'pr', 2)
             self.assertEqual(core.tests.returncode, 0, core.tests.stdout + core.tests.stderr)
             self.assertEqual(core.tests.command, ['parallel-coverage'])
-            self.assertEqual(core.workers, 2)
+            self.assertEqual(core.workers, 1)
             self.assertEqual(core.versions, {'coverage': real_version('coverage'),
                                              'engine': 'coverage-unittest-parallel'})
             self.assertIsNotNone(core.coverage)
@@ -904,7 +1055,7 @@ class PythonTestRunnerTests(unittest.TestCase):
         class Core:
             tests = python_test_runner.ProcessResult(['parallel'], 0)
             coverage = python_test_runner.ProcessResult(['coverage'], 0)
-            workers = 2
+            workers = 6
             versions = {'coverage': python_test_runner.PINS['coverage'], 'engine': 'coverage-unittest-parallel'}
             coverage_metadata = {'files': ['.getzilla/getzilla/python_test_runner.py']}
 
@@ -921,11 +1072,15 @@ class PythonTestRunnerTests(unittest.TestCase):
              patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
              patch('getzilla.verification._factory_unit', return_value=[]), \
              patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \
+             patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
+             patch.object(python_test_runner, 'linux_quota_capacity', return_value=26), \
              patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
+            os.environ.pop('GETZILLA_TEST_WORKERS', None)
+            os.environ.pop('_GETZILLA_TEST_CHILD', None)
             results = {check.name: check for check in _python(repo_root, mode='pr')}
         self.assertIn('python-unittest', results)
         self.assertIsNotNone(runner.call_args, results)
-        self.assertEqual(runner.call_args.args[2], 2)
+        self.assertEqual(runner.call_args.args[2], 6)
         self.assertIn('coverage-unittest-parallel', results['python-unittest'].summary)
 
     def test_inherited_pytest_selection_cannot_omit_tests(self) -> None:
