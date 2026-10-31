@@ -284,31 +284,25 @@ sys.exit(0)
 
 
 def _install_tool(bindir: Path, name: str, body: str) -> None:
-    path = bindir / name
-    path.write_text(body, encoding='utf-8')
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    path = bindir / (name + '.py' if os.name == 'nt' else name)
+    path.write_text(body, encoding='utf-8', newline='\n')
+    if os.name == 'nt':
+        (bindir / (name + '.cmd')).write_text(
+            f'@"{sys.executable}" "{path}" %*\r\n', encoding='utf-8', newline='')
+    else:
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-class _PathTools:
-    def __init__(self, tools: dict[str, str]) -> None:
-        self.tools = tools
-        self._tmp = None
-        self._old_path = None
-
-    def __enter__(self) -> Path:
-        self._tmp = tempfile.TemporaryDirectory(prefix='getzilla-tools-')
-        bindir = Path(self._tmp.name)
-        for name, body in self.tools.items():
+@contextlib.contextmanager
+def _PathTools(tools: dict[str, str]):
+    with tempfile.TemporaryDirectory(prefix='getzilla-tools-') as temporary:
+        bindir = Path(temporary)
+        for name, body in tools.items():
             _install_tool(bindir, name, body)
-        self._old_path = os.environ.get('PATH', '')
-        os.environ['PATH'] = f'{bindir}{os.pathsep}{self._old_path}'
-        return bindir
-
-    def __exit__(self, *exc) -> None:
-        if self._old_path is not None:
-            os.environ['PATH'] = self._old_path
-        if self._tmp is not None:
-            self._tmp.cleanup()
+        # Fixture executables must win in both discovery and subprocess launch.
+        with patch.dict(os.environ, {'PATH': f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}'}), \
+                patch.object(util_module, 'environment_scripts_dir', return_value=None):
+            yield bindir
 
 
 class VerificationTests(unittest.TestCase):
@@ -1954,6 +1948,51 @@ class TypedSpecVerificationTests(unittest.TestCase):
 
 
 class QualityContourTests(unittest.TestCase):
+    def test_fixture_tools_override_venv_and_restore_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            (scripts / 'app.py').write_text('value = 1\n', encoding='utf-8', newline='\n')
+            competing = root / 'other-environment-bin'
+            competing.mkdir()
+            for name in ('bandit', 'ruff'):
+                _install_tool(competing, name, '#!/usr/bin/env python3\nfrom pathlib import Path\n'
+                              f'Path({str(root / (name + "-competitor-ran"))!r}).touch()\n'
+                              'raise SystemExit(9)\n')
+            bandit = ('#!/usr/bin/env python3\nimport json, sys\nfrom pathlib import Path\n'
+                      f'Path({str(root / "bandit-fixture-ran")!r}).touch()\n'
+                      'report = Path(sys.argv[sys.argv.index("-o") + 1])\n'
+                      'report.write_text(json.dumps({"results": [], "metrics": {"_totals": {"loc": 0}}}), encoding="utf-8")\n')
+            ruff = ('#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n'
+                    f'Path({str(root / "ruff-fixture-ran")!r}).touch()\n'
+                    'print("warning: No Python files found under the given path(s)", file=sys.stderr)\n')
+            original_resolver = util_module.environment_scripts_dir
+            original_path = os.environ.get('PATH')
+            with patch.object(sys, 'prefix', str(root / 'other-environment')), \
+                    patch.object(util_module.sysconfig, 'get_path', return_value=str(competing)):
+                for name in ('bandit', 'ruff'):
+                    self.assertEqual(Path(find_tool(name)).parent, competing)
+                with self.assertRaisesRegex(RuntimeError, '^fixture cleanup$'):
+                    with _PathTools({'bandit': bandit, 'ruff': ruff}) as bindir:
+                        for name in ('bandit', 'ruff'):
+                            self.assertEqual(Path(find_tool(name)).parent, bindir)
+                        bandit_result = verification_module._bandit(root)
+                        ruff_result = verification_module._ruff(root)
+                        self.assertEqual(bandit_result.status, 'skip', bandit_result.summary)
+                        self.assertIn('0 lines', bandit_result.summary)
+                        self.assertEqual(ruff_result.status, 'skip', ruff_result.summary)
+                        self.assertIn('0 files', ruff_result.summary)
+                        for name in ('bandit', 'ruff'):
+                            self.assertTrue((root / (name + '-fixture-ran')).is_file())
+                            self.assertFalse((root / (name + '-competitor-ran')).exists())
+                        raise RuntimeError('fixture cleanup')
+                self.assertFalse(bindir.exists())
+                self.assertEqual(os.environ.get('PATH'), original_path)
+                self.assertIs(util_module.environment_scripts_dir, original_resolver)
+                for name in ('bandit', 'ruff'):
+                    self.assertEqual(Path(find_tool(name)).parent, competing)
+
     def test_unmarked_tree_with_ruff_still_runs_unittest(self) -> None:
         with project_copy(git=True) as root:
             tests_dir = root / 'tests'
@@ -2450,6 +2489,20 @@ class FailFastVerificationTests(unittest.TestCase):
             self.assertEqual(report['evidence_status'], 'recorded')
             receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'verification.json'
             self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
+
+    def test_required_refusal_prevents_optional_tool_execution(self):
+        from getzilla import verification_tools
+        with self.routed_tree() as (root, route):
+            (root / verification_tools.CONFIG).write_text(json.dumps({'schema_version': 1, 'checks': [
+                {'id': 'optional', 'tool': 'hypothesis', 'commands': [['must-not-execute']]}]}),
+                encoding='utf-8', newline='\n')
+            with patch.object(verification_module, '_architecture_preflight_check', return_value=CheckResult('architecture-inputs', 'fail', 'primary failure')), \
+                 patch.object(verification_tools, 'run_check', side_effect=AssertionError('optional tool dispatched')):
+                report = verify(root, 'pr', record=False)
+            optional = _check(report, 'tool:optional')
+            self.assertEqual(optional['status'], 'skip')
+            self.assertEqual(optional['details'][0]['blocked_by'], 'architecture-inputs')
+            self.assertEqual(_check(report, 'source-stability')['status'], 'pass')
 
 
 class DoctorTests(unittest.TestCase):

@@ -18,7 +18,7 @@ from .landing_normalizer import normalize_landing_text
 
 PDF_WORKER = Path(__file__).resolve().parent / "resources/landing_pdf_worker.py"
 PDF_DECODER_DIGEST = hashlib.sha256(PDF_WORKER.read_bytes()).hexdigest()
-PDF_PYPDF_VERSION = "6.18.1"
+PDF_PYPDF_VERSION = "6.21.4"
 MAX_AUDIO_BASE64_BYTES = 10_000_000
 MAX_IMAGE_BYTES = 20 * 1_048_576
 

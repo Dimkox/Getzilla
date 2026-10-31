@@ -25,6 +25,15 @@ def paths(selection) -> set[str]:
 
 
 class InstallExtrasTests(unittest.TestCase):
+    def test_optional_verification_glue_installs_without_enabling_checks(self) -> None:
+        chosen = paths(MODULE.PayloadSelection(('qwen',)))
+        self.assertIn('scripts/getzilla_verification_tools.py', chosen)
+        self.assertIn('.getzilla/getzilla/verification_tools.py', chosen)
+        self.assertIn('.getzilla/getzilla/verification_tool_reports.py', chosen)
+        self.assertIn('.getzilla/getzilla/verification_tool_workspace.py', chosen)
+        self.assertIn('.getzilla/templates/verification-tools.example.json', chosen)
+        self.assertNotIn('.getzilla-verification.json', chosen)
+
     def test_plain_repository_gets_no_domain_skills_or_root_shims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)

@@ -87,7 +87,7 @@ class UnixCallerTests(unittest.TestCase):
                 def log_message(self, *args):
                     pass
                 def do_GET(self):
-                    payload = secondary.capability() if self.path == "/v2/landing-backend" else secondary.observe(self.path.split("/")[3])
+                    payload = secondary.capability() if self.path == "/v3/landing-backend" else secondary.observe(self.path.split("/")[3])
                     raw = canonical_json(payload)
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")

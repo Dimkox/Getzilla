@@ -6,7 +6,7 @@ import unittest
 
 from getzilla_factory.landing_http import HttpLandingProfile
 from getzilla_factory.landing_renderer import TARGET_BASE_SHA, TARGET_BASE_TREE, TARGET_REPOSITORY_ID
-from getzilla_factory.landing_contracts import LandingProviderEvidenceV2, SiteArtifactV1
+from getzilla_factory.landing_contracts import LandingProviderEvidenceV2, SiteArtifactV1, landing_digest
 from getzilla_factory.landing_observation import LandingProviderObservation
 from getzilla_factory.landing_service import LandingJobRecord
 from getzilla_factory.landing_failover_contracts import attempt_receipt, backend_capability
@@ -137,6 +137,49 @@ class CallerRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(SettingsError, "idempotency conflict"):
             caller.submit("parent-1", b"changed brief", "text/plain")
         self.assertEqual(["qwen-intl"], script.calls)
+
+    def test_stale_capability_version_or_parser_stops_before_submission(self):
+        from getzilla_factory.landing_failover import FailoverCoordinator
+        from getzilla_factory.landing_failover_config import FailoverConfig
+        from getzilla_factory.landing_failover_journal import CallerJournal
+
+        for stale in ('version', 'parser'):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as temporary:
+                config = FailoverConfig.from_dict(configuration(Path(temporary), count=1))
+                calls = []
+
+                class StaleBackend:
+                    def __init__(self, backend, **kwargs):
+                        self.backend = backend
+
+                    def capability(self):
+                        profile = HttpLandingProfile.for_provider(self.backend.profile_id, available=True)
+                        document = backend_capability(profile, config.actor_id, config.repository_id,
+                                                      config.exact_base_sha, config.exact_base_tree)
+                        domain = 'landing-backend-v2'
+                        if stale == 'version':
+                            document['schema_version'] = 1
+                            domain = 'landing-backend-v1'
+                        else:
+                            document['profile']['pdf_parser_version'] = '6.18.1'
+                            document['profile_digest'] = landing_digest('http-profile', document['profile'])
+                        document['digest'] = landing_digest(domain,
+                            {key: value for key, value in document.items() if key != 'digest'})
+                        return document
+
+                    def submit(self, *args):
+                        calls.append(args)
+                        raise AssertionError('stale backend must not receive input')
+
+                    def close(self):
+                        pass
+
+                with CallerJournal(config) as journal:
+                    result = FailoverCoordinator(config, journal, backend_factory=StaleBackend).submit(
+                        'stale-profile', b'brief', 'text/plain')
+                self.assertEqual('stopped', result['state'])
+                self.assertEqual('backend_identity', result['reason'])
+                self.assertEqual([], calls)
 
     def test_absent_backends_consume_each_slot_once_and_replay_has_no_io(self):
         from getzilla_factory.landing_failover import FailoverCoordinator

@@ -152,6 +152,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla par -j <n> -- "cmd1" "cmd2"` | Runs independent commands in parallel on the measured CPUs |
 | Check | `getzilla test` | Runs the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | | `getzilla verify --mode fast\|pr\|release` | Runs the checks the route selects and records a receipt |
+| | `getzilla test-tools catalog\|plan\|run` | Optional [executed test and mutation evidence](docs/verification-tools.md) for seven open-source tools |
 | | `getzilla review <kind> --status pass\|fail --report <file> --reviewed-commit <sha>` | Records an independent review |
 | | `getzilla gate status`, `gate decide <gate> approved\|rejected` | Shows or records a human-gate decision |
 | | `getzilla vulns [--online]` | Checks pinned dependencies against known vulnerabilities (OSV) |

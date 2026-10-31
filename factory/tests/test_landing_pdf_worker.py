@@ -11,6 +11,7 @@ import io
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 import unittest
 from unittest import mock
 
@@ -26,16 +27,34 @@ CURRENT_EPOCH_SHA = "fde60e040167c10975b00d11f578c4da6763069a"
 _CHILD_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
 
 
-def _pypdf_pinned() -> bool:
+def _declared_pypdf_version() -> str:
+    manifest = tomllib.loads((Path(__file__).parents[1] / 'pyproject.toml').read_text(encoding='utf-8'))
+    pins = [item.removeprefix('pypdf==') for item in manifest['project']['dependencies']
+            if item.startswith('pypdf==')]
+    if len(pins) != 1:
+        raise ValueError('factory must declare one exact pypdf pin')
+    return pins[0]
+
+
+def _child_pypdf_version() -> str | None:
     probe = subprocess.run(
         (
             str(Path(sys.executable).absolute()), "-B", "-I", "-c",
-            "import importlib.metadata as m; import pypdf; "
-            "raise SystemExit(0 if m.version('pypdf')=='6.18.1' else 1)",
+            "import importlib.metadata as m; import importlib.util; "
+            "spec = importlib.util.find_spec('pypdf'); "
+            "print(m.version('pypdf')) if spec is not None else None; "
+            "raise SystemExit(0 if spec is not None else 3)",
         ),
-        cwd="/", env=_CHILD_ENV, capture_output=True, timeout=30,
+        cwd="/", env=_CHILD_ENV, capture_output=True, text=True, timeout=30,
     )
-    return probe.returncode == 0
+    if probe.returncode == 3:
+        return None
+    if probe.returncode != 0 or not probe.stdout.strip():
+        raise RuntimeError('isolated PDF dependency probe failed: ' + probe.stderr[-2000:])
+    return probe.stdout.strip()
+
+
+CHILD_PYPDF_VERSION = _child_pypdf_version()
 
 
 def _single_page_pdf(text: str) -> bytes:
@@ -76,6 +95,9 @@ def _blank_pdf(*, page_count: int = 1) -> bytes:
 
 
 class PdfWorkerInputGuards(unittest.TestCase):
+    def test_runtime_parser_version_matches_manifest_pin(self):
+        self.assertEqual(landing_media.PDF_PYPDF_VERSION, _declared_pypdf_version())
+
     def test_empty_payload_is_rejected_before_any_spawn(self):
         with self.assertRaises(LandingMediaError) as ctx:
             extract_pdf_text(b"")
@@ -88,7 +110,7 @@ class PdfWorkerInputGuards(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "pdf_decoder_drift")
 
 
-@unittest.skipIf(_pypdf_pinned(), "pinned pypdf 6.18.1 present; unavailable branch cannot run")
+@unittest.skipIf(CHILD_PYPDF_VERSION is not None, "pypdf present; unavailable branch cannot run")
 class PdfWorkerWithoutParser(unittest.TestCase):
     def test_worker_executes_and_reports_parser_unavailable(self):
         with self.assertRaises(LandingMediaError) as ctx:
@@ -96,8 +118,11 @@ class PdfWorkerWithoutParser(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "pdf_parser_unavailable")
 
 
-@unittest.skipUnless(_pypdf_pinned(), "requires pypdf 6.18.1 installed for the child interpreter")
+@unittest.skipUnless(CHILD_PYPDF_VERSION is not None, "requires pypdf installed for the child interpreter")
 class PdfWorkerWithPinnedParser(unittest.TestCase):
+    def test_child_uses_the_manifest_parser_version(self):
+        self.assertEqual(CHILD_PYPDF_VERSION, _declared_pypdf_version())
+
     def test_textual_pdf_returns_normalized_text(self):
         self.assertEqual(extract_pdf_text(_single_page_pdf("PDFWORKER OK")).strip(), "PDFWORKER OK")
 

@@ -21,7 +21,7 @@ def main():
     resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
     try:
         from importlib.metadata import version
-        if version("pypdf") != "6.18.1":
+        if version("pypdf") != "6.21.4":
             emit(error="pdf_parser_unavailable")
             return
         from pypdf import PdfReader

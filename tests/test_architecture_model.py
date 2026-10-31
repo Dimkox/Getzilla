@@ -1422,10 +1422,12 @@ class ArchitectureModelTests(unittest.TestCase):
                 "CONTRACT-FACTORY-LANDING-SPEC-V1",
                 "CONTRACT-FACTORY-LANDING-PROVIDER-OBSERVATION-V1",
                 "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V1",
+                "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V2",
                 "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
             },
         )
         landing_node = next(
@@ -1438,6 +1440,7 @@ class ArchitectureModelTests(unittest.TestCase):
             set(landing_records) - {
                 "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
             },
         )
         self.assertTrue(
