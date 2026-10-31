@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "8be006c54e43f790bdc6ae1412a60f3efbbcd98be5e527cf699da4f36d2041a8",
+  "lock_sha256": "5b52c4db6fc07fdd06639f614ea47dbff4c94f99a209ccdeb0aae174208c5a0a",
   "profile": "ubuntu-24.04-x86_64-cpython312",
   "schema_version": "factory-runtime-wheels/v1",
   "wheels": [
@@ -18,7 +18,7 @@
     {"filename":"psycopg_binary-3.3.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl","name":"psycopg-binary","sha256":"e7510c37550f91a187e3660a8cc50d4b760f8c3b8b2f89ebc5698cd2c7f2c85d","version":"3.3.4"},
     {"filename":"pydantic-2.13.5-py3-none-any.whl","name":"pydantic","sha256":"346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73","version":"2.13.5"},
     {"filename":"pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","name":"pydantic-core","sha256":"0fc5be0abd4a407e200d844b404e33639a554e7bd0d448e7b9ae181be4789ac2","version":"2.46.5"},
-    {"filename":"pypdf-6.21.2-py3-none-any.whl","name":"pypdf","sha256":"1d44d1a3a200f25062adff0085b02040e4646431ac2ccac22e42679e91466084","version":"6.21.2"},
+    {"filename":"pypdf-6.21.4-py3-none-any.whl","name":"pypdf","sha256":"33e4fb41ca352810eb4e9838aa0d82d6888a5f8bf682f43e99cce5faa666255c","version":"6.21.4"},
     {"filename":"starlette-1.7.0-py3-none-any.whl","name":"starlette","sha256":"67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e","version":"1.7.0"},
     {"filename":"typing_extensions-4.16.0-py3-none-any.whl","name":"typing-extensions","sha256":"481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8","version":"4.16.0"},
     {"filename":"typing_inspection-0.4.4-py3-none-any.whl","name":"typing-inspection","sha256":"65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147","version":"0.4.4"},

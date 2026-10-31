@@ -44,6 +44,11 @@ class ProtocolError(ValueError):
     """Fixed diagnostic without peer output or caller content."""
 
 
+def recover_after_restart(root, binding, expected_revision: int, expected_generation: int) -> dict:
+    """Observe the previous turn without starting a peer or authorizing replay."""
+    return journal.recovery_status(root, binding, expected_revision, expected_generation)
+
+
 def _pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -143,6 +148,12 @@ async def initialize(peer: OwnedJsonlPeer) -> None:
     except asyncio.TimeoutError:
         raise ProtocolError('initialization_failed') from None
     await peer.send({'method': 'initialized', 'params': {}})
+
+
+async def start_offline_container(root, binding, generation: int, revision: int, *, timeout: float = 10):
+    """Start the owned native peer without network or live dispatch authority."""
+    from . import native_container
+    return await native_container.start(root, binding, generation, revision, timeout=timeout)
 
 
 class TurnObserver:

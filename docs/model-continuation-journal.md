@@ -6,6 +6,8 @@ The API lives in `.getzilla/getzilla/model_continuation_state.py`:
 
 - `create_chain(root, Binding, Usage, TaskBudget)` records the original attempt as candidate zero. The ordered policy list includes this original model. Original request/cost usage and task deadline must be supplied; unknown usage fails.
 - `inspect_chain(root, binding)` reads a matching chain. Missing or corrupt state is an error, not a fresh budget.
+- `recovery_status(root, binding, expected_revision, expected_generation)` reads live-journal status under lock and checks the current policy and deadline. It never permits dispatch or replay. It refuses stale references and does not expose bindings or event payloads. The status is a point-in-time observation, not authorization.
+- `codex_continuation.recover_after_restart(...)` exposes this observation to the Codex coordinator without starting a peer.
 - `record_terminal(root, binding, generation, event_id, category)` records a closed normalized category. Terminal inference state leaves tool effects unknown.
 - `reserve_next(root, binding, expected_revision, event_id, Usage)` returns `adapter_not_qualified` in production. Tests patch the private boundary only to exercise persistence. Every result has `dispatch_permitted:false`, including test reservations.
 - `cancel_chain(root, binding, expected_revision)` stops further reservation and retains all expenditure. Cancellation can reduce activity after policy revocation.
@@ -32,15 +34,9 @@ This store has no relationship to Factory PostgreSQL budget grants or PR239 prog
 
 ## Recovery and rollback
 
-Disable the policy to stop reservation. Preserve the journal and unknown outcomes. Revert source through a reviewed PR if needed; never delete a ledger to regain attempts or money.
+The optional `codex_continuation.start_offline_container` entry point starts the pinned native Codex app server inside an owned Docker container with no network or credentials. T3 records a one-shot ownership intent before Docker resources are created. It stores the full container and image identities before start and records confirmed start separately. A normal close stops the verified container and records a digest of its state and work volumes. `native_container.recover` inspects the recorded container after coordinator restart, stops it if needed, and rechecks the volume digest. It never starts a successor or permits live dispatch. Missing or changed resources and uncertain state fail closed. The Docker daemon is part of the trusted boundary; a stopped local container does not establish the outcome of remote effects. The caller must retain the recorded container, image and volumes until recovery is complete. `native_container.cleanup` serializes against startup and records cleanup in T3. It refuses uncertain in-flight operations and unrecorded container identities. It removes only the recorded container and image IDs. Docker volumes remain for manual verification because their names can be reused; cleanup reports `manual_volume_cleanup_required` while they remain. Roll back through a reviewed revert and retain any unknown-outcome journal.
 
-## Direct model-only OpenAI request
-
-The optional `getzilla.openai_model_request` API prepares a text-only Responses request for accounting. Dispatch refuses before consuming a claim or accessing the network because data admission is not established. The journal stores no credential or prompt. This API is not connected to native Getzilla startup or automatic model continuation.
-
-The caller must supply a versioned contract containing the exact model, account reference, full input token ceiling, output token ceiling, byte limit, price ceilings, rate revision and expiry. The operator must confirm that the input ceiling covers the model's complete input context, including framing, and that both prices cover every applicable charge. These are operator assertions: byte length is not a token count, and the adapter does not verify current provider prices or account ownership. The configured ceiling is not a provider-enforced spending limit. See the [OpenAI token guide](https://developers.openai.com/api/docs/guides/token-counting) and [pricing](https://developers.openai.com/api/docs/pricing).
-
-T3 reserves the full configured input and output ceilings, rounds the charge up to micros and applies the stricter task or policy cap. A live-model-only record binds the contract and request digest to the first policy candidate. A consumed accounting claim is never reissued. This accounting claim does not authorize data transfer. The API does not record terminal outcomes or reserve another candidate. It cannot resume a native coding session, reconcile tool effects, or prove a process fence. Credential/account matching and data authorization remain unfinished.
+Disable the policy to stop reservation. Preserve the journal and unknown outcomes. Revert source through a reviewed PR if needed; never delete a ledger to regain attempts or money. No live dispatch path exists to roll back in T3.
 
 ## Controlled local fixture
 

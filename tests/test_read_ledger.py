@@ -13,6 +13,8 @@ sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
 import getzilla.read_ledger as ledger  # noqa: E402
 from getzilla.read_ledger import command_files, output_files, patch_targets, record, seen  # noqa: E402
+from getzilla.router import build_route  # noqa: E402
+from getzilla.state import add_approval, set_active_route  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
 
 
@@ -41,6 +43,37 @@ class ReadLedgerHookTests(unittest.TestCase):
         for name in ('read.py', 'unread.py'):
             (root / 'app' / name).write_text('a\n', encoding='utf-8')
         subprocess.run(['git', 'add', 'app'], cwd=root, check=True)
+
+    def test_linked_worktree_read_is_known_to_canonical_session_ledger(self) -> None:
+        with project_copy(git=True) as root:
+            self._project(root)
+            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                            'commit', '-qm', 'fixture'], cwd=root, check=True)
+            target = root / '.getzilla/runtime/worktrees/ledger-child'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'ledger-child', str(target)], cwd=root, check=True)
+            self._shell(root, 'cat app/read.py')
+            self._shell(target, 'cat app/unread.py')
+            read_patch = _patch('Update', str(target / 'app/unread.py'))
+            unseen_patch = _patch('Update', str(target / 'app/read.py'))
+            self.assertEqual(ledger.unread(root, 'ledger-session', read_patch, root), [])
+            self.assertEqual(ledger.unread(root, 'ledger-session', unseen_patch, root),
+                             ['.getzilla/runtime/worktrees/ledger-child/app/read.py'])
+            self.assertEqual(ledger.unread(target, 'ledger-session', _patch('Update', 'app/unread.py'), target), [])
+            self._shell(root, 'cat app/read.py', 'other-session')
+            self.assertTrue(ledger.unread(root, 'other-session', read_patch, root))
+            subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/project.git'],
+                           cwd=root, check=True)
+            set_active_route(root, build_route(root, 'fix read ledger regression', 'ledger-session').to_dict())
+            add_approval(root, 'protected-path', 'fixture', 5, actions=['protected-path-write'],
+                         resources=['.getzilla/runtime/worktrees/ledger-child/app/unread.py'])
+            self.assertEqual(self._patch(root, read_patch)['decision'], 'allow')
+
+    def test_unregistered_nested_git_pointer_does_not_share_a_ledger(self) -> None:
+        with project_copy(git=True) as root:
+            target = root / '.getzilla/runtime/worktrees/unregistered'
+            target.mkdir(parents=True)
+            (target / '.git').write_text('gitdir: not-a-worktree\n', encoding='utf-8')
+            self.assertEqual(ledger._ledger_root(target), target.resolve())
 
     def test_a_patch_to_an_unread_file_is_refused_and_a_read_one_passes(self) -> None:
         with project_copy(git=True) as root:

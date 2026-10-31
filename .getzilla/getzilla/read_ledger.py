@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,6 +33,32 @@ _OUTPUT_WORD = re.compile(r'[\w.\-/]{1,300}')
 _OPERATORS = {'&&', '||', ';', '|', '&'}
 _PATCH_TARGET = re.compile(r'^\*\*\* (Update|Delete|Add) File: (.+?)\s*$', re.MULTILINE)
 _PATCH_MOVE = re.compile(r'^\*\*\* Move to: (.+?)\s*$', re.MULTILINE)
+
+
+def _ledger_root(root: Path) -> Path:
+    """Use the parent ledger for registered worktrees inside its runtime directory."""
+    root = root.resolve()
+    if not (root / '.git').is_file():
+        return root
+    for parent in root.parents:
+        trees = parent / '.getzilla' / 'runtime' / 'worktrees'
+        if not root.is_relative_to(trees) or not (parent / '.getzilla').is_dir():
+            continue
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        try:
+            result = subprocess.run(
+                ['git', '-c', 'core.fsmonitor=false', '-C', str(parent), 'worktree', 'list', '--porcelain', '-z'],
+                capture_output=True, text=True, encoding='utf-8', errors='strict',
+                timeout=5, check=False, env=environment,
+            )
+            registered = {Path(item[9:]).resolve() for item in result.stdout.split('\0')
+                          if item.startswith('worktree ')}
+            if result.returncode == 0 and {parent, root} <= registered:
+                return parent
+        except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+            pass
+        break
+    return root
 
 
 def _ledger(root: Path, session: str) -> Path | None:
@@ -63,6 +90,7 @@ def _entries(path: Path) -> list[str] | None:
 
 def seen(root: Path, session: str) -> set[str] | None:
     """Files this session saw; None when the session keeps no ledger yet."""
+    root = _ledger_root(root)
     path = _ledger(root, session)
     if path is None or not path.is_file():
         return None
@@ -83,6 +111,11 @@ def _prune(directory: Path) -> None:
 
 def record(root: Path, session: str, paths: set[str]) -> None:
     """Add paths under a runtime lock; the newest stay when the ledger is full."""
+    original = root.resolve()
+    root = _ledger_root(original)
+    if root != original:
+        prefix = original.relative_to(root)
+        paths = {(prefix / item).as_posix() for item in paths}
     path = _ledger(root, session)
     if path is None or not paths:
         return
@@ -163,6 +196,7 @@ def patch_targets(patch: str) -> tuple[set[str], set[str]]:
 
 def unread(root: Path, session: str, patch: str, cwd: Path) -> list[str]:
     """Existing files a patch would change that this session never saw (empty when not enforced)."""
+    root = _ledger_root(root)
     known = seen(root, session)
     if not known:
         return []
@@ -191,6 +225,7 @@ def observe(root: Path, session: str, tool: str, command: str | None, cwd: Path,
     """PostToolUse: remember what this tool call read or wrote."""
     if not isinstance(command, str) or not command:
         return
+    root = _ledger_root(root)
     if tool == 'apply_patch' or command.lstrip().startswith('*** Begin Patch'):
         changed, written = patch_targets(command)
         files = {rel for raw in changed | written if (rel := _relative(root, raw, cwd))}
