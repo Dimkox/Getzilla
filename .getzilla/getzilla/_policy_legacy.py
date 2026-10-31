@@ -2010,7 +2010,7 @@ def _gh_external_write_argv(argv: list[str], root: Path | None, env: dict[str, s
     lowered = ['gh', *[word.lower() for word in argv[1:]]]
     positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
     if positionals[:1] == ['api']:
-        request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
+        request = _gh_api_request(argv[indexes[0] + 1:], _gh_host(argv, env) or _api_host(env))
         if request:
             return f'github-api:{request[0]} {request[1]}/{request[2]}'
     if positionals == ['pr', 'review']:
@@ -2104,7 +2104,7 @@ def _production_argv_targets(root: Path | None, argv: list[str], env: dict[str, 
     positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS if argv[0] == 'gh' else frozenset(), 3)
     resource: str | None = None
     if action == 'pull-request-merge' and positionals[:1] == ['api']:
-        request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
+        request = _gh_api_request(argv[indexes[0] + 1:], _gh_host(argv, env) or _api_host(env))
         merge = _GITHUB_PULL_MERGE.search(request[2]) if request else None
         host = request[1] if request else None
         repo = merge.group(1).lower() if merge else None

@@ -221,6 +221,83 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 self.assertFalse(allowed)
                 self.assertIn('secret', reason or '')
 
+    @staticmethod
+    def api_host_commands(endpoint: str, method: str) -> tuple[str, ...]:
+        return (
+            f'gh --hostname other.example api {endpoint} --method {method}',
+            f'gh --hostname=other.example api {endpoint} --method {method}',
+            f'gh api {endpoint} --hostname other.example --method {method}',
+            f'gh api {endpoint} --hostname=other.example --method {method}',
+        )
+
+    def test_api_host_positions_cannot_borrow_the_default_host_grant(self) -> None:
+        self.grant('github-api:POST api.github.com/repos/Dimkox/Getzilla/issues')
+        for command in self.api_host_commands('repos/Dimkox/Getzilla/issues', 'POST'):
+            with self.subTest(command=command):
+                self.assertFalse(self.verdict(command)[0])
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+                self.assertEqual(_http_write_resource(command, self.root),
+                                 'github-api:POST other.example/repos/Dimkox/Getzilla/issues')
+
+    def test_api_host_positions_accept_the_exact_host_grant(self) -> None:
+        resource = 'github-api:POST other.example/repos/Dimkox/Getzilla/issues'
+        self.grant(resource)
+        for selected in self.api_host_commands('repos/Dimkox/Getzilla/issues', 'POST'):
+            for command in (selected, f'GH_HOST=unrelated.example {selected}'):
+                with self.subTest(command=command):
+                    self.assertEqual(_http_write_resource(command, self.root), resource)
+                    allowed, reason = self.verdict(command)
+                    self.assertTrue(allowed, reason)
+                    self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+
+    def test_api_merge_host_positions_cannot_borrow_default_host_scopes(self) -> None:
+        self.grant('github-api:PUT api.github.com/repos/Dimkox/Getzilla/pulls/5/merge')
+        self.grant('Dimkox/Getzilla#5', production=True)
+        for command in self.api_host_commands('repos/Dimkox/Getzilla/pulls/5/merge', 'PUT'):
+            with self.subTest(command=command):
+                self.assertFalse(self.verdict(command)[0])
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+                self.assertEqual(production_targets(self.root, command),
+                                 [('pull-request-merge', 'other.example/dimkox/getzilla#5')])
+
+    def test_api_merge_host_positions_require_both_exact_scopes(self) -> None:
+        resource = 'github-api:PUT other.example/repos/Dimkox/Getzilla/pulls/5/merge'
+        for api_grant, merge_grant in ((False, False), (True, False), (False, True), (True, True)):
+            self.setUp()
+            if api_grant:
+                self.grant(resource)
+            if merge_grant:
+                self.grant('other.example/dimkox/getzilla#5', production=True)
+            for command in self.api_host_commands('repos/Dimkox/Getzilla/pulls/5/merge', 'PUT'):
+                with self.subTest(command=command, api_grant=api_grant, merge_grant=merge_grant):
+                    self.assertEqual(_http_write_resource(command, self.root), resource)
+                    self.assertEqual(production_targets(self.root, command),
+                                     [('pull-request-merge', 'other.example/dimkox/getzilla#5')])
+                    allowed, reason = self.verdict(command)
+                    self.assertEqual(allowed, api_grant and merge_grant, reason)
+                    self.assertEqual(self.hook_verdict(command).get('decision'),
+                                     'allow' if api_grant and merge_grant else 'deny')
+
+    def test_api_host_prefix_keeps_endpoint_url_authority(self) -> None:
+        resource = 'github-api:POST endpoint.example/repos/Dimkox/Getzilla/issues'
+        self.grant(resource)
+        for command in self.api_host_commands('https://endpoint.example/repos/Dimkox/Getzilla/issues', 'POST'):
+            with self.subTest(command=command):
+                self.assertEqual(_http_write_resource(command, self.root), resource)
+                allowed, reason = self.verdict(command)
+                self.assertTrue(allowed, reason)
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+
+    def test_api_host_prefix_cannot_hide_duplicate_host_selectors(self) -> None:
+        self.grant('github-api:POST other.example/repos/Dimkox/Getzilla/issues')
+        for prefix in ('--hostname other.example', '--hostname=other.example'):
+            for suffix in ('--hostname other.example', '--hostname=unrelated.example'):
+                command = f'gh {prefix} api repos/Dimkox/Getzilla/issues --method POST {suffix}'
+                with self.subTest(command=command):
+                    self.assertFalse(self.verdict(command)[0])
+                    self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+                    self.assertTrue(analyze_command_authority(command).ambiguous)
+
     def test_hook_keeps_secret_checks_before_exact_grant_admission(self) -> None:
         self.grant('gh:dimkox/getzilla pr create')
         for suffix, expected in (('-Fbody.md', 'allow'), ('-F.env', 'deny')):
