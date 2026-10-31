@@ -93,9 +93,17 @@ class ModelContinuationTest(unittest.TestCase):
             self.write(changed)
             self.assertEqual(load_policy(self.root).state, 'invalid')
 
-    def test_invalid_bytes_duplicate_keys_size_and_sanitized_diagnostics(self):
-        for data in (b'\xff', b'{', b'{"schema_version":1,"enabled":false,"enabled":true}',
-                     b' ' * 16385, b'{"secret":"SECRET_SENTINEL"}'):
+    def test_duplicate_keys_reject_an_otherwise_valid_policy(self):
+        policy = enabled_policy()
+        self.write(policy)
+        self.assertEqual(load_policy(self.root).state, 'configured')
+        duplicate = '{"enabled": false, ' + json.dumps(policy)[1:]
+        self.assertEqual(json.loads(duplicate), policy)
+        self.path.write_text(duplicate, encoding='utf-8')
+        self.assertEqual(load_policy(self.root).state, 'invalid')
+
+    def test_invalid_bytes_size_and_sanitized_diagnostics(self):
+        for data in (b'\xff', b'{', b' ' * 16385, b'{"secret":"SECRET_SENTINEL"}'):
             self.path.write_bytes(data)
             self.assertEqual(load_policy(self.root).state, 'invalid')
             self.assertNotIn('SECRET', json.dumps(startup_status(self.root, 'SECRET\n')))

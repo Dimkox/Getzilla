@@ -553,6 +553,7 @@ class _ShellToken:
     operator: bool = False
     expansion: bool = False
     substitution: bool = False
+    opaque: bool = False
 
 
 _SHELL_OPERATORS = (
@@ -581,7 +582,7 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
             tokens.append(_ShellToken(operator, start, index, operator=True))
             continue
         quote = ''
-        expansion = substitution = False
+        expansion = substitution = opaque = False
         while index < len(text):
             char = text[index]
             if quote == "'":
@@ -605,6 +606,12 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
                 quote = char
             elif char in ' \t\r' or char in _PUNCTUATION:
                 break
+            elif char in '*?[{' or (char == '~' and (
+                index == start or (_ASSIGNMENT.match(text[start:index]) and text[index - 1] in '=:')
+            )):
+                # Same closed literal-word boundary used by root admission: shell glob,
+                # brace and tilde syntax is opaque only outside quotes and escapes.
+                opaque = True
             if char in {'$', '`'}:
                 expansion = True
                 substitution = substitution or char == '`' or text.startswith('$(', index)
@@ -614,7 +621,8 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
         values = _split_words(text[start:index])
         if len(values) != 1:
             raise ValueError('unsupported shell word')
-        tokens.append(_ShellToken(values[0], start, index, expansion=expansion, substitution=substitution))
+        tokens.append(_ShellToken(values[0], start, index, expansion=expansion,
+                                  substitution=substitution, opaque=opaque or expansion))
     return tokens
 
 
@@ -1384,6 +1392,14 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
         return action, True
     if executable == 'gh' and _gh_command(normalized) in {('alias', 'set'), ('alias', 'import')}:
         return action, True
+    if executable == 'gh':
+        if _gh_ambiguous_command_prefix(argv):
+            return action, True
+        if _gh_argument_context(argv) is not None:
+            parsed = _gh_arguments(argv)
+            # The command-text pass checks active expansion before argv roles are trusted.
+            # Dollar/backtick characters in literal text values are data, including on merge.
+            return action, parsed is None
     if executable == 'git':
         selector_index = _git_selector_index(argv)
         if selector_index >= len(argv):
@@ -1597,6 +1613,7 @@ def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     else:
         analysis = _analyze_authority_pieces(raw_command)
     actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
+    ambiguous = ambiguous or _gh_has_opaque_shell_words(raw_command)
     executable_text = _executable_text(raw_command)
     if _IFS_OBFUSCATION.search(executable_text):
         # `git$IFS'push'`/`git${IFS}push`: $IFS word-splits into `git push` at runtime but
@@ -1649,8 +1666,207 @@ _GH_API_VALUE_OPTIONS = frozenset({
 })
 _GH_API_READ_METHODS = frozenset({'GET', 'HEAD'})
 _GITHUB_PULL_MERGE = re.compile(r'(?:^|/)repos/([^/]+/[^/]+)/pulls/(\d+)/merge/?$', re.IGNORECASE)
-_GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IGNORECASE)
+_GITHUB_PULL_URL = re.compile(
+    r'https?://github\.com/([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#][^\s]*)?',
+    re.IGNORECASE | re.ASCII,
+)
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
+
+
+def _gh_has_opaque_shell_words(command: str, depth: int = 0) -> bool:
+    """Reject unresolved gh argv before assigning text, file or resource roles.
+
+    Reuse the shell lexer and bounded command/wrapper model. A word may expand
+    into several argv entries, even in a text option. Quoted/escaped literals
+    remain literal; nested command strings are checked in their own shell context.
+    """
+    if depth > 4:
+        return True
+    for chunk in _command_chunks(command):
+        try:
+            words = _shell_tokens(chunk)
+        except ValueError:
+            return re.search(r'\bgh(?:\.exe)?\b', chunk, re.IGNORECASE) is not None
+        commands = _simple_commands(chunk)
+        if not any(argv and argv[0] == 'gh' for argv in commands):
+            continue
+        if any(word.opaque or (word.operator and word.value in {'(', ')'}) for word in words):
+            # Unquoted parentheses include process substitution and extglob syntax.
+            return True
+        for argv in commands:
+            if argv is None:
+                return True
+            nested = _nested_commands(argv)
+            if not nested and argv[0] not in _DATA_ARGUMENT_EXECUTABLES:
+                nested = _wrapped_payloads(argv, depth)
+            if any(isinstance(payload, str) and _gh_has_opaque_shell_words(payload, depth + 1)
+                   for payload in nested):
+                return True
+    return False
+
+
+_GH_CASE_GLOBAL_VALUES = frozenset({'-R', '--repo', '--hostname'})
+_GH_BODY_VALUES = frozenset({'-b', '--body', '-F', '--body-file'})
+_GH_CREATE_VALUES = _GH_BODY_VALUES | frozenset({
+    '-t', '--title', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-p', '--project', '-T', '--template',
+})
+_GH_EDIT_VALUES = _GH_BODY_VALUES | frozenset({
+    '-t', '--title', '-m', '--milestone', '--add-assignee', '--remove-assignee', '--add-label', '--remove-label',
+    '--add-project', '--remove-project',
+})
+# A bounded set of documented mutation contexts. Other gh commands keep their existing policy.
+# Values are case-sensitive: review -r and merge -m are flags, but create -r/-m consume data.
+_GH_ARGUMENT_SCHEMAS = {
+    ('pr', 'create'): (_GH_CREATE_VALUES | {'-B', '--base', '-H', '--head', '-r', '--reviewer'},
+                       frozenset({'-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose',
+                                  '-e', '--editor', '-w', '--web', '--dry-run', '--no-maintainer-edit'}), 0),
+    ('issue', 'create'): (_GH_CREATE_VALUES, frozenset({'-e', '--editor', '-w', '--web'}), 0),
+    ('pr', 'edit'): (_GH_EDIT_VALUES | {'-B', '--base', '--add-reviewer', '--remove-reviewer'},
+                    frozenset({'--remove-milestone'}), 1),
+    ('issue', 'edit'): (_GH_EDIT_VALUES, frozenset({'--remove-milestone'}), 1),
+    ('pr', 'comment'): (_GH_BODY_VALUES, frozenset({'-e', '--editor', '-w', '--web', '--edit-last',
+                                                 '--create-if-none', '--delete-last', '--yes'}), 1),
+    ('issue', 'comment'): (_GH_BODY_VALUES, frozenset({'-e', '--editor', '-w', '--web', '--edit-last',
+                                                    '--create-if-none', '--delete-last', '--yes'}), 1),
+    ('pr', 'review'): (_GH_BODY_VALUES, frozenset({'-a', '--approve', '-c', '--comment', '-r', '--request-changes'}), 1),
+    ('pr', 'merge'): (_GH_BODY_VALUES | {'-A', '--author-email', '-t', '--subject', '--match-head-commit'},
+                     frozenset({'--admin', '--auto', '--disable-auto', '-d', '--delete-branch',
+                                '-m', '--merge', '-r', '--rebase', '-s', '--squash'}), 1),
+    ('api',): (_GH_API_VALUE_OPTIONS, frozenset({'--allow-escape-sequences', '-i', '--include', '--paginate',
+                                               '--silent', '--slurp', '--verbose'}), 1),
+}
+
+
+@dataclass(frozen=True)
+class _GhArguments:
+    command: tuple[str, ...]
+    operands: tuple[str, ...]
+    options: tuple[tuple[str, str], ...]
+    flags: frozenset[str]
+
+
+def _gh_argument_context(argv: list[str]) -> tuple[tuple[str, ...], tuple[int, ...]] | None:
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    command = tuple(word.lower() for word in words)
+    if command[:1] == ('api',):
+        command, indexes = ('api',), indexes[:1]
+    elif command in {('pr', 'new'), ('issue', 'new')}:
+        command = (command[0], 'create')
+    if command in _GH_ARGUMENT_SCHEMAS:
+        return command, tuple(indexes)
+    return None
+
+
+def _gh_ambiguous_command_prefix(argv: list[str]) -> bool:
+    """Only known global options may precede the command words we classify."""
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    boundary = indexes[0] if words[:1] == ['api'] else indexes[-1] if indexes else len(argv)
+    index = 1
+    while index < boundary:
+        token = argv[index]
+        if token in _GH_CASE_GLOBAL_VALUES:
+            if index + 1 >= len(argv):
+                return True
+            index += 2
+            continue
+        if (token.startswith('--repo=') or token.startswith('--hostname=')
+                or (token.startswith('-R') and len(token) > 2)):
+            index += 1
+            continue
+        if token.startswith('-') and token not in {'-h', '--help', '--version'}:
+            return True
+        index += 1
+    return False
+
+
+def _gh_arguments(argv: list[str]) -> _GhArguments | None:
+    """Consume known gh option values once; ``None`` means unmodelled or ambiguous.
+
+    This consumes argv from the existing shell lexer. Short clusters and unknown
+    flags stay unsupported, and a hyphen-leading option value is always data.
+    """
+    context = _gh_argument_context(argv)
+    if context is None:
+        return None
+    command, command_indexes = context
+    values, switches, maximum = _GH_ARGUMENT_SCHEMAS[command]
+    values = values | _GH_CASE_GLOBAL_VALUES
+    options: list[tuple[str, str]] = []
+    flags: set[str] = set()
+    operands: list[str] = []
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if index in command_indexes:
+            index += 1
+            continue
+        if argument == '--':
+            operands.extend(argv[index + 1:])
+            break
+        if not argument.startswith('-') or argument == '-':
+            operands.append(argument)
+            index += 1
+            continue
+        name, separator, value = argument.partition('=')
+        if name not in values and name not in switches and argument[:2] in values:
+            name, separator, value = argument[:2], '=', argument[2:].removeprefix('=')
+        if name in values:
+            if not separator:
+                index += 1
+                if index >= len(argv) or index in command_indexes:
+                    return None
+                value = argv[index]
+            if command == ('api',):
+                name = {'-R': '--repo', '-F': '--field', '-f': '--raw-field'}.get(name, name)
+            else:
+                name = {'-R': '--repo', '-b': '--body', '-F': '--body-file'}.get(name, name)
+            if name in {'--repo', '--hostname', '--body', '--body-file', '--input'} and any(
+                seen == name for seen, _ in options
+            ):
+                return None
+            options.append((name, value))
+        elif name in switches or name in {'-h', '--help'}:
+            if separator and value.lower() not in {'true', 'false', 't', 'f', '1', '0'}:
+                return None
+            flags.add(name)
+        else:
+            return None
+        index += 1
+    dynamic_operand = any(
+        ('$' in word or '`' in word) if command == ('api',) else (
+            _authority_token_is_dynamic(word)
+            and not (command == ('pr', 'review') and _github_pull_url_target(word) is not None)
+        )
+        for word in operands
+    )
+    if len(operands) > maximum or dynamic_operand:
+        return None
+    selected = dict(options)
+    if '--body' in selected and '--body-file' in selected:
+        return None
+    if '--repo' in selected and not re.fullmatch(r'(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', selected['--repo']):
+        return None
+    if '--hostname' in selected and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?', selected['--hostname']):
+        return None
+    parsed = _GhArguments(command, tuple(operands), tuple(options), frozenset(flags))
+    if any(not path or _authority_token_is_dynamic(path) for path in _gh_file_operands(parsed)):
+        return None
+    return parsed
+
+
+def _gh_file_operands(parsed: _GhArguments) -> list[str]:
+    """Actual file consumers; API typed fields and literal text have different roles."""
+    paths: list[str] = []
+    for name, value in parsed.options:
+        if name in {'--body-file', '--input'} or (
+            parsed.command == ('pr', 'create') and name in {'-T', '--template'}
+        ):
+            paths.append(value)
+        elif parsed.command == ('api',) and name == '--field':
+            _, separator, field = value.partition('=')
+            if separator and field.startswith('@'):
+                paths.append(field[1:])
+    return paths
 
 
 def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') -> tuple[str, str, str] | None:
@@ -1696,6 +1912,10 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
 
 def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
     """Target host of a gh command: ``--hostname`` flag, else ``GH_HOST`` from the prefix."""
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selected = dict(parsed.options).get('--hostname') if parsed else None
+        return (selected or (env or {}).get('GH_HOST', '')).lower() or None
     for index, word in enumerate(argv):
         if word == '--hostname' and index + 1 < len(argv):
             return argv[index + 1].lower()
@@ -1708,6 +1928,10 @@ def _gh_host(argv: list[str], env: dict[str, str] | None) -> str | None:
 
 def _gh_repo_flag(argv: list[str]) -> str | None:
     """Value of gh's ``-R``/``--repo`` in any pflag spelling: ``-R x``, ``-Rx``, ``-R=x``, ``--repo x``, ``--repo=x``."""
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selected = dict(parsed.options).get('--repo') if parsed else ''
+        return selected.lower() if selected is not None else None
     for index, word in enumerate(argv):
         if word in {'-R', '--repo'}:
             return argv[index + 1].lower() if index + 1 < len(argv) else ''
@@ -1745,17 +1969,33 @@ def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | Non
     return repo
 
 
+def _github_pull_url_target(selector: str) -> str | None:
+    """The complete supported URL shape; shell literal provenance is checked before argv admission."""
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in '%\\' for char in selector):
+        return None
+    url = _GITHUB_PULL_URL.fullmatch(selector)
+    if url is None or url.group(1).rsplit('/', 1)[-1] in {'.', '..'}:
+        return None
+    return f'{url.group(1).lower()}#{url.group(2)}'
+
+
 def _gh_pull_request(argv: list[str], index: int, root: Path | None, env: dict[str, str] | None = None) -> str | None:
-    """``owner/repo#N`` for the PR a ``gh pr <command>`` names after ``argv[index]``, or ``None``."""
-    selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
-        '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
-    }), 1)
+    """Exact PR target; URL selectors require literal github.com authority or stay unresolved."""
+    if _gh_argument_context(argv) is not None:
+        parsed = _gh_arguments(argv)
+        selectors = list(parsed.operands) if parsed else []
+    else:
+        selectors, _ = _positionals(['gh', *argv[index + 1:]], frozenset({
+            '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email',
+        }), 1)
     if not selectors:
         return None
-    url = _GITHUB_PULL_URL.match(selectors[0])
-    if url:
-        return f'{url.group(1).lower()}#{url.group(2)}'
-    return f'{_gh_repository(argv, root, env)}#{selectors[0]}'
+    selector = selectors[0]
+    if '://' in selector or selector.lstrip().lower().startswith(('http:', 'https:', '//')):
+        # The URL resource has no host component. Never alias another authority,
+        # userinfo/port, encoded URL or malformed URL-shaped selector to this grant.
+        return _github_pull_url_target(selector)
+    return f'{_gh_repository(argv, root, env)}#{selector}'
 
 
 def _api_host(env: dict[str, str] | None) -> str:
@@ -1765,31 +2005,17 @@ def _api_host(env: dict[str, str] | None) -> str:
     return 'api.github.com'
 
 
-def _gh_external_write(command: str, root: Path | None = None) -> str | None:
-    """Exact resource of a gh API mutation or PR review: the grant must name this target.
-
-    ``github-api:<METHOD> <host>/<endpoint>`` or ``github-pr-review:<owner>/<repo>#<n>``;
-    a review whose PR cannot be named statically yields ``github-pr-review:<owner>/<repo>#``,
-    which no grant can match.
-    """
-    outer = _command_env(command)
-    for piece in _shell_commands(command):
-        if piece is None:
-            continue
-        env, tokens = {**outer, **piece[0]}, piece[1]
-        index = next((i for i, token in enumerate(tokens) if _executable_name(token) == 'gh'), None)
-        if index is None:
-            continue
-        argv = ['gh', *tokens[index + 1:]]
-        lowered = ['gh', *[token.lower() for token in argv[1:]]]
-        positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
-        if positionals[:1] == ['api']:
-            request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
-            if request:
-                return f'github-api:{request[0]} {request[1]}/{request[2]}'
-        if positionals == ['pr', 'review']:
-            target = _gh_pull_request(argv, indexes[1], root, env)
-            return f'github-pr-review:{target or _gh_repository(argv, root, env) + "#"}'
+def _gh_external_write_argv(argv: list[str], root: Path | None, env: dict[str, str]) -> str | None:
+    """API/review authority of one invocation, never a first match across commands."""
+    lowered = ['gh', *[word.lower() for word in argv[1:]]]
+    positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
+    if positionals[:1] == ['api']:
+        request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
+        if request:
+            return f'github-api:{request[0]} {request[1]}/{request[2]}'
+    if positionals == ['pr', 'review']:
+        target = _gh_pull_request(argv, indexes[1], root, env)
+        return f'github-pr-review:{target or _gh_repository(argv, root, env) + "#"}'
     return None
 
 
@@ -1859,53 +2085,48 @@ def production_targets(root: Path | None, command: str) -> list[tuple[str, str |
     docker push and ``name@version`` for npm publish. ``None`` means the target cannot
     be determined statically, which no grant satisfies.
     """
-    targets: list[tuple[str, str | None]] = []
-    payload = _exact_outer_shell_payload(command)
-    outer = {**_command_env(command), **(_command_env(payload) if payload is not None else {})}
-    for piece in _shell_commands(command if payload is None else payload):
-        if piece is None:
-            continue
-        env, tokens = {**outer, **piece[0]}, piece[1]
-        index = next((i for i, token in enumerate(tokens) if _executable_name(token) in _AUTHORITY_EXECUTABLES), None)
-        if index is None:
-            continue
-        argv = [_executable_name(tokens[index]), *tokens[index + 1:]]
-        lowered = [argv[0], *[token.lower() for token in argv[1:]]]
-        action = _production_action(lowered)
-        if not action:
-            continue
-        if argv[0] == 'git':
-            _, sub = _git_subcommand(lowered)
-            targets.extend((action, target) for target in _git_push_targets(argv[sub + 1:], root))
-            continue
-        positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS if argv[0] == 'gh' else frozenset(), 3)
-        resource: str | None = None
-        if action == 'pull-request-merge' and positionals[:1] == ['api']:
-            request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
-            merge = _GITHUB_PULL_MERGE.search(request[2]) if request else None
-            host = _gh_host(argv, env)
-            repo = f'{merge.group(1).lower()}' if merge else None
-            if repo is not None and host and host != 'github.com':
-                repo = f'{host}/{repo}'
-            resource = f'{repo}#{merge.group(2)}' if merge else None
-        elif action == 'pull-request-merge':
-            resource = _gh_pull_request(argv, indexes[1], root, env)
-            # gh pr merge --admin bypasses branch protection; a plain merge grant must not
-            # authorize it, so the target is a distinct resource that only an explicit grant names.
-            if resource is not None and any(w == '--admin' or w.startswith('--admin=') for w in lowered):
-                resource = f'{resource}!admin'
-        elif action == 'github-release' and len(positionals) > 2:
-            resource = f'{_gh_repository(argv, root, env)}@{argv[indexes[2]]}'
-        elif action == 'docker-push':
-            pushed = [argv[i] for p, i in zip(positionals, indexes) if p not in {'push', 'image', 'manifest'}]
-            tags = [argv[i + 1] for i, token in enumerate(argv[:-1]) if token in {'-t', '--tag'}]
-            resource = (pushed or tags or [None])[0]
-        elif action == 'npm-publish' and root is not None:
-            package = load_json(root / 'package.json', None)
-            if isinstance(package, dict) and package.get('name') and package.get('version'):
-                resource = f'{package["name"]}@{package["version"]}'
-        targets.append((action, resource))
+    analysis = _mutation_analysis(command, root)
+    targets = [target for invocation in analysis.invocations for target in invocation.production]
+    if analysis.reason:
+        return [(action, None) for action, _ in targets]
     return targets
+
+
+def _production_argv_targets(root: Path | None, argv: list[str], env: dict[str, str]) -> tuple[tuple[str, str | None], ...]:
+    """All production targets of one already bounded invocation."""
+    lowered = [argv[0], *[word.lower() for word in argv[1:]]]
+    action = _production_action(lowered)
+    if not action:
+        return ()
+    if argv[0] == 'git':
+        _, sub = _git_subcommand(lowered)
+        return tuple((action, target) for target in _git_push_targets(argv[sub + 1:], root))
+    positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS if argv[0] == 'gh' else frozenset(), 3)
+    resource: str | None = None
+    if action == 'pull-request-merge' and positionals[:1] == ['api']:
+        request = _gh_api_request(argv[indexes[0] + 1:], _api_host(env))
+        merge = _GITHUB_PULL_MERGE.search(request[2]) if request else None
+        host = request[1] if request else None
+        repo = merge.group(1).lower() if merge else None
+        if repo is not None and host and host not in {'github.com', 'api.github.com'}:
+            repo = f'{host}/{repo}'
+        resource = f'{repo}#{merge.group(2)}' if merge else None
+    elif action == 'pull-request-merge':
+        resource = _gh_pull_request(argv, indexes[1], root, env)
+        parsed = _gh_arguments(argv)
+        if resource is not None and parsed is not None and '--admin' in parsed.flags:
+            resource = f'{resource}!admin'
+    elif action == 'github-release' and len(positionals) > 2:
+        resource = f'{_gh_repository(argv, root, env)}@{argv[indexes[2]]}'
+    elif action == 'docker-push':
+        pushed = [argv[i] for p, i in zip(positionals, indexes) if p not in {'push', 'image', 'manifest'}]
+        tags = [argv[i + 1] for i, word in enumerate(argv[:-1]) if word in {'-t', '--tag'}]
+        resource = (pushed or tags or [None])[0]
+    elif action == 'npm-publish' and root is not None:
+        package = load_json(root / 'package.json', None)
+        if isinstance(package, dict) and package.get('name') and package.get('version'):
+            resource = f'{package["name"]}@{package["version"]}'
+    return ((action, resource),)
 
 
 _CURL_BODY_OPTIONS = frozenset({
@@ -1926,23 +2147,110 @@ _GH_TEXT_OPTIONS = frozenset({
 })
 
 
+_HTTP_CLIENTS = frozenset({'curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'})
+_CURL_VALUES = _CURL_BODY_OPTIONS | frozenset({
+    '-X', '--request', '-H', '--header', '-o', '--output', '-D', '--dump-header', '-w', '--write-out',
+    '-A', '--user-agent', '-e', '--referer', '-u', '--user', '-x', '--proxy', '-m', '--max-time',
+    '--connect-timeout', '--retry', '--retry-delay', '--cacert', '--capath', '--cert', '--key', '--url', '--noproxy',
+})
+_CURL_SWITCHES = frozenset({
+    '-f', '-s', '-S', '-L', '-I', '-G', '-i', '-k', '-v', '-4', '-6', '-q', '-g', '-N',
+    '--fail', '--fail-with-body', '--silent', '--show-error', '--location', '--head', '--get', '--include',
+    '--insecure', '--verbose', '--ipv4', '--ipv6', '--disable', '--globoff', '--no-buffer', '--compressed',
+    '--no-progress-meter', '--http1.1', '--http2', '--help', '--version',
+})
+_WGET_VALUES = _WGET_BODY_OPTIONS | frozenset({
+    '--method', '--header', '-O', '--output-document', '-o', '--output-file', '-U', '--user-agent',
+    '--user', '--password', '--timeout', '--tries', '--ca-certificate', '--certificate', '--private-key',
+})
+_WGET_SWITCHES = frozenset({
+    '-q', '-S', '-c', '-nv', '--quiet', '--server-response', '--continue', '--no-verbose',
+    '--no-check-certificate', '--spider', '--help', '--version',
+})
+_PS_HTTP_BODY = frozenset({'-body', '-infile', '-form', '-contenttype'})
+_PS_HTTP_VALUES = _PS_HTTP_BODY | frozenset({
+    '-uri', '-method', '-custommethod', '-headers', '-outfile', '-useragent', '-timeoutsec',
+    '-maximumredirection', '-authentication', '-credential', '-proxy', '-proxycredential',
+})
+_PS_HTTP_SWITCHES = frozenset({
+    '-usebasicparsing', '-skipcertificatecheck', '-skiphttperrorcheck', '-disablekeepalive',
+    '-noproxy', '-passthru', '-verbose',
+})
+
+
 def _http_tool_write(argv: list[str]) -> str | None:
-    """URL a ``curl``/``wget`` argv writes to (non-GET method, body, form or upload), else ``None``."""
-    options = _CURL_BODY_OPTIONS if argv[0] == 'curl' else _WGET_BODY_OPTIONS
-    method_options = {'-X', '--request'} if argv[0] == 'curl' else {'--method'}
-    write, url = False, None
-    for index, word in enumerate(argv[1:], 1):
-        option, _, attached = word.partition('=') if word.startswith('--') else (word, '', '')
-        method = attached or (argv[index + 1] if index + 1 < len(argv) else '') if option in method_options else None
-        if argv[0] == 'curl' and word.startswith('-X') and len(word) > 2:
-            method = word[2:]
-        if method is not None and method.strip().upper() not in {'GET', 'HEAD', ''}:
-            write = True
-        if option in options or (argv[0] == 'curl' and re.match(r'^-[dFT]\S', word)) or option.startswith('--data-'):
-            write = True
-        if url is None and re.match(r'^https?://', word, re.IGNORECASE):
-            url = word
-    return (url or 'direct-http-write') if write else None
+    """One explicit HTTP endpoint, a read, or an ungrantable unresolved request.
+
+    Consume option values by role. Body/header URLs are data. Unknown options,
+    target files, client URL expansion and multiple targets never select a first URL.
+    """
+    client = argv[0]
+    powershell = client not in {'curl', 'wget'}
+    values = _PS_HTTP_VALUES if powershell else _CURL_VALUES if client == 'curl' else _WGET_VALUES
+    switches = _PS_HTTP_SWITCHES if powershell else _CURL_SWITCHES if client == 'curl' else _WGET_SWITCHES
+    body_options = _PS_HTTP_BODY if powershell else _CURL_BODY_OPTIONS if client == 'curl' else _WGET_BODY_OPTIONS
+    methods = {'-method', '-custommethod'} if powershell else {'-X', '--request'} if client == 'curl' else {'--method'}
+    reads = _PS_READ_METHODS if powershell else {'get', 'head'}
+    endpoints: list[str] = []
+    write = uncertain = options_done = False
+    index = 1
+    while index < len(argv):
+        word = argv[index]
+        if not options_done and word == '--':
+            options_done = True
+            index += 1
+            continue
+        if options_done or not word.startswith('-'):
+            if powershell and word.startswith('@'):
+                uncertain = True  # splatting can supply an otherwise invisible method or target
+            endpoints.append(word)
+            index += 1
+            continue
+        option, separator, value = word.partition('=')
+        if powershell:
+            option, colon, attached = option.partition(':')
+            if colon:
+                separator, value = colon, attached
+            option = option.lower()
+            if len(option) >= 3:
+                matches = [name for name in values | switches if name.startswith(option)]
+                if len(matches) == 1:
+                    option = matches[0]
+        elif not word.startswith('--') and len(word) > 2 and word[:2] in values:
+            option, separator, value = word[:2], '=', word[2:].removeprefix('=')
+        if option in {'--config', '-K', '--next', '-:', '--input-file', '-i', '-e', '--execute'} and (
+            client == 'wget' or option not in {'-i', '-e'}
+        ):
+            uncertain = True
+        elif option in values:
+            if not separator:
+                index += 1
+                if index >= len(argv):
+                    uncertain = True
+                    break
+                value = argv[index]
+            if option in methods:
+                write = write or value.strip().lower() not in reads
+            elif option in body_options:
+                write = True
+            elif option in {'--url', '-uri'}:
+                endpoints.append(value)
+        elif option in switches and not separator:
+            pass
+        elif client == 'curl' and not word.startswith('--') and all('-' + flag in switches for flag in word[1:]):
+            pass
+        else:
+            uncertain = True
+        index += 1
+    if uncertain:
+        return 'direct-http-write'
+    if not write:
+        return None
+    if len(endpoints) != 1 or not re.fullmatch(r'https?://[^\s]+', endpoints[0], re.IGNORECASE):
+        return 'direct-http-write'
+    if any(char in endpoints[0] for char in '*[]{}'):
+        return 'direct-http-write'
+    return endpoints[0]
 
 
 def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> str | None:
@@ -1951,8 +2259,14 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
     The repository is ``-R``/``--repo``, else ``GH_REPO``, else ``.`` (the current repository);
     a non-default ``GH_HOST`` qualifies it, so an env override never matches a default grant.
     """
-    if any('$' in word or '`' in word for word in argv):
-        return None  # a dynamic selector is ambiguous authority, not a grantable exact target
+    if _gh_ambiguous_command_prefix(argv):
+        return 'gh:'
+    context = _gh_argument_context(argv)
+    parsed = _gh_arguments(argv) if context is not None else None
+    if context is not None and parsed is None:
+        return 'gh:'  # existing grant normalization forbids category-only resources
+    if parsed is None and any('$' in word or '`' in word for word in argv):
+        return 'gh:'
     lowered = [word.lower() for word in argv]
     positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
     if not positionals or positionals[0] in _GH_READ_GROUPS or (len(positionals) > 1 and positionals[1] in _GH_READ_COMMANDS):
@@ -1961,65 +2275,343 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
         return None  # `gh pr` alone prints help
     if _production_action(['gh', *lowered[1:]]) or tuple(positionals) == ('pr', 'review'):
         return None
-    operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS, 8)
+    if parsed is not None:
+        operands = list(parsed.operands)
+    else:
+        operands, _ = _positionals(['gh', *argv[indexes[-1] + 1:]], _GH_TEXT_OPTIONS | _GH_VALUE_OPTIONS | {'-R'}, 8)
     repository = _gh_repo_flag(argv)
     if repository is None:
         repository = (env or {}).get('GH_REPO', '').lower() or '.'
-    host = (env or {}).get('GH_HOST', '').lower()
+    host = _gh_host(argv, env) if parsed is not None else (env or {}).get('GH_HOST', '').lower()
     if host and host != 'github.com':
         repository = f'{host}/{repository}'
     return f'gh:{repository} ' + ' '.join([*positionals, *operands])
 
 
-_PS_METHOD_OPTION = re.compile(r'''(?:^|\s)-([a-z]+)(?:\s+|=|:)(\S+)''')
 _PS_READ_METHODS = frozenset({'get', 'head', 'options', 'default'})
 
 
-def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
-    lowered = command.lower()
-    mutation = False
-    gh_resource = _gh_external_write(command, root)
-    if gh_resource:
-        return gh_resource
-    gh_env = _command_env(command)
-    for argv in _simple_commands(command):
-        if argv is None:
+@dataclass(frozen=True)
+class _MutationInvocation:
+    production: tuple[tuple[str, str | None], ...] = ()
+    external: str | None = None
+
+
+@dataclass(frozen=True)
+class _MutationAnalysis:
+    invocations: tuple[_MutationInvocation, ...]
+    reason: str | None = None
+    external_unresolved: bool = False
+    context_proven: bool = True
+
+
+_TARGET_ENV = frozenset({'GH_REPO', 'GH_HOST'})
+_MUTATION_WORDS = re.compile(r'\b(?:gh|curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm)\b', re.IGNORECASE)
+_MUTATION_SHELLS = frozenset({'bash', 'sh', 'zsh', 'dash', 'ksh'})
+_UNBOUNDED_SHELL_COMMANDS = frozenset({
+    'if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'select',
+    'function', 'coproc', '!', 'eval', 'source', '.', 'alias', 'unalias', 'trap',
+})
+_UNRESOLVED_MUTATION = 'External write context is unresolved; use one literal command with an explicit target.'
+_MULTIPLE_MUTATIONS = 'Multiple external write commands require separate tool calls, each with its exact grant.'
+
+
+def _neutral_options(
+    arguments: list[str], *, values: frozenset[str] = frozenset(), flags: frozenset[str] = frozenset(),
+    maximum: int | None = None,
+) -> bool:
+    """Closed option roles for the specific read command selected by the caller."""
+    operands = index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == '--':
+            operands += len(arguments) - index - 1
+            break
+        if not word.startswith('-') or word == '-':
+            operands += 1
+        elif word not in flags:
+            option, separator, _value = word.partition('=')
+            if not word.startswith('--') and len(word) > 2 and word[:2] in values:
+                option, separator = word[:2], '='
+            if option not in values:
+                return False
+            if not separator:
+                index += 1
+                if index >= len(arguments):
+                    return False
+        index += 1
+    return maximum is None or operands <= maximum
+
+
+def _neutral_printf(arguments: list[str]) -> bool:
+    """Printf operands are data only under a literal text, %% or %s format.
+
+    Other formats can assign variables or evaluate arithmetic in supported
+    shells. Variable destinations and escape-generated formats are unmodelled.
+    """
+    if arguments[:1] == ['--']:
+        arguments = arguments[1:]
+    elif arguments and arguments[0].startswith('-'):
+        return False
+    if not arguments:
+        return False
+    format_text = arguments[0]
+    index = 0
+    while index < len(format_text):
+        char = format_text[index]
+        if char in {'%', '\\'}:
+            index += 1
+            allowed = '%s' if char == '%' else 'abefnrtvE\\'
+            if index >= len(format_text) or format_text[index] not in allowed:
+                return False
+        index += 1
+    return True
+
+
+_NEUTRAL_GIT_OPTIONS = {
+    'status': (frozenset(), frozenset({'--short', '-s', '--branch', '-b', '--porcelain', '--porcelain=v1',
+                                     '--porcelain=v2', '--long', '--show-stash', '--no-ahead-behind'})),
+    'log': (frozenset({'-n', '--max-count', '--format', '--pretty', '--since', '--until', '--author', '--grep'}),
+            frozenset({'--oneline', '--no-patch', '--stat', '--name-only', '--name-status', '--all', '--decorate',
+                       '--no-decorate', '--no-ext-diff', '--no-textconv'})),
+    'diff': (frozenset(), frozenset({'--stat', '--shortstat', '--numstat', '--name-only', '--name-status', '--check',
+                                   '--cached', '--staged', '--quiet', '--exit-code', '--no-ext-diff', '--no-textconv'})),
+    'show': (frozenset({'--format', '--pretty'}), frozenset({'--no-patch', '-s', '--stat', '--name-only',
+                                                         '--name-status', '--no-ext-diff', '--no-textconv'})),
+    'rev-parse': (frozenset(), frozenset({'--show-toplevel', '--show-prefix', '--git-dir', '--git-common-dir',
+                                        '--is-inside-work-tree', '--verify', '--abbrev-ref', '--short'})),
+}
+_NEUTRAL_GH_OPTIONS = {
+    ('pr', 'view'): (frozenset({'--json'}), frozenset({'--comments', '-c'}), 1),
+    ('issue', 'view'): (frozenset({'--json'}), frozenset({'--comments', '-c'}), 1),
+    ('repo', 'view'): (frozenset({'--json'}), frozenset(), 1),
+    ('pr', 'list'): (frozenset({'--json', '--limit', '-L', '--state', '-s', '--base', '-B', '--head', '-H',
+                              '--author', '-A', '--label', '-l', '--search', '-S'}), frozenset(), 0),
+    ('issue', 'list'): (frozenset({'--json', '--limit', '-L', '--state', '-s', '--assignee', '-a',
+                                 '--author', '-A', '--label', '-l', '--search', '-S'}), frozenset(), 0),
+    ('pr', 'status'): (frozenset({'--json'}), frozenset(), 0),
+    ('issue', 'status'): (frozenset(), frozenset(), 0),
+    ('pr', 'checks'): (frozenset({'--json'}), frozenset({'--required'}), 1),
+    ('pr', 'diff'): (frozenset(), frozenset({'--stat', '--name-only', '--patch'}), 1),
+}
+
+
+def _neutral_git(argv: list[str]) -> bool:
+    arguments = argv[1:]
+    while arguments and arguments[0] == '--no-pager':
+        arguments = arguments[1:]
+    if not arguments:
+        return False
+    name, arguments = arguments[0], arguments[1:]
+    if name in _NEUTRAL_GIT_OPTIONS:
+        values, flags = _NEUTRAL_GIT_OPTIONS[name]
+        return _neutral_options(arguments, values=values, flags=flags)
+    # These families also write. Only the exact read subcommands are neutral.
+    if name == 'config':
+        return (len(arguments) == 2 and arguments[0] in {'--get', '--get-all', '--get-regexp'}
+                and not arguments[1].startswith('-')) or arguments in [['--list'], ['-l']]
+    if name == 'remote':
+        return arguments in [[], ['-v'], ['--verbose']] or (
+            len(arguments) == 2 and arguments[0] == 'get-url' and not arguments[1].startswith('-')
+        )
+    if name == 'branch':
+        return arguments in [['--show-current'], ['--list']]
+    return False
+
+
+def _neutral_gh(argv: list[str]) -> bool:
+    words, indexes = _positionals(argv, _GH_CASE_GLOBAL_VALUES, 2)
+    if words[:1] == ['api']:
+        return _gh_arguments(argv) is not None and _neutral_options(
+            [word for index, word in enumerate(argv[1:], 1) if index != indexes[0]],
+            values=_GH_CASE_GLOBAL_VALUES | frozenset({'-X', '--method', '-H', '--header'}),
+            flags=frozenset({'-i', '--include', '--paginate', '--silent', '--slurp', '--verbose'}), maximum=1,
+        )
+    schema = _NEUTRAL_GH_OPTIONS.get(tuple(words))
+    if schema is None or _gh_ambiguous_command_prefix(argv):
+        return False
+    values, flags, maximum = schema
+    return _neutral_options(
+        [word for index, word in enumerate(argv[1:], 1) if index not in indexes],
+        values=values | _GH_CASE_GLOBAL_VALUES, flags=flags, maximum=maximum,
+    )
+
+
+def _neutral_command(argv: list[str], root: Path | None) -> bool:
+    """Prove a bounded non-mutation command; a data argument family is not proof.
+
+    Unknown builtins, dispatchers and read-family options can change persistent
+    variables, executable resolution or repository configuration. Refuse them
+    around a mutation instead of trying to enumerate all state-writing names.
+    """
+    name, arguments = argv[0], argv[1:]
+    if name == 'printf':
+        return _neutral_printf(arguments)
+    if name in {'echo', 'true', 'false'}:
+        return True
+    if name == 'pwd':
+        return arguments in [[], ['-L'], ['-P']]
+    if name == 'cat':
+        return _neutral_options(arguments, flags=frozenset({'-A', '-b', '-e', '-E', '-n', '-s', '-t', '-T', '-u', '-v',
+                                                          '--show-all', '--number', '--number-nonblank',
+                                                          '--show-ends', '--show-tabs', '--squeeze-blank'}))
+    if name == 'git':
+        return _neutral_git(argv)
+    if name == 'gh':
+        return _neutral_gh(argv)
+    if name in {'cd', 'pushd'}:
+        if arguments[:1] == ['--']:
+            arguments = arguments[1:]
+        if root is None or len(arguments) != 1 or not arguments[0] or arguments[0].startswith('-'):
+            return False
+        if name == 'pushd' and arguments[0].startswith('+'):
+            return False  # directory-stack selection is not a literal path
+        # This exception does not grant a second root. The existing root guard
+        # still resolves the complete original command, including symlinks.
+        try:
+            return (root / arguments[0]).resolve().is_relative_to(root.resolve())
+        except (OSError, RuntimeError, ValueError):
+            return False
+    return False
+
+
+def _argv_mutation(argv: list[str], root: Path | None, env: dict[str, str]) -> _MutationInvocation | None:
+    production = _production_argv_targets(root, argv, env)
+    external = None
+    if argv[0] == 'gh':
+        external = _gh_external_write_argv(argv, root, env) or _gh_write_resource(argv, env)
+    elif argv[0] in _HTTP_CLIENTS:
+        external = _http_tool_write(argv)
+    return _MutationInvocation(production, external) if production or external else None
+
+
+def _unproven_mutations(chunk: str) -> list[_MutationInvocation]:
+    """The broad legacy scanner is detection only; it can never supply grantable authority."""
+    found: list[_MutationInvocation] = []
+    for argv in _simple_commands(chunk):
+        if not argv or argv[0] in _INERT_EXECUTABLES:
             continue
-        if argv[0] in {'curl', 'wget'} and _http_tool_write(argv):
-            return _http_tool_write(argv)
-        if argv[0] == 'gh':
-            gh_resource = _gh_write_resource(argv, gh_env)
-            if gh_resource:
-                return gh_resource
-    if re.search(r'\bcurl\b', lowered):
-        mutation = bool(re.search(r'(?:-x|--request)\s*(?:post|put|patch|delete)\b|(?:-d|--data(?:-raw|-binary)?)(?:\s|=)', lowered))
-    elif re.search(r'\bwget\b', lowered):
-        mutation = bool(re.search(r'--method(?:\s|=)(?:post|put|patch|delete)\b|--post-data(?:\s|=)', lowered))
-    elif re.search(r'\bgh\b[^\n]*\bapi\b', lowered):
-        # Fallback for text shlex cannot tokenize: any explicit non-GET verb or a field.
-        verbs = re.findall(r'(?:^|\s)(?:-x|--method)(?:\s*=\s*|\s*)["\']?([a-z]+)', lowered)
-        mutation = any(verb not in {'get', 'head'} for verb in verbs) or bool(
-            re.search(r'(?:^|\s)(?:-f|--field|--raw-field|--input)(?:\s|=)', lowered)
-        )
-        if mutation:
-            return 'github-api:unparsed'
-    elif re.search(r'\bgh\b[^\n]*\bpr\b[^\n]*\breview\b', lowered):
-        return 'github-pr-review:unparsed'
-    if not mutation and re.search(r'\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b', lowered):
-        # PowerShell web cmdlets: any -Method/-CustomMethod outside the read-only allowlist
-        # (Merge, PURGE, ...) or a request body is a write (review S59-6, #64).
-        # A variable, expression or splatted hashtable (`$m`, `($v)`, `@p`) may carry any verb (#64).
-        methods = [
-            value.strip('\'"') for option, value in _PS_METHOD_OPTION.findall(lowered)
-            if len(option) >= 2 and ('method'.startswith(option) or 'custommethod'.startswith(option))
-        ]
-        mutation = any(method not in _PS_READ_METHODS for method in methods) or bool(
-            re.search(r'-(?:body|infile|form|contenttype)\b|(?:^|\s)@[a-z_{]', lowered)
-        )
-    if not mutation:
-        return None
-    match = _HTTP_URL.search(command)
-    return match.group(0) if match else 'direct-http-write'
+        mutation = _argv_mutation(argv, None, {})
+        if mutation is not None:
+            found.append(mutation)
+        if argv[0] not in _DATA_ARGUMENT_EXECUTABLES:
+            for index, word in enumerate(argv[1:], 1):
+                name = _executable_name(word)
+                if name in _AUTHORITY_EXECUTABLES | _HTTP_CLIENTS:
+                    mutation = _argv_mutation([name, *argv[index + 1:]], None, {})
+                    if mutation is not None:
+                        found.append(mutation)
+    return found
+
+
+def _mutation_words(words: list[_ShellToken]) -> tuple[list[str], bool]:
+    """Literal argv excluding actual redirections; quoted operator words remain data."""
+    argv: list[str] = []
+    uncertain = False
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word.operator:
+            if word.value in {'<<', '<<-', '<<<'}:
+                uncertain = True
+            if '<' not in word.value and '>' not in word.value:
+                uncertain = True
+                index += 1
+                continue
+            if index and words[index - 1].end == word.start and words[index - 1].value.isdigit() and argv:
+                argv.pop()
+            index += 1
+            if index >= len(words) or words[index].operator:
+                uncertain = True
+            index += 1
+            continue
+        argv.append(word.value)
+        index += 1
+    return argv, uncertain
+
+
+def _mutation_analysis(
+    command: str, root: Path | None = None, *, depth: int = 0, inherited: dict[str, str] | None = None,
+) -> _MutationAnalysis:
+    """Collect every mutating invocation from original source, with bounded execution context.
+
+    Only literal linear composition and one supported shell payload are admitted.
+    Read commands do not export assignments into later writes. Cross-command target
+    environment effects are unsupported, so their presence makes mutation authority
+    unresolved. No argv is converted back into shell source for admission.
+    """
+    try:
+        words = _shell_tokens(command)
+    except ValueError:
+        external = bool(_MUTATION_WORDS.search(command))
+        risky = external or _AUTHORITY_WORDS.search(command)
+        return _MutationAnalysis((), _UNRESOLVED_MUTATION if risky else None, external, False)
+    uncertain = any(word.operator and word.value not in {'&&', ';', '\n'}
+                    and '<' not in word.value and '>' not in word.value for word in words)
+    invocations: list[_MutationInvocation] = []
+    unresolved = external_unresolved = False
+    context_proven = not uncertain
+    inherited = inherited if inherited is not None else {key: os.environ[key] for key in _TARGET_ENV if key in os.environ}
+    for chunk in _command_chunks(command):
+        lexical = _shell_tokens(chunk)
+        raw_argv, ambiguous_redirect = _mutation_words(lexical)
+        assignments, raw_argv = _leading_env(raw_argv)
+        env = {**inherited, **assignments}
+        if not raw_argv:
+            context_proven = False  # assignment-only commands can write through inherited attributes
+            continue
+        argv, bounded = _bounded_command(raw_argv)
+        if _executable_name(raw_argv[0]) == 'env':
+            wrapper_env, _ = _leading_env(raw_argv[1:])
+            env.update(wrapper_env)
+        if not argv:
+            context_proven = False
+            found = _unproven_mutations(chunk)
+            unresolved = unresolved or bool(found)
+            external_unresolved = external_unresolved or any(item.external for item in found)
+            continue
+        name = _executable_name(argv[0])
+        uncertain = uncertain or name in _UNBOUNDED_SHELL_COMMANDS
+        argv = ['git', name[4:], *argv[1:]] if name.startswith('git-') and len(name) > 4 else [name, *argv[1:]]
+        payload = _literal_shell_payload(argv) if name in _MUTATION_SHELLS else None
+        if payload is not None and bounded and depth == 0:
+            nested = _mutation_analysis(payload, root, depth=depth + 1, inherited=env)
+            invocations.extend(nested.invocations)
+            unresolved = unresolved or nested.reason is not None
+            external_unresolved = external_unresolved or nested.external_unresolved
+            context_proven = context_proven and nested.context_proven
+            context_proven = context_proven and not any(word.operator or word.opaque for word in lexical)
+            if nested.invocations and (ambiguous_redirect or any(word.opaque for word in lexical)):
+                unresolved = True
+            continue
+        mutation = _argv_mutation(argv, root, env)
+        if mutation is not None:
+            invocations.append(mutation)
+            unresolved = unresolved or not bounded or ambiguous_redirect or any(word.opaque for word in lexical)
+            unresolved = unresolved or mutation.external == 'direct-http-write'
+        else:
+            context_proven = context_proven and bounded and _neutral_command(argv, root)
+            context_proven = context_proven and not any(word.operator or word.opaque for word in lexical)
+            found = _unproven_mutations(chunk)
+            unresolved = unresolved or bool(found)
+            external_unresolved = external_unresolved or any(item.external for item in found)
+    if unresolved or (invocations and (uncertain or not context_proven)):
+        return _MutationAnalysis(tuple(invocations), _UNRESOLVED_MUTATION, external_unresolved, False)
+    if len(invocations) > 1:
+        return _MutationAnalysis(tuple(invocations), _MULTIPLE_MUTATIONS)
+    return _MutationAnalysis(tuple(invocations), context_proven=context_proven)
+
+
+def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
+    """Compatibility view: only one fully bounded write can expose an exact resource."""
+    if _gh_has_opaque_shell_words(command):
+        return 'gh:'
+    analysis = _mutation_analysis(command, root)
+    if analysis.reason:
+        return 'direct-http-write' if analysis.external_unresolved or any(
+            item.external for item in analysis.invocations
+        ) else None
+    return analysis.invocations[0].external if analysis.invocations else None
 
 
 _SECRET_PIECE_SPLIT = re.compile(r"""[\s'"`=:@,;()<>|&{}]+""")
@@ -2457,6 +3049,10 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
         return None
     if name == 'curl':
         return _curl_path_words(rest)
+    if name == 'gh':
+        parsed = _gh_arguments(argv)
+        if parsed is not None:
+            return _gh_file_operands(parsed)
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:
@@ -2591,6 +3187,7 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
 _SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | None] = {}
+_GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
 
 
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
@@ -2616,6 +3213,9 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
         _SECRET_SCAN_CACHE[key] = _BUDGET_MARKER
         return _BUDGET_MARKER
+    if _gh_has_opaque_shell_words(command):
+        # A text role cannot hide a file option introduced by shell expansion.
+        return _GH_OPAQUE_MARKER
     budget = _Budget()
     result: str | None = None
     try:
@@ -2676,6 +3276,8 @@ def evaluate_pre_tool(
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
         secret = shell_secret_reference(root, command, secret_read)
+        if secret == _GH_OPAQUE_MARKER:
+            return False, 'GitHub CLI arguments must be literal; quote or escape data and use explicit option values.'
         if secret is not None:
             return False, f'Reading secret material is blocked: the shell command references {secret}'
         authority = analyze_command_authority(command)
@@ -2684,33 +3286,39 @@ def evaluate_pre_tool(
                 'Ambiguous production authority (alias or code-running git config, nested or dynamic command): spell the git/gh/'
                 'docker/npm operation literally at the top level so it can be matched to an exact grant.'
             )
+        mutations = _mutation_analysis(command, root)
+        if mutations.reason:
+            return False, mutations.reason
         for action in authority.actions:
             if action == 'workflow-dispatch':
                 return False, 'GitHub Actions workflow dispatch is forbidden for this repository.'
+        production_checks = [target for invocation in mutations.invocations for target in invocation.production]
+        resolved_actions = {action for action, _ in production_checks}
+        production_checks.extend((action, None) for action in authority.actions if action not in resolved_actions)
+        for target_action, resource in production_checks:
             from .human_gates import gate_block_reason
 
-            for target_action, resource in production_targets(root, command) or [(action, None)]:
-                gate_reason = gate_block_reason(root, 'production', target_action)
-                if gate_reason:
-                    return False, gate_reason
-                ref = (resource or '').removeprefix('delete:')
-                owner_branches = project_policy(root).get('agent_push_branches')
-                owner_branches = set(owner_branches) if isinstance(owner_branches, list) else set()
-                if target_action.startswith('git-push') and ((ref in PROTECTED_BRANCHES and ref not in owner_branches)
-                                                            or ref in {'--all', '--branches', '--mirror'}):
-                    return False, f'Push to protected branch {resource} is forbidden for agents, with or without a grant.'
-                if resource is None:
-                    return False, (
-                        f'Production action {target_action} requires an exact delegated local grant bound to the current SHA '
-                        'for a named target (branch, tag, owner/repo#N, image or package); none could be determined.'
-                    )
-                if not has_valid_approval(root, 'production', action=target_action, resource=resource):
-                    from .state import approval_mismatch
-                    return False, (
-                        f'Production action {target_action} on {resource} requires an exact delegated local grant '
-                        'bound to the current SHA.'
-                        + approval_mismatch(root, 'production', action=target_action, resource=resource)
-                    )
+            gate_reason = gate_block_reason(root, 'production', target_action)
+            if gate_reason:
+                return False, gate_reason
+            ref = (resource or '').removeprefix('delete:')
+            owner_branches = project_policy(root).get('agent_push_branches')
+            owner_branches = set(owner_branches) if isinstance(owner_branches, list) else set()
+            if target_action.startswith('git-push') and ((ref in PROTECTED_BRANCHES and ref not in owner_branches)
+                                                        or ref in {'--all', '--branches', '--mirror'}):
+                return False, f'Push to protected branch {resource} is forbidden for agents, with or without a grant.'
+            if resource is None:
+                return False, (
+                    f'Production action {target_action} requires an exact delegated local grant bound to the current SHA '
+                    'for a named target (branch, tag, owner/repo#N, image or package); none could be determined.'
+                )
+            if not has_valid_approval(root, 'production', action=target_action, resource=resource):
+                from .state import approval_mismatch
+                return False, (
+                    f'Production action {target_action} on {resource} requires an exact delegated local grant '
+                    'bound to the current SHA.'
+                    + approval_mismatch(root, 'production', action=target_action, resource=resource)
+                )
         from .cost_guard import paid_run_resource
         from .util import runtime_dir
 
@@ -2724,7 +3332,7 @@ def evaluate_pre_tool(
             gate_reason = gate_block_reason(root, 'paid-run', 'paid-run', paid_resource)
             if gate_reason:
                 return False, f'Live paid run of {paid_resource} is blocked: {gate_reason}'
-        http_resource = _http_write_resource(command, root)
+        http_resource = mutations.invocations[0].external if mutations.invocations else None
         if http_resource:
             from .human_gates import gate_block_reason
 

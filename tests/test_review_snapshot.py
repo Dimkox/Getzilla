@@ -141,6 +141,141 @@ class ReviewSnapshotTests(unittest.TestCase):
         self.assertEqual(marker['commit'], self.first)
         self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'removed')
 
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX modes')
+    def test_actual_snapshot_is_private_with_a_permissive_umask(self) -> None:
+        previous = os.umask(0o002)
+        try:
+            path = review_snapshot.create(self.root, self.first)
+        finally:
+            os.umask(previous)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+        self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'removed')
+
+    def test_failed_add_after_registration_keeps_ownership_and_can_be_removed(self) -> None:
+        real_git = review_snapshot._git
+
+        def interrupted(root, *args):
+            result = real_git(root, *args)
+            if args[:2] == ('worktree', 'add'):
+                raise WorktreeError('git worktree: TimeoutExpired')
+            return result
+
+        with patch.object(review_snapshot, '_git', side_effect=interrupted):
+            with self.assertRaises(WorktreeError) as failure:
+                review_snapshot.create(self.root, self.first)
+        markers = list(self.snapshots.glob('*.json'))
+        self.assertEqual(len(markers), 1, 'a registered failed creation must keep its owner marker')
+        data = json.loads(markers[0].read_text())
+        self.assertEqual(data['creation_state'], 'failed')
+        self.assertEqual(data['phase'], 'worktree-add')
+        self.assertEqual(data['commit'], self.first)
+        path = markers[0].with_suffix('')
+        self.assertIn('retained', str(failure.exception))
+        self.assertIn(str(path), str(failure.exception))
+        self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'removed')
+
+    def test_failed_add_preserves_an_unregistered_partial_directory(self) -> None:
+        real_git = review_snapshot._git
+
+        def partial(root, *args):
+            if args[:2] == ('worktree', 'add'):
+                path = Path(args[-2])
+                path.mkdir(exist_ok=True)
+                (path / 'partial.txt').write_text('retained partial checkout')
+                raise WorktreeError('git worktree: TimeoutExpired')
+            return real_git(root, *args)
+
+        with patch.object(review_snapshot, '_git', side_effect=partial), self.assertRaises(WorktreeError):
+            review_snapshot.create(self.root, self.first)
+        markers = list(self.snapshots.glob('*.json'))
+        self.assertEqual(len(markers), 1)
+        path = markers[0].with_suffix('')
+        self.assertEqual((path / 'partial.txt').read_text(), 'retained partial checkout')
+        self.assertEqual(review_snapshot.remove(self.root, str(path))['result'], 'kept')
+        self.assertTrue(markers[0].is_file())
+
+    def test_failed_add_retains_ownership_when_registration_cannot_be_inspected(self) -> None:
+        real_list = review_snapshot.list_worktrees
+        calls = []
+
+        def uncertain(root):
+            calls.append(root)
+            if len(calls) > 1:
+                raise WorktreeError('registration unavailable')
+            return real_list(root)
+
+        real_git = review_snapshot._git
+
+        def before_add(root, *args):
+            if args[:2] == ('worktree', 'add'):
+                raise WorktreeError('git worktree: TimeoutExpired')
+            return real_git(root, *args)
+
+        with patch.object(review_snapshot, 'list_worktrees', side_effect=uncertain):
+            with patch.object(review_snapshot, '_git', side_effect=before_add), self.assertRaises(WorktreeError):
+                review_snapshot.create(self.root, self.first)
+        markers = list(self.snapshots.glob('*.json'))
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(json.loads(markers[0].read_text())['creation_state'], 'failed')
+        self.assertTrue(markers[0].with_suffix('').is_dir())
+
+    def test_snapshot_name_collision_keeps_existing_data_and_marker(self) -> None:
+        self.snapshots.mkdir(parents=True)
+        path = self.snapshots / (self.first[:12] + '-abcdef')
+        path.mkdir()
+        (path / 'unique.txt').write_text('owned by another operation')
+        marker = self.snapshots / (path.name + '.json')
+        marker.write_text('existing marker')
+        with patch.object(review_snapshot.secrets, 'token_hex', return_value='abcdef'):
+            with self.assertRaises(WorktreeError):
+                review_snapshot.create(self.root, self.first)
+        self.assertEqual((path / 'unique.txt').read_text(), 'owned by another operation')
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(), 'existing marker')
+
+
+    def test_failed_marker_write_leaves_no_reserved_directory_or_partial_marker(self) -> None:
+        real_open = Path.open
+
+        class InterruptedMarker:
+            def __init__(self, handle):
+                self.handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                self.handle.close()
+
+            def write(self, value):
+                self.handle.write(value[:1])
+                self.handle.flush()
+                raise OSError('marker write interrupted')
+
+        def interrupted(path, *args, **kwargs):
+            handle = real_open(path, *args, **kwargs)
+            if path.parent == self.snapshots and args and args[0] == 'x':
+                return InterruptedMarker(handle)
+            return handle
+
+        with patch.object(Path, 'open', interrupted), self.assertRaises(WorktreeError):
+            review_snapshot.create(self.root, self.first)
+        self.assertEqual(list(self.snapshots.iterdir()), [])
+        self.assertEqual(self.registered(), [str(self.root)])
+
+    def test_finalize_write_failure_keeps_the_original_valid_owner_marker(self) -> None:
+        with patch.object(review_snapshot, 'dump_json', side_effect=OSError('marker replacement failed')):
+            with self.assertRaises(WorktreeError) as failure:
+                review_snapshot.create(self.root, self.first)
+        self.assertIn('finalize-marker', str(failure.exception))
+        markers = list(self.snapshots.glob('*.json'))
+        self.assertEqual(len(markers), 1)
+        data = json.loads(markers[0].read_text())
+        self.assertEqual(data['commit'], self.first)
+        self.assertEqual(data['creation_state'], 'creating')
+        self.assertEqual(review_snapshot.remove(self.root, str(markers[0].with_suffix('')))['result'], 'removed')
+
     def test_a_failed_worktree_add_leaves_no_marker(self) -> None:
         real_git = review_snapshot._git
 

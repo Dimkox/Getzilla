@@ -251,6 +251,9 @@ def _root_hint(context: Any) -> str:
         return (f' The command runs in {getattr(context, "effective_root", None)}, but the session is in '
                 f'{getattr(context, "session_root", None)}. Cross-root pushes require a registered linked '
                 'worktree, a literal target directory or git -C, and its own exact grant. '
+                'For PR creation, use that worktree as the absolute tool workdir or one literal cd &&, '
+                'then gh pr create --repo <own owner/repo> --head <current non-protected branch> '
+                'with its exact external-write grant. '
                 'Other cross-root actions require a session in the target repository.')
     return ''
 
