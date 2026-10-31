@@ -15,7 +15,7 @@ from pilot.github import (
 )
 from pilot.profile import exact_landing_profile
 from pilot.store import PilotStore
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
 from pilot.workspace import PreparedWorkspace
 
 
@@ -157,7 +157,7 @@ class FakeGitHubTransport:
 class GitHubPublicationTests(unittest.TestCase):
     def test_exact_command_shapes_are_non_force_single_ref_and_draft_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            store = PilotStore(Path(raw) / "state", control_repository=Path(__file__).resolve().parents[2])
+            store = PilotStore(Path(raw) / "state", control_repository=make_control(Path(raw)))
             configured, issue, candidate, writer = gate_passed(store)
             publication = GitHubPublication(configured, store)
             branch = publication.branch_request("pilot-job-1")
@@ -189,7 +189,7 @@ class GitHubPublicationTests(unittest.TestCase):
     def test_ambiguous_restart_reconciles_branch_and_pr_without_second_write(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state_root = Path(raw) / "state"
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(Path(raw))
             store = PilotStore(state_root, control_repository=control, clock=lambda: utc_time(0))
             configured, issue, _candidate, writer = gate_passed(store)
             external = FakeGitHubTransport(issue, configured.base_sha)

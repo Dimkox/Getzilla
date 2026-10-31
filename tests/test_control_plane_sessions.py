@@ -90,6 +90,23 @@ class ArgvLiteralTests(unittest.TestCase):
 
 
 class GrantRetryTests(unittest.TestCase):
+    def test_exact_production_grant_after_denial_allows_only_its_target(self) -> None:
+        with project_copy(git=True) as root:
+            subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/app.git'],
+                           cwd=root, check=True)
+            prompt(root, 's1', 'Fix the login timeout bug in the auth module')
+            command = {'command': 'git push origin fix/x'}
+            self.assertTrue(denied(pre(root, 's1', 'Bash', command)))
+            self.assertIn('Circuit breaker', json.dumps(pre(root, 's1', 'Bash', command)))
+            state.bind_session('s1')
+            try:
+                state.add_approval(root, 'production', 'push fix/x', 5,
+                                   actions=['git-push-branch'], resources=['fix/x'])
+            finally:
+                state.bind_session(None)
+            self.assertFalse(denied(pre(root, 's1', 'Bash', command)))
+            self.assertTrue(denied(pre(root, 's1', 'Bash', {'command': 'git push origin fix/y'})))
+
     def test_a_grant_recorded_after_a_denial_makes_the_retry_a_new_attempt(self) -> None:
         # The breaker stops blind repeats; a retry after a new grant must show the real reason instead.
         tool = 'mcp__x__create_record'

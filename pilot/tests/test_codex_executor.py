@@ -17,7 +17,7 @@ from pilot.codex_executor import (
 from pilot.contracts import CandidateChangeV1, canonical_json
 from pilot.profile import CODEX_OUTPUT_SCHEMA, exact_landing_profile
 from pilot.store import PilotStore
-from pilot.tests.support import issue_snapshot
+from pilot.tests.support import issue_snapshot, make_control
 from pilot.workspace import PreparedWorkspace
 
 
@@ -128,7 +128,7 @@ class CodexExecutorTests(unittest.TestCase):
                 body="untrusted $(git push --force) body",
             )
             workspace_digest = "3" * 64
-            state = PilotStore(root / "state", control_repository=Path(__file__).resolve().parents[2])
+            state = PilotStore(root / "state", control_repository=make_control(root))
             state.create_or_replay(issue, command_key="submit-1")
             state.mark_workspace_ready(issue.job_id, workspace_digest=workspace_digest)
             workspace = PreparedWorkspace(
@@ -210,7 +210,7 @@ class CodexExecutorTests(unittest.TestCase):
                 python_sha256="b" * 64,
             )
             issue = issue_snapshot(profile_digest=profile.profile_digest, base_sha=profile.base_sha, base_tree=profile.base_tree)
-            state = PilotStore(root / "state", control_repository=Path(__file__).resolve().parents[2])
+            state = PilotStore(root / "state", control_repository=make_control(root))
             state.create_or_replay(issue, command_key="submit-1")
             state.mark_workspace_ready(issue.job_id, workspace_digest="3" * 64)
             workspace = PreparedWorkspace(root / "w", root / "w/app", root / "w/git", issue.base_sha, issue.base_tree, "3" * 64, True, True)

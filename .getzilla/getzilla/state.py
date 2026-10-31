@@ -428,6 +428,11 @@ def add_approval(
     normalized_resources = sorted({
         _normalize_grant_resource(normalized_scope, str(item)) for item in (resources or []) if str(item).strip()
     })
+    if normalized_scope == 'production' and (not normalized_resources or '' in normalized_resources):
+        raise ValueError(
+            'production grants require exact nonblank resources; for example '
+            '--action git-push-branch --resource fix/x'
+        )
     if normalized_scope in {'external-write', 'protected-path'} and not normalized_resources:
         raise ValueError(f'{normalized_scope} grants require explicit resources')
 

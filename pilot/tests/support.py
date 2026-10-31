@@ -8,6 +8,17 @@ import subprocess
 from pilot.contracts import CandidateChangeV1, IssueSnapshotV1
 
 
+def make_control(root: Path) -> Path:
+    """Keep synthetic control separate from state/source/workspace siblings.
+
+    Reuse the directory when a test reopens its store. Inherited TMPDIR may
+    itself live inside the real checkout, which is not this fixture's control.
+    """
+    control = root / "control"
+    control.mkdir(mode=0o700, exist_ok=True)
+    return control
+
+
 def run_git(repository: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:
     completed = subprocess.run(
         ("git", *arguments),

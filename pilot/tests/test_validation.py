@@ -8,7 +8,7 @@ from pilot.contracts import CandidateChangeV1
 from pilot.profile import exact_landing_profile
 from pilot.store import PilotStore
 from pilot.tests.test_contracts import HEX64_A, HEX64_B
-from pilot.tests.support import issue_snapshot
+from pilot.tests.support import issue_snapshot, make_control
 from pilot.validation import (
     BubblewrapTestRunner,
     CandidateValidator,
@@ -189,7 +189,7 @@ class ValidationTests(unittest.TestCase):
             configured = profile()
             issue = issue_snapshot(profile_digest=configured.profile_digest, base_sha=configured.base_sha, base_tree=configured.base_tree)
             sealed = candidate(issue)
-            store = PilotStore(root / "state", control_repository=Path(__file__).resolve().parents[2])
+            store = PilotStore(root / "state", control_repository=make_control(root))
             store.create_or_replay(issue, command_key="submit-1")
             store.mark_workspace_ready(issue.job_id, workspace_digest=sealed.workspace_digest)
             store.begin_invocation(issue.job_id, command_key="codex-1")
@@ -220,7 +220,7 @@ class ValidationTests(unittest.TestCase):
             configured = profile()
             issue = issue_snapshot(profile_digest=configured.profile_digest, base_sha=configured.base_sha, base_tree=configured.base_tree)
             sealed = candidate(issue)
-            store = PilotStore(root / "state", control_repository=Path(__file__).resolve().parents[2])
+            store = PilotStore(root / "state", control_repository=make_control(root))
             store.create_or_replay(issue, command_key="submit-1")
             store.mark_workspace_ready(issue.job_id, workspace_digest=sealed.workspace_digest)
             store.begin_invocation(issue.job_id, command_key="codex-1")
