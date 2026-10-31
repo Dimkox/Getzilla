@@ -408,6 +408,39 @@ class GhArgumentPolicyTests(unittest.TestCase):
                         self.assertEqual(production_targets(self.root, command),
                                          [('pull-request-merge', 'dimkox/getzilla#5')])
 
+    def test_literal_canonical_review_queries_keep_exact_grants(self) -> None:
+        self.grant_pr_target('review')
+        plain = 'https://github.com/Dimkox/Getzilla/pull/5'
+        self.assertEqual(self.hook_verdict(self.pr_url_command('review', plain)).get('decision'), 'allow')
+        for selector in (shlex.quote(plain + '?tab=commits'), plain + r'\?tab=commits',
+                         shlex.quote(plain) + "'?tab='commits"):
+            command = f'gh pr review {selector} --approve'
+            with self.subTest(selector=selector):
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+                self.assertEqual(_http_write_resource(command, self.root), 'github-pr-review:dimkox/getzilla#5')
+        for selector in (plain + '?tab=commits', shlex.quote(plain) + '?tab=commits',
+                         '"' + plain + '?tab=$TAB"'):
+            with self.subTest(active=selector):
+                self.assertEqual(self.hook_verdict(f'gh pr review {selector} --approve').get('decision'), 'deny')
+
+    def test_review_queries_do_not_relax_host_grants_or_merge_queries(self) -> None:
+        canonical = 'https://github.com/Dimkox/Getzilla/pull/5?tab=commits'
+        for wrong in (None, 'Other/Project#5', 'Dimkox/Getzilla#6'):
+            self.setUp()
+            if wrong is not None:
+                self.grant_pr_target('review', wrong)
+            with self.subTest(wrong=wrong):
+                self.assertEqual(self.hook_verdict(self.pr_url_command('review', canonical)).get('decision'), 'deny')
+        self.setUp()
+        self.grant_pr_target('review')
+        for authority in ('other.example', 'github.com:443', 'user@github.com', 'gıthub.com'):
+            with self.subTest(authority=authority):
+                url = canonical.replace('github.com', authority)
+                self.assertEqual(self.hook_verdict(self.pr_url_command('review', url)).get('decision'), 'deny')
+        self.setUp()
+        self.grant_pr_target('merge')
+        self.assertEqual(self.hook_verdict(self.pr_url_command('merge', canonical)).get('decision'), 'deny')
+
     def test_foreign_pr_url_review_and_merge_cannot_use_default_host_grants(self) -> None:
         for verb in ('review', 'merge'):
             self.setUp()
