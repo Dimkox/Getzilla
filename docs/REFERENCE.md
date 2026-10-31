@@ -465,7 +465,7 @@ Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_so
 | BMAD Method | 6.12.1 | bmad-code-org/BMAD-METHOD | 6.12.1 | 2026-10-06 |
 | GitHub Spec Kit | 1.1.0 | github/spec-kit | 1.1.0 | 2026-10-06 |
 
-These rows are dated currency observations for the workflow artifact adapters. The required installed Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline has its own pinned manifest and `getzilla baseline status|apply` commands; optional tool updates are separate from that requirement. `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
+These rows are dated currency observations for the workflow artifact adapters. The required installed Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline has its own pinned manifest. `getzilla baseline status --project /path/to/repo` inspects installation and project wiring; `getzilla baseline apply --project /path/to/repo` connects an installed workflow baseline. See [baseline setup](baseline.md) for user-level installation and security tools. Optional tool updates are separate from that requirement. `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
 
 ## Install into a project
 
@@ -535,7 +535,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `install-into` | `scripts/install_into.py` | Plan an existing repository read-only, or atomically materialize an absent new target |
 | `adopt` | `scripts/adopt_existing.py` | Adopt a folder without Git into a new local workspace (`plan`, `apply`, `status`, `resume`, `abort`) |
 | `components` | `scripts/getzilla_components.py` | Show and add optional components (`agent:<name>`, `extra:bitrix`, `extra:seo-landing`, `compliance:eu-ai-act`, `factory`) |
-| `baseline` | `scripts/getzilla_baseline.py` | Mandatory pinned baseline: `status`, `apply` |
+| `baseline` | `scripts/getzilla_baseline.py` | Inspect with `status --project <repo>`; connect installed workflow tools with `apply --project <repo>` |
 | `harness` | `scripts/getzilla_harness.py` | Check, or with `--write` regenerate, the generated agent harness copies |
 | `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, write the new files into the project on a `getzilla-update-<version>` branch, then update third-party tools (`--no-self`, `--no-tools`, `--accept-local`, `--retire-legacy`); the project's own lint and coverage configuration stays |
 | — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |

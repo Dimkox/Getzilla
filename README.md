@@ -109,7 +109,7 @@ The installer is verified before it runs: the commands download it from the `v2.
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `getzilla setup-agent --agent codex` (or `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder).
 
-Current source requires the pinned Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline in installed projects. `getzilla baseline status` reports it and `getzilla baseline apply` installs it. This requirement is separate from optional components and later tool updates.
+Current source requires the pinned Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline in installed projects. Inspect installation and project wiring with `getzilla baseline status --project /path/to/repo`. After installing the user-level tools, connect the workflow baseline with `getzilla baseline apply --project /path/to/repo`; this command does not install the user-level tools or security data. See [baseline setup](docs/baseline.md). This requirement is separate from optional components and later tool updates.
 
 To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this optional update at the end of every run.
 
@@ -142,7 +142,8 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla install-into --plan <repo>` | Shows, read-only, what Getzilla would add to a project; `--materialize-new <path>` creates a new project |
 | | `getzilla adopt plan\|apply\|status\|resume\|abort` | Adopts a folder without Git into a new local workspace |
 | | `getzilla components status`, `components add <name>` | Shows and adds optional parts, for example `agent:cursor`, `extra:bitrix`, `compliance:eu-ai-act`, `factory` |
-| | `getzilla baseline status\|apply` | Shows or applies the mandatory pinned baseline |
+| | `getzilla baseline status --project <repo>` | Shows the installed baseline and project wiring |
+| | `getzilla baseline apply --project <repo>` | Connects the installed workflow baseline to a project |
 | | `getzilla harness [--write]` | Checks or regenerates the agent files in `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/` and `.cursor/` |
 | Update | `getzilla update [--no-self] [--no-tools] [--accept-local] [--retire-legacy]` | Updates Getzilla, writes the new files into the project on a new branch, then updates third-party tools |
 | A task | `getzilla cpu` | Measures and records the usable CPUs (startup step zero) |
