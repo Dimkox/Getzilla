@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "docker",
+    "image",
+    "inspect",
+    "getzilla-issue162-tools:local",
+    "--format",
+    "{{json .Id}}"
+  ],
+  "exit_code": 0,
+  "seconds": 0.07800691295415163
+}

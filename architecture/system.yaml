@@ -2243,6 +2243,25 @@
     },
     {
       "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-RESEARCH-EVIDENCE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "engineering/benchmarks/issue162",
+        "engineering/benchmarks/issue172"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
       "id": "NODE-LOCAL-VERIFIER",
       "owner": "repository engineering",
       "public_contracts": [],

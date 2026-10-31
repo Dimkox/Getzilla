@@ -1,0 +1,28 @@
+{
+  "large": {
+    "citation_binding": "Every row and hit in result_file inherits this envelope. Hit file/range/chunk hashes remain explicit. Component scores are separate; RRF is not confidence.",
+    "config_sha256": "94d5a64c26348608037772569c0a2fd794d3db47f27d8594e3df1d379935e6d4",
+    "corpus_id": "large",
+    "index_schema": "issue162-v1",
+    "model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "repository": "large",
+    "result_file": "large-results.json",
+    "result_sha256": "4f64f31130d92b5477168a0aa97749273e2a46e2043176884d32b28c00067838",
+    "snapshot_sha256": "0e1bee6911d81feb2c740be863fbb7c8d5df568657cfc4697699bea352d3f362",
+    "source_commit": "8352756ccddbb7b9f13da2da689ef633d968e30f",
+    "tenant": "benchmark"
+  },
+  "small": {
+    "citation_binding": "Every row and hit in result_file inherits this envelope. Hit file/range/chunk hashes remain explicit. Component scores are separate; RRF is not confidence.",
+    "config_sha256": "94d5a64c26348608037772569c0a2fd794d3db47f27d8594e3df1d379935e6d4",
+    "corpus_id": "small",
+    "index_schema": "issue162-v1",
+    "model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "repository": "small",
+    "result_file": "small-results.json",
+    "result_sha256": "897a39176a31948173330c6915b78ce8db2c5b6f9a43e73e1f3df73ce9413d77",
+    "snapshot_sha256": "f0b1fb9d59ec90852688c53e3986b5fd0d8eeb3fab434272a65ba69d7671e400",
+    "source_commit": "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd",
+    "tenant": "benchmark"
+  }
+}

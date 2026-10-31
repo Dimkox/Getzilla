@@ -1,0 +1,36 @@
+{
+  "removed_owned_paths": [
+    {
+      "path": "model",
+      "bytes": 91114788
+    },
+    {
+      "path": "gitless",
+      "bytes": 2334487
+    },
+    {
+      "path": "upstream.git",
+      "bytes": 97720
+    },
+    {
+      "path": "__pycache__",
+      "bytes": 53222
+    }
+  ],
+  "verified_before_removal": [
+    "all model asset SHA256 pins",
+    "all duplicate Gitless source SHA256 pins"
+  ],
+  "retained": [
+    "sources",
+    "support",
+    "results",
+    "data",
+    "codec",
+    "execution",
+    "publication",
+    "getzilla-issue162-tools:local image"
+  ],
+  "shared_prune": false,
+  "reason": "review passed; source originals and reproduction pins retained; tools image reserved for product gate"
+}

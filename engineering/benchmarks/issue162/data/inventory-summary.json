@@ -1,0 +1,14 @@
+[
+  {
+    "corpus": "small",
+    "files": 8,
+    "functions": 62,
+    "snapshot_sha256": "f0b1fb9d59ec90852688c53e3986b5fd0d8eeb3fab434272a65ba69d7671e400"
+  },
+  {
+    "corpus": "large",
+    "files": 140,
+    "functions": 2194,
+    "snapshot_sha256": "0e1bee6911d81feb2c740be863fbb7c8d5df568657cfc4697699bea352d3f362"
+  }
+]
