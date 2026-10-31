@@ -486,9 +486,10 @@ def _git_binding(root: Path) -> _GitBinding:
             git_directory = (repository / target).resolve(strict=True)
             backlink = git_directory / "gitdir"
             common_registration = git_directory / "commondir"
-            registrations.extend((path, _git_path_identity(path), label) for path, label in (
-                (git_directory, "directory"), (backlink, "worktree backlink"),
-                (common_registration, "common-directory registration"),
+            registrations.extend((
+                (git_directory, _git_path_identity(git_directory), "directory"),
+                (backlink, _git_path_identity(backlink), "worktree backlink"),
+                (common_registration, _git_path_identity(common_registration), "common-directory registration"),
             ))
             common_content = _git_pointer(common_registration)
             if not common_content.endswith(b"\n") or b"\0" in common_content:

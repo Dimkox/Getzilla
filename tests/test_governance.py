@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import hashlib
@@ -28,6 +29,7 @@ import getzilla.governance as governance
 import getzilla.architecture_diff as architecture_diff
 from getzilla.architecture import ArchitectureError
 from getzilla.architecture_fitness import architecture_evidence
+from getzilla.queue_provenance import analyze_queue_tree
 from getzilla.spec import SpecError, load_schema, validate_schema
 from getzilla.governance import (
     ActorRef,
@@ -2104,6 +2106,12 @@ class GovernanceHandoffTests(unittest.TestCase):
 
 class GovernanceInputBoundaryTests(unittest.TestCase):
     """Hostile inputs must never redirect Git or publish a mutable projection."""
+
+    def test_git_registration_checks_do_not_add_queue_operations(self) -> None:
+        source = "import queue\n" + inspect.getsource(architecture_diff._git_binding)
+        analysis = analyze_queue_tree(ast.parse(source))
+        self.assertEqual(analysis.signals, ("import:queue",))
+        self.assertFalse(analysis.uncertain)
 
     def _repository(self, *, object_format: str = "sha1") -> tuple[Path, str]:
         temporary = tempfile.TemporaryDirectory()
