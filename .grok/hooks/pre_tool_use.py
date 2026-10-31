@@ -554,7 +554,7 @@ def main() -> None:
         action = sensitive_action(classification_root, {
             'tool_name': current_tool,
             'tool_input': current_input,
-        })
+        }, execution_cwd=context.execution_cwd)
         if current_tool == 'Bash' and context.has_ambiguous_command_evidence and action is None:
             action = 'ambiguous-sensitive-shell'
         root = context.effective_root or context.session_root
@@ -576,7 +576,7 @@ def main() -> None:
                 allowed, reason = evaluate_pre_tool(root, {
                     'tool_name': current_tool,
                     'tool_input': current_input,
-                })
+                }, execution_cwd=context.execution_cwd)
             except Exception:
                 if action:
                     allowed, reason = False, f'Sensitive action {action} denied: policy evaluation failed closed.'

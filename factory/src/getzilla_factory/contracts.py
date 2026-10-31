@@ -242,8 +242,8 @@ class TaskIntakeV1:
         if (
             not isinstance(acceptance, list)
             or not acceptance
-            or acceptance != sorted(set(acceptance))
             or any(not isinstance(item, str) or not ACCEPTANCE_ID.fullmatch(item) for item in acceptance)
+            or acceptance != sorted(set(acceptance))
         ):
             raise ContractError("acceptance_ids")
         source_type = data["source_type"]

@@ -241,6 +241,7 @@ class RootContext:
     command_workdirs: dict[str, str]
     effective_root: Path | None
     resolution_status: str
+    execution_cwd: Path | None = None
 
     @property
     def sensitive_safe(self) -> bool:
@@ -1081,6 +1082,8 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
     if len(session_roots) > 1 or (session_values and len(session_roots) != 1):
         return RootContext(session_cwd, None, {}, None, 'ambiguous-session-root')
     session_root = next(iter(session_roots), None)
+    # Workspace-root metadata proves repository identity, not where a command starts.
+    execution_cwd = session_paths[0] if 'cwd' in session_values else None
 
     if tool == 'apply_patch' and session_root is not None:
         patch_root, ambiguous = _linked_patch_root(session_root, input_data.get('command'))
@@ -1092,6 +1095,7 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
     command_values = {
         key: str(input_data[key]) for key in _COMMAND_ROOT_ALIASES if input_data.get(key) not in (None, '')
     }
+    declared_values = dict(command_values)
     command = input_data.get('command')
     if tool == 'Bash' and isinstance(command, str):
         # Resolve only the declared execution directory, as the root checks below already do.
@@ -1103,7 +1107,7 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
         command_values.update(_command_directory_aliases(command, cwd=str(inline_base)))
     if not command_values:
         status = 'session-root' if session_root is not None else 'missing-root'
-        return RootContext(session_cwd, session_root, {}, session_root, status)
+        return RootContext(session_cwd, session_root, {}, session_root, status, execution_cwd)
 
     if '<ambiguous>' in command_values.values():
         return RootContext(session_cwd, session_root, command_values, None, 'ambiguous-command-root')
@@ -1150,6 +1154,13 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
         return RootContext(session_cwd, session_root, command_values, None, 'ambiguous-command-root')
     if len(command_roots) != 1:
         return RootContext(session_cwd, session_root, command_values, None, 'ambiguous-command-root')
+    if declared_directories:
+        # Relative tool paths need the actual session cwd. Shell cd and git -C must not
+        # replace this initial directory; the policy applies command directory changes later.
+        relative_without_cwd = execution_cwd is None and any(
+            not Path(raw).expanduser().is_absolute() for raw in declared_values.values()
+        )
+        execution_cwd = None if relative_without_cwd else next(iter(declared_directories))
     effective_root = next(iter(command_roots))
     status = 'effective-root' if session_root in (None, effective_root) else 'cross-root'
     if status == 'cross-root' and tool == 'Bash' and session_root is not None:
@@ -1157,7 +1168,7 @@ def _root_context(payload: dict[str, Any], input_data: dict[str, Any], tool: str
             status = 'linked-worktree-push'
         elif _linked_worktree_pr_create(session_root, effective_root, command, command_values):
             status = 'linked-worktree-pr-create'
-    return RootContext(session_cwd, session_root, command_values, effective_root, status)
+    return RootContext(session_cwd, session_root, command_values, effective_root, status, execution_cwd)
 
 
 def session_id(payload: dict[str, Any]) -> str:

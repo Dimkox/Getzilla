@@ -80,15 +80,16 @@ def ensure_components(root: Path, needs: list[str], *, source: Path | None = Non
     """Copy missing components into an installed project; existing files are left as they are."""
     source = source or getzilla_home()
     installer = _installer(source)
-    payload = installer.build_payload(source)
     valid = {'factory', *(f'agent:{name}' for name in installer.KNOWN_AGENTS),
              *(f'compliance:{name}' for name in getattr(installer, 'KNOWN_COMPLIANCE', ())),
              *(f'extra:{name}' for name in getattr(installer, 'KNOWN_EXTRAS', ()))}
-    results = []
-    manifest = load_manifest(root)
     for need in needs:
         if need not in valid:
             raise ValueError(f'unknown component {need!r}; expected one of {", ".join(sorted(valid))}')
+    payload = installer.build_payload(source)
+    results = []
+    manifest = load_manifest(root)
+    for need in needs:
         added = Added(need)
         agents = {name for name in installer.KNOWN_AGENTS if (root / installer.AGENT_COMPONENT_PATHS[name][0]).exists()}
         for entry in payload:

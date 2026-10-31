@@ -1,6 +1,7 @@
 import sys
 import os
 import shutil
+import shlex
 import tempfile
 import unittest
 from unittest import mock
@@ -11,6 +12,261 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool
 from tests._support import project_copy
+
+
+class PythonScannerPolicyTests(unittest.TestCase):
+    """Classify literal fixture commands; never import or launch a scanner."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'policy.json').write_text('{}\n')
+        (self.root / '.env').write_text('FIXTURE_ONLY=not-a-credential\n')
+
+    def check(self, command):
+        return evaluate_pre_tool(self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_literal_bandit_arguments_keep_input_and_output_roles(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml -q -f json -- example.py',
+            'python3 -I -W ignore -X dev -m bandit -c bandit.yaml -r -- .getzilla/getzilla',
+            'python3 -Imbandit -cbandit.yaml -fjson -o report.json -- example.py',
+            'python3 -Xdev -Wignore -m bandit -c bandit.yaml -- example.py',
+            'python3 --check-hash-based-pycs=never -m bandit -c=bandit.yaml -o=report.json -- example.py',
+            'python3 -m bandit --configfile bandit.yaml --quiet --format json --recursive -- example.py',
+            'python3 -m bandit --configfile=bandit.yaml --silent --output=report.json -- example.py',
+            'python3 -m bandit -c bandit.yaml -o - -- example.py',
+            'python3 -m bandit -c bandit.yaml -o .getzilla/runtime/scratch/report.json -- example.py',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertTrue(allowed, reason)
+
+    def test_bandit_outputs_use_existing_protected_target_guard(self):
+        for output in ('-o AGENTS.md', '-oAGENTS.md', '-o=AGENTS.md',
+                       '--output AGENTS.md', '--output=AGENTS.md'):
+            with self.subTest(output=output):
+                command = 'python3 -m bandit --configfile bandit.yaml ' + output + ' -- example.py'
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+        allowed, reason = self.check(
+            'python3 -m bandit -c bandit.yaml -o .getzilla/runtime/changes/report.json -- example.py')
+        self.assertFalse(allowed)
+        self.assertIn('shell mutation targeting .getzilla/runtime/changes/report.json;', reason)
+        for outputs in ('-o AGENTS.md -o report.json', '-o report.json --output=AGENTS.md'):
+            with self.subTest(outputs=outputs):
+                allowed, reason = self.check('python3 -m bandit -c bandit.yaml ' + outputs + ' -- example.py')
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+
+    def test_bandit_program_options_respect_data_boundaries(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml -- -o AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -- --output=AGENTS.md',
+            'python3 -m bandit --configfile=-oAGENTS.md -- AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -o report.json -- --output-file AGENTS.md',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertTrue(allowed, reason)
+
+    def test_unknown_bandit_forms_remain_opaque(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml --output-file=AGENTS.md',
+            'python3 -m bandit -c bandit.yaml --out=AGENTS.md',
+            'python3 -m bandit -c bandit.yaml --unknown-output AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -f custom',
+            'python3 -m bandit -c bandit.yaml -qoAGENTS.md',
+            'python3 -m bandit -c bandit.yaml -o',
+            'python3 -m bandit -c bandit.yaml --output',
+            'python3 -m bandit -c bandit.yaml -o "$OUTPUT"',
+            'python3 -m bandit -c bandit.yaml -- *.py',
+            'python3 --unknown -m bandit -c bandit.yaml',
+            'python3 -X pycache_prefix=.getzilla/config -m bandit -c bandit.yaml',
+            'python3 -Xpresite=fixture_setup -m bandit -c bandit.yaml',
+            'python3 -W ignore::fixture_setup.Warning -m bandit -c bandit.yaml',
+            'python3 -X pycache_prefix=.getzilla/config -m bandit --configfile bandit.yaml',
+            'python3 -W ignore::fixture_setup.Warning -m bandit --configfile bandit.yaml',
+            'python3 -c "print(1)" -m bandit -c bandit.yaml',
+            'python3 /dev/stdin -m bandit -c bandit.yaml',
+            'python3 -m "$MODULE" -c bandit.yaml',
+            'env python3 -m bandit -c bandit.yaml',
+            'nice python3 -m bandit -c bandit.yaml',
+            "sh -c 'python3 -m bandit -c bandit.yaml'",
+            'launcher python3 -m bandit -c bandit.yaml',
+            'python3 -m bandit -qoAGENTS.md -- example.py',
+            'python3 -m bandit --out AGENTS.md -- example.py',
+            'python3 -m bandit --out=AGENTS.md -- example.py',
+            'python3 -m bandit --output-fileAGENTS.md -- example.py',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('opaque control-plane shell mutation', reason)
+
+    def test_other_python_program_arguments_keep_existing_refusals(self):
+        for command in ('python3 -m fixture_check -c bandit.yaml',
+                        'python3 fixture_check.py -c bandit.yaml',
+                        'python3 -m bandit.__main__ -c bandit.yaml'):
+            with self.subTest(command=command):
+                self.assertFalse(self.check(command)[0])
+
+    def test_bandit_inputs_still_use_secret_read_guard(self):
+        for command in ('python3 -m bandit -c .env -- example.py',
+                        'python3 -m bandit --configfile=.env -- example.py',
+                        'python3 -m bandit -c bandit.yaml -- .env'):
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('secret', reason.lower())
+
+    def test_bandit_protected_redirection_remains_denied(self):
+        for suffix in ('> AGENTS.md', '2> AGENTS.md', '>> AGENTS.md'):
+            with self.subTest(suffix=suffix):
+                allowed, reason = self.check('python3 -m bandit -c bandit.yaml -- example.py ' + suffix)
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+
+    def test_wrapped_bandit_outputs_are_refused_without_short_config(self):
+        for command in ('nice python3 -m unittest', "sh -c 'python3 -m unittest'"):
+            self.assertTrue(self.check(command)[0], command)
+        for config in ('', '--configfile bandit.yaml '):
+            for output in ('-o AGENTS.md', '-oAGENTS.md'):
+                inner = 'python3 -m bandit ' + config + output + ' -- example.py'
+                self.assertFalse(self.check(inner)[0], 'Direct protected output control')
+                for command in ('nice ' + inner, 'sh -c ' + shlex.quote(inner)):
+                    with self.subTest(command=command):
+                        allowed, reason = self.check(command)
+                        self.assertFalse(allowed, reason)
+
+    def test_attached_scanner_paths_keep_secret_policy(self):
+        for option in ('-cpublic.yaml', '-opublic.json', '-c.env.example', '-o.env.example'):
+            allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+            self.assertTrue(allowed, reason)
+        for option in ('-c .env', '-c.env', '-c=.env', '--configfile=.env',
+                       '-o .env', '-o.env', '-o=.env', '--output=.env'):
+            with self.subTest(option=option):
+                allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+                self.assertFalse(allowed, reason)
+
+    def test_attached_scanner_paths_use_configured_secret_patterns(self):
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["fixture-sensitive.json"]}\n')
+        for option in ('-c fixture-sensitive.json', '-cfixture-sensitive.json',
+                       '-o fixture-sensitive.json', '-ofixture-sensitive.json'):
+            with self.subTest(option=option):
+                allowed, reason = self.check('python3 -m bandit ' + option + ' -- example.py')
+                self.assertFalse(allowed, reason)
+
+    def test_scanner_secret_operands_follow_possible_shell_directories(self):
+        (self.root / 'nested/deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # Config, report and positional source paths all use the command's directory.
+        operands = (
+            '-c fixture-sensitive.json -- example.py',
+            '-cfixture-sensitive.json -- example.py',
+            '-c=fixture-sensitive.json -- example.py',
+            '--configfile=fixture-sensitive.json -- example.py',
+            '-o fixture-sensitive.json -- example.py',
+            '-ofixture-sensitive.json -- example.py',
+            '--output=fixture-sensitive.json -- example.py',
+            'fixture-sensitive.json',
+            '-- fixture-sensitive.json',
+            '-- -o fixture-sensitive.json',
+        )
+        for prefix in ('cd nested && ', 'cd nested; '):
+            for operand in operands:
+                with self.subTest(prefix=prefix, operand=operand):
+                    command = prefix + 'python3 -m bandit ' + operand
+                    self.assertFalse(self.check(command)[0], command)
+        command = ('cd nested && cd deeper && python3 -m bandit '
+                   '-c../fixture-sensitive.json -- example.py')
+        self.assertFalse(self.check(command)[0], command)
+
+    def test_scanner_directory_controls_keep_public_paths_and_fail_closed_when_unknown(self):
+        (self.root / 'nested').mkdir()
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # The || branch runs from the original directory when cd fails.
+        for command in (
+            'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
+            'cd nested && python3 -m bandit -cpublic.yaml -opublic.json -- example.py',
+            'cd nested && python3 -m bandit -c../public.yaml -- ../example.py',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(self.check(command)[0], command)
+        for command in (
+            'cd "$DESTINATION" && python3 -m bandit -cpublic.yaml -- example.py',
+            'cd "$DESTINATION" && python3 -m bandit -- example.py',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(self.check(command)[0], command)
+        (self.root / '.getzilla/config/policy.json').write_text('{}\n')
+        command = 'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'
+        self.assertTrue(self.check(command)[0], command)
+
+    def test_mixed_scanner_directory_branches_are_refused_by_direct_and_parallel_policy(self):
+        from getzilla.parallel import policy_refusal
+
+        (self.root / 'nested/deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        for prefix in ('cd nested || true; ', 'cd nested || true && ',
+                       'cd nested && cd deeper || true; ', 'true || cd nested; '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = prefix + 'python3 -m bandit ' + operand
+                with self.subTest(command=command, layer='direct'):
+                    self.assertFalse(self.check(command)[0], command)
+                with self.subTest(command=command, layer='parallel'):
+                    self.assertIsNotNone(policy_refusal(self.root, command), command)
+        for command in (
+            'true || false; python3 -m bandit -cpublic.yaml -- example.py',
+            'python3 -m bandit -cpublic.yaml -- example.py; cd nested || true',
+            'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
+        ):
+            with self.subTest(public_control=command):
+                self.assertTrue(self.check(command)[0], command)
+                self.assertIsNone(policy_refusal(self.root, command), command)
+
+    def test_scanner_directory_prefix_requires_a_complete_proof(self):
+        from getzilla.parallel import policy_refusal
+
+        directory = self.root / 'nested'
+        (directory / 'deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # A failed command can skip cd; a later join resumes in the original directory.
+        for separator in ('; ', '\n', ' & ', ' | ', ' |& '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
+                with self.subTest(command=command, layer='direct'):
+                    allowed, reason = evaluate_pre_tool(
+                        self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}},
+                        execution_cwd=directory)
+                    self.assertFalse(allowed, reason)
+                with self.subTest(command=command, layer='parallel'):
+                    self.assertIsNotNone(policy_refusal(self.root, command, cwd=directory), command)
+        for prefix in ('cd deeper && true && ', 'cd deeper; true\n',
+                       'cd deeper; cd ..; ', 'cd deeper || '):
+            command = prefix + 'python3 -m bandit -cpublic.yaml -opublic.json -- example.py'
+            with self.subTest(public_prefix=prefix):
+                allowed, reason = evaluate_pre_tool(
+                    self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}},
+                    execution_cwd=directory)
+                self.assertTrue(allowed, reason)
+                self.assertIsNone(policy_refusal(self.root, command, cwd=directory), command)
 
 
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
