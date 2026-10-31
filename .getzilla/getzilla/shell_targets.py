@@ -474,9 +474,11 @@ def _shell_mutation_targets(
     unknown_base = initial_unknown
     pending: tuple[set[str], bool] | None = None
     directory_changed = False
-    saw_fallback = False
+    prefix_operators: set[str] = set()
+    plain_prefix = True
     for chunk_index, (chunk, operator) in enumerate(_chunks_with_operators(command)):
-        saw_fallback = saw_fallback or operator == '||'
+        if operator:
+            prefix_operators.add(operator)
         if pending is not None:
             moved, moved_unknown = pending
             if operator == '&&':
@@ -491,6 +493,9 @@ def _shell_mutation_targets(
             first = shlex.split(chunk.strip())[:1]
         except ValueError:
             first = []
+        plain_prefix = plain_prefix and bool(first) and inner == chunk and (
+            first[0] not in _SHELL_KEYWORDS and not re.search(r'[(){}]', chunk)
+        )
         plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
         is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
         if is_cd and len(_command_chunks(inner)) == 1:
@@ -529,11 +534,14 @@ def _shell_mutation_targets(
             if scanner is not None:
                 scanner_targets, scanner_unresolved = scanner
                 scanner_unresolved = scanner_unresolved or inner != chunk
-                # A two-command cd failure arm is known. Later mixed branches can rejoin a
-                # skipped successful cd; this bounded scanner contract cannot prove their cwd.
-                scanner_unresolved = scanner_unresolved or (
-                    directory_changed and saw_fallback and chunk_index > 1
+                # Prove the whole prefix, including operators before the first cd. Pure &&
+                # reaches this scanner only after every cd succeeds; pure sequence preserves
+                # every success/failure base. Mixed joins can resume after a skipped cd.
+                proven_directory_prefix = plain_prefix and (
+                    prefix_operators <= {'&&'} or prefix_operators <= {';', '\n'}
+                    or (chunk_index == 1 and operator == '||')
                 )
+                scanner_unresolved = scanner_unresolved or (directory_changed and not proven_directory_prefix)
                 found.extend(scanner_targets)
                 mutation = mutation or bool(scanner_targets) or scanner_unresolved
                 unresolved = unresolved or scanner_unresolved

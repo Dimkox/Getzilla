@@ -238,6 +238,36 @@ class PythonScannerPolicyTests(unittest.TestCase):
                 self.assertTrue(self.check(command)[0], command)
                 self.assertIsNone(policy_refusal(self.root, command), command)
 
+    def test_scanner_directory_prefix_requires_a_complete_proof(self):
+        from getzilla.parallel import policy_refusal
+
+        directory = self.root / 'nested'
+        (directory / 'deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        # A failed command can skip cd; a later join resumes in the original directory.
+        for separator in ('; ', '\n', ' & ', ' | ', ' |& '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
+                with self.subTest(command=command, layer='direct'):
+                    allowed, reason = evaluate_pre_tool(
+                        self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}},
+                        execution_cwd=directory)
+                    self.assertFalse(allowed, reason)
+                with self.subTest(command=command, layer='parallel'):
+                    self.assertIsNotNone(policy_refusal(self.root, command, cwd=directory), command)
+        for prefix in ('cd deeper && true && ', 'cd deeper; true\n',
+                       'cd deeper; cd ..; ', 'cd deeper || '):
+            command = prefix + 'python3 -m bandit -cpublic.yaml -opublic.json -- example.py'
+            with self.subTest(public_prefix=prefix):
+                allowed, reason = evaluate_pre_tool(
+                    self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}},
+                    execution_cwd=directory)
+                self.assertTrue(allowed, reason)
+                self.assertIsNone(policy_refusal(self.root, command, cwd=directory), command)
+
 
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
 class ScratchPipPolicyTest(unittest.TestCase):

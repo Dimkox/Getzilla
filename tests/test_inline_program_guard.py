@@ -263,6 +263,22 @@ class InlineProgramGuardTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertTrue(self.denied(command), command)
 
+    def test_native_scanner_rejects_skipped_directory_joins(self):
+        policy = self.root / '.getzilla/config/policy.json'
+        original = policy.read_text()
+        self.addCleanup(policy.write_text, original)
+        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        for separator in ('; ', '\n', ' & '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
+                with self.subTest(command=command):
+                    self.assertTrue(self.denied(command, workdir=self.root / 'nested'), command)
+        self.assertFalse(self.denied(
+            'cd deeper && true && python3 -m bandit -cpublic.yaml -- example.py',
+            workdir=self.root / 'nested'))
+
     def test_lexical_stream_and_descriptor_aliases_fail_closed(self):
         paths = (
             "/dev/./stdin", "/dev//stdin", "/dev/../dev/stdin", "//dev/stdin", "///dev/stdin",

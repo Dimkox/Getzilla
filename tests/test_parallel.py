@@ -98,6 +98,24 @@ class BatchTests(unittest.TestCase):
         runner.assert_called_once()
         self.assertEqual(runner.call_args.kwargs['cwd'], directory.resolve())
 
+    def test_skipped_directory_join_refuses_the_entire_batch(self) -> None:
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'policy.json').write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        directory = self.root / 'nested'
+        (directory / 'deeper').mkdir(parents=True)
+        for separator in ('; ', '\n', ' & '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
+                runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+                with self.subTest(command=command):
+                    jobs, _ = run_batch(self.root, [command, 'echo public'], workers=2,
+                                        cwd=directory, runner=runner)
+                    self.assertIsNotNone(jobs[0].refused)
+                    runner.assert_not_called()
+
     def test_each_expands_globs_with_quoted_paths(self) -> None:
         for name in ('test a.php', 'test_b.php', 'other.txt'):
             (self.root / name).write_text('', encoding='utf-8')
