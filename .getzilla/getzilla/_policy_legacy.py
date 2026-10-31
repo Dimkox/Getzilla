@@ -1666,7 +1666,10 @@ _GH_API_VALUE_OPTIONS = frozenset({
 })
 _GH_API_READ_METHODS = frozenset({'GET', 'HEAD'})
 _GITHUB_PULL_MERGE = re.compile(r'(?:^|/)repos/([^/]+/[^/]+)/pulls/(\d+)/merge/?$', re.IGNORECASE)
-_GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IGNORECASE)
+_GITHUB_PULL_URL = re.compile(
+    r'https?://github\.com/([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#][^\s]*)?',
+    re.IGNORECASE | re.ASCII,
+)
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
 
 
@@ -1964,7 +1967,7 @@ def _gh_repository(argv: list[str], root: Path | None, env: dict[str, str] | Non
 
 
 def _gh_pull_request(argv: list[str], index: int, root: Path | None, env: dict[str, str] | None = None) -> str | None:
-    """``owner/repo#N`` for the PR a ``gh pr <command>`` names after ``argv[index]``, or ``None``."""
+    """Exact PR target; URL selectors require literal github.com authority or stay unresolved."""
     if _gh_argument_context(argv) is not None:
         parsed = _gh_arguments(argv)
         selectors = list(parsed.operands) if parsed else []
@@ -1974,10 +1977,17 @@ def _gh_pull_request(argv: list[str], index: int, root: Path | None, env: dict[s
         }), 1)
     if not selectors:
         return None
-    url = _GITHUB_PULL_URL.match(selectors[0])
-    if url:
+    selector = selectors[0]
+    if '://' in selector or selector.lstrip().lower().startswith(('http:', 'https:', '//')):
+        # The URL resource has no host component. Never alias another authority,
+        # userinfo/port, encoded URL or malformed URL-shaped selector to this grant.
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in '%\\' for char in selector):
+            return None
+        url = _GITHUB_PULL_URL.fullmatch(selector)
+        if url is None or url.group(1).rsplit('/', 1)[-1] in {'.', '..'}:
+            return None
         return f'{url.group(1).lower()}#{url.group(2)}'
-    return f'{_gh_repository(argv, root, env)}#{selectors[0]}'
+    return f'{_gh_repository(argv, root, env)}#{selector}'
 
 
 def _api_host(env: dict[str, str] | None) -> str:

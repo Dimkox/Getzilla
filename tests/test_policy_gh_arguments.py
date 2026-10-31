@@ -14,8 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla._policy_legacy import _http_write_resource, analyze_command_authority  # noqa: E402
-from getzilla.policy import evaluate_pre_tool  # noqa: E402
+from getzilla._policy_legacy import _http_write_resource, analyze_command_authority, production_targets  # noqa: E402
+from getzilla.policy import evaluate_pre_tool, sensitive_action  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, approvals_path, set_active_route  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
@@ -358,6 +358,134 @@ class GhArgumentPolicyTests(unittest.TestCase):
                     self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
             command = f'gh pr {verb} 5 --repo Dimkox/Getzilla --body --*/*'
             self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+
+    def pr_url_command(self, verb: str, selector: str, extra: str = '') -> str:
+        flags = '--approve' if verb == 'review' else '--squash --match-head-commit ' + 'a' * 40
+        return f'gh pr {verb} {shlex.quote(selector)} {flags} {extra}'.strip()
+
+    def grant_pr_target(self, verb: str, target: str = 'Dimkox/Getzilla#5') -> None:
+        self.grant(target if verb == 'merge' else 'github-pr-review:' + target,
+                   production=verb == 'merge')
+
+    def assert_ungrantable_pr_url(self, verb: str, selector: str) -> None:
+        command = self.pr_url_command(verb, selector)
+        result = self.hook_verdict(command)
+        self.assertEqual(result.get('decision'), 'deny', result)
+        if verb == 'review':
+            resource = _http_write_resource(command, self.root)
+            # The existing parser can also leave the repository unknown (for example IPv6 syntax).
+            self.assertIn(resource, {'github-pr-review:dimkox/getzilla#', 'github-pr-review:#'})
+            self.assertEqual(sensitive_action(self.root, {
+                'tool_name': 'Bash', 'tool_input': {'command': command},
+            }), 'external-write')
+            with self.assertRaises(ValueError):
+                self.grant(resource)
+        else:
+            self.assertEqual(production_targets(self.root, command), [('pull-request-merge', None)])
+            self.assertIn(sensitive_action(self.root, {
+                'tool_name': 'Bash', 'tool_input': {'command': command},
+            }), {'pull-request-merge', 'external-write'})
+
+    def test_canonical_pr_url_review_and_merge_keep_exact_grant_admission(self) -> None:
+        for verb in ('review', 'merge'):
+            self.setUp()
+            self.grant_pr_target(verb)
+            for url in (
+                'https://github.com/Dimkox/Getzilla/pull/5',
+                'http://github.com/Dimkox/Getzilla/pull/5',
+                'https://GITHUB.COM/Dimkox/Getzilla/pull/5/',
+                'https://github.com/Dimkox/Getzilla/pull/5/files',
+                'https://github.com/Dimkox/Getzilla/pull/5#discussion',
+            ):
+                command = self.pr_url_command(verb, url)
+                with self.subTest(verb=verb, url=url):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), 'allow', result)
+                    if verb == 'review':
+                        self.assertEqual(_http_write_resource(command, self.root),
+                                         'github-pr-review:dimkox/getzilla#5')
+                    else:
+                        self.assertEqual(production_targets(self.root, command),
+                                         [('pull-request-merge', 'dimkox/getzilla#5')])
+
+    def test_foreign_pr_url_review_and_merge_cannot_use_default_host_grants(self) -> None:
+        for verb in ('review', 'merge'):
+            self.setUp()
+            self.grant_pr_target(verb)
+            for authority in (
+                'other.example', 'github.com.other.example', 'othergithub.com', 'api.github.com',
+                'github.com.', 'github.com:443', 'github.com:8443',
+                'fixture@github.com', 'github.com@other.example', 'fixture:fixture@github.com',
+                'gıthub.com', 'gİthub.com', 'github．com', '%67ithub.com',
+                '127.0.0.1', '[::1]',
+            ):
+                url = f'https://{authority}/Dimkox/Getzilla/pull/5'
+                with self.subTest(verb=verb, authority=authority):
+                    self.assert_ungrantable_pr_url(verb, url)
+
+    def test_malformed_pr_urls_do_not_become_grantable_branch_selectors(self) -> None:
+        for verb in ('review', 'merge'):
+            self.setUp()
+            self.grant_pr_target(verb)
+            for url in (
+                'https:/github.com/Dimkox/Getzilla/pull/5',
+                'https:github.com/Dimkox/Getzilla/pull/5',
+                '//github.com/Dimkox/Getzilla/pull/5',
+                'ssh://github.com/Dimkox/Getzilla/pull/5',
+                'https://github.com/Dimkox/Getzilla/issues/5',
+                'https://github.com/Dimkox/Getzilla/pull/5suffix',
+                'https://github.com/Dimkox/Getzilla/pull/%35',
+                'https://github.com/Dimkox/%47etzilla/pull/5',
+                'https://github.com/Dimkox/../pull/5',
+                'https://github.com/Dimkox/Getzilla/pull/5%2fother',
+                'https://github.com\\@other.example/Dimkox/Getzilla/pull/5',
+                'https://github.com/Dimkox/Getzilla/pull/5\n',
+                'https://github.com/Dimkox/Getzilla/pull/5 trailing',
+            ):
+                with self.subTest(verb=verb, url=url):
+                    self.assert_ungrantable_pr_url(verb, url)
+
+    def test_canonical_pr_urls_still_require_the_matching_repo_and_number(self) -> None:
+        for verb in ('review', 'merge'):
+            for wrong_target in ('Other/Project#5', 'Dimkox/Getzilla#6'):
+                self.setUp()
+                self.grant_pr_target(verb, wrong_target)
+                command = self.pr_url_command(verb, 'https://github.com/Dimkox/Getzilla/pull/5')
+                with self.subTest(verb=verb, wrong_target=wrong_target):
+                    self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+
+    def test_pr_url_text_in_a_body_does_not_change_the_selected_resource(self) -> None:
+        for verb in ('review', 'merge'):
+            self.setUp()
+            self.grant_pr_target(verb)
+            for body in (
+                'https://other.example/Other/Project/pull/9',
+                'https://fixture@github.com/Other/Project/pull/9',
+                'https://github.com/Other/Project/pull/%39 .env --repo Other/Project',
+            ):
+                command = self.pr_url_command(
+                    verb, 'https://github.com/Dimkox/Getzilla/pull/5', '--body ' + shlex.quote(body))
+                with self.subTest(verb=verb, body=body):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), 'allow', result)
+
+    def test_pr_url_fix_preserves_numeric_branch_and_secret_file_controls(self) -> None:
+        for verb in ('review', 'merge'):
+            for selector in ('5', 'feature/url-host', 'contributor:feature/url-host'):
+                self.setUp()
+                self.grant_pr_target(verb, 'Dimkox/Getzilla#' + selector)
+                command = self.pr_url_command(verb, selector, '--repo Dimkox/Getzilla')
+                with self.subTest(verb=verb, selector=selector):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), 'allow', result)
+            self.setUp()
+            self.grant_pr_target(verb)
+            for body_file, expected in (('.env.example', 'allow'), ('.env', 'deny')):
+                command = self.pr_url_command(
+                    verb, 'https://github.com/Dimkox/Getzilla/pull/5', '--body-file ' + body_file)
+                with self.subTest(verb=verb, body_file=body_file):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), expected, result)
 
 
 @unittest.skipUnless(shutil.which('bash'), 'Bash argv-only controls require Bash')
