@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -10,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla._policy_legacy import _http_write_resource  # noqa: E402
+from getzilla._policy_legacy import _http_write_resource, analyze_command_authority  # noqa: E402
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, approvals_path, set_active_route  # noqa: E402
@@ -42,6 +46,15 @@ class GhArgumentPolicyTests(unittest.TestCase):
 
     def verdict(self, command: str) -> tuple[bool, str | None]:
         return evaluate_pre_tool(self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def hook_verdict(self, command: str) -> dict:
+        code, result, error = run_hook(self.root, 'pre_tool_use.py', {
+            'cwd': str(self.root), 'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'tool_name': 'Bash',
+            'tool_input': {'command': command},
+        })
+        self.assertEqual(code, 0, error)
+        return result
 
     def test_repo_spellings_preserve_exact_resource_and_grant(self) -> None:
         self.grant('gh:dimkox/getzilla pr create')
@@ -106,7 +119,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
 
     def test_unresolved_shell_words_are_not_authorized_by_a_static_grant(self) -> None:
         self.grant('gh:dimkox/getzilla pr create')
-        for value in ('$BODY', '"$BODY"', "'$literal'"):
+        for value in ('$BODY', '"$BODY"'):
             with self.subTest(value=value):
                 self.assertFalse(self.verdict(f'gh pr create --repo Dimkox/Getzilla --body {value}')[0])
 
@@ -232,6 +245,153 @@ class GhArgumentPolicyTests(unittest.TestCase):
             command = f'gh pr create {options}'
             with self.subTest(command=command):
                 self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
+
+    def test_hook_rejects_title_expansions_with_an_otherwise_valid_grant(self) -> None:
+        for group in ('pr', 'issue'):
+            self.setUp()
+            self.grant(f'gh:dimkox/getzilla {group} create')
+            for value in ('{Fixture,--body-file=.env}', '--*/*', '"--"*/*',
+                          '$TITLE', '"$TITLE"', '$(printf Fixture)', '`printf Fixture`',
+                          '<(printf Fixture)', '>(printf Fixture)', '~', '[ab]', '{1..2}'):
+                command = f'gh {group} create --repo Dimkox/Getzilla --title {value} --body public'
+                if value == '{Fixture,--body-file=.env}':
+                    command = command.removesuffix(' --body public')
+                with self.subTest(command=command):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), 'deny', result)
+                    self.assertEqual(_http_write_resource(command, self.root), 'gh:')
+                    self.assertTrue(analyze_command_authority(command).ambiguous)
+
+    def test_hook_preserves_quoted_and_escaped_title_literals(self) -> None:
+        for group in ('pr', 'issue'):
+            self.setUp()
+            resource = f'gh:dimkox/getzilla {group} create'
+            self.grant(resource)
+            for value in ("'{Fixture,--body-file=.env}'", '"{Fixture,--body-file=.env}"',
+                          r'\{Fixture,--body-file=.env\}', '"--*/*"', r'--\*/\*',
+                          "'$TITLE'", r'\$TITLE', r'"\$TITLE"', "'`literal`'", r'\`literal\`',
+                          "'<(literal)'", r'\<\(literal\)', "'~'", "'[ab]'", r'\[ab\]',
+                          '"--repo=Other/Project"', '.env', 'Fixture'):
+                command = f'gh {group} create --repo Dimkox/Getzilla --title {value} --body public'
+                with self.subTest(command=command):
+                    result = self.hook_verdict(command)
+                    self.assertEqual(result.get('decision'), 'allow', result)
+                    self.assertEqual(_http_write_resource(command, self.root), resource)
+
+    def test_hook_title_literals_cannot_use_a_wrong_resource_grant(self) -> None:
+        self.grant('gh:other/project pr create')
+        for value in ('"--repo=Other/Project"', "'$TITLE'", '"--*/*"',
+                      '"{Fixture,--body-file=.env}"'):
+            command = f'gh pr create --repo Dimkox/Getzilla --title {value} --body public'
+            with self.subTest(command=command):
+                self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+
+    def test_hook_rejects_api_field_expansions_without_losing_write_classification(self) -> None:
+        self.grant('github-api:POST api.github.com/repos/Dimkox/Getzilla/issues')
+        for value in ('$FIELDS', '"$FIELDS"', '--*/*', '{title=x,--hostname=other.example}',
+                      '$(printf title=x)', '<(printf title=x)'):
+            command = f'gh api repos/Dimkox/Getzilla/issues -f {value}'
+            with self.subTest(command=command):
+                result = self.hook_verdict(command)
+                self.assertEqual(result.get('decision'), 'deny', result)
+                self.assertEqual(_http_write_resource(command, self.root), 'gh:')
+                self.assertTrue(analyze_command_authority(command).ambiguous)
+
+    def test_hook_preserves_api_literal_fields_and_quoted_graphql(self) -> None:
+        resource = 'github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'
+        self.grant(resource)
+        for field in ("-f '$FIELDS'", r'-f \$FIELDS', r'-f "\$FIELDS"', '-f "--*/*"',
+                      '-f "{title=x,--hostname=other.example}"',
+                      '-F "name=--hostname=other.example"', '-f name=@.env'):
+            command = f'gh api -HAccept:application/json repos/Dimkox/Getzilla/issues {field}'
+            with self.subTest(command=command):
+                result = self.hook_verdict(command)
+                self.assertEqual(result.get('decision'), 'allow', result)
+                self.assertEqual(_http_write_resource(command, self.root), resource)
+        self.setUp()
+        self.grant('github-api:POST api.github.com/graphql')
+        command = "gh api graphql -f 'query=query($id:ID!){node(id:$id){id}}'"
+        self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+
+    def test_hook_api_literal_field_cannot_use_a_foreign_host_grant(self) -> None:
+        self.grant('github-api:POST other.example/repos/Dimkox/Getzilla/issues')
+        for field in ('-f "title=fixture --hostname other.example"', "-f '$FIELDS'"):
+            command = f'gh api repos/Dimkox/Getzilla/issues {field}'
+            with self.subTest(command=command):
+                self.assertEqual(_http_write_resource(command, self.root),
+                                 'github-api:POST api.github.com/repos/Dimkox/Getzilla/issues')
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+
+    def test_hook_read_api_query_requires_literal_glob_punctuation(self) -> None:
+        endpoint = 'repos/Dimkox/Getzilla/commits?per_page=3'
+        for argument in (shlex.quote(endpoint), endpoint.replace('?', r'\?')):
+            command = f"gh api {argument} --jq '.[] | {{sha, subject: .commit.message}}'"
+            with self.subTest(command=command):
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+        command = f'gh api {endpoint}'
+        self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+        self.assertEqual(_http_write_resource(command, self.root), 'gh:')
+
+    def test_expansion_check_reaches_wrapped_and_nested_gh(self) -> None:
+        self.grant('gh:dimkox/getzilla pr create')
+        opaque = 'gh pr create --repo Dimkox/Getzilla --title --*/* --body public'
+        literal = 'gh pr create --repo Dimkox/Getzilla --title "--*/*" --body public'
+        for command in (f'env {opaque}', f'bash -c {shlex.quote(opaque)}'):
+            with self.subTest(command=command):
+                self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+                self.assertEqual(_http_write_resource(command, self.root), 'gh:')
+        self.assertEqual(self.hook_verdict(f'bash -c {shlex.quote(literal)}').get('decision'), 'allow')
+        # Root admission already refuses env wrappers; a lexer repair must not broaden that boundary.
+        self.assertEqual(self.hook_verdict(f'env {literal}').get('decision'), 'deny')
+
+    def test_production_and_review_body_literals_retain_their_exact_grants(self) -> None:
+        for verb, resource, production in (
+            ('review', 'github-pr-review:dimkox/getzilla#5', False),
+            ('merge', 'Dimkox/Getzilla#5', True),
+        ):
+            self.setUp()
+            self.grant(resource, production=production)
+            for body in ("'$literal'", "'`literal`'", '"{literal,words}"'):
+                command = f'gh pr {verb} 5 --repo Dimkox/Getzilla --body {body}'
+                with self.subTest(command=command):
+                    self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
+            command = f'gh pr {verb} 5 --repo Dimkox/Getzilla --body --*/*'
+            self.assertEqual(self.hook_verdict(command).get('decision'), 'deny')
+
+
+@unittest.skipUnless(shutil.which('bash'), 'Bash argv-only controls require Bash')
+class GhShellArgvControls(unittest.TestCase):
+    """Only printf runs: gh and secret paths are argument strings, never commands or reads."""
+
+    def test_expansion_and_literal_controls_match_real_bash_argv(self) -> None:
+        with project_copy() as root:
+            fixture = root / 'argv-fixture'
+            for filename in ('--aaa/title', '--repo=Other/Project'):
+                path = fixture / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            cases = (
+                ('--title {Fixture,--body-file=.env}', ['--title', 'Fixture', '--body-file=.env']),
+                ('--title "{Fixture,--body-file=.env}"', ['--title', '{Fixture,--body-file=.env}']),
+                (r'--title \{Fixture,--body-file=.env\}', ['--title', '{Fixture,--body-file=.env}']),
+                ('--title --*/*', ['--title', '--aaa/title', '--repo=Other/Project']),
+                ('--title "--*/*"', ['--title', '--*/*']),
+                (r'--title --\*/\*', ['--title', '--*/*']),
+                ('-f $FIELDS', ['-f', 'title=fixture', '--hostname', 'other.example']),
+                ('-f "$FIELDS"', ['-f', 'title=fixture --hostname other.example']),
+                ("-f '$FIELDS'", ['-f', '$FIELDS']),
+                (r'-f \$FIELDS', ['-f', '$FIELDS']),
+            )
+            for shell_words, expected in cases:
+                with self.subTest(shell_words=shell_words):
+                    result = subprocess.run(
+                        [shutil.which('bash') or 'bash', '--noprofile', '--norc', '-c',
+                         'printf "%s\\0" gh ' + shell_words],
+                        cwd=fixture, check=True, capture_output=True,
+                        env={'PATH': os.defpath, 'LC_ALL': 'C', 'FIELDS': 'title=fixture --hostname other.example'},
+                    )
+                    self.assertEqual(result.stdout.decode().split('\0')[:-1], ['gh', *expected])
 
 
 if __name__ == '__main__':

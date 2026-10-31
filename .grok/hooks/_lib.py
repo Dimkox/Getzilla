@@ -922,17 +922,17 @@ def _pr_create_options(words: list[str]) -> dict[str, str] | None:
     options: dict[str, str] = {}
     index = 3
     while index < len(words):
-        token = words[index]
-        if token in _PR_CREATE_FLAGS:
-            options[token] = ''
+        argument = words[index]
+        if argument in _PR_CREATE_FLAGS:
+            options[argument] = ''
         else:
-            name, separator, value = token.partition('=')
+            name, separator, value = argument.partition('=')
             # Existing path/secret policy sees separated short operands and long '=value' forms.
             # Do not newly admit attached -F filenames across roots until that parser models them.
-            if token.startswith('-F') and token != '-F':
+            if argument.startswith('-F') and argument != '-F':
                 return None
-            if name not in _PR_CREATE_VALUES and token[:2] in _PR_CREATE_VALUES:
-                name, separator, value = token[:2], '=', token[2:].removeprefix('=')
+            if name not in _PR_CREATE_VALUES and argument[:2] in _PR_CREATE_VALUES:
+                name, separator, value = argument[:2], '=', argument[2:].removeprefix('=')
             if name not in _PR_CREATE_VALUES:
                 return None
             name = _PR_CREATE_VALUES[name]

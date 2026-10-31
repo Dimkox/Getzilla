@@ -553,6 +553,7 @@ class _ShellToken:
     operator: bool = False
     expansion: bool = False
     substitution: bool = False
+    opaque: bool = False
 
 
 _SHELL_OPERATORS = (
@@ -581,7 +582,7 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
             tokens.append(_ShellToken(operator, start, index, operator=True))
             continue
         quote = ''
-        expansion = substitution = False
+        expansion = substitution = opaque = False
         while index < len(text):
             char = text[index]
             if quote == "'":
@@ -605,6 +606,12 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
                 quote = char
             elif char in ' \t\r' or char in _PUNCTUATION:
                 break
+            elif char in '*?[{' or (char == '~' and (
+                index == start or (_ASSIGNMENT.match(text[start:index]) and text[index - 1] in '=:')
+            )):
+                # Same closed literal-word boundary used by root admission: shell glob,
+                # brace and tilde syntax is opaque only outside quotes and escapes.
+                opaque = True
             if char in {'$', '`'}:
                 expansion = True
                 substitution = substitution or char == '`' or text.startswith('$(', index)
@@ -614,7 +621,8 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
         values = _split_words(text[start:index])
         if len(values) != 1:
             raise ValueError('unsupported shell word')
-        tokens.append(_ShellToken(values[0], start, index, expansion=expansion, substitution=substitution))
+        tokens.append(_ShellToken(values[0], start, index, expansion=expansion,
+                                  substitution=substitution, opaque=opaque or expansion))
     return tokens
 
 
@@ -1389,8 +1397,9 @@ def _candidate_authority(argv: list[str]) -> tuple[str | None, bool]:
             return action, True
         if _gh_argument_context(argv) is not None:
             parsed = _gh_arguments(argv)
-            if parsed is None or (parsed.command != ('api',) and any('$' in word or '`' in word for word in argv)):
-                return action, True
+            # The command-text pass checks active expansion before argv roles are trusted.
+            # Dollar/backtick characters in literal text values are data, including on merge.
+            return action, parsed is None
     if executable == 'git':
         selector_index = _git_selector_index(argv)
         if selector_index >= len(argv):
@@ -1604,6 +1613,7 @@ def analyze_command_authority(raw_command: str) -> AuthorityAnalysis:
     else:
         analysis = _analyze_authority_pieces(raw_command)
     actions, ambiguous, proven = list(analysis.actions), analysis.ambiguous, analysis.context_proven
+    ambiguous = ambiguous or _gh_has_opaque_shell_words(raw_command)
     executable_text = _executable_text(raw_command)
     if _IFS_OBFUSCATION.search(executable_text):
         # `git$IFS'push'`/`git${IFS}push`: $IFS word-splits into `git push` at runtime but
@@ -1658,6 +1668,38 @@ _GH_API_READ_METHODS = frozenset({'GET', 'HEAD'})
 _GITHUB_PULL_MERGE = re.compile(r'(?:^|/)repos/([^/]+/[^/]+)/pulls/(\d+)/merge/?$', re.IGNORECASE)
 _GITHUB_PULL_URL = re.compile(r'^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)', re.IGNORECASE)
 PROTECTED_BRANCHES = frozenset({'main', 'master'})
+
+
+def _gh_has_opaque_shell_words(command: str, depth: int = 0) -> bool:
+    """Reject unresolved gh argv before assigning text, file or resource roles.
+
+    Reuse the shell lexer and bounded command/wrapper model. A word may expand
+    into several argv entries, even in a text option. Quoted/escaped literals
+    remain literal; nested command strings are checked in their own shell context.
+    """
+    if depth > 4:
+        return True
+    for chunk in _command_chunks(command):
+        try:
+            words = _shell_tokens(chunk)
+        except ValueError:
+            return re.search(r'\bgh(?:\.exe)?\b', chunk, re.IGNORECASE) is not None
+        commands = _simple_commands(chunk)
+        if not any(argv and argv[0] == 'gh' for argv in commands):
+            continue
+        if any(word.opaque or (word.operator and word.value in {'(', ')'}) for word in words):
+            # Unquoted parentheses include process substitution and extglob syntax.
+            return True
+        for argv in commands:
+            if argv is None:
+                return True
+            nested = _nested_commands(argv)
+            if not nested and argv[0] not in _DATA_ARGUMENT_EXECUTABLES:
+                nested = _wrapped_payloads(argv, depth)
+            if any(isinstance(payload, str) and _gh_has_opaque_shell_words(payload, depth + 1)
+                   for payload in nested):
+                return True
+    return False
 
 
 _GH_CASE_GLOBAL_VALUES = frozenset({'-R', '--repo', '--hostname'})
@@ -1751,20 +1793,20 @@ def _gh_arguments(argv: list[str]) -> _GhArguments | None:
     operands: list[str] = []
     index = 1
     while index < len(argv):
-        token = argv[index]
+        argument = argv[index]
         if index in command_indexes:
             index += 1
             continue
-        if token == '--':
+        if argument == '--':
             operands.extend(argv[index + 1:])
             break
-        if not token.startswith('-') or token == '-':
-            operands.append(token)
+        if not argument.startswith('-') or argument == '-':
+            operands.append(argument)
             index += 1
             continue
-        name, separator, value = token.partition('=')
-        if name not in values and name not in switches and token[:2] in values:
-            name, separator, value = token[:2], '=', token[2:].removeprefix('=')
+        name, separator, value = argument.partition('=')
+        if name not in values and name not in switches and argument[:2] in values:
+            name, separator, value = argument[:2], '=', argument[2:].removeprefix('=')
         if name in values:
             if not separator:
                 index += 1
@@ -2136,10 +2178,10 @@ def _gh_write_resource(argv: list[str], env: dict[str, str] | None = None) -> st
         return 'gh:'
     context = _gh_argument_context(argv)
     parsed = _gh_arguments(argv) if context is not None else None
-    if context is not None and (parsed is None or (parsed.command != ('api',) and any('$' in word or '`' in word for word in argv))):
+    if context is not None and parsed is None:
         return 'gh:'  # existing grant normalization forbids category-only resources
-    if any('$' in word or '`' in word for word in argv):
-        return None
+    if parsed is None and any('$' in word or '`' in word for word in argv):
+        return 'gh:'
     lowered = [word.lower() for word in argv]
     positionals, indexes = _positionals(lowered, _GH_VALUE_OPTIONS, 2)
     if not positionals or positionals[0] in _GH_READ_GROUPS or (len(positionals) > 1 and positionals[1] in _GH_READ_COMMANDS):
@@ -2166,6 +2208,8 @@ _PS_READ_METHODS = frozenset({'get', 'head', 'options', 'default'})
 
 
 def _http_write_resource_text(command: str, root: Path | None = None) -> str | None:
+    if _gh_has_opaque_shell_words(command):
+        return 'gh:'  # opaque targeting never becomes a read or a grantable static resource
     lowered = command.lower()
     mutation = False
     gh_resource = _gh_external_write(command, root)
@@ -2785,6 +2829,7 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
 _SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | None] = {}
+_GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
 
 
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
@@ -2810,6 +2855,9 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
         _SECRET_SCAN_CACHE[key] = _BUDGET_MARKER
         return _BUDGET_MARKER
+    if _gh_has_opaque_shell_words(command):
+        # A text role cannot hide a file option introduced by shell expansion.
+        return _GH_OPAQUE_MARKER
     budget = _Budget()
     result: str | None = None
     try:
@@ -2870,6 +2918,8 @@ def evaluate_pre_tool(
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
         secret = shell_secret_reference(root, command, secret_read)
+        if secret == _GH_OPAQUE_MARKER:
+            return False, 'GitHub CLI arguments must be literal; quote or escape data and use explicit option values.'
         if secret is not None:
             return False, f'Reading secret material is blocked: the shell command references {secret}'
         authority = analyze_command_authority(command)

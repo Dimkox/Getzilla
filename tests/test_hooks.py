@@ -1216,6 +1216,7 @@ class HookTests(unittest.TestCase):
                 'npm "$ACTION"',
                 'gh "$GROUP" merge 1',
                 'gh pr "$ACTION" 1',
+                'gh pr view "$NUMBER"',
             )
             for index, command in enumerate(unsafe_selectors):
                 with self.subTest(command=command):
@@ -1226,7 +1227,11 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    if command.startswith('gh '):
+                        self.assertIn('Sensitive action external-write', data['reason'])
+                        self.assertIn('ambiguous-command-root', data['reason'])
+                    else:
+                        self.assertIn('ambiguous-sensitive-shell', data['reason'])
 
             self._grant(root, 'production', actions=['git-push-branch'], resources=['feature'])
             command = 'printf ok\ngit push origin "$REFS"'
@@ -1242,7 +1247,7 @@ class HookTests(unittest.TestCase):
                 'git status "$PATH"',
                 "bash -lc 'git status \"$PATH\"'",
                 'printf ok\ngit status "$PATH"',
-                'gh pr view "$NUMBER"',
+                'gh pr view "5"',
                 'docker inspect "$IMAGE"',
                 'npm view "$PACKAGE"',
                 'git push origin feature',
