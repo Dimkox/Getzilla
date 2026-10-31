@@ -11,7 +11,7 @@ from pilot.authority import LiteralGrantAuthority
 from pilot.github import GitHubPublication
 from pilot.live_github import CommandResult, PinnedGitHubTransport
 from pilot.store import PilotStore
-from pilot.tests.support import utc_time
+from pilot.tests.support import make_control, utc_time
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, gate_passed, grant
 
 
@@ -84,7 +84,7 @@ class PinnedGitHubTransportTests(unittest.TestCase):
     def test_observes_then_executes_only_exact_push_and_draft_post(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            state = PilotStore(root / "state", control_repository=Path(__file__).resolve().parents[2], clock=lambda: utc_time(0))
+            state = PilotStore(root / "state", control_repository=make_control(root), clock=lambda: utc_time(0))
             configured, issue, candidate, writer = gate_passed(state)
             publication = GitHubPublication(configured, state, clock=lambda: utc_time(5))
             branch = publication.branch_request(issue.job_id)

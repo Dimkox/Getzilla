@@ -45,6 +45,7 @@ class PolicyTests(unittest.TestCase):
                 'ship',
                 5,
                 actions=['git-push-branch'],
+                resources=['fix/x'],
             )
 
             self.assertIn('grant_binding_digest', approval)
@@ -59,6 +60,7 @@ class PolicyTests(unittest.TestCase):
                 'ship',
                 5,
                 actions=['git-push-branch'],
+                resources=['fix/x'],
             )
             approval['tree_fingerprint'] = approval.pop('grant_binding_digest')
             approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
@@ -68,6 +70,7 @@ class PolicyTests(unittest.TestCase):
                     root,
                     'production',
                     action='git-push-branch',
+                    resource='fix/x',
                 )
             )
 
@@ -79,6 +82,7 @@ class PolicyTests(unittest.TestCase):
                 'ship',
                 5,
                 actions=['git-push-branch'],
+                resources=['fix/x'],
             )
             approval['tree_fingerprint'] = '0' * 64
             approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
@@ -88,6 +92,7 @@ class PolicyTests(unittest.TestCase):
                     root,
                     'production',
                     action='git-push-branch',
+                    resource='fix/x',
                 )
             )
 

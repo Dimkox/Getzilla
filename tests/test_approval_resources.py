@@ -161,6 +161,60 @@ class ExactTargetGrantTests(unittest.TestCase):
     def bash(self, root: Path, command: str) -> tuple[bool, str | None]:
         return evaluate_pre_tool(root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
 
+    def test_production_grants_require_nonblank_targets_without_changing_storage(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'seed', 5,
+                         actions=['git-push-branch'], resources=['fix/seed'])
+            before = approvals_path(root).read_bytes()
+            for action in ('git-push-branch', 'git-push-tag', 'pull-request-merge',
+                           'docker-push', 'npm-publish', 'github-release'):
+                for resources in (None, [], [''], [' ', '\t'], ['refs/heads/'], ['refs/tags/']):
+                    with self.subTest(action=action, resources=resources):
+                        with self.assertRaisesRegex(ValueError, 'resource'):
+                            add_approval(root, 'production', 'no target', 5,
+                                         actions=[action], resources=resources)
+                        self.assertEqual(approvals_path(root).read_bytes(), before)
+
+    def test_cli_refuses_missing_production_targets_without_writing_a_grant(self) -> None:
+        for selection in (['--action', 'git-push-branch'], ['--profile', 'release']):
+            for resource in ([], ['--resource', '   ']):
+                with self.subTest(selection=selection, resource=resource), github_project() as root:
+                    proc = subprocess.run(
+                        [sys.executable, str(ROOT / 'scripts/getzilla_approve.py'),
+                         'production', *selection, *resource, '--reason', 'no target'],
+                        cwd=root, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(proc.returncode, 2, proc.stderr)
+                    self.assertNotIn('Traceback', proc.stderr)
+                    self.assertIn('--action git-push-branch --resource fix/x', proc.stderr)
+                    self.assertFalse(approvals_path(root).exists())
+
+    def test_cli_rejected_target_preserves_existing_approvals(self) -> None:
+        with github_project() as root:
+            add_approval(root, 'production', 'seed', 5,
+                         actions=['git-push-branch'], resources=['fix/seed'])
+            before = approvals_path(root).read_bytes()
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / 'scripts/getzilla_approve.py'),
+                 'production', '--action', 'git-push-branch', '--reason', 'no target'],
+                cwd=root, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(approvals_path(root).read_bytes(), before)
+
+    def test_cli_exact_target_grant_authorizes_only_its_branch(self) -> None:
+        with github_project() as root:
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / 'scripts/getzilla_approve.py'),
+                 'production', '--action', 'git-push-branch', '--resource', 'fix/x',
+                 '--reason', 'push fix/x'],
+                cwd=root, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)['resources'], ['fix/x'])
+            self.assertTrue(self.bash(root, 'git push origin fix/x')[0])
+            self.assertFalse(self.bash(root, 'git push origin fix/y')[0])
+
     def test_category_resource_names_are_refused(self) -> None:
         with github_project() as root:
             for resource in ('github-api', 'github-pull-request-review', 'direct-http-write'):
@@ -241,12 +295,24 @@ class ExactTargetGrantTests(unittest.TestCase):
                     self.assertFalse(allowed, command)
                     self.assertIn('protected branch', reason or '')
 
-    def test_unbound_production_grant_does_not_authorize_a_targeted_action(self) -> None:
+    def test_legacy_unbound_production_grant_does_not_authorize_a_targeted_action(self) -> None:
         with github_project() as root:
-            add_approval(root, 'production', 'any push', 5, actions=['git-push-branch'])
+            approval = add_approval(root, 'production', 'push fix/x', 5,
+                                    actions=['git-push-branch'], resources=['fix/x'])
+            approval['resources'] = []
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
             allowed, reason = self.bash(root, 'git push origin fix/x')
             self.assertFalse(allowed)
             self.assertIn('fix/x', reason or '')
+
+    def test_expired_exact_production_grant_does_not_authorize_its_target(self) -> None:
+        with github_project() as root:
+            approval = add_approval(root, 'production', 'push fix/x', 5,
+                                    actions=['git-push-branch'], resources=['fix/x'])
+            self.assertTrue(self.bash(root, 'git push origin fix/x')[0])
+            approval['expires_at'] = '2000-01-01T00:00:00+00:00'
+            approvals_path(root).write_text(json.dumps([approval]), encoding='utf-8')
+            self.assertFalse(self.bash(root, 'git push origin fix/x')[0])
 
     def test_merge_grant_binds_the_pull_request(self) -> None:
         with github_project() as root:

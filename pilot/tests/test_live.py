@@ -17,7 +17,7 @@ from pilot.live import (
     _validate_roots,
 )
 from pilot.store import PilotStore, PilotStoreError
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
 from pilot.tests.test_coordinator import FakeExecutor, FakeIssueSource, FakeValidator
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, grant, profile
 from pilot.tests.test_github import gate_passed
@@ -89,30 +89,33 @@ def phases(
 
 
 class PilotPhasesTests(unittest.TestCase):
-    def test_runtime_roots_reject_a_symlinked_parent_into_control(self) -> None:
+    def test_runtime_roots_reject_control_paths_and_symlinked_parents(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            control = root / "control"
+            control = make_control(root)
             source = root / "source"
-            control.mkdir()
             source.mkdir()
             alias = root / "control-alias"
             alias.symlink_to(control, target_is_directory=True)
-            config = SimpleNamespace(
-                source_repository=source,
-                state_root=root / "state",
-                workspace_root=alias / "workspaces",
-                validation_root=root / "validation",
-            )
-
-            with self.assertRaisesRegex(LivePilotError, "runtime_path_boundary"):
-                _validate_roots(config, control)
+            for field in ("state_root", "workspace_root", "validation_root"):
+                for forbidden in (control, control / "runtime", alias / "runtime"):
+                    with self.subTest(field=field, forbidden=forbidden):
+                        config = SimpleNamespace(
+                            source_repository=source,
+                            state_root=root / "state",
+                            workspace_root=root / "workspaces",
+                            validation_root=root / "validation",
+                        )
+                        _validate_roots(config, control)
+                        setattr(config, field, forbidden)
+                        with self.assertRaisesRegex(LivePilotError, "runtime_path_boundary"):
+                            _validate_roots(config, control)
 
     def test_three_process_phases_use_distinct_grants_and_replay_zero_writes(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             state_root = root / "state"
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(root)
             configured = profile()
             issue = issue_snapshot(
                 profile_digest=configured.profile_digest,
@@ -178,7 +181,7 @@ class PilotPhasesTests(unittest.TestCase):
     def test_missing_api_key_stops_before_snapshot_or_invocation_and_secret_is_not_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(root)
             configured = profile()
             issue = issue_snapshot(profile_digest=configured.profile_digest, base_sha=configured.base_sha, base_tree=configured.base_tree)
             candidate = candidate_change(issue)
@@ -217,7 +220,7 @@ class PilotPhasesTests(unittest.TestCase):
     def test_in_flight_branch_restart_observes_without_a_second_push(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(root)
             state_root = root / "state"
             store = PilotStore(state_root, control_repository=control, clock=lambda: utc_time(0))
             configured, issue, candidate, workspace = gate_passed(store)

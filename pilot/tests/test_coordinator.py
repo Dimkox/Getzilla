@@ -9,7 +9,7 @@ from pilot.contracts import CandidateValidationV1
 from pilot.coordinator import PilotCoordinator
 from pilot.github import GitHubPublication
 from pilot.store import PilotStore
-from pilot.tests.support import candidate_change, issue_snapshot, utc_time
+from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, grant, profile
 from pilot.workspace import PreparedWorkspace
 
@@ -97,7 +97,7 @@ class PilotCoordinatorTests(unittest.TestCase):
     def test_restart_reopens_workspace_at_each_recoverable_local_state(self) -> None:
         for restart_state in ("workspace_ready", "candidate_sealed", "gate_passed"):
             with self.subTest(restart_state=restart_state), tempfile.TemporaryDirectory() as raw:
-                control = Path(__file__).resolve().parents[2]
+                control = make_control(Path(raw))
                 store = PilotStore(
                     Path(raw) / "state",
                     control_repository=control,
@@ -163,7 +163,7 @@ class PilotCoordinatorTests(unittest.TestCase):
 
     def test_one_fake_run_forms_all_five_outputs_and_replay_has_no_effect(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(Path(raw))
             store = PilotStore(Path(raw) / "state", control_repository=control, clock=lambda: utc_time(0))
             configured = profile()
             issue = issue_snapshot(profile_digest=configured.profile_digest, base_sha=configured.base_sha, base_tree=configured.base_tree)

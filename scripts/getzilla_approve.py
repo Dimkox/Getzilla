@@ -56,6 +56,7 @@ parser.add_argument(
     default=[],
     help=(
         'Exact repository-relative path, MCP tool name or URL for protected/external grants. '
+        'Production grants require a branch, tag, owner/repo#N, owner/repo@tag, image or name@version. '
         'Repeat for several resources; wildcard patterns are refused.'
     ),
 )

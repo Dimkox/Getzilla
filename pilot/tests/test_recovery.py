@@ -5,14 +5,14 @@ import tempfile
 import unittest
 
 from pilot.store import PilotStore, PilotStoreError
-from pilot.tests.support import issue_snapshot
+from pilot.tests.support import issue_snapshot, make_control
 
 
 class PilotRecoveryTests(unittest.TestCase):
     def test_interrupted_invocation_is_terminal_and_cannot_start_again(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state_root = Path(raw) / "state"
-            control = Path(__file__).resolve().parents[2]
+            control = make_control(Path(raw))
             issue = issue_snapshot()
             store = PilotStore(state_root, control_repository=control)
             store.create_or_replay(issue, command_key="submit-1")

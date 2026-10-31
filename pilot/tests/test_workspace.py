@@ -5,10 +5,32 @@ import tempfile
 import unittest
 
 from pilot.workspace import ExactGitWorkspace, WorkspaceError, WorkspacePolicy
-from pilot.tests.support import issue_snapshot, make_source, run_git
+from pilot.tests.support import issue_snapshot, make_control, make_source, run_git
 
 
 class ExactGitWorkspaceTests(unittest.TestCase):
+    def test_workspace_rejects_control_paths_and_symlink_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            control = make_control(root)
+            source, base_sha, base_tree = make_source(root)
+            alias = root / "control-alias"
+            alias.symlink_to(control, target_is_directory=True)
+            for workspace_root, reason in (
+                (control, "workspace_root_boundary"),
+                (control / "workspaces", "workspace_root_boundary"),
+                (alias, "workspace_root_mode"),
+            ):
+                with self.subTest(workspace_root=workspace_root):
+                    with self.assertRaisesRegex(WorkspaceError, reason):
+                        ExactGitWorkspace(
+                            source,
+                            workspace_root,
+                            control_repository=control,
+                            policy=WorkspacePolicy("a" * 64, base_sha, base_tree, ("index.html",), 4096),
+                        )
+            self.assertFalse((control / "workspaces").exists())
+
     def test_private_no_local_clone_has_no_remote_and_seals_one_parent_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -23,7 +45,7 @@ class ExactGitWorkspaceTests(unittest.TestCase):
             manager = ExactGitWorkspace(
                 source,
                 root / "private-workspaces",
-                control_repository=Path(__file__).resolve().parents[2],
+                control_repository=make_control(root),
                 policy=policy,
             )
             prepared = manager.prepare("pilot-job-1")
@@ -65,7 +87,7 @@ class ExactGitWorkspaceTests(unittest.TestCase):
             manager = ExactGitWorkspace(
                 source,
                 root / "private-workspaces",
-                control_repository=Path(__file__).resolve().parents[2],
+                control_repository=make_control(root),
                 policy=WorkspacePolicy("a" * 64, base_sha, base_tree, ("index.html",), 4096),
             )
             prepared = manager.prepare("pilot-job-1")
@@ -93,7 +115,7 @@ class ExactGitWorkspaceTests(unittest.TestCase):
             manager = ExactGitWorkspace(
                 source,
                 root / "private-workspaces",
-                control_repository=Path(__file__).resolve().parents[2],
+                control_repository=make_control(root),
                 policy=WorkspacePolicy("a" * 64, base_sha, base_tree, ("index.html",), 4096),
             )
             prepared = manager.prepare("pilot-job-1")
