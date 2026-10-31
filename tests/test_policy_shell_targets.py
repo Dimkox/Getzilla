@@ -213,6 +213,31 @@ class PythonScannerPolicyTests(unittest.TestCase):
         command = 'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'
         self.assertTrue(self.check(command)[0], command)
 
+    def test_mixed_scanner_directory_branches_are_refused_by_direct_and_parallel_policy(self):
+        from getzilla.parallel import policy_refusal
+
+        (self.root / 'nested/deeper').mkdir(parents=True)
+        (self.root / '.getzilla/config/policy.json').write_text(
+            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        for prefix in ('cd nested || true; ', 'cd nested || true && ',
+                       'cd nested && cd deeper || true; ', 'true || cd nested; '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = prefix + 'python3 -m bandit ' + operand
+                with self.subTest(command=command, layer='direct'):
+                    self.assertFalse(self.check(command)[0], command)
+                with self.subTest(command=command, layer='parallel'):
+                    self.assertIsNotNone(policy_refusal(self.root, command), command)
+        for command in (
+            'true || false; python3 -m bandit -cpublic.yaml -- example.py',
+            'python3 -m bandit -cpublic.yaml -- example.py; cd nested || true',
+            'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
+        ):
+            with self.subTest(public_control=command):
+                self.assertTrue(self.check(command)[0], command)
+                self.assertIsNone(policy_refusal(self.root, command), command)
+
 
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
 class ScratchPipPolicyTest(unittest.TestCase):

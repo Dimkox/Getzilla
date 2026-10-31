@@ -473,7 +473,10 @@ def _shell_mutation_targets(
     bases: set[str] = {initial_base}
     unknown_base = initial_unknown
     pending: tuple[set[str], bool] | None = None
-    for chunk, operator in _chunks_with_operators(command):
+    directory_changed = False
+    saw_fallback = False
+    for chunk_index, (chunk, operator) in enumerate(_chunks_with_operators(command)):
+        saw_fallback = saw_fallback or operator == '||'
         if pending is not None:
             moved, moved_unknown = pending
             if operator == '&&':
@@ -491,6 +494,7 @@ def _shell_mutation_targets(
         plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
         is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
         if is_cd and len(_command_chunks(inner)) == 1:
+            directory_changed = True
             # `cd . > AGENTS.md` still truncates the file: the shell opens a redirection in the
             # directory it is in before cd runs.
             for match in _SHELL_REDIRECTION.finditer(chunk):
@@ -525,6 +529,11 @@ def _shell_mutation_targets(
             if scanner is not None:
                 scanner_targets, scanner_unresolved = scanner
                 scanner_unresolved = scanner_unresolved or inner != chunk
+                # A two-command cd failure arm is known. Later mixed branches can rejoin a
+                # skipped successful cd; this bounded scanner contract cannot prove their cwd.
+                scanner_unresolved = scanner_unresolved or (
+                    directory_changed and saw_fallback and chunk_index > 1
+                )
                 found.extend(scanner_targets)
                 mutation = mutation or bool(scanner_targets) or scanner_unresolved
                 unresolved = unresolved or scanner_unresolved

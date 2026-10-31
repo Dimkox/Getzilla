@@ -65,7 +65,7 @@ class BatchTests(unittest.TestCase):
     def test_a_refused_command_stops_the_whole_batch(self) -> None:
         marker = self.root / 'ran.txt'
         with mock.patch.object(parallel, 'policy_refusal',
-                               side_effect=lambda _root, command: 'push needs a grant' if 'push' in command else None):
+                               side_effect=lambda _root, command, **_context: 'push needs a grant' if 'push' in command else None):
             jobs, folder = run_batch(self.root, [f'touch {marker}', 'git push origin main'], workers=2, cwd=self.root)
         self.assertFalse(marker.exists())
         self.assertIn('nothing ran', report(self.root, jobs, folder, workers=2, wall=0))
@@ -74,6 +74,29 @@ class BatchTests(unittest.TestCase):
         with project_copy(git=True) as root:
             self.assertIsNotNone(parallel.policy_refusal(root, 'git push origin main'))
             self.assertIsNone(parallel.policy_refusal(root, 'echo hello'))
+
+    def test_scanner_policy_uses_the_same_directory_as_the_batch_runner(self) -> None:
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'policy.json').write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        directory = self.root / 'nested'
+        directory.mkdir()
+        # The injected runner records calls only: no scanner or fixture command executes.
+        for operand in ('-cfixture-sensitive.json -- example.py',
+                        '--configfile=fixture-sensitive.json -- example.py',
+                        '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+            runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+            with self.subTest(operand=operand):
+                jobs, _ = run_batch(self.root, ['python3 -m bandit ' + operand, 'echo public'],
+                                    workers=2, cwd=directory, runner=runner)
+                self.assertIsNotNone(jobs[0].refused)
+                runner.assert_not_called()
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        jobs, _ = run_batch(self.root, ['python3 -m bandit -cpublic.yaml -- example.py'],
+                            workers=1, cwd=directory, runner=runner)
+        self.assertIsNone(jobs[0].refused)
+        runner.assert_called_once()
+        self.assertEqual(runner.call_args.kwargs['cwd'], directory.resolve())
 
     def test_each_expands_globs_with_quoted_paths(self) -> None:
         for name in ('test a.php', 'test_b.php', 'other.txt'):

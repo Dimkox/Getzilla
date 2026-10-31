@@ -254,6 +254,15 @@ class InlineProgramGuardTests(unittest.TestCase):
                    'tool_input': {'cmd': 'nice python3 -m unittest'}}
         self.assertFalse(self.denied_payload(payload), 'Ordinary wrapped Python keeps its existing decision')
 
+    def test_native_scanner_mixed_directory_branch_refusal_is_retained(self):
+        for prefix in ('cd nested || true; ', 'cd nested || true && '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = prefix + 'python3 -m bandit ' + operand
+                with self.subTest(command=command):
+                    self.assertTrue(self.denied(command), command)
+
     def test_lexical_stream_and_descriptor_aliases_fail_closed(self):
         paths = (
             "/dev/./stdin", "/dev//stdin", "/dev/../dev/stdin", "//dev/stdin", "///dev/stdin",
