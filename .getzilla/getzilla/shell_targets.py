@@ -9,15 +9,21 @@ import stat
 from pathlib import Path
 
 from ._policy_legacy import (
+    _Budget,
+    _BudgetExceeded,
     _command_chunks,
+    _configured_patterns,
+    _secret_reference,
+    _simple_commands,
     _shell_tokens,
     _GLOB_META,
     _SHELL_MUTATION_SIGNAL,
     _SHELL_REDIRECTION,
     _UNWRAP_SHELL,
     _WRAPPERS,
+    DEFAULT_SECRET_READ,
 )
-from .util import safe_relative_path
+from .util import load_json, safe_relative_path
 
 def _normalize_repo_path(value: str) -> str:
     normalized = value.replace('\\', '/')
@@ -137,6 +143,132 @@ def _command_name(argv: list[str]) -> str:
         return ''
     command = argv[0].replace('\\', '/').rsplit('/', 1)[-1].lower()
     return command[:-4] if command.endswith('.exe') else command
+
+
+def _python_module_arguments(argv: list[str]) -> tuple[str, list[str], bool] | None:
+    """Separate a literal module selector from interpreter options; never parse program flags as Python flags."""
+    if not re.fullmatch(r'python(?:3(?:\.\d+)?)?', _command_name(argv)):
+        return None
+    index = 1
+    unresolved = False
+    while index < len(argv):
+        argument = argv[index]
+        if argument.split('=', 1)[0] == '--check-hash-based-pycs':
+            if '=' not in argument:
+                index += 1
+            if index >= len(argv) or argv[index].split('=', 1)[-1] not in {'always', 'default', 'never'}:
+                return None
+        elif argument.startswith('--') or argument == '-' or not argument.startswith('-'):
+            return None
+        else:
+            flags = argument[1:]
+            for position, flag in enumerate(flags):
+                if flag == 'm':
+                    module = flags[position + 1:]
+                    if not module:
+                        index += 1
+                        module = argv[index] if index < len(argv) else ''
+                    return (module, argv[index + 1:], unresolved) if module and not module.startswith('-') else None
+                if flag in 'WX':
+                    value = flags[position + 1:]
+                    if not value:
+                        index += 1
+                        if index >= len(argv):
+                            return None
+                        value = argv[index]
+                    # Other values can import code or redirect bytecode writes; only these diagnostics are proven.
+                    if value != ('ignore' if flag == 'W' else 'dev'):
+                        unresolved = True
+                    break
+                # Inline/interactive, diagnostics and unknown selectors do not select a proven module.
+                if flag not in 'bBdEIOPqRsSuvx':
+                    return None
+        index += 1
+    return None
+
+
+def _bandit_shell_targets(
+    root: Path, command: str, *, bases: set[str], unknown_base: bool,
+) -> tuple[list[str], bool] | None:
+    """Account for the bounded Bandit CLI used by verification, not arbitrary Python program arguments.
+
+    Config/source operands are inputs; -o/--output opens a report. Unknown options,
+    expansions and shell syntax remain unresolved. Native inline and secret guards still apply.
+    """
+    try:
+        tokens = _shell_tokens(command)
+    except ValueError:
+        return None
+    selected = _python_module_arguments([token.value for token in tokens])
+    if selected is None or selected[0] != 'bandit':
+        # Existing normalization discovers literal wrappers; it grants no scanner exception to them.
+        for argv in _simple_commands(command):
+            wrapped = _python_module_arguments(argv) if argv else None
+            if wrapped is not None and wrapped[0] == 'bandit':
+                return [], True
+        return None
+    unresolved = unknown_base or selected[2] or '\\' in command or any(
+        token.operator or token.expansion or re.search(r'[$`~*?\[\]{}%\^#\x00]', token.value)
+        for token in tokens
+    )
+    targets: list[str] = []
+    paths: list[str] = []
+    has_attached_path = False
+    arguments = selected[1]
+    value_options = {'-c': 'input', '--configfile': 'input', '-f': 'format', '--format': 'format',
+                     '-o': 'output', '--output': 'output'}
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        index += 1
+        if argument == '--':
+            paths.extend(arguments[index:])
+            break  # Every later operand is a source path, even one spelled like an output option.
+        if argument in {'-q', '--quiet', '--silent', '-r', '--recursive'}:
+            continue
+        if not argument.startswith('-') or argument == '-':
+            paths.append(argument)
+            continue
+        option, separator, value = argument.partition('=')
+        if option in value_options:
+            if not separator:
+                if index >= len(arguments) or (arguments[index].startswith('-') and arguments[index] != '-'):
+                    unresolved = True
+                    continue
+                value = arguments[index]
+                index += 1
+        elif argument[:2] in {'-c', '-f', '-o'} and not argument.startswith('--'):
+            option, value = argument[:2], argument[2:]
+            if option in {'-c', '-o'}:
+                has_attached_path = True
+        else:
+            unresolved = True
+            continue
+        if not value:
+            unresolved = True
+        elif value_options[option] == 'output' and value != '-':
+            targets.append(value)
+            paths.append(value)
+        elif value_options[option] == 'input':
+            paths.append(value)
+        elif value_options[option] == 'format' and value != 'json':
+            unresolved = True
+    if paths and not unresolved and (has_attached_path or bases != {''}):
+        # Raw root-relative operands retain the generic secret guard. Decoded short options and
+        # directory changes need their actual paths checked against the repository's policy.
+        config = load_json(root / '.getzilla/config/policy.json', {}) or {}
+        patterns = _configured_patterns(
+            config if isinstance(config, dict) else {}, 'secret_read_paths', DEFAULT_SECRET_READ,
+        )
+        try:
+            budget = _Budget()
+            unresolved = any(
+                _secret_reference(root, posixpath.join(base, path), patterns, expand=False, budget=budget)
+                for path in paths for base in sorted(bases)
+            )
+        except _BudgetExceeded:
+            unresolved = True
+    return targets, bool(unresolved)
 
 
 def _directory_target(root: Path, raw: str, *, explicit: bool) -> bool:
@@ -325,21 +457,28 @@ def _cd_target(argv: list[str]) -> tuple[bool, str | None]:
     return True, args[0]
 
 
-def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, bool, bool]:
+def _shell_mutation_targets(
+    root: Path, command: str, *, initial_base: str = '', initial_unknown: bool = False,
+) -> tuple[list[str], bool, bool, bool]:
     """Mutation targets, each read from every directory the command can be in at that point (#214).
 
     `cd X && cmd` runs cmd in X; `cd X; cmd` runs it in X or, if cd failed, where it was; `cd X || cmd`
     runs it only where it was. A cd whose directory the shell decides makes later relative targets unknown,
-    reported as the fourth value (blind).
+    reported as the fourth value (blind). Unsupported scanner arguments also make destinations blind.
     """
     targets: list[str] = []
     mutation = False
     unresolved = False
     blind = False
-    bases: set[str] = {''}
-    unknown_base = False
+    bases: set[str] = {initial_base}
+    unknown_base = initial_unknown
     pending: tuple[set[str], bool] | None = None
-    for chunk, operator in _chunks_with_operators(command):
+    directory_changed = False
+    prefix_operators: set[str] = set()
+    plain_prefix = True
+    for chunk_index, (chunk, operator) in enumerate(_chunks_with_operators(command)):
+        if operator:
+            prefix_operators.add(operator)
         if pending is not None:
             moved, moved_unknown = pending
             if operator == '&&':
@@ -354,9 +493,13 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             first = shlex.split(chunk.strip())[:1]
         except ValueError:
             first = []
+        plain_prefix = plain_prefix and bool(first) and inner == chunk and (
+            first[0] not in _SHELL_KEYWORDS and not re.search(r'[(){}]', chunk)
+        )
         plain = inner == chunk and first and first[0] in _CD and not re.search(r'[(){}]', chunk)
         is_cd, directory = _cd_target(_shell_argv(inner)) if plain else (False, None)
         if is_cd and len(_command_chunks(inner)) == 1:
+            directory_changed = True
             # `cd . > AGENTS.md` still truncates the file: the shell opens a redirection in the
             # directory it is in before cd runs.
             for match in _SHELL_REDIRECTION.finditer(chunk):
@@ -371,6 +514,8 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             is_cd, directory = _cd_target(_shell_argv(_SHELL_REDIRECTION.sub(' ', inner)))
             if directory is None:
                 pending = (set(bases), True)
+            elif posixpath.isabs(directory):
+                pending = ({directory}, False)
             else:
                 pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
             continue
@@ -385,15 +530,33 @@ def _shell_mutation_targets(root: Path, command: str) -> tuple[list[str], bool, 
             if redirections:
                 mutation = True
                 found.extend(redirections)
-            signal = _SHELL_MUTATION_SIGNAL.search(piece) is not None
-            argv_targets = _argv_mutation_targets(root, _shell_argv(piece))
-            if argv_targets is not None:
-                mutation = True
-                found.extend(argv_targets)
-            elif signal:
-                mutation = True
-                unresolved = True
-                blind = blind or unknown_base
+            scanner = _bandit_shell_targets(root, piece, bases=bases, unknown_base=unknown_base)
+            if scanner is not None:
+                scanner_targets, scanner_unresolved = scanner
+                scanner_unresolved = scanner_unresolved or inner != chunk
+                # Prove the whole prefix, including operators before the first cd. Pure &&
+                # reaches this scanner only after every cd succeeds; pure sequence preserves
+                # every success/failure base. Mixed joins can resume after a skipped cd.
+                proven_directory_prefix = plain_prefix and (
+                    prefix_operators <= {'&&'} or prefix_operators <= {';', '\n'}
+                    or (chunk_index == 1 and operator == '||')
+                )
+                scanner_unresolved = scanner_unresolved or (directory_changed and not proven_directory_prefix)
+                found.extend(scanner_targets)
+                mutation = mutation or bool(scanner_targets) or scanner_unresolved
+                unresolved = unresolved or scanner_unresolved
+                # Unknown scanner options can conceal an attached output path from lexical matching.
+                blind = blind or scanner_unresolved
+            else:
+                signal = _SHELL_MUTATION_SIGNAL.search(piece) is not None
+                argv_targets = _argv_mutation_targets(root, _shell_argv(piece))
+                if argv_targets is not None:
+                    mutation = True
+                    found.extend(argv_targets)
+                elif signal:
+                    mutation = True
+                    unresolved = True
+                    blind = blind or unknown_base
             for raw in found:
                 if not raw or raw.startswith('/') or any(marker in raw for marker in ('$', '`')):
                     targets.append(raw)
@@ -585,11 +748,14 @@ def _control_plane_shell_mutation(
     root: Path,
     command: str,
     patterns: list[str],
+    *, initial_base: str = '', initial_unknown: bool = False,
 ) -> tuple[list[str], bool]:
     pip = _scratch_pip_targets(root, command)
     if pip is not None:
         return pip
-    raw_targets, mutation, unresolved, blind = _shell_mutation_targets(root, command)
+    raw_targets, mutation, unresolved, blind = _shell_mutation_targets(
+        root, command, initial_base=initial_base, initial_unknown=initial_unknown,
+    )
     protected_targets: list[str] = []
     dynamic_protected = False
     for raw in raw_targets:
@@ -604,7 +770,7 @@ def _control_plane_shell_mutation(
     if protected_targets:
         return list(dict.fromkeys(protected_targets)), False
     if dynamic_protected or blind:
-        # A write after a cd into a directory the shell decides could land anywhere (#214).
+        # Unknown directories or scanner options can conceal a protected destination.
         return [], True
     return [], mutation and unresolved and _opaque_control_plane_reference(root, command, patterns)
 

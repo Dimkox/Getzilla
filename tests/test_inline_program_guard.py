@@ -43,6 +43,9 @@ class InlineProgramGuardTests(unittest.TestCase):
     def denied(self, command, *, workdir=None):
         payload = {"tool_name": "exec_command", "tool_input": {"cmd": command, "workdir": str(workdir or self.root)},
                    "cwd": str(self.root), "session_id": "inline-guard-fixture"}
+        return self.denied_payload(payload)
+
+    def denied_payload(self, payload):
         output = []
         # Only observer/ledger bookkeeping is synthetic; parser, root resolution and policy run normally.
         with (mock.patch.object(pre, "read_payload", return_value=payload),
@@ -110,6 +113,171 @@ class InlineProgramGuardTests(unittest.TestCase):
                 self.assertTrue(self.denied(command))
                 with mock.patch.object(hooks, "_runs_inline_program", return_value=False):
                     self.assertFalse(self.denied(command), "Removing the guard must flip the verdict")
+
+    def test_literal_bandit_argument_contract_reaches_native_policy(self):
+        # These are command strings passed to the hook; no scanner is imported or executed.
+        commands = (
+            "python3 -m bandit -c bandit.yaml -q -f json -- example.py",
+            "python3 -Imbandit -cbandit.yaml -o report.json -- example.py",
+            "python3 -B -X dev -W ignore -m bandit --configfile=bandit.yaml --output=report.json -- example.py",
+            "python3 -m bandit -c bandit.yaml -- -o AGENTS.md",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertFalse(self.denied(command), command)
+                self.assertNotIn("command.inline-program", hooks._command_directory_aliases(command))
+
+    def test_bandit_contract_preserves_native_denials(self):
+        commands = (
+            "python3 -m bandit -c bandit.yaml -o AGENTS.md",
+            "python3 -m bandit --configfile bandit.yaml -o=AGENTS.md",
+            "python3 -m bandit -c bandit.yaml --output=AGENTS.md",
+            "python3 -m bandit -c bandit.yaml --output-file=AGENTS.md",
+            "python3 -m bandit -c bandit.yaml > AGENTS.md",
+            "python3 -m bandit -c bandit.yaml -- .env",
+            "python3 -c 'print(1)' -m bandit -c bandit.yaml",
+            "python3 -Bc'print(1)' -m bandit -c bandit.yaml",
+            "python3 -i -m bandit -c bandit.yaml",
+            "python3 --unknown -m bandit -c bandit.yaml",
+            "python3 -X pycache_prefix=.getzilla/config -m bandit -c bandit.yaml",
+            "python3 -W ignore::fixture_setup.Warning -m bandit -c bandit.yaml",
+            "python3 -X pycache_prefix=.getzilla/config -m bandit --configfile bandit.yaml",
+            "python3 /dev/stdin -m bandit -c bandit.yaml",
+            'python3 -m "$MODULE" -c bandit.yaml',
+            "nice python3 -m bandit -c bandit.yaml",
+            "sh -c 'python3 -m bandit -c bandit.yaml'",
+            "python3 fixture_check.py -c bandit.yaml",
+            "python3 -m bandit -qoAGENTS.md -- example.py",
+            "python3 -m bandit --out AGENTS.md -- example.py",
+            "python3 -m bandit --output-fileAGENTS.md -- example.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command), command)
+
+    def test_wrapped_bandit_outputs_reach_native_policy_without_short_config(self):
+        for command in ('nice python3 -m unittest', "sh -c 'python3 -m unittest'"):
+            self.assertFalse(self.denied(command), command)
+        for config in ('', '--configfile bandit.yaml '):
+            for output in ('-o AGENTS.md', '-oAGENTS.md'):
+                inner = 'python3 -m bandit ' + config + output + ' -- example.py'
+                self.assertTrue(self.denied(inner), 'Direct protected output control')
+                for command in ('nice ' + inner, 'sh -c ' + shlex.quote(inner)):
+                    with self.subTest(command=command):
+                        self.assertNotIn('command.inline-program', hooks._command_directory_aliases(command))
+                        self.assertTrue(self.denied(command), command)
+
+    def test_attached_scanner_paths_reach_native_secret_policy(self):
+        for option in ('-cpublic.yaml', '-opublic.json', '-c.env.example', '-o.env.example'):
+            command = 'python3 -m bandit ' + option + ' -- example.py'
+            self.assertFalse(self.denied(command), command)
+        for option in ('-c .env', '-c.env', '-c=.env', '--configfile=.env',
+                       '-o .env', '-o.env', '-o=.env', '--output=.env'):
+            with self.subTest(option=option):
+                command = 'python3 -m bandit ' + option + ' -- example.py'
+                self.assertNotIn('command.inline-program', hooks._command_directory_aliases(command))
+                self.assertTrue(self.denied(command), command)
+
+    def test_scanner_directory_relative_secrets_reach_native_policy(self):
+        policy = self.root / '.getzilla/config/policy.json'
+        original = policy.read_text()
+        self.addCleanup(policy.write_text, original)
+        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        for operand in (
+            '-c fixture-sensitive.json -- example.py',
+            '-cfixture-sensitive.json -- example.py',
+            '--configfile=fixture-sensitive.json -- example.py',
+            '-o fixture-sensitive.json -- example.py',
+            '-ofixture-sensitive.json -- example.py',
+            '--output=fixture-sensitive.json -- example.py',
+            'fixture-sensitive.json', '-- fixture-sensitive.json',
+        ):
+            for prefix in ('cd nested && ', 'cd nested; '):
+                command = prefix + 'python3 -m bandit ' + operand
+                with self.subTest(command=command):
+                    if prefix.endswith('&& '):
+                        self.assertNotIn('command.inline-program', hooks._command_directory_aliases(
+                            command, cwd=str(self.root)))
+                    self.assertTrue(self.denied(command), command)
+        self.assertFalse(self.denied(
+            'cd nested && python3 -m bandit -cpublic.yaml -opublic.json -- example.py'))
+        # Native root resolution already refuses ambiguous || directory branches.
+        self.assertTrue(self.denied(
+            'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py'))
+        self.assertTrue(self.denied('cd "$DESTINATION" && python3 -m bandit -- example.py'))
+        policy.write_text('{}\n')
+        self.assertFalse(self.denied(
+            'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'))
+
+    def test_scanner_paths_use_validated_native_execution_directory(self):
+        policy = self.root / '.getzilla/config/policy.json'
+        original = policy.read_text()
+        self.addCleanup(policy.write_text, original)
+        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json", '
+                          '"nested/deeper/fixture-sensitive.json"]}\n')
+        contexts = (
+            ({'cwd': str(self.root)}, {'workdir': str(self.root / 'nested')}, self.root / 'nested'),
+            ({'cwd': str(self.root / 'nested')}, {'workdir': 'deeper'}, self.root / 'nested/deeper'),
+            ({'cwd': str(self.root / 'nested')}, {}, self.root / 'nested'),
+            ({'cwd': str(self.root / 'nested'), 'workspaceRoot': str(self.root)}, {}, self.root / 'nested'),
+            ({'workspaceRoot': str(self.root)}, {'workdir': str(self.root / 'nested')}, self.root / 'nested'),
+        )
+        for session, directories, actual_cwd in contexts:
+            payload = {'tool_name': 'exec_command', 'session_id': 'inline-guard-fixture', **session}
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                with self.subTest(session=session, directories=directories, operand=operand):
+                    payload['tool_input'] = {'cmd': 'python3 -m bandit ' + operand, **directories}
+                    self.assertTrue(self.denied_payload(payload), payload)
+            protected = shlex.quote(os.path.relpath(self.root / 'AGENTS.md', actual_cwd))
+            payload['tool_input'] = {'cmd': 'python3 -m bandit -o ' + protected, **directories}
+            self.assertTrue(self.denied_payload(payload), payload)
+            payload['tool_input'] = {'cmd': 'python3 -m bandit -cpublic.yaml -opublic.json -- example.py', **directories}
+            self.assertFalse(self.denied_payload(payload), payload)
+
+        # Untrusted tool fields cannot replace the separately propagated native cwd.
+        payload = {'tool_name': 'exec_command', 'cwd': str(self.root), 'session_id': 'inline-guard-fixture',
+                   'tool_input': {'cmd': 'python3 -m bandit -cfixture-sensitive.json -- example.py',
+                                  'workdir': str(self.root / 'nested'), 'execution_cwd': str(self.root)}}
+        self.assertTrue(self.denied_payload(payload), payload)
+        for session, directories in (
+            ({'cwd': str(self.root)}, {'workdir': str(self.root / 'nested'), 'cwd': str(self.root)}),
+            ({'workspaceRoot': str(self.root)}, {}),
+            ({'workspaceRoot': str(self.root)}, {'workdir': 'nested'}),
+        ):
+            payload = {'tool_name': 'exec_command', 'session_id': 'inline-guard-fixture', **session,
+                       'tool_input': {'cmd': 'python3 -m bandit -- example.py', **directories}}
+            with self.subTest(unresolved=payload):
+                self.assertTrue(self.denied_payload(payload), payload)
+        payload = {'tool_name': 'exec_command', 'workspaceRoot': str(self.root),
+                   'tool_input': {'cmd': 'nice python3 -m unittest'}}
+        self.assertFalse(self.denied_payload(payload), 'Ordinary wrapped Python keeps its existing decision')
+
+    def test_native_scanner_mixed_directory_branch_refusal_is_retained(self):
+        for prefix in ('cd nested || true; ', 'cd nested || true && '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = prefix + 'python3 -m bandit ' + operand
+                with self.subTest(command=command):
+                    self.assertTrue(self.denied(command), command)
+
+    def test_native_scanner_rejects_skipped_directory_joins(self):
+        policy = self.root / '.getzilla/config/policy.json'
+        original = policy.read_text()
+        self.addCleanup(policy.write_text, original)
+        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        for separator in ('; ', '\n', ' & '):
+            for operand in ('-cfixture-sensitive.json -- example.py',
+                            '--configfile=fixture-sensitive.json -- example.py',
+                            '-ofixture-sensitive.json -- example.py', '-- fixture-sensitive.json'):
+                command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
+                with self.subTest(command=command):
+                    self.assertTrue(self.denied(command, workdir=self.root / 'nested'), command)
+        self.assertFalse(self.denied(
+            'cd deeper && true && python3 -m bandit -cpublic.yaml -- example.py',
+            workdir=self.root / 'nested'))
 
     def test_lexical_stream_and_descriptor_aliases_fail_closed(self):
         paths = (

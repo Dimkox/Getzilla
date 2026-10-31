@@ -251,6 +251,9 @@ def _root_hint(context: Any) -> str:
         return (f' The command runs in {getattr(context, "effective_root", None)}, but the session is in '
                 f'{getattr(context, "session_root", None)}. Cross-root pushes require a registered linked '
                 'worktree, a literal target directory or git -C, and its own exact grant. '
+                'For PR creation, use that worktree as the absolute tool workdir or one literal cd &&, '
+                'then gh pr create --repo <own owner/repo> --head <current non-protected branch> '
+                'with its exact external-write grant. '
                 'Other cross-root actions require a session in the target repository.')
     return ''
 
@@ -551,7 +554,7 @@ def main() -> None:
         action = sensitive_action(classification_root, {
             'tool_name': current_tool,
             'tool_input': current_input,
-        })
+        }, execution_cwd=context.execution_cwd)
         if current_tool == 'Bash' and context.has_ambiguous_command_evidence and action is None:
             action = 'ambiguous-sensitive-shell'
         root = context.effective_root or context.session_root
@@ -573,7 +576,7 @@ def main() -> None:
                 allowed, reason = evaluate_pre_tool(root, {
                     'tool_name': current_tool,
                     'tool_input': current_input,
-                })
+                }, execution_cwd=context.execution_cwd)
             except Exception:
                 if action:
                     allowed, reason = False, f'Sensitive action {action} denied: policy evaluation failed closed.'

@@ -87,15 +87,16 @@ class Job:
     refused: str | None = None
 
 
-def policy_refusal(root: Path, command: str) -> str | None:
+def policy_refusal(root: Path, command: str, *, cwd: Path | None = None) -> str | None:
     """The same verdict the PreToolUse hook would give this command on its own."""
     from .policy import evaluate_pre_tool, sensitive_action
 
+    directory = (root if cwd is None else cwd).resolve()
     event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
-    action = sensitive_action(root, event)
+    action = sensitive_action(root, event, execution_cwd=directory)
     if action:
         return f'sensitive action {action}: run it on its own so the policy and its approvals apply'
-    allowed, reason = evaluate_pre_tool(root, event)
+    allowed, reason = evaluate_pre_tool(root, event, execution_cwd=directory)
     return None if allowed else (reason or 'refused by repository policy')
 
 
@@ -112,9 +113,11 @@ def expand_each(patterns: list[str], template: str, cwd: Path) -> list[str]:
 def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeout: float | None = None,
               runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> tuple[list[Job], Path]:
     """Run independent commands concurrently; nothing runs when the policy refuses any of them."""
+    # Freeze one absolute cwd for both authorization and execution; keep policy lookup at root.
+    cwd = cwd.resolve()
     jobs = [Job(index, command) for index, command in enumerate(commands, 1)]
     for job in jobs:
-        job.refused = policy_refusal(root, job.command)
+        job.refused = policy_refusal(root, job.command, cwd=cwd)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + f'-{os.getpid()}'
     folder = root / LOGS / stamp
     folder.mkdir(parents=True, exist_ok=True)

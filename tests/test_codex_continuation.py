@@ -7,6 +7,7 @@ import tempfile
 import json
 import time
 import os
+import signal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,12 +119,17 @@ class CodexContinuationTest(unittest.TestCase):
         self.assertFalse(state.eligible)
 
     def test_terminal_snapshot_cannot_hide_a_tool_effect(self):
-        state = codex_continuation.TurnObserver('thread', 'turn')
-        state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
-                      'willRetry': False, 'error': {'codexErrorInfo': 'rateLimitExceeded'}}})
-        state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {
-            'id': 'turn', 'status': 'failed', 'items': [{'id': 'x', 'type': 'commandExecution'}]}}})
-        self.assertFalse(state.eligible)
+        for item_type, eligible in (('agentMessage', True), ('commandExecution', False)):
+            with self.subTest(item_type=item_type):
+                state = codex_continuation.TurnObserver('thread', 'turn')
+                error = {'codexErrorInfo': 'rateLimitExceeded'}
+                state.observe({'method': 'error', 'params': {'threadId': 'thread', 'turnId': 'turn',
+                              'willRetry': False, 'error': error}})
+                state.observe({'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {
+                    'id': 'turn', 'status': 'failed', 'error': error,
+                    'items': [{'id': 'x', 'type': item_type}]}}})
+                self.assertEqual(state.eligible, eligible)
+                self.assertFalse(state.dispatch_permitted)
 
     def test_unhashable_item_type_fails_closed(self):
         state = codex_continuation.TurnObserver('thread', 'turn')
@@ -279,27 +285,62 @@ class CodexContinuationTest(unittest.TestCase):
         async def exercise():
             with tempfile.TemporaryDirectory() as temp:
                 script = Path(temp) / 'peer.py'
-                release = Path(temp) / 'release'
-                script.write_text("import signal,subprocess,sys,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                                  "subprocess.Popen([sys.executable, '-c', "
-                                  "'import os,sys,time; end=time.monotonic()+30; "
-                                  "exec(\\\"while time.monotonic()<end and not os.path.exists(sys.argv[1]): time.sleep(0.01)\\\")', "
-                                  "sys.argv[1]])\n"
-                                  "print('ready', flush=True)\nend=time.monotonic()+30\n"
-                                  "while time.monotonic()<end: time.sleep(0.01)\n")
-                peer = await codex_continuation.OwnedJsonlPeer.start(sys.executable, str(script), str(release), timeout=0.1)
-                try:
-                    self.assertEqual(await asyncio.wait_for(peer._process.stdout.readline(), 5), b'ready\n')
-                    started = time.monotonic()
+                descendant = Path(temp) / 'descendant.py'
+                descendant.write_text("import os,sys\nrelease,ack=map(int,sys.argv[1:])\n"
+                                      "os.write(ack,b'R')\nassert os.read(release,1)==b''\n"
+                                      "os.write(ack,b'E')\n")
+                script.write_text("import os,signal,subprocess,sys\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                                  "release,ack=map(int,sys.argv[1:3])\n"
+                                  "subprocess.Popen([sys.executable,sys.argv[3],str(release),str(ack)],"
+                                  "pass_fds=(release,ack))\n"
+                                  "os.close(release)\nos.close(ack)\nprint('ready', flush=True)\n"
+                                  "while True: signal.pause()\n")
+                release_read, release_write = os.pipe()
+                ack_read, ack_write = os.pipe()
+                with (os.fdopen(release_read, 'rb') as release_input,
+                      os.fdopen(release_write, 'wb') as release_output,
+                      os.fdopen(ack_read, 'rb') as ack_input,
+                      os.fdopen(ack_write, 'wb') as ack_output):
+                    acknowledgement = asyncio.StreamReader()
+                    ack_transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+                        lambda: asyncio.StreamReaderProtocol(acknowledgement), ack_input)
                     try:
-                        await asyncio.wait_for(peer.close(), 3)
-                    except codex_continuation.ProtocolError as exc:
-                        self.assertEqual(str(exc), 'shutdown_incomplete')
-                    self.assertTrue(peer._process._transport.is_closing())
-                    self.assertLess(time.monotonic() - started, 3)
-                finally:
-                    release.touch()
-                    await asyncio.sleep(0.1)
+                        process = await asyncio.create_subprocess_exec(
+                            sys.executable, str(script), str(release_input.fileno()),
+                            str(ack_output.fileno()), str(descendant),
+                            pass_fds=(release_input.fileno(), ack_output.fileno()), start_new_session=True,
+                            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL)
+                        release_input.close()
+                        ack_output.close()
+                        peer = codex_continuation.OwnedJsonlPeer(process, 0.1)
+                        try:
+                            self.assertEqual(await asyncio.wait_for(process.stdout.readline(), 5), b'ready\n')
+                            self.assertEqual(await asyncio.wait_for(acknowledgement.readexactly(1), 5), b'R')
+                            started = time.monotonic()
+                            try:
+                                await asyncio.wait_for(peer.close(), 3)
+                            except codex_continuation.ProtocolError as exc:
+                                self.assertEqual(str(exc), 'shutdown_incomplete')
+                            self.assertTrue(process._transport.is_closing())
+                            self.assertLess(time.monotonic() - started, 3)
+                        finally:
+                            # EOF cannot be missed when the temporary directory disappears.
+                            release_output.close()
+                            try:
+                                exited = await asyncio.wait_for(acknowledgement.read(), 5)
+                                self.assertIn(exited, (b'E', b'RE'))
+                            finally:
+                                # Also stop the peer if an assertion failed before close().
+                                try:
+                                    os.killpg(process.pid, signal.SIGKILL)
+                                except ProcessLookupError:
+                                    pass
+                                process._transport.close()
+                                await asyncio.wait_for(process.wait(), 5)
+                                await asyncio.wait_for(acknowledgement.read(), 5)
+                    finally:
+                        ack_transport.close()
         asyncio.run(exercise())
 
     @unittest.skipIf(os.name == 'nt', 'POSIX process behavior')

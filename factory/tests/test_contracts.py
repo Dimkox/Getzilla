@@ -64,6 +64,35 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(intake.idempotency_key), 64)
         self.assertEqual(intake.limits.wall_seconds, 14400)
 
+    def test_valid_acceptance_ids_keep_canonical_work_identity(self):
+        intake = TaskIntakeV1.from_dict(valid_intake(), now=NOW)
+        self.assertEqual(intake.acceptance_ids, ("AC-001", "AC-002"))
+        self.assertEqual(intake.to_dict()["acceptance_ids"], ["AC-001", "AC-002"])
+        self.assertEqual(intake.intent_digest, "aa0b45262846a55bd1283116c96e91767b976ff4e8c3329c43ddc3d5183bd8cc")
+        self.assertEqual(intake.idempotency_key, "52c5c515d3f48b45a6a92db97d9c7a5c5984762c80e8158a871aec5b314b4ab5")
+
+    def test_malformed_acceptance_ids_use_contract_error(self):
+        cases = {
+            "nested list": [["AC-001"]],
+            "nested object": [{"id": "AC-001"}],
+            "mixed number and string": [7, "AC-001"],
+            "empty": [],
+            "unsorted": ["AC-002", "AC-001"],
+            "duplicate": ["AC-001", "AC-001"],
+            "invalid string": ["not-an-acceptance-id"],
+            "short number": ["AC-01"],
+            "long number": ["AC-1000000"],
+        }
+        for name, acceptance in cases.items():
+            with self.subTest(case=name):
+                now = datetime.now(timezone.utc)
+                payload = valid_intake()
+                payload["m0_authority"]["observed_at"] = now.isoformat()
+                payload["acceptance_ids"] = acceptance
+                with self.assertRaises(ContractError) as caught:
+                    TaskIntakeV1.from_dict(payload, now=now)
+                self.assertEqual(caught.exception.code, "acceptance_ids")
+
     def test_complete_frozen_intent_defines_duplicate_identity(self):
         original = valid_intake()
         replay = TaskIntakeV1.from_dict(original, now=NOW)

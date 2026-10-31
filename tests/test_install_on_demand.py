@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -114,6 +115,93 @@ class OnDemandTests(unittest.TestCase):
         self.assertTrue((self.target / '.claude' / 'settings.json').is_file())
         with mock.patch.dict(os.environ, {'GETZILLA_AGENT': 'grok'}):
             self.assertEqual(INSTALL.detect_agents(self.target), ('grok',))
+
+
+class ComponentPreflightTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.source = Path(tmp.name) / 'source'
+        self.target = Path(tmp.name) / 'project'
+        source_files = {
+            'scripts/install_into.py': (ROOT / 'scripts/install_into.py').read_bytes(),
+            '.getzilla/templates/consumer-AGENTS.md.tmpl': b'Fixture project instructions\n',
+            '.getzilla/templates/consumer-factory-README.md.tmpl': b'Factory notes\n',
+            '.getzilla/templates/hook_root_shim.py': b'# Fixture hook shim\n',
+            'factory/README.md': b'Factory source notes\n',
+            'factory/pyproject.toml': b'[project]\nname = "fixture-factory"\n',
+            '.codex/hooks.json': b'{"hooks": []}\n',
+            '.getzilla/compliance/eu-ai-act/rules.json': b'{"rules": []}\n',
+            'VERSION': b'fixture-v1\n',
+        }
+        for relative in INSTALL.MANAGED_FILES:
+            source_files.setdefault(relative, b'')
+        target_files = {
+            '.getzilla/AGBP_SYNC.json': b'{"schema_version": 1}\n',
+            '.getzilla/config/compliance.json': b'{"schema_version":"getzilla-compliance-v1","enabled":[]}\n',
+            MANIFEST: b'{"schema_version":"getzilla-managed-components-v1","components":{}}\n',
+            'factory/README.md': b'My own factory notes\n',
+            'local.txt': b'Unrelated user work\n',
+        }
+        for base, files in ((self.source, source_files), (self.target, target_files)):
+            for relative, content in files.items():
+                path = base / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        (self.target / 'empty-user-directory').mkdir()
+
+    def snapshot(self) -> dict:
+        return {
+            path.relative_to(self.target).as_posix(): (
+                stat.S_IMODE(path.stat().st_mode), None if path.is_dir() else path.read_bytes()
+            )
+            for path in self.target.rglob('*')
+        }
+
+    def assert_rejected_without_mutation(self, needs: list[str]) -> None:
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "^unknown component 'agent:notepad'; expected one of "):
+            ensure_components(self.target, needs, source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_unknown_component_after_valid_names_does_not_change_target(self) -> None:
+        self.assert_rejected_without_mutation(['factory', 'agent:codex', 'compliance:eu-ai-act', 'agent:notepad'])
+
+    def test_unknown_component_before_valid_names_does_not_change_target(self) -> None:
+        self.assert_rejected_without_mutation(['agent:notepad', 'factory', 'agent:codex', 'compliance:eu-ai-act'])
+
+    def test_valid_batch_preserves_order_ownership_and_user_edits(self) -> None:
+        needs = ['compliance:eu-ai-act', 'agent:codex', 'factory', 'factory']
+        added = ensure_components(self.target, needs, source=self.source)
+        self.assertEqual([item.component for item in added], needs)
+        self.assertEqual(added[0].files, [
+            '.getzilla/compliance/eu-ai-act/rules.json', 'scripts/getzilla_audit_bundle.py',
+            'scripts/getzilla_compliance.py',
+        ])
+        self.assertEqual(added[1].files, ['.codex/hooks.json'])
+        self.assertIn('factory/pyproject.toml', added[2].files)
+        self.assertNotIn('factory/README.md', added[2].files)
+        self.assertEqual(added[3].files, [])
+        self.assertEqual(added[2].kept, ['factory/README.md'])
+        self.assertEqual((self.target / 'factory/README.md').read_bytes(), b'My own factory notes\n')
+        manifest = load_manifest(self.target)
+        self.assertEqual(set(manifest['components']), set(needs))
+        for item in added[:3]:
+            record = manifest['components'][item.component]
+            self.assertEqual(record['files'], item.files)
+            self.assertEqual(record['source_version'], 'fixture-v1')
+            self.assertTrue(record['added_at'])
+        config = json.loads((self.target / '.getzilla/config/compliance.json').read_text(encoding='utf-8'))
+        self.assertEqual(config, {'schema_version': 'getzilla-compliance-v1', 'enabled': ['eu-ai-act']})
+
+        custom = self.target / '.codex/hooks.json'
+        custom.write_bytes(b'{"user": "custom hooks"}\n')
+        before_repeat = self.snapshot()
+        again = ensure_components(self.target, needs, source=self.source)
+        self.assertEqual([item.component for item in again], needs)
+        self.assertTrue(all(not item.files for item in again))
+        self.assertEqual(again[1].kept, ['.codex/hooks.json'])
+        self.assertEqual(self.snapshot(), before_repeat)
 
 
 if __name__ == '__main__':
