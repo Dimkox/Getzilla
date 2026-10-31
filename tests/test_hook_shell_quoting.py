@@ -45,7 +45,7 @@ class ShellQuotingTests(unittest.TestCase):
 
     def test_quoted_data_reaches_normal_policy(self) -> None:
         commands = (
-            "gh api repos/Dimkox/getzilla/commits?per_page=3 --jq '.[] | {sha, date: .commit.committer.date, subject: .commit.message}'",
+            "gh api 'repos/Dimkox/getzilla/commits?per_page=3' --jq '.[] | {sha, date: .commit.committer.date, subject: .commit.message}'",
             "rg -n 'allow|deny' README.md",
             "jq 'map(select(.enabled))' package.json",
             "printf '%s' ';' '|' '||' '(' ')' '&&'",

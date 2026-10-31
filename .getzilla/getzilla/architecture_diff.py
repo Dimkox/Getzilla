@@ -62,7 +62,7 @@ def _binding_key(binding: "_GitBinding") -> tuple[object, ...]:
     return (
         str(binding.root),
         str(binding.git_directory),
-        tuple((str(path), identity) for path, identity in binding.registrations),
+        tuple((str(path), identity) for path, identity, _label in binding.registrations),
         tuple(str(path) for path in binding.absent_registrations),
     )
 
@@ -425,21 +425,25 @@ def _git_pointer(path: Path) -> bytes:
 class _GitBinding:
     root: Path
     git_directory: Path
-    registrations: tuple[tuple[Path, tuple[int, int, int, int, int, int]], ...]
+    registrations: tuple[tuple[Path, tuple[int, int, int, int, int, int], str], ...]
     absent_registrations: tuple[Path, ...] = ()
 
     def verify(self) -> None:
-        try:
-            if any(_git_path_identity(path) != identity for path, identity in self.registrations):
-                raise ArchitectureError("Git worktree binding changed", code="git")
-            for path in self.absent_registrations:
-                try:
-                    path.lstat()
-                except FileNotFoundError:
-                    continue
-                raise ArchitectureError("Git common-directory registration changed", code="git")
-        except OSError as exc:
-            raise ArchitectureError("Git worktree binding is unavailable", code="git") from exc
+        for path, identity, label in self.registrations:
+            try:
+                current = _git_path_identity(path)
+            except OSError as exc:
+                raise ArchitectureError(f"Git {label} binding is unavailable", code="git") from exc
+            if current != identity:
+                raise ArchitectureError(f"Git {label} binding changed", code="git")
+        for path in self.absent_registrations:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise ArchitectureError("Git common-directory registration is unavailable", code="git") from exc
+            raise ArchitectureError("Git common-directory registration changed", code="git")
 
 
 def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Path) -> bool:
@@ -465,7 +469,11 @@ def _git_binding(root: Path) -> _GitBinding:
         repository = named_root.resolve(strict=True)
         dot_git = repository / ".git"
         registration = dot_git.lstat()
-        registrations = {path: _git_path_identity(path) for path in (repository, dot_git)}
+        registrations = [
+            (repository, _git_path_identity(repository), "worktree root"),
+            (dot_git, _git_path_identity(dot_git),
+             "directory" if stat.S_ISDIR(registration.st_mode) else "worktree registration"),
+        ]
         absent_registrations: tuple[Path, ...] = ()
         if stat.S_ISDIR(registration.st_mode):
             git_directory = dot_git
@@ -478,14 +486,18 @@ def _git_binding(root: Path) -> _GitBinding:
             git_directory = (repository / target).resolve(strict=True)
             backlink = git_directory / "gitdir"
             common_registration = git_directory / "commondir"
-            registrations.update({path: _git_path_identity(path) for path in (git_directory, backlink, common_registration)})
+            registrations.extend((
+                (git_directory, _git_path_identity(git_directory), "directory"),
+                (backlink, _git_path_identity(backlink), "worktree backlink"),
+                (common_registration, _git_path_identity(common_registration), "common-directory registration"),
+            ))
             common_content = _git_pointer(common_registration)
             if not common_content.endswith(b"\n") or b"\0" in common_content:
                 raise ArchitectureError("Git common-directory registration is invalid", code="git")
             common_directory = (git_directory / Path(os.fsdecode(common_content[:-1]))).resolve(strict=True)
             if git_directory.parent.name != "worktrees" or common_directory != git_directory.parent.parent:
                 raise ArchitectureError("Git common-directory relationship does not match registered worktree", code="git")
-            registrations[common_directory] = _git_path_identity(common_directory)
+            registrations.append((common_directory, _git_path_identity(common_directory), "common directory"))
             backlink_content = _git_pointer(backlink)
             if not backlink_content.endswith(b"\n") or b"\0" in backlink_content:
                 raise ArchitectureError("Git worktree backlink is invalid", code="git")
@@ -496,7 +508,7 @@ def _git_binding(root: Path) -> _GitBinding:
             raise ArchitectureError("Git worktree registration is not a directory or regular file", code="git")
         if not stat.S_ISDIR(git_directory.lstat().st_mode):
             raise ArchitectureError("Git directory is not a non-symlink directory", code="git")
-        binding = _GitBinding(repository, git_directory, tuple(registrations.items()), absent_registrations)
+        binding = _GitBinding(repository, git_directory, tuple(registrations), absent_registrations)
         binding.verify()
         returncode, output, _error = _run_capped(
             _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],

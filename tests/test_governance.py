@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import hashlib
@@ -8,6 +9,7 @@ import inspect
 import os
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +29,7 @@ import getzilla.governance as governance
 import getzilla.architecture_diff as architecture_diff
 from getzilla.architecture import ArchitectureError
 from getzilla.architecture_fitness import architecture_evidence
+from getzilla.queue_provenance import analyze_queue_tree
 from getzilla.spec import SpecError, load_schema, validate_schema
 from getzilla.governance import (
     ActorRef,
@@ -2104,6 +2107,12 @@ class GovernanceHandoffTests(unittest.TestCase):
 class GovernanceInputBoundaryTests(unittest.TestCase):
     """Hostile inputs must never redirect Git or publish a mutable projection."""
 
+    def test_git_registration_checks_do_not_add_queue_operations(self) -> None:
+        source = "import queue\n" + inspect.getsource(architecture_diff._git_binding)
+        analysis = analyze_queue_tree(ast.parse(source))
+        self.assertEqual(analysis.signals, ("import:queue",))
+        self.assertFalse(analysis.uncertain)
+
     def _repository(self, *, object_format: str = "sha1") -> tuple[Path, str]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -2158,6 +2167,170 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 operation = commands[-1]
                 self.assertTrue(any(value.startswith("--git-dir=") for value in operation))
                 self.assertIn(f"--work-tree={worktree}", operation)
+
+    def _binding_repository(self, linked: bool) -> tuple[Path, Path, Path, str]:
+        main, head = self._repository()
+        common = main / ".git"
+        if not linked:
+            return main, common, common, head
+        root = main.parent / f"{main.name}-binding-linked"
+        self.addCleanup(shutil.rmtree, root, True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(root), head], cwd=main, check=True)
+        return root, common / "worktrees" / root.name, common, head
+
+    def _assert_git_binding_refused(self, operation: Callable[[], object], label: str, root: Path) -> None:
+        with self.assertRaises(ArchitectureError) as caught:
+            operation()
+        self.assertEqual(caught.exception.code, "git")
+        self.assertIn(f"Git {label} ", str(caught.exception))
+        self.assertNotIn(str(root), str(caught.exception))
+        self.assertNotIn("gitdir:", str(caught.exception))
+
+    @unittest.skipIf(os.name == "nt", "POSIX ctime detects a restored directory name")
+    def test_git_binding_rejects_root_substitution_restored_before_postcheck(self) -> None:
+        root, head = self._repository()
+        foreign, _ = self._repository()
+        (foreign / "decisions.md").write_bytes(b"foreign repository\n")
+        subprocess.run(["git", "add", "."], cwd=foreign, check=True)
+        subprocess.run(["git", "commit", "-qm", "foreign"], cwd=foreign, check=True)
+        foreign_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=foreign)
+        self.assertNotEqual(foreign_head, (head + "\n").encode())
+        saved = root.with_name(root.name + "-saved")
+        self.addCleanup(shutil.rmtree, saved, True)
+        before = root.lstat()
+        real_run = architecture_diff._run_capped
+        observed: list[bytes] = []
+
+        def substitute_during_read(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            if command[-2:] != ["rev-parse", "HEAD"]:
+                return real_run(command, **kwargs)
+            root.rename(saved)
+            foreign.rename(root)
+            try:
+                result = real_run(command, **kwargs)
+                observed.append(result[1])
+                return result
+            finally:
+                root.rename(foreign)
+                saved.rename(root)
+                # Restoring mtime must not hide the changed POSIX ctime.
+                os.utime(root, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=substitute_during_read):
+            self._assert_git_binding_refused(
+                lambda: architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]), "worktree root", root,
+            )
+        self.assertEqual(observed, [foreign_head])
+
+    def test_git_binding_allows_normal_object_additions_during_read(self) -> None:
+        root, head = self._repository()
+        real_run = architecture_diff._run_capped
+
+        def add_object_after_read(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            result = real_run(command, **kwargs)
+            if command[-2:] == ["rev-parse", "HEAD"]:
+                subprocess.run(["git", "hash-object", "-w", "--stdin"], input=b"another loose object\n",
+                               cwd=root, check=True, capture_output=True)
+            return result
+
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=add_object_after_read):
+            self.assertEqual(architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]), (head + "\n").encode())
+
+    def test_git_binding_rejects_replaced_or_missing_directories_by_class(self) -> None:
+        for linked in (False, True):
+            for role in ("root", "git", "common", "objects"):
+                for replace_directory in (False, True):
+                    with self.subTest(linked=linked, role=role, replaced=replace_directory):
+                        root, git_directory, common, _ = self._binding_repository(linked)
+                        directories = {
+                            "root": (root, "worktree root"),
+                            "git": (git_directory, "directory" if linked else "worktree root"),
+                            "common": (common, "common directory" if linked else "worktree root"),
+                            "objects": (common / "objects", "common directory" if linked else "directory"),
+                        }
+                        directory, label = directories[role]
+                        binding = architecture_diff._git_binding(root)
+                        saved = directory.with_name(directory.name + "-saved")
+                        self.addCleanup(shutil.rmtree, saved, True)
+                        directory.rename(saved)
+                        if replace_directory:
+                            directory.mkdir()
+                            # Keep all descendants' inodes: only this directory is replaced.
+                            for child in saved.iterdir():
+                                child.rename(directory / child.name)
+                        # A missing common ancestor also removes the linked Git directory.
+                        if linked and role == "common" and not replace_directory:
+                            label = "directory"
+                        self._assert_git_binding_refused(binding.verify, label, root)
+
+    def test_git_binding_reports_identity_changes_by_registration_class(self) -> None:
+        root, git_directory, common, _ = self._binding_repository(True)
+        for directory, label in ((root, "worktree root"), (git_directory, "directory"),
+                                 (common, "common directory"), (root / ".git", "worktree registration"),
+                                 (git_directory / "gitdir", "worktree backlink"),
+                                 (git_directory / "commondir", "common-directory registration")):
+            for field in ("st_dev", "st_ino", "st_mode", "unavailable"):
+                with self.subTest(directory=directory.name, field=field):
+                    binding = architecture_diff._git_binding(root)
+                    real_lstat = Path.lstat
+
+                    def changed_identity(path: Path) -> object:
+                        info = real_lstat(path)
+                        if path != directory:
+                            return info
+                        if field == "unavailable":
+                            raise PermissionError(13, "unavailable", str(path))
+                        values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                        other_type = stat.S_IFREG if stat.S_ISDIR(info.st_mode) else stat.S_IFDIR
+                        values[field] = other_type | 0o700 if field == "st_mode" else values[field] + 1
+                        return SimpleNamespace(**values)
+
+                    with mock.patch.object(Path, "lstat", changed_identity):
+                        self._assert_git_binding_refused(binding.verify, label, root)
+
+    def test_git_binding_keeps_regular_registrations_strict_and_names_the_class(self) -> None:
+        for role in ("pointer", "backlink", "commondir"):
+            for remove in (False, True):
+                with self.subTest(role=role, removed=remove):
+                    root, git_directory, _, _ = self._binding_repository(True)
+                    registrations = {
+                        "pointer": (root / ".git", "worktree registration"),
+                        "backlink": (git_directory / "gitdir", "worktree backlink"),
+                        "commondir": (git_directory / "commondir", "common-directory registration"),
+                    }
+                    path, label = registrations[role]
+                    binding = architecture_diff._git_binding(root)
+                    if remove:
+                        path.unlink()
+                        label = "worktree root" if role == "pointer" else "directory"
+                    else:
+                        before = path.lstat()
+                        # In-place writes also work for the hidden .git file on Windows.
+                        with path.open("r+b") as handle:
+                            content = handle.read()
+                            handle.seek(0)
+                            handle.write(content)
+                        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+                    self._assert_git_binding_refused(binding.verify, label, root)
+
+    def test_git_binding_rejects_common_object_store_redirect_during_read(self) -> None:
+        for linked in (False, True):
+            with self.subTest(linked=linked):
+                root, git_directory, _, _ = self._binding_repository(linked)
+                foreign, _ = self._repository()
+                real_run = architecture_diff._run_capped
+
+                def redirect_after_read(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+                    result = real_run(command, **kwargs)
+                    if command[-2:] == ["rev-parse", "HEAD"]:
+                        (git_directory / "commondir").write_text(str(foreign / ".git") + "\n", encoding="utf-8")
+                    return result
+
+                with mock.patch.object(architecture_diff, "_run_capped", side_effect=redirect_after_read):
+                    self._assert_git_binding_refused(
+                        lambda: architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]),
+                        "common-directory registration" if linked else "directory", root,
+                    )
 
     def test_linked_worktree_registrations_rewritten_later_still_bind(self) -> None:
         # Registrations written in a later clock tick than they were created have
