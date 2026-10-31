@@ -13,6 +13,127 @@ from getzilla.policy import evaluate_pre_tool
 from tests._support import project_copy
 
 
+class PythonScannerPolicyTests(unittest.TestCase):
+    """Classify literal fixture commands; never import or launch a scanner."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'policy.json').write_text('{}\n')
+        (self.root / '.env').write_text('FIXTURE_ONLY=not-a-credential\n')
+
+    def check(self, command):
+        return evaluate_pre_tool(self.root, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+
+    def test_literal_bandit_arguments_keep_input_and_output_roles(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml -q -f json -- example.py',
+            'python3 -I -W ignore -X dev -m bandit -c bandit.yaml -r -- .getzilla/getzilla',
+            'python3 -Imbandit -cbandit.yaml -fjson -o report.json -- example.py',
+            'python3 -Xdev -Wignore -m bandit -c bandit.yaml -- example.py',
+            'python3 --check-hash-based-pycs=never -m bandit -c=bandit.yaml -o=report.json -- example.py',
+            'python3 -m bandit --configfile bandit.yaml --quiet --format json --recursive -- example.py',
+            'python3 -m bandit --configfile=bandit.yaml --silent --output=report.json -- example.py',
+            'python3 -m bandit -c bandit.yaml -o - -- example.py',
+            'python3 -m bandit -c bandit.yaml -o .getzilla/runtime/scratch/report.json -- example.py',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertTrue(allowed, reason)
+
+    def test_bandit_outputs_use_existing_protected_target_guard(self):
+        for output in ('-o AGENTS.md', '-oAGENTS.md', '-o=AGENTS.md',
+                       '--output AGENTS.md', '--output=AGENTS.md'):
+            with self.subTest(output=output):
+                command = 'python3 -m bandit --configfile bandit.yaml ' + output + ' -- example.py'
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+        allowed, reason = self.check(
+            'python3 -m bandit -c bandit.yaml -o .getzilla/runtime/changes/report.json -- example.py')
+        self.assertFalse(allowed)
+        self.assertIn('shell mutation targeting .getzilla/runtime/changes/report.json;', reason)
+        for outputs in ('-o AGENTS.md -o report.json', '-o report.json --output=AGENTS.md'):
+            with self.subTest(outputs=outputs):
+                allowed, reason = self.check('python3 -m bandit -c bandit.yaml ' + outputs + ' -- example.py')
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+
+    def test_bandit_program_options_respect_data_boundaries(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml -- -o AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -- --output=AGENTS.md',
+            'python3 -m bandit --configfile=-oAGENTS.md -- AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -o report.json -- --output-file AGENTS.md',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertTrue(allowed, reason)
+
+    def test_unknown_bandit_forms_remain_opaque(self):
+        commands = (
+            'python3 -m bandit -c bandit.yaml --output-file=AGENTS.md',
+            'python3 -m bandit -c bandit.yaml --out=AGENTS.md',
+            'python3 -m bandit -c bandit.yaml --unknown-output AGENTS.md',
+            'python3 -m bandit -c bandit.yaml -f custom',
+            'python3 -m bandit -c bandit.yaml -qoAGENTS.md',
+            'python3 -m bandit -c bandit.yaml -o',
+            'python3 -m bandit -c bandit.yaml --output',
+            'python3 -m bandit -c bandit.yaml -o "$OUTPUT"',
+            'python3 -m bandit -c bandit.yaml -- *.py',
+            'python3 --unknown -m bandit -c bandit.yaml',
+            'python3 -X pycache_prefix=.getzilla/config -m bandit -c bandit.yaml',
+            'python3 -Xpresite=fixture_setup -m bandit -c bandit.yaml',
+            'python3 -W ignore::fixture_setup.Warning -m bandit -c bandit.yaml',
+            'python3 -X pycache_prefix=.getzilla/config -m bandit --configfile bandit.yaml',
+            'python3 -W ignore::fixture_setup.Warning -m bandit --configfile bandit.yaml',
+            'python3 -c "print(1)" -m bandit -c bandit.yaml',
+            'python3 /dev/stdin -m bandit -c bandit.yaml',
+            'python3 -m "$MODULE" -c bandit.yaml',
+            'env python3 -m bandit -c bandit.yaml',
+            'nice python3 -m bandit -c bandit.yaml',
+            "sh -c 'python3 -m bandit -c bandit.yaml'",
+            'launcher python3 -m bandit -c bandit.yaml',
+            'python3 -m bandit -qoAGENTS.md -- example.py',
+            'python3 -m bandit --out AGENTS.md -- example.py',
+            'python3 -m bandit --out=AGENTS.md -- example.py',
+            'python3 -m bandit --output-fileAGENTS.md -- example.py',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('opaque control-plane shell mutation', reason)
+
+    def test_other_python_program_arguments_keep_existing_refusals(self):
+        for command in ('python3 -m fixture_check -c bandit.yaml',
+                        'python3 fixture_check.py -c bandit.yaml',
+                        'python3 -m bandit.__main__ -c bandit.yaml'):
+            with self.subTest(command=command):
+                self.assertFalse(self.check(command)[0])
+
+    def test_bandit_inputs_still_use_secret_read_guard(self):
+        for command in ('python3 -m bandit -c .env -- example.py',
+                        'python3 -m bandit --configfile=.env -- example.py',
+                        'python3 -m bandit -c bandit.yaml -- .env'):
+            with self.subTest(command=command):
+                allowed, reason = self.check(command)
+                self.assertFalse(allowed)
+                self.assertIn('secret', reason.lower())
+
+    def test_bandit_protected_redirection_remains_denied(self):
+        for suffix in ('> AGENTS.md', '2> AGENTS.md', '>> AGENTS.md'):
+            with self.subTest(suffix=suffix):
+                allowed, reason = self.check('python3 -m bandit -c bandit.yaml -- example.py ' + suffix)
+                self.assertFalse(allowed)
+                self.assertIn('shell mutation targeting AGENTS.md;', reason)
+
+
 @unittest.skipIf(os.name == 'nt', 'Supported scratch pip syntax is POSIX-only')
 class ScratchPipPolicyTest(unittest.TestCase):
     def setUp(self):

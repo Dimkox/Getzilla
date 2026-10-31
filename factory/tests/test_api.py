@@ -315,6 +315,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.service.calls[-1][3], "correlation-001")
         self.assertNotIn(self.token, response.text)
 
+    def test_malformed_acceptance_ids_return_422_before_admission(self):
+        with TestClient(self.client.app, raise_server_exceptions=False) as client:
+            for acceptance in ([["AC-001"]], [{"id": "AC-001"}], [7, "AC-001"]):
+                with self.subTest(acceptance=acceptance):
+                    payload = self.payload()
+                    payload["acceptance_ids"] = acceptance
+                    response = client.post("/v1/tasks", headers=self.auth, json=payload)
+                    self.assertEqual(self.service.calls, [])
+                    self.assertEqual(response.status_code, 422, response.text)
+                    self.assertEqual(response.json(), {
+                        "error": "invalid",
+                        "code": "acceptance_ids",
+                        "detail": "contract validation failed",
+                    })
+                    self.assertEqual(response.headers["X-Correlation-ID"], "correlation-001")
+
     def test_checked_contract_is_the_only_openapi_surface(self):
         self.assertEqual(self.client.get("/openapi.json").status_code, 404)
         contract = json.loads(
