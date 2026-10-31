@@ -11,7 +11,7 @@
 
 # Getzilla
 
-Current source: **2.3.1 source candidate** (unpublished): all work merged to `main` since v2.3.0, up to PR #179. It adds `getzilla update`, disk cleanup (`getzilla cleanup`), session-bound grants and the light lane for small changes. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. Publication does not prove production readiness. Continue through [START_HERE.md](START_HERE.md).
+Current source: **2.3.1 source candidate** (unpublished). It includes `getzilla update`, disk cleanup (`getzilla cleanup`), session-bound grants, the light lane for small changes and optional verification-tool adapters. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. The install commands below remain pinned to that release; source-only features are not promises about its contents. Use the [v2.3.0 quickstart](https://github.com/Dimkox/Getzilla/blob/v2.3.0/QUICKSTART.md) for that release. Publication does not prove production readiness. Continue source development through [START_HERE.md](START_HERE.md).
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
@@ -55,21 +55,21 @@ Think of a child building a LEGO tower. Building is the fun part, and nobody sho
 | "It works" | The AI says so | Tests and checks really ran, and the results are saved |
 | Who checks the work | The same AI that wrote it | A different AI reviewer. The author cannot approve itself |
 | Where changes go | Wherever the AI puts them, sometimes straight into `main` | Every task gets its own branch and pull request |
-| Memory | Gone when the chat ends | Every task leaves a folder: the request, the plan, test results, reviews |
+| Memory | Gone when the chat ends | Scope stays in the task or PR; local results and reviews stay in ignored runtime storage. Full-lane work also has a change package |
 | Mistakes | The next session repeats them | [Recurring lessons](engineering/mistakes.md) link to [dated incidents](engineering/incidents/README.md); decisions remain in `decisions.md` |
-| Small vs. risky tasks | Treated the same | Small tasks take a short path. Risky ones get more checks and a human sign-off |
-| Something unclear | The AI guesses | Getzilla stops instead of guessing |
+| Small vs. risky tasks | Treated the same | Eligible small tasks take a short path. Risky ones get the selected audits and applicable human approvals |
+| Something unclear | The AI guesses | The agent resolves routine choices within scope. Missing evidence blocks qualification; named human decisions need approval |
 | Who ships | The AI | The agent uses a pull request. Under conditional L5, it merges after checks and independent review |
 
 You do not give up vibe coding. The rule is **vibe first, check second**: build it fast, then run it through Getzilla before it is kept.
 
 ## How a task goes
 
-1. **Build it.** Get the feature working quickly on its own branch.
-2. **Sort it.** Getzilla looks at the task and decides how careful to be: which skills to use, which reviewers to call, whether a person must approve the plan first.
-3. **Check it.** Tests and other checks run. The results are saved next to the task.
+1. **Start it.** Getzilla routes the task automatically; build the feature on its own branch.
+2. **Measure it.** After the candidate is committed, Getzilla reconciles the route with the actual diff to select the delivery lane and independent reviews. Named human decisions keep their own approval requirements.
+3. **Check it.** Bounded controls check the changed behavior. The results stay in local runtime storage.
 4. **Review it.** Separate AI reviewers read the change and write down what they find.
-5. **Ship it.** A pull request is opened. Conditional L5 permits agent merge after exact-head checks, independent review and resolved threads. Teams that want an extra lock can add Trust CI, a separate service that tests the exact version again before merge.
+5. **Ship it.** Run the lane's final local verifier and open a pull request. Conditional L5 permits agent merge after exact-head checks, independent review and resolved threads. The external gate follows repository visibility: GitHub Actions for public repositories, paid Trust CI for private repositories.
 
 ## What it costs
 
@@ -109,7 +109,9 @@ The installer is verified before it runs: the commands download it from the `v2.
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To switch agents later, run `getzilla setup-agent --agent codex` (or `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder).
 
-To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this at the end of every run.
+Current source requires the pinned Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline in installed projects. `getzilla baseline status` reports it and `getzilla baseline apply` installs it. This requirement is separate from optional components and later tool updates.
+
+To bring third-party tools (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) to their latest versions and install the pinned, SHA-256-verified OpenGrep release, run `python3 scripts/getzilla_update.py`; the installer offers this optional update at the end of every run.
 
 To update everything with one command, run `getzilla update` inside your project. It updates Getzilla itself, then writes the new Getzilla files into the project on a new branch `getzilla-update-<version>` and commits them there, then updates the third-party tools. The project must have no uncommitted changes. Nothing is pushed, and nothing is deleted unless you pass `--retire-legacy`; review the branch and open a pull request. `--no-self` and `--no-tools` skip the first and the last step. If a file your project keeps as its own (`.getzilla/AGBP_SYNC.json`) changed since its digest was recorded, the update stops; `getzilla update --accept-local` records the committed version as the one to keep and continues. The project's own `ruff.toml`, `bandit.yaml` and `.coveragerc` stay as they are. A project without a sync record gets one. On a pre-rename project the update lists the old pre-rename stack files and any file that still imports the old engine; `--retire-legacy` removes the old files in the same commit once nothing imports them.
 
@@ -186,11 +188,11 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 - `.cursor/rules/getzilla/`: prompt-only Cursor rules from `.grok/cursor-rules/`, generated the same way for this repository only; `install_into.py` does not install them into consumer repositories (Cursor reads `AGENTS.md` and `.agents/skills/` itself)
 - `.getzilla/`: the engine that sorts tasks, runs checks and saves the evidence
 - `.getzilla/runtime/`: ignored task state, plans, analyses and reviews; `engineering/changes/` retains historical packages. Change packages are created on demand at `.getzilla/runtime/changes/<id>/`.
-- Small low-risk diffs of at most 50 code lines use one review without a package or report-only commits. Full CI remains required.
+- In current source, an admitted low-risk diff of at most 50 added plus deleted code lines needs no package or report-only commit. Sensitive paths are checked before ordinary tests and prose are excluded. One ordinary code review is the floor; configured or explicitly retained extra reviews still apply. Final local qualification uses `getzilla verify --mode fast`, which can still discover the full test suite. Full CI remains required.
 - `scripts/getzilla_evidence.py`: portable local evidence archive; CI keeps its own actual run artifacts for 30 days.
 - Disk use: review copies go to the runtime `snapshots` folder (created on first use) and are removed with `getzilla cleanup snapshot --remove`; test runs keep their temporary files inside their own run folder. `getzilla cleanup inventory` shows what is left.
 - `architecture/`: a map of the system ([system.yaml](architecture/system.yaml), [rules.yaml](architecture/rules.yaml), [diagrams](architecture/generated/))
-- `trust-ci/`: the optional outside checker, run as its own service
+- `trust-ci/`: the separate external checker used for private repositories; public repositories use GitHub Actions
 - `factory/`, `delivery/`, `pilot/`: bigger automation pieces, switched off by default
 
 ## What it is not

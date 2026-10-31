@@ -2,6 +2,8 @@
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
+**Version boundary.** This page describes the unpublished **2.3.1 source candidate**. The installer commands below deliberately install published **v2.3.0**. For that release, use its [versioned quickstart](https://github.com/Dimkox/Getzilla/blob/v2.3.0/QUICKSTART.md). Source additions such as the light lane and `getzilla test-tools` are available only in a source installation that contains them.
+
 **One-command install.** These installers add whatever is missing (Git, Python 3.10+, your coding agent: Qwen Code by default, or Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Grok Build), point the agent at its models (OpenRouter with your own key from https://openrouter.ai/keys by default, or the agent's own sign-in), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
 
 ```powershell
@@ -28,6 +30,8 @@ The installer is verified before it runs: the commands download it from the `v2.
 Without a terminal to ask in, the installers use `GETZILLA_AGENT` (`qwen` default, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter` default, `native`), `GETZILLA_MODEL` and `OPENROUTER_API_KEY`. The key becomes the user environment variable `OPENROUTER_API_KEY` (and `ANTHROPIC_AUTH_TOKEN` for Claude Code) that every agent reads: an owner-only `~/.getzilla/openrouter.env` sourced from your shell profiles on Linux/macOS, persistent user variables on Windows. Open a new terminal afterwards. `--forget-key` removes it. Minimum versions: Python 3.10, Node.js 20 (Qwen Code, Codex), PowerShell 7.4 on Windows (the installer adds it). Re-run the setup any time with `python3 scripts/getzilla_setup_agent.py --agent <agent>`.
 
 At the end of every run, first install or re-run, the installer offers to update third-party tools to their latest versions (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, the CVE database) plus the pinned OpenGrep release, whose SHA-256 is checked before it is installed, and does so only after you answer `y`. Run the same update yourself at any time with `python3 scripts/getzilla_update.py` (`--status` shows the last results); agents remind you when it has not run for a day, but never start it themselves.
+
+In current source, installed projects require the pinned Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline. Inspect it with `getzilla baseline status` and apply it with `getzilla baseline apply`. The optional update above refreshes tools; it does not make the baseline optional. Domain components, architecture adoption and the factory remain separate choices.
 
 With the installer done, continue at step 3. The manual steps below are the same path by hand.
 
@@ -71,6 +75,59 @@ Every `python3 scripts/...` command below also runs through the launcher, for ex
 
    The payload delivers the architecture CLI, parser/evaluators, strict schemas, and non-authoritative examples. Every plan and payload excludes the target-owned `architecture/system.yaml`, `architecture/rules.yaml`, and `architecture/adoption.json`. It also excludes `trust-ci/` and `.github/workflows/`.
 
+4. Work:
+   ```bash
+   cd /path/to/repo
+   qwen      # or: codex, claude, gemini, copilot, grok
+   ```
+   Each agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
+
+   A project gets only what it uses. Domain skills come with their domain: the Bitrix skill when the project has `bitrix/`, `local/modules` or `local/components`, and the SEO-landing skill when it has `side-projects/seo-landings/`. Add one later with `getzilla components add extra:bitrix` or `extra:seo-landing`, or choose at install time with `--extras`. Hook entry scripts stay inside `.grok/hooks/`; only an older installation keeps its copies in the repository root.
+   Prompt example: `Добавь обработчик события OnAfterUserAdd в local-модуль`
+
+   If hooks did not create a route, create one explicitly:
+
+   ```bash
+   python3 scripts/getzilla_route.py "Добавить обработчик события OnAfterUserAdd в local-модуль" --session first-task --json
+   python3 scripts/getzilla_status.py
+   ```
+
+   Keep bounded exploration on the task branch. The initial route is provisional; it does not prove light-lane admission. Full-lane work uses `getzilla change start` for scope, acceptance and typed specifications in ignored `.getzilla/runtime/changes/<id>/`. Existing tracked packages under `engineering/changes/` remain history. The package requirement has the existing measured-light and low-risk docs/micro exemptions.
+
+5. Complete delivery checks once:
+
+   Commit the candidate and bind the route to the complete diff. Run controls that fit the changed behavior, then let the independent route-selected reviewers inspect that exact commit. A reviewer that needs its own copy makes one with `getzilla cleanup snapshot <commit>` and removes it with `getzilla cleanup snapshot --remove <path>` when the report is returned. Save reports outside Git, in the runtime package evidence folder or `.getzilla/runtime/reviews/<route-id>/`. No report commit or freeze commit is needed.
+
+   ```bash
+   python3 scripts/getzilla_route.py --reconcile --json
+   ```
+
+   Select one final local qualifier after review:
+
+   | Measured delivery lane | Package and reviews | Final local command |
+   | --- | --- | --- |
+   | Light: complete clean diff, low risk, at most 50 added plus deleted code lines, no sensitive changes | No package; ordinary code review plus any configured or explicitly retained additional reviews | `python3 scripts/getzilla_verify.py --mode fast` |
+   | Full | Runtime package and typed spec unless the existing low-risk docs/micro exemption applies; selected independent reviews | `python3 scripts/getzilla_verify.py --mode pr` |
+
+   The light selector checks sensitive paths before excluding ordinary tests and non-executable prose. Unknown, binary, rename, submodule or incomplete inventories do not qualify. `fast` is a verifier mode, not a promise to run only changed tests; it can still discover the full suite. The PR verifier retains its disclosed docs/state scope selector, and the existing focused landing mode requires its own closed inventory. Release verification remains `--mode release`.
+
+   An explicit bounded observation, such as `getzilla verify --mode fast --no-record --test tests.test_quality_gates --budget 180` in this source repository, creates no receipt or lane admission. Choose test names that exist in the target project.
+
+   After the selected final gate passes, record each actual passing review and inspect status:
+
+   ```bash
+   python3 scripts/getzilla_review.py code_review --status pass --report .getzilla/runtime/reviews/<route-id>/code-review.md --reviewed-commit <exact-full-sha>
+   python3 scripts/getzilla_status.py
+   ```
+
+   Repeat the receipt command for every selected review kind. A source change requires new independent reviews and a new final gate. Local receipts are preflight evidence. Public repositories use pinned Actions checks; private ones use the external Trust CI gate. Require green exact-head checks before merge.
+
+6. Follow `/getzilla-delivery` and `/release-readiness`. Conditional AGENTS L5 covers merge, tag and release of the project's own repository after required checks, independent review and resolved threads. Record exact action/resource grants. Production writes, deployment and external writes need separate scoped authority. `getzilla_deploy.py` prepares commands.
+
+Explicit owner overrides of local workflow rules must name the rule, scope, reason, deferred checks and follow-up validation. Keep the result UNVERIFIED until deferred checks run; do not create fake passing evidence or bypass external checks.
+
+## Advanced configuration
+
 ### Optional manual executable-architecture adoption
 
 An installed repository without `architecture/adoption.json` remains backward-compatible and reports architecture as `not_configured`. Adoption is an explicit repository-owner decision: copy the examples, replace every example identity/path/policy with reviewed target truth, validate them, render/review the projections, and create the marker last. Use the reviewed model and rules as architecture input; generated diagrams are projections only.
@@ -102,7 +159,7 @@ After review succeeds, create `architecture/adoption.json` manually with exactly
 }
 ```
 
-The marker requires sorted keys, two-space JSON, and exactly one final newline. Commit the marker with both reviewed target documents; marker present plus either missing/invalid document fails closed. The diagram command is read-only: checked-in projection changes are ordinary reviewed source edits. The marker, diagrams, Markdown, and receipts do not replace the system/rules authority, and local checks do not replace the App-owned exact-SHA Trust CI check.
+The marker requires sorted keys, two-space JSON, and exactly one final newline. Commit the marker with both reviewed target documents; marker present plus either missing/invalid document fails closed. The diagram command is read-only: checked-in projection changes are ordinary reviewed source edits. The marker, diagrams, Markdown, and receipts do not replace the system/rules authority, and local checks do not replace the required external exact-head checks: public Actions or private Trust CI.
 
 Exact-state evidence uses literal 40-character commit SHAs. Use `--worktree` only for diagnostics; it never claims an exact head SHA:
 
@@ -111,49 +168,10 @@ python3 scripts/getzilla_architecture.py diff --base <40-char-sha> --head <40-ch
 python3 scripts/getzilla_architecture.py fitness --base <40-char-sha> --head <40-char-sha> --pre-risk red --json
 ```
 
-4. Work:
-   ```bash
-   cd /path/to/repo
-   qwen      # or: codex, claude, gemini, copilot, grok
-   ```
-   Each agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
-
-   A project gets only what it uses. Domain skills come with their domain: the Bitrix skill when the project has `bitrix/`, `local/modules` or `local/components`, and the SEO-landing skill when it has `side-projects/seo-landings/`. Add one later with `getzilla components add extra:bitrix` or `extra:seo-landing`, or choose at install time with `--extras`. Hook entry scripts stay inside `.grok/hooks/`; only an older installation keeps its copies in the repository root.
-   Prompt example: `Добавь обработчик события OnAfterUserAdd в local-модуль`
-
-   If hooks did not create a route, create one explicitly:
-
-   ```bash
-   python3 scripts/getzilla_route.py "Добавить обработчик события OnAfterUserAdd в local-модуль" --session first-task --json
-   python3 scripts/getzilla_change.py start --title "Первая задача"
-   python3 scripts/getzilla_status.py
-   ```
-
-   `getzilla change start` writes the change package to `.getzilla/runtime/changes/<id>/`. This is ignored runtime state, not Git content; older tracked packages under `engineering/changes/` are history. `getzilla verify --mode pr` needs this package and its typed spec on a route that delivers code, unless the exact diff is admitted to the light lane.
-
-5. Complete delivery checks once:
-
-   Commit the candidate. Bind the route to the committed diff, run a bounded control, then let the independent route-selected reviewers inspect that exact commit. A reviewer that needs its own copy makes one with `getzilla cleanup snapshot <commit>` and removes it with `getzilla cleanup snapshot --remove <path>` when the report is returned. Save the reports outside Git, in the runtime package evidence folder or `.getzilla/runtime/reviews/<route-id>/`. No report commit or freeze commit is needed.
-
-   ```bash
-   python3 scripts/getzilla_route.py --reconcile --json
-   python3 scripts/getzilla_verify.py --mode fast --no-record --test tests.test_quality_gates --budget 180
-   python3 scripts/getzilla_verify.py --mode pr
-   python3 scripts/getzilla_review.py code_review --status pass --report .getzilla/runtime/reviews/<route-id>/code-review.md --reviewed-commit <exact-full-sha>
-   python3 scripts/getzilla_status.py
-   ```
-
-   Repeat the receipt command for every selected review kind. A source change requires new independent reviews and a new final gate. Local receipts are preflight evidence. Public repositories use pinned Actions checks; private ones use the external Trust CI gate. Require green exact-head checks before merge.
-
-   Small low-risk changes (at most 50 changed code lines, no control files) take the light lane: one independent review and focused checks, no change package. Full CI still runs.
-
-6. Follow `/getzilla-delivery` and `/release-readiness`. Conditional AGENTS L5 covers merge, tag and release of the project's own repository after required checks, independent review and resolved threads. Record exact action/resource grants. Production writes, deployment and external writes need separate scoped authority. `getzilla_deploy.py` prepares commands.
-
-Explicit owner overrides of local workflow rules must name the rule, scope, reason, deferred checks and follow-up validation. Keep the result UNVERIFIED until deferred checks run; do not create fake passing evidence or bypass external checks.
 
 ### Optional workflow artifact convergence
 
-Create an explicit `engineering/changes/<active-id>/workflow/manifest.json` listing allowlisted GitHub Spec Kit, BMAD, or Superpowers files (accepted shapes and the known-unparsed list live in [docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md](docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md)). Inspect without writing first:
+Create an explicit `.getzilla/runtime/changes/<active-id>/workflow/manifest.json` listing allowlisted GitHub Spec Kit, BMAD, or Superpowers files (accepted shapes and the known-unparsed list live in [docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md](docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md)). Inspect without writing first:
 
 ```bash
 python3 scripts/getzilla_artifacts.py import --change-id <active-id>
@@ -162,8 +180,6 @@ python3 scripts/getzilla_artifacts.py converge --change-id <active-id>
 ```
 
 Persist the exact derived `workflow/task-graph.json` / `workflow/convergence-report.json` files or marked framework projections/exports only with `--write --expected-digest <sha256>`; use 64 zeroes only to create a missing target. The graph stores source-status hints, while current canonical receipts derive ephemeral effective status without a tracked rewrite. Per-target runtime locks serialize cooperating writers. Missing targets use atomic no-clobber creation; existing targets require platform atomic exchange. Any post-exchange mismatch rolls back before displaced content is read, and a second racing entry is retained under a bounded recovery/temp name for manual forward recovery rather than deleted. Imported documents and their tightly allowlisted RED/GREEN argv are never executed and never become route, governance, approval, receipt, or merge authority. `getzilla_verify` checks stored graph/report read-only when the manifest exists and skips this check for historical packages. The `workflow_sources` currency observation is valid for 90 days after `observed_at`: before the freshness test fails, re-observe upstream latest releases, refresh `.getzilla/config/toolchain.json` and the README table, and re-point any renamed shape test.
-
-7. Trust project hooks in the TUI: `/hooks-trust`
 
 ## Keep the disk clean
 
@@ -195,11 +211,11 @@ It serves `http://127.0.0.1:8765/` on loopback only. The tour uses bundled sampl
 
 `install_into.py --plan` inspects an existing target read-only. On Linux with the descriptor and `renameat2(RENAME_NOREPLACE)` capabilities stated above, `install_into.py --materialize-new` publishes the local Grok stack (skills, agents, hooks, scripts, `AGENTS.md`) only at an absent target. It does **not** copy `trust-ci/`, `.github/workflows/`, target-owned architecture authority, this repository’s `README.md`, `QUICKSTART.md`, or `VERSION`. Consumer laptops do not stand up PostgreSQL.
 
-Local `python3 scripts/getzilla_verify.py --mode pr` is preflight evidence. It is **not merge authority**. Merge trust, when deployed, is the GitHub App-owned check `adaptive-trust-ci/verified@<policy-sha12>` on the exact pull-request SHA.
+The selected local verifier (`--mode fast` for admitted light work, `--mode pr` for full delivery) produces preflight evidence. Merge requires the external checks on the exact pull-request SHA: pinned GitHub Actions for public repositories, or the configured App-owned `adaptive-trust-ci/verified@<policy-sha12>` check and applicable approvals for private repositories.
 
 This repository is **PR-only**. Do not `git push origin main`. Ship product changes on an isolated branch and a pull request.
 
-Optional local quality tools used by `getzilla_verify --mode pr` (not required in `toolchain.json`): ruff, bandit, coverage (`fail_under` 74).
+Local PR quality checks can require Ruff, Bandit and coverage (`fail_under` 74) under the selected profile. Absence from the doctor tool list does not make a selected verifier check optional; inspect the verifier report for required tools and disclosed skips.
 
 ## Bitrix example
 
