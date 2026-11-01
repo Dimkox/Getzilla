@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import errno
 import re
 import secrets
+import stat
 import time
 import urllib.parse
 import contextvars
@@ -134,12 +136,43 @@ def _lock_identity(lock: Path) -> tuple[int, int, int, bytes]:
     return info.st_ino, info.st_dev, info.st_mtime_ns, content
 
 
+def _wait_for_lock(lock: Path, deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f'could not acquire runtime lock: {lock}')
+    time.sleep(min(0.05, remaining))
+
+
+def _open_lock_guard(guard: Path) -> int:
+    parent = fsx.open_dir(guard.parent)
+    descriptor: int | None = None
+    try:
+        descriptor = fsx.open_at(parent, guard.name,
+                                 os.O_CREAT | os.O_RDWR | fsx.O_BINARY | fsx.O_NOINHERIT
+                                 | fsx.O_NOFOLLOW | fsx.O_NONBLOCK, 0o600)
+        opened = os.fstat(descriptor)
+        named = fsx.lstat_at(parent, guard.name)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or fsx.is_link(named)
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+            raise OSError(errno.EINVAL, 'runtime lock guard must be a single-link regular file', str(guard))
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    finally:
+        fsx.close_dir(parent)
+
+
 @contextmanager
-def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Iterator[None]:
-    lock = runtime_dir(root) / f'.{name}.lock'
-    deadline = time.monotonic() + timeout
+def _pid_lock(lock: Path, deadline: float, *, allow_immediate: bool) -> Iterator[None]:
+    """Legacy marker, always acquired and released under the retained guard."""
     fd: int | None = None
+    first_attempt = allow_immediate
     while fd is None:
+        if not first_attempt and time.monotonic() >= deadline:
+            raise TimeoutError(f'could not acquire runtime lock: {lock}')
+        first_attempt = False
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
         except FileExistsError:
@@ -158,25 +191,57 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
                     continue
                 except FileNotFoundError:
                     continue
-                except OSError:
-                    pass
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f'could not acquire runtime lock: {lock}')
-            time.sleep(0.05)
+            _wait_for_lock(lock, deadline)
         except PermissionError:
             # Windows refuses to create a name whose previous file is still
             # delete-pending; that is contention, not a missing permission.
             if not fsx.WINDOWS:
                 raise
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f'could not acquire runtime lock: {lock}')
-            time.sleep(0.05)
+            _wait_for_lock(lock, deadline)
     try:
         os.write(fd, f'{os.getpid()}\n'.encode())
         yield
     finally:
         os.close(fd)
         _release_lock_file(lock)
+
+
+@contextmanager
+def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Iterator[None]:
+    deadline = time.monotonic() + timeout
+    lock = runtime_dir(root) / f'.{name}.lock'
+    # Never unlink this file: every opener must lock the same retained inode.
+    # The extra suffix also avoids agent_lifecycle's enclosing .agents.guard.
+    guard = lock.with_name(f'.{name}.guard.lock')
+    descriptor = _open_lock_guard(guard)
+    locked = False
+    contended = False
+    try:
+        while True:
+            if contended and time.monotonic() >= deadline:
+                raise TimeoutError(f'could not acquire runtime lock: {lock}')
+            try:
+                fsx.lock_file(descriptor, exclusive=True, blocking=False)
+                locked = True
+                break
+            except OSError as error:
+                if not (isinstance(error, BlockingIOError)
+                        or (fsx.WINDOWS and error.errno in {errno.EACCES, errno.EDEADLK})):
+                    raise
+                contended = True
+                _wait_for_lock(lock, deadline)
+        # Only an uncontended acquisition gets the timeout=0 immediate attempt.
+        # A retry must still have budget when it reaches the PID stage.
+        with _pid_lock(lock, deadline, allow_immediate=not contended):
+            yield
+    finally:
+        try:
+            if locked:
+                # Windows needs an explicit unlock before close. Do it on POSIX
+                # too, keeping the guard held through removal of the PID marker.
+                fsx.unlock_file(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def active_route_path(root: Path) -> Path:
