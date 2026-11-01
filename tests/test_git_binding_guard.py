@@ -609,6 +609,97 @@ class GitBindingGuardCacheTests(_GuardFixture):
         self.assertFalse(diff._GIT_BLOB_CACHE)
 
 
+class GitOperationCacheCapacityTests(_GuardFixture):
+    require_native = False
+
+    def maximum_contract_model(self):
+        from tests.test_architecture_fitness import GitArchitectureRepo, _rules, _system
+        repo = GitArchitectureRepo(self)
+        system = _system()
+        system["contracts"] = [
+            {"id": f"CONTRACT-CAPACITY-{number:03d}", "kind": "json_schema",
+             "path": f"contracts/{number:03d}.json", "version": "1",
+             "role": "consumer", "compatibility": "exact"}
+            for number in range(256)
+        ]
+        for contract in system["contracts"]:
+            repo.write_json(contract["path"], {"type": "object"})
+        repo.model(system, _rules())
+        return repo, repo.commit("maximum contract fixture")
+
+    def caches(self):
+        return (diff._GIT_FORMAT_CACHE, diff._GIT_COMMIT_CACHE,
+                diff._GIT_BLOB_CACHE, diff._MATERIALIZED_STATE_CACHE)
+
+    def test_cold_and_warm_maximum_contract_model_is_admitted(self) -> None:
+        repo, head = self.maximum_contract_model()
+        for warm in (False, True):
+            with self.subTest(warm=warm):
+                for cache in self.caches():
+                    cache.clear()
+                if warm:
+                    diff._exact_commit(repo.root, head, label="warmup")
+                before = tuple(dict(cache) for cache in self.caches())
+                with diff._GitOperation(repo.root) as scope:
+                    state = diff._materialized_state(repo.root, head, _scope=scope)
+                    self.assertEqual(len(state.contracts), 256)
+                    self.assertIs(diff._materialized_state(repo.root, head, _scope=scope), state)
+                    self.assertEqual(tuple(dict(cache) for cache in self.caches()), before)
+                self.assertIs(diff._materialized_state(repo.root, head), state)
+
+    def test_same_scope_cache_hits_reuse_values_without_rereading_git(self) -> None:
+        root, _, _, head = self.repository()
+        operations = (
+            ("format", lambda scope: diff._git_object_id_length(root, _scope=scope), len(head)),
+            ("commit", lambda scope: diff._exact_commit(root, head, label="head", _scope=scope), head),
+            ("blobs", lambda scope: diff._git_blobs(root, head, ("value.txt",), _scope=scope),
+             {"value.txt": b"original content\n"}),
+            ("state", lambda scope: diff._materialized_state(root, head, bootstrap_baseline=True,
+                                                            _scope=scope), None),
+        )
+        for kind, operation, expected in operations:
+            with self.subTest(kind=kind):
+                for cache in self.caches():
+                    cache.clear()
+                with diff._GitOperation(root) as scope:
+                    self.assertEqual(operation(scope), expected)
+                    self.assertTrue(all(not cache for cache in self.caches()))
+                    with mock.patch.object(diff, "_run_capped", side_effect=AssertionError("pending result reread")):
+                        self.assertEqual(operation(scope), expected)
+                    self.assertTrue(all(not cache for cache in self.caches()))
+
+    def test_maximum_contract_model_late_invalidation_discards_pending_caches(self) -> None:
+        repo, head = self.maximum_contract_model()
+        completed = []
+
+        def operation():
+            with diff._GitOperation(repo.root) as scope:
+                state = diff._materialized_state(repo.root, head, _scope=scope)
+                completed.append(len(state.contracts))
+                self.transient(repo.root / ".git")
+
+        self.refused(operation)
+        self.assertEqual(completed, [256])
+        self.assertTrue(all(not cache for cache in self.caches()))
+
+    def test_pending_unique_entry_limit_rejects_new_key_after_duplicate(self) -> None:
+        root, _, _, _ = self.repository()
+        reached_new_key = []
+
+        def operation():
+            with diff._GitOperation(root) as scope:
+                for number in range(512):
+                    scope.stage("format", ("bounded", number), 40)
+                scope.stage("format", ("bounded", 0), 40)
+                reached_new_key.append(True)
+                scope.stage("format", ("bounded", 512), 40)
+
+        with self.assertRaisesRegex(ArchitectureError, "Git operation binding cache limit exceeded"):
+            operation()
+        self.assertEqual(reached_new_key, [True])
+        self.assertTrue(all(not cache for cache in self.caches()))
+
+
 class GitBindingGuardFallbackTests(_GuardFixture):
     require_native = False
 

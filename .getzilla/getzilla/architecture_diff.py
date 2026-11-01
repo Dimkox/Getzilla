@@ -562,7 +562,7 @@ class _GitOperation:
         self._relaxed = relaxed
         self._owner = threading.get_ident()
         self._closed = False
-        self._pending: list[tuple[str, tuple[object, ...], Any]] = []
+        self._pending: dict[tuple[str, tuple[object, ...]], Any] = {}
         self._deadline = time.monotonic() + 120.0
 
     def __enter__(self) -> "_GitOperation":
@@ -612,18 +612,33 @@ class _GitOperation:
     def key(self) -> tuple[object, ...]:
         return _binding_key(self.check(), self.guard)
 
+    def lookup(self, kind: str, key: tuple[object, ...],
+               admitted: dict[tuple[object, ...], Any]) -> tuple[bool, Any]:
+        """Reuse checked pending values without publishing them outside this scope."""
+        self.check()
+        entry = kind, key
+        if entry in self._pending:
+            found, value = True, self._pending[entry]
+        elif key in admitted:
+            found, value = True, admitted[key]
+        else:
+            found, value = False, None
+        self.check()
+        return found, value
+
     def stage(self, kind: str, key: tuple[object, ...], value: Any) -> None:
         self.check()
-        if len(self._pending) >= _GIT_BLOB_CACHE_LIMIT:
+        entry = kind, key
+        if entry not in self._pending and len(self._pending) >= _GIT_BLOB_CACHE_LIMIT:
             raise ArchitectureError("Git operation binding cache limit exceeded", code="git")
-        self._pending.append((kind, key, value))
+        self._pending[entry] = value
 
     def __exit__(self, exception_type, _exception, _traceback) -> None:
         try:
             self.check()
             if exception_type is None:
                 # No source read occurs after this admission check.
-                for kind, key, value in self._pending:
+                for (kind, key), value in self._pending.items():
                     if kind == "format":
                         _GIT_FORMAT_CACHE[key] = value
                     elif kind == "commit":
@@ -857,7 +872,8 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if not isinstance(value, str) or len(value) != object_id_length or _EXACT_SHA.fullmatch(value) is None:
         raise ArchitectureError(f"{label} must match the exact repository commit format", code="git")
     key = (*_scope.key(), "commit", value)
-    if _GIT_COMMIT_CACHE.get(key) is True:
+    _, cached = _scope.lookup("commit", key, _GIT_COMMIT_CACHE)
+    if cached is True:
         _scope.check()
         return value
     try:
@@ -885,7 +901,7 @@ def _git_object_id_length(root: Path, *, _scope: _GitOperation | None = None) ->
             return _git_object_id_length(root, _scope=scope)
     _scope.check(root)
     key = (*_scope.key(), "object-format")
-    cached = _GIT_FORMAT_CACHE.get(key)
+    _, cached = _scope.lookup("format", key, _GIT_FORMAT_CACHE)
     if cached is not None:
         _scope.check()
         return cached
@@ -1448,9 +1464,10 @@ def _materialized_state(
         bootstrap_baseline,
         ADOPTION_BASE_SHA,
     )
-    if cache_key in _MATERIALIZED_STATE_CACHE:
+    found, cached = _scope.lookup("state", cache_key, _MATERIALIZED_STATE_CACHE)
+    if found:
         _scope.check()
-        return _MATERIALIZED_STATE_CACHE[cache_key]
+        return cached
     model_values = tuple(_git_blob(root, sha, path, _scope=_scope) for path in _MODEL_PATHS)
     marker_value = _git_blob(root, sha, _ADOPTION_PATH, _scope=_scope)
     if model_values == (None, None):
@@ -1731,7 +1748,7 @@ def _git_blobs(root: Path, sha: str, paths: tuple[str, ...],
         return {}
     _exact_commit(root, sha, label="commit_sha", _scope=_scope)
     cache_key = (*_scope.key(), "blobs", sha, requested)
-    cached = _GIT_BLOB_CACHE.get(cache_key)
+    _, cached = _scope.lookup("blobs", cache_key, _GIT_BLOB_CACHE)
     if cached is not None:
         _scope.check()
         return dict(cached)
