@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.receipts import write_receipt
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, get_active_route, set_active_route
+from getzilla.state import add_approval, approvals_path, get_active_route
+from tests._support import activate_owned_route
 import subprocess
 
 from tests._support import prepare_review_source, project_copy, run_hook
@@ -46,7 +47,7 @@ class HookTests(unittest.TestCase):
             move = patch.replace('@@', f'*** Move to: {target / "other.py"}\n@@', 1)
             _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': move}})
             self.assertEqual(denied['decision'], 'deny', denied)
-            set_active_route(target, build_route(target, 'different task', 'other-session').to_dict())
+            activate_owned_route(target, build_route(target, 'different task', 'other-session').to_dict())
             _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'session_id': 'other-session'})
             self.assertEqual(denied['decision'], 'deny', denied)
             (target / 'AGENTS.md').write_text('changed outside grant', encoding='utf-8')
@@ -104,7 +105,7 @@ class HookTests(unittest.TestCase):
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                            cwd=target, check=True)
-            set_active_route(target, build_route(target, 'Review exact local operation', 'root-test').to_dict())
+            activate_owned_route(target, build_route(target, 'Review exact local operation', 'root-test').to_dict())
             file = target / '.grok/hooks/pre_tool_use.py'
             patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
             payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
@@ -258,7 +259,7 @@ class HookTests(unittest.TestCase):
             target = root / '.getzilla/runtime/worktrees/linked'
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(target, 'production', actions=['git-push-branch'], resources=['feature'])
-            set_active_route(target, build_route(target, 'different task for another session', 'other-session').to_dict())
+            activate_owned_route(target, build_route(target, 'different task for another session', 'other-session').to_dict())
             for session, expected in (('root-test', 'allow'), ('other-session', 'deny')):
                 with self.subTest(session=session):
                     _, data, error = run_hook(root, 'pre_tool_use.py', {
@@ -328,7 +329,7 @@ class HookTests(unittest.TestCase):
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(root, 'external-write', actions=['external-write'],
                         resources=['gh:dimkox/getzilla pr create'])
-            set_active_route(target, build_route(target, 'Target fixture route', 'root-test').to_dict())
+            activate_owned_route(target, build_route(target, 'Target fixture route', 'root-test').to_dict())
             payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'Bash', 'tool_input': {
                 'command': 'gh pr create --repo Dimkox/Getzilla --head feature --fill', 'workdir': str(target),
             }}
@@ -371,7 +372,7 @@ class HookTests(unittest.TestCase):
                 _, before, error = run_hook(root, 'pre_tool_use.py', payload)
                 self.assertEqual(before['decision'], 'allow', (before, error))
                 if changed == 'route':
-                    set_active_route(target, build_route(target, 'A different task', 'root-test').to_dict())
+                    activate_owned_route(target, build_route(target, 'A different task', 'root-test').to_dict())
                 elif changed == 'tree':
                     (target / 'AGENTS.md').write_text('changed after grant', encoding='utf-8')
                 elif changed == 'head':
@@ -391,7 +392,7 @@ class HookTests(unittest.TestCase):
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(target, 'external-write', actions=['external-write'],
                         resources=['gh:dimkox/getzilla pr create'])
-            set_active_route(target, build_route(target, 'Another session task', 'other-session').to_dict())
+            activate_owned_route(target, build_route(target, 'Another session task', 'other-session').to_dict())
             for session, expected in (('root-test', 'allow'), ('other-session', 'deny')):
                 with self.subTest(session=session):
                     _, data, error = run_hook(root, 'pre_tool_use.py', {
@@ -585,7 +586,7 @@ class HookTests(unittest.TestCase):
             cwd=root,
             check=True,
         )
-        set_active_route(root, build_route(root, 'Review exact local operation', 'root-test').to_dict())
+        activate_owned_route(root, build_route(root, 'Review exact local operation', 'root-test').to_dict())
         add_approval(
             root,
             scope,
@@ -644,7 +645,7 @@ class HookTests(unittest.TestCase):
     def test_followup_reuses_active_route(self) -> None:
         with project_copy(git=True) as root:
             original = build_route(root, 'Добавить REST API', 'session-1').to_dict()
-            set_active_route(root, original)
+            activate_owned_route(root, original)
             _, data, _ = run_hook(root, 'user_prompt_submit.py', {
                 'cwd': str(root), 'prompt': 'делай', 'session_id': 'session-1'
             })
@@ -656,7 +657,7 @@ class HookTests(unittest.TestCase):
                   '<summary>Background command "deploy release" completed</summary>\n</task-notification>')
         with project_copy(git=True) as root:
             original = build_route(root, 'Добавить REST API', 'session-1').to_dict()
-            set_active_route(root, original)
+            activate_owned_route(root, original)
             _, data, _ = run_hook(root, 'user_prompt_submit.py', {
                 'cwd': str(root), 'prompt': notice, 'session_id': 'session-1'
             })
@@ -676,7 +677,7 @@ class HookTests(unittest.TestCase):
             with self.subTest(owner=owner, status=status), project_copy(git=True) as root:
                 leftover = build_route(root, 'Добавить REST API', owner).to_dict()
                 leftover['status'] = status
-                set_active_route(root, leftover)
+                activate_owned_route(root, leftover)
                 run_hook(root, 'user_prompt_submit.py', {
                     'cwd': str(root), 'prompt': notice, 'session_id': 'session-1'
                 })
@@ -687,7 +688,7 @@ class HookTests(unittest.TestCase):
     def test_followup_rematches_when_session_differs(self) -> None:
         with project_copy(git=True) as root:
             leftover = build_route(root, 'Добавить REST API', 'session-A').to_dict()
-            set_active_route(root, leftover)
+            activate_owned_route(root, leftover)
             run_hook(root, 'user_prompt_submit.py', {
                 'cwd': str(root), 'prompt': 'делай', 'session_id': 'session-B',
             })
@@ -699,7 +700,7 @@ class HookTests(unittest.TestCase):
         with project_copy(git=True) as root:
             leftover = build_route(root, 'Добавить REST API', 'session-1').to_dict()
             leftover['status'] = 'ready'
-            set_active_route(root, leftover)
+            activate_owned_route(root, leftover)
             run_hook(root, 'user_prompt_submit.py', {
                 'cwd': str(root), 'prompt': 'делай', 'session_id': 'session-1',
             })
@@ -710,7 +711,7 @@ class HookTests(unittest.TestCase):
     def _leftover_high_risk_route(self, root: Path) -> dict:
         route = build_route(root, 'Исправить баг в обработчике Битрикс D7', 'leftover').to_dict()
         route['risk'] = 'high'
-        set_active_route(root, route)
+        activate_owned_route(root, route)
         return route
 
     def test_repair_yourself_rematches_leftover_route(self) -> None:
@@ -1329,7 +1330,7 @@ class HookTests(unittest.TestCase):
     def test_subagent_lifecycle_is_recorded(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             _, data, _ = run_hook(root, 'subagent_start.py', {
                 'cwd': str(root), 'agent_id': 'a1', 'agent_type': route['write_agent']
             })
@@ -1343,7 +1344,7 @@ class HookTests(unittest.TestCase):
     def test_subagent_stop_emits_empty_payload(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             run_hook(root, 'subagent_start.py', {
                 'cwd': str(root), 'agent_id': 'a1', 'agent_type': route['write_agent'],
             })
@@ -1356,7 +1357,7 @@ class HookTests(unittest.TestCase):
     def test_duplicate_subagent_stop_is_idempotent(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             run_hook(root, 'subagent_start.py', {
                 'cwd': str(root), 'agent_id': 'a1', 'agent_type': route['write_agent'],
             })
@@ -1372,21 +1373,21 @@ class HookTests(unittest.TestCase):
 
     def test_precompact_writes_handoff(self) -> None:
         with project_copy() as root:
-            set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             _, data, _ = run_hook(root, 'pre_compact.py', {'cwd': str(root), 'trigger': 'auto'})
             self.assertTrue(data['continue'])
             self.assertTrue((root / '.getzilla/runtime/handoff.json').is_file())
 
     def test_session_start_loads_active_route(self) -> None:
         with project_copy() as root:
-            set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             _, data, _ = run_hook(root, 'session_start.py', {'cwd': str(root)})
             self.assertIn('Active route', data['hookSpecificOutput']['additionalContext'])
 
     def test_stop_warns_without_evidence(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             (root / 'feature.txt').write_text('changed')
             code, data, err = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'stop_hook_active': False})
             self.assertEqual(code, 0, err)
@@ -1410,7 +1411,7 @@ class HookTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current change', 's1').to_dict()
             route['required_evidence'] = ['code_review']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             write_receipt(root, 'code_review', 'pass', **prepare_review_source(root))
             # Establish previous fingerprint marker.
             run_hook(root, 'post_tool_use.py', {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {}})

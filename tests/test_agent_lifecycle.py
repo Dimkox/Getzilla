@@ -13,7 +13,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.state import get_agent_state, record_agent_start, record_agent_stop, set_active_route
+from getzilla.state import get_agent_state, record_agent_start, record_agent_stop
+from tests._support import activate_owned_route
 from getzilla.util import dump_json
 from tests._support import project_copy, run_hook
 
@@ -24,7 +25,7 @@ class AgentLifecycleTests(unittest.TestCase):
     def test_observer_failures_cannot_authorize_sensitive_tools(self) -> None:
         from getzilla.router import build_route
         with project_copy(git=True) as root:
-            set_active_route(root, build_route(root, 'Fix security policy boundary', 'synthetic').to_dict())
+            activate_owned_route(root, build_route(root, 'Fix security policy boundary', 'synthetic').to_dict())
             payload = {'cwd': str(root), 'agent_id': 'child', 'generation': 'generation'}
             for state in ({'active': [], 'history': []}, {'active': {'child': []}, 'history': []},
                           {'active': {'child': {'route_id': 'synthetic', 'task_id': 'synthetic'}}, 'history': {}}):
@@ -68,8 +69,11 @@ class AgentLifecycleTests(unittest.TestCase):
                 if event == 'resume':
                     self.event(root, record, 'interrupt-ack', 3, **values)
                 route = get_active_route(root)
-                route['change_id'] = 'different-task'
-                set_active_route(root, route)
+                # Inject an actual changed logical task, not ordinary package attachment.
+                route['logical_task_id'] = 'different-task'
+                dump_json(root / '.getzilla/runtime/routes' / (route['route_id'] + '.json'), route)
+                dump_json(root / '.getzilla/runtime/sessions' / (route['session_id'] + '.json'),
+                          {key: route[key] for key in ('route_id', 'session_id', 'logical_task_id', 'authority_epoch')})
                 before = get_agent_state(root)
                 with self.assertRaises(ValueError):
                     self.event(root, record, event, 4, **(values if event.endswith('ack') else {}))
@@ -84,7 +88,7 @@ class AgentLifecycleTests(unittest.TestCase):
             self.start(root)
             record_agent_stop(root, 'writer-1', 'general_implementer', now=T0)
             record = record_agent_start(root, 'writer-1', 'general_implementer')
-            payload = {'cwd': str(root), 'tool_name': 'Read', 'agent_id': 'writer-1',
+            payload = {'cwd': str(root), 'session_id': 'fixture-owner', 'tool_name': 'Read', 'agent_id': 'writer-1',
                        'agent_type': 'general_implementer',
                        'generation': record['generation']}
             self.assertEqual(run_hook(root, 'post_tool_use.py', payload)[0], 0)
@@ -111,7 +115,7 @@ class AgentLifecycleTests(unittest.TestCase):
             self.assertNotIn('writer-1', get_agent_state(root)['active'])
 
     def start(self, root: Path) -> dict:
-        set_active_route(root, {'route_id': 'route-229', 'change_id': 'task-229',
+        activate_owned_route(root, {'route_id': 'route-229', 'change_id': 'task-229',
                                 'write_agent': 'general_implementer',
                                 'allowed_agents': ['general_implementer', 'repo_explorer']})
         return record_agent_start(root, 'writer-1', 'general_implementer', now=T0)
@@ -225,7 +229,7 @@ class AgentLifecycleTests(unittest.TestCase):
         from getzilla.agent_lifecycle import update_agent
         with project_copy() as root:
             source = '20261002-исправить-ошибку-обработки-агента-ru229a'
-            set_active_route(root, {'route_id': 'route-ru', 'change_id': source,
+            activate_owned_route(root, {'route_id': 'route-ru', 'change_id': source,
                                     'write_agent': 'general_implementer'})
             record = record_agent_start(root, 'ru-child', 'general_implementer', now=T0)
             task = 'task:07c97be3d028db247dc02e4dcdff082ae8ca537e1e0a47fc6ef74900d155d266'
@@ -249,7 +253,7 @@ class AgentLifecycleTests(unittest.TestCase):
         with project_copy() as root:
             self.assertEqual(self.start(root)['task_id'], 'task-229')
         with project_copy() as root:
-            set_active_route(root, {'route_id': 'route-ru', 'session_id': 'сеанс:229',
+            activate_owned_route(root, {'route_id': 'route-ru', 'session_id': 'сеанс:229',
                                     'write_agent': 'general_implementer'})
             record = record_agent_start(root, 'ru-child', 'general_implementer', now=T0)
             self.assertRegex(record['task_id'], r'^task:[0-9a-f]{64}$')
@@ -257,7 +261,7 @@ class AgentLifecycleTests(unittest.TestCase):
                              record['task_id'])
             update_agent(root, 'ru-child', record['generation'], 'route-ru', record['task_id'], 'heartbeat', now=T0)
         with project_copy() as root:
-            set_active_route(root, {'route_id': 'route-229', 'write_agent': 'general_implementer'})
+            activate_owned_route(root, {'route_id': 'route-229', 'write_agent': 'general_implementer'})
             record = record_agent_start(root, 'writer-1', 'general_implementer', now=T0)
             self.assertEqual(record['task_id'], 'route-229')
             update_agent(root, 'writer-1', record['generation'], 'route-229', 'route-229', 'heartbeat', now=T0)
@@ -266,7 +270,7 @@ class AgentLifecycleTests(unittest.TestCase):
         for source in ('', None, [], 'task with spaces', 'task\nsecret', 'task@value',
                        'я' * 129, 'a' * 129):
             with self.subTest(source_type=type(source).__name__), project_copy() as root:
-                set_active_route(root, {'route_id': 'route-ru', 'change_id': source,
+                activate_owned_route(root, {'route_id': 'route-ru', 'change_id': source,
                                         'write_agent': 'general_implementer'})
                 with self.assertRaises(ValueError):
                     record_agent_start(root, 'ru-child', 'general_implementer', now=T0)
@@ -274,7 +278,7 @@ class AgentLifecycleTests(unittest.TestCase):
 
     def test_cli_control_flow_runs_same_child_to_terminal_report(self) -> None:
         with project_copy() as root:
-            set_active_route(root, {'route_id': 'route-229', 'change_id': 'task-229',
+            activate_owned_route(root, {'route_id': 'route-229', 'change_id': 'task-229',
                                     'write_agent': 'general_implementer'})
             command = [sys.executable, str(ROOT / 'scripts/getzilla_agent.py'), '--root', str(root)]
 
@@ -354,7 +358,7 @@ class AgentLifecycleTests(unittest.TestCase):
 
     def test_concurrent_writer_acquisition_has_one_owner(self) -> None:
         with project_copy() as root:
-            set_active_route(root, {'route_id': 'route-229', 'write_agent': 'general_implementer'})
+            activate_owned_route(root, {'route_id': 'route-229', 'write_agent': 'general_implementer'})
             code = ('import sys; from pathlib import Path; '
                     'sys.path.insert(0,sys.argv[1]+"/.getzilla"); '
                     'from getzilla.state import record_agent_start; '
@@ -376,13 +380,13 @@ class AgentLifecycleTests(unittest.TestCase):
                                              'agent_id': 'writer-1'})
             run_hook(root, 'subagent_start.py', {'cwd': str(root), 'agent_type': 'repo_explorer'})
             self.assertEqual(get_agent_state(root), before)
-            run_hook(root, 'pre_tool_use.py', {'cwd': str(root), 'tool_name': 'Read',
+            run_hook(root, 'pre_tool_use.py', {'cwd': str(root), 'session_id': 'fixture-owner', 'tool_name': 'Read',
                                              'subagentId': 'writer-1',
                                              'generation': record['generation']})
             updated = get_agent_state(root)['active']['writer-1']
             self.assertEqual(updated['activity'], 'tool')
             self.assertEqual(updated['last_progress_at'], before['active']['writer-1']['last_progress_at'])
-            code, output, _ = run_hook(root, 'subagent_stop.py', {'cwd': str(root),
+            code, output, _ = run_hook(root, 'subagent_stop.py', {'cwd': str(root), 'session_id': 'fixture-owner',
                 'agent_id': 'writer-1', 'generation': 'stale', 'agent_type': 'general_implementer'})
             self.assertEqual((code, output), (0, {}))
             self.assertIn('writer-1', get_agent_state(root)['active'])

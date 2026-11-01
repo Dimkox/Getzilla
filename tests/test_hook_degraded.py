@@ -12,7 +12,8 @@ sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 from getzilla import verification  # noqa: E402
 from getzilla.hook_health import degraded_events, events_path, route_degraded_events  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import get_active_route, set_active_route  # noqa: E402
+from getzilla.state import get_active_route
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
 
 BASH = {'tool_name': 'Bash', 'tool_input': {'command': 'ls'}}
@@ -54,7 +55,7 @@ class HookDegradedTests(unittest.TestCase):
 
     def test_stop_gate_reports_degraded_hooks_of_this_route(self) -> None:
         with project_copy(git=True) as root:
-            set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             created = get_active_route(root)['created_at']
             write_event(root, '2000-01-01T00:00:00Z')  # before the route: not counted
             write_event(root, '2999-01-01T00:00:00Z')

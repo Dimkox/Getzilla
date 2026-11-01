@@ -68,8 +68,8 @@ class DiffRiskCheckTests(unittest.TestCase):
 
     def run_check(self, mode: str, route=LOW_ROUTE):
         if route:
-            from getzilla.state import set_active_route
-            set_active_route(self.repo, {**route, 'base_commit': self.base})
+            from tests._support import activate_owned_route
+            activate_owned_route(self.repo, {**route, 'base_commit': self.base})
         return verification._diff_risk_check(self.repo, route, mode, self.ranges(), tree_fingerprint(self.repo))
 
     def test_payment_change_on_low_route_fails_pr_without_escalated_evidence(self) -> None:

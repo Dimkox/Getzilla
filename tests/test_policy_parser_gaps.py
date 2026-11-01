@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import fsx  # noqa: E402
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import set_active_route  # noqa: E402
+from tests._support import activate_owned_route
 from tests._support import project_copy  # noqa: E402
 
 
@@ -28,7 +28,7 @@ from tests._support import project_copy  # noqa: E402
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
-        set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)
         (root / 'deploy/tls/server.key').write_text('synthetic\n', encoding='utf-8')

@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
 from getzilla import session_progress as progress
-from getzilla.state import bind_session, set_active_route
+from getzilla.state import bind_session
+from tests._support import activate_owned_route
 from tests import _support
 from tests._support import project_copy, run_hook
 
@@ -61,7 +62,7 @@ class ProgressTests(unittest.TestCase):
         bind_session('session-one')
         self.addCleanup(bind_session, None)
         self.route = {'route_id': 'route-one', 'change_id': 'task-one', 'session_id': 'session-one'}
-        set_active_route(self.root, self.route)
+        activate_owned_route(self.root, self.route)
         self.scope = progress.scope_id(self.root, 'session-one')
         self.inputs = {'command': 'python3 -m unittest tests.test_example'}
         self.response = {'exit_code': 1, 'output': 'FAIL test_example: expected 2, got 1'}
@@ -149,9 +150,9 @@ class ProgressTests(unittest.TestCase):
             self.assertIsNone(self.refuse(scope=scope))
         self.assertIsNone(self.refuse(cwd=self.root / 'other'))
         self.assertIsNone(self.refuse(inputs={'command': 'python3 -m unittest tests.other'}))
-        set_active_route(self.root, {**self.route, 'route_id': 'route-two'})
+        activate_owned_route(self.root, {**self.route, 'route_id': 'route-two'})
         self.assertEqual(progress.scope_id(self.root, 'session-one'), self.scope)
-        set_active_route(self.root, {**self.route, 'change_id': 'task-two'})
+        activate_owned_route(self.root, {**self.route, 'change_id': 'task-two'})
         self.assertNotEqual(progress.scope_id(self.root, 'session-one'), self.scope)
 
     def test_unknown_source_warns_without_enforcing_and_expiry_is_not_progress(self):
@@ -269,7 +270,7 @@ class ProgressHookTests(unittest.TestCase):
     def test_observer_exception_cannot_skip_policy_or_post_hook_receipt_invalidation(self):
         from getzilla.receipts import get_receipt, write_receipt
         with project_copy(git=True) as root:
-            set_active_route(root, {'route_id': 'progress-errors', 'session_id': 'progress-errors'})
+            activate_owned_route(root, {'route_id': 'progress-errors', 'session_id': 'progress-errors'})
             payload = {'cwd': str(root), 'session_id': 'progress-errors', 'tool_name': 'Bash',
                        'tool_input': {'command': 'python3 -m unittest tests.example'}, 'tool_response': {'exit_code': 1}}
             with patch.object(sys, 'path', [str(root / '.grok/hooks'), *sys.path]):
@@ -299,7 +300,7 @@ class ProgressHookTests(unittest.TestCase):
     def test_without_git_repeated_failures_warn_but_do_not_stop_source_edits(self):
         # Runtime-backed reviewer scratch may itself be inside another Git repository.
         with project_copy() as root, patch.dict(os.environ, {'GIT_CEILING_DIRECTORIES': str(root.parent)}):
-            set_active_route(root, {'route_id': 'no-git', 'session_id': 'no-git'})
+            activate_owned_route(root, {'route_id': 'no-git', 'session_id': 'no-git'})
             payload = {'cwd': str(root), 'session_id': 'no-git', 'tool_name': 'Bash',
                        'tool_input': {'command': 'python3 -m unittest tests.example'}, 'tool_response': {'exit_code': 1}}
             for number in range(4):
@@ -309,7 +310,7 @@ class ProgressHookTests(unittest.TestCase):
 
     def test_real_hooks_stop_blind_retry_then_allow_changed_source_and_keep_policy(self):
         with project_copy(git=True) as root:
-            set_active_route(root, {'route_id': 'progress-hook', 'session_id': 'progress-hook', 'change_id': 'progress-task'})
+            activate_owned_route(root, {'route_id': 'progress-hook', 'session_id': 'progress-hook', 'change_id': 'progress-task'})
             payload = {'cwd': str(root), 'session_id': 'progress-hook', 'tool_name': 'exec_command',
                        'tool_input': {'cmd': 'python3 -m unittest tests.example', 'workdir': str(root)},
                        'tool_response': {'exit_code': 1, 'output': 'same assertion'}}
@@ -328,7 +329,7 @@ class ProgressHookTests(unittest.TestCase):
 
     def test_cli_inspection_and_recovery_share_hook_scope_and_hide_invalid_arguments(self):
         with project_copy(git=True) as root:
-            set_active_route(root, {'route_id': 'cli-loop', 'session_id': 'cli-loop'})
+            activate_owned_route(root, {'route_id': 'cli-loop', 'session_id': 'cli-loop'})
             scope = progress.scope_id(root, 'cli-loop')
             for number in range(1, 4):
                 progress.observe(root, scope, {'command': 'pytest'}, root, {'exit_code': 1}, SOURCE,

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.router import build_route
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 INLINE_PROGRAMS = (
@@ -62,7 +62,7 @@ class InlineProgramTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.stack = contextlib.ExitStack()
         cls.root = cls.stack.enter_context(project_copy(git=True))
-        set_active_route(cls.root, build_route(cls.root, 'Review inline interpreter handling', 'inline').to_dict())
+        activate_owned_route(cls.root, build_route(cls.root, 'Review inline interpreter handling', 'inline').to_dict())
 
     @classmethod
     def tearDownClass(cls) -> None:

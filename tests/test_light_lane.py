@@ -99,7 +99,8 @@ class LightLaneVerificationTests(unittest.TestCase):
         from getzilla.agent_lifecycle import start_agent
         from getzilla.policy import evaluate_pre_tool
         from getzilla.router import build_route
-        from getzilla.state import get_active_route, set_active_route
+        from getzilla.state import get_active_route
+        from tests._support import activate_owned_route
         from getzilla.verification import verify
         from tests._support import project_copy
         for path, content, reason in [('app.py', 'value = 1\n' * 51, 'code_line_limit_exceeded'),
@@ -110,7 +111,7 @@ class LightLaneVerificationTests(unittest.TestCase):
                 original = build_route(root, 'Fix the greeting text', 'escalation-e2e').to_dict()
                 original.update(base_commit=base, quality_profiles=['base'])
                 self.assertEqual(original['review_agents'], ['code_reviewer'])
-                set_active_route(root, original)
+                activate_owned_route(root, original)
                 source = root / path
                 source.parent.mkdir(parents=True, exist_ok=True)
                 source.write_text(content)
@@ -132,7 +133,8 @@ class LightLaneVerificationTests(unittest.TestCase):
 
     def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
         from getzilla.router import build_route
-        from getzilla.state import get_active_route, set_active_route
+        from getzilla.state import get_active_route
+        from tests._support import activate_owned_route
         from getzilla.verification import verify
         from tests._support import project_copy
         with project_copy(git=True) as root:
@@ -142,7 +144,7 @@ class LightLaneVerificationTests(unittest.TestCase):
             route['base_commit'] = base
             route['quality_profiles'] = ['base']
             self.assertEqual(route['delivery_lane'], 'light')
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             (root / 'app.py').write_text('def greeting():\n    return "hello"\n')
             (root / 'tests').mkdir()
             (root / 'tests/test_app.py').write_text('import unittest\nfrom app import greeting\nclass Tests(unittest.TestCase):\n    def test_greeting(self):\n        self.assertEqual(greeting(), "hello")\n')

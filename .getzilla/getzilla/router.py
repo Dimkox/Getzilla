@@ -753,7 +753,7 @@ def trivial_waiver(route: dict[str, object], effective_risk: str, profile: str, 
     return [kind for kind in required if kind in waivable]
 
 
-def route_context(route: Route | dict[str, object], root: Path | None = None) -> str:
+def route_context(route: Route | dict[str, object], root: Path | None = None, *, max_bytes: int = 16384) -> str:
     data = route.to_dict() if isinstance(route, Route) else route
     analysis = ', '.join(data.get('analysis_agents', [])) or 'none'
     reviews = ', '.join(data.get('review_agents', [])) or 'none'
@@ -779,13 +779,14 @@ def route_context(route: Route | dict[str, object], root: Path | None = None) ->
            if PAID_RUN_GATE in data.get('human_gates', []) else '')
     )
     from .continuity import MAX_CONTEXT_BYTES, render_context
-    context = render_context(root, data)
+    max_bytes = max(512, min(max_bytes, MAX_CONTEXT_BYTES))
+    context = render_context(root, data, max_bytes=max_bytes)
     combined = metadata + '\n\n' + context
-    if len(combined.encode('utf-8')) <= MAX_CONTEXT_BYTES:
+    if len(combined.encode('utf-8')) <= max_bytes:
         return combined
     # Intake rendering already contains its full recovery path; reserve it rather than
     # silently cutting the authoritative text or treating display truncation as intake.
-    remaining = MAX_CONTEXT_BYTES - len(context.encode('utf-8')) - 2
+    remaining = max_bytes - len(context.encode('utf-8')) - 2
     if remaining <= 0:
         return context
     return metadata.encode('utf-8')[:remaining].decode('utf-8', 'ignore') + '\n\n' + context

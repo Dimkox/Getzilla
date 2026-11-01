@@ -17,7 +17,8 @@ from getzilla.human_gates import record_gate_decision  # noqa: E402
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.spec import validate_schema  # noqa: E402
-from getzilla.state import get_active_change, set_active_route  # noqa: E402
+from getzilla.state import get_active_change
+from tests._support import activate_owned_route
 from getzilla.util import runtime_dir  # noqa: E402
 from tests._support import project_copy  # noqa: E402
 from tests.branch_support import git  # noqa: E402
@@ -115,7 +116,7 @@ class PaidRunGateTests(unittest.TestCase):
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
             route = build_route(root, 'подключи OpenRouter и гоняй генерацию картинок, пока не получится хорошо', 'paid')
             self.assertIn(GATE, route.human_gates)
-            set_active_route(root, route.to_dict())
+            activate_owned_route(root, route.to_dict())
             state = start_change(root)
             transition(root, state['change_id'], 'scoped', 'package scope prepared')
             command = {'tool_name': 'Bash', 'tool_input': {'command': 'n8n execute --id 7'}}

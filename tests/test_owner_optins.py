@@ -13,7 +13,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import add_approval, set_active_route  # noqa: E402
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy  # noqa: E402
 
 
@@ -41,7 +42,7 @@ class PushOptInTests(unittest.TestCase):
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/app.git'], cwd=root, check=True)
         route = build_route(root, 'Publish the reviewed fix', 'push-test').to_dict()
         route['human_gates'] = []  # the push policy is under test here, not route gates
-        set_active_route(root, route)
+        activate_owned_route(root, route)
 
     def test_main_stays_forbidden_without_the_owner_opt_in(self) -> None:
         with project_copy(git=True) as root:

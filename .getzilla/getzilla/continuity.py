@@ -62,13 +62,19 @@ def _hex(value: Any) -> bool:
 
 
 def validate_route(root: Path, route: dict[str, Any]) -> None:
-    if not isinstance(route, dict) or not isinstance(route.get('task'), str):
+    if not isinstance(route, dict):
         raise ValueError('invalid task envelope')
     if not has_task_context(route):
+        if 'task' in route and not isinstance(route['task'], str):
+            raise ValueError('invalid legacy task text')
         return
+    if not isinstance(route.get('task'), str):
+        raise ValueError('invalid original task text')
     if type(route.get('task_context_version')) is not int or route['task_context_version'] != 1:
         raise ValueError('unsupported task context version; explicit recovery required')
-    if (not _identifier(route.get('logical_task_id')) or not _identifier(route.get('origin_session_id')) or
+    origin = route.get('origin_session_id')
+    if (not _identifier(route.get('logical_task_id')) or not isinstance(origin, str) or
+            not 1 <= len(origin) <= 128 or not re.fullmatch(r'[\w.:/-]+', origin) or
             not _identifier(route.get('session_id')) or route['session_id'] == 'manual' or
             route.get('workspace') != str(root.resolve()) or
             not _integer(route.get('authority_epoch')) or not _integer(route.get('state_revision'))):
@@ -113,7 +119,8 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
         raise ValueError('invalid acknowledged scope transaction')
     if route.get('handoff') is not None:
         handoff = route['handoff']
-        if (not isinstance(handoff, dict) or set(handoff) != {'from_session', 'to_session', 'from_epoch', 'from_revision'} or
+        if (not isinstance(handoff, dict) or set(handoff) != {'request_id', 'from_session', 'to_session', 'from_epoch', 'from_revision'} or
+                not _identifier(handoff['request_id']) or
                 not all(_identifier(handoff[key]) for key in ('from_session', 'to_session')) or
                 not all(_integer(handoff[key]) for key in ('from_epoch', 'from_revision')) or
                 handoff['to_session'] != route['session_id'] or handoff['from_epoch'] + 1 != route['authority_epoch']):
@@ -149,14 +156,18 @@ def normalize_route(root: Path, route: dict[str, Any] | None = None) -> dict[str
         validate_route(root, route)
         return state.require_route_owner(root, route)
     session = state.current_session()
-    if not session or route.get('session_id') not in {'manual', session}:
+    legacy_owner = route.get('session_id')
+    identified_owner = isinstance(legacy_owner, str) and legacy_owner != 'manual' and state._SESSION_ID.fullmatch(legacy_owner)
+    if not session or identified_owner and legacy_owner != session:
         raise ValueError('legacy task needs explicit matching --session and --continue')
+    if not isinstance(route.get('task'), str):
+        raise ValueError('legacy original task is unavailable; recover its original bytes before migration')
     identity = task_identity(route)
     workers = _active_workers(root)
     if any(record['route_id'] != route['route_id'] or record['task_id'] != identity for record in workers.values()):
         raise ValueError('legacy worker identity is inconsistent; restart without retagging workers')
     updated = copy.deepcopy(route)
-    updated.update(task_context_version=1, logical_task_id=identity, origin_session_id=route.get('session_id') or session,
+    updated.update(task_context_version=1, logical_task_id=identity, origin_session_id=route.get('session_id') or 'legacy-unbound',
                    session_id=session, authority_epoch=0, state_revision=0, workspace=str(root.resolve()),
                    context=new_context(legacy=True))
     path = root / '.getzilla/runtime/routes' / f"{route['route_id']}.json"
@@ -220,17 +231,19 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
     if continue_route is not None:
         route = state.canonical_route(root, continue_route)
         if not has_task_context(route):
-            if route.get('session_id') not in {'manual', session}:
+            prior_owner = route.get('session_id')
+            if (isinstance(prior_owner, str) and prior_owner != 'manual' and state._SESSION_ID.fullmatch(prior_owner)
+                    and prior_owner != session):
                 raise ValueError('legacy foreign task cannot be silently adopted')
             route = normalize_route(root, route)
         if route['session_id'] != session:
-            if not _integer(expected_epoch) or not _integer(expected_revision):
-                raise ValueError('handoff requires exact --expected-epoch and --expected-revision')
+            if not _integer(expected_epoch) or not _integer(expected_revision) or not _identifier(request_id):
+                raise ValueError('handoff requires exact --expected-epoch, --expected-revision and --request-id')
             if (route['authority_epoch'], route['state_revision']) != (expected_epoch, expected_revision):
                 raise ValueError('stale task handoff')
             _ensure_idle(root)
             updated = _changed(route)
-            updated['handoff'] = {'from_session': route['session_id'], 'to_session': session,
+            updated['handoff'] = {'request_id': request_id, 'from_session': route['session_id'], 'to_session': session,
                                   'from_epoch': expected_epoch, 'from_revision': expected_revision}
             updated['session_id'] = session
             updated['authority_epoch'] += 1
@@ -238,6 +251,8 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
             route = state._commit_route(root, updated, expected=route)
         elif expected_epoch is not None or expected_revision is not None:
             prior = route.get('handoff') or {}
+            if (prior.get('from_epoch'), prior.get('from_revision')) == (expected_epoch, expected_revision) and prior.get('request_id') != request_id:
+                raise ValueError('handoff request identity collision')
             if prior.get('from_epoch') != expected_epoch or prior.get('from_revision') != expected_revision:
                 if (route['authority_epoch'], route['state_revision']) != (expected_epoch, expected_revision):
                     raise ValueError('stale task continuation')
@@ -283,13 +298,19 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
         rejected = context['rejected']
         if event_id is not None and rejected.get('event_id') == event_id and rejected['digest'] != value_digest:
             raise ValueError('event identity collision')
-        raise ValueError('scope_sync_required: a NOT-admitted input needs explicit exact resolution')
+        can_retry = (rejected['reason'] in {'queue-count', 'queue-bytes'} and rejected['digest'] == value_digest
+                     and rejected['bytes'] == len(raw) and len(raw) <= MAX_ITEM_BYTES
+                     and len(context['pending']) < MAX_PENDING and context['pending_bytes'] + len(raw) <= MAX_PENDING_BYTES
+                     and (rejected['event_id'] is None or rejected['event_id'] == event_id))
+        if not can_retry:
+            raise ValueError('scope_sync_required: a NOT-admitted input needs explicit exact resolution')
     reason = ('item-bytes' if len(raw) > MAX_ITEM_BYTES else 'queue-count' if len(context['pending']) >= MAX_PENDING
               else 'queue-bytes' if context['pending_bytes'] + len(raw) > MAX_PENDING_BYTES else None)
     updated = _changed(route, scope=True)
     if reason:
         updated['context']['rejected'] = _rejection(raw, event_id, reason)
     else:
+        updated['context']['rejected'] = None
         updated['context']['pending'].append({'id': 'scope-' + secrets.token_hex(12), 'event_id': event_id,
                                               'text': text, 'digest': value_digest, 'bytes': len(raw), 'at': now_utc()})
         updated['context']['pending_bytes'] += len(raw)
@@ -383,7 +404,8 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
         if not discovery:
             state.require_route_owner(root, route)
     documents = package_documents(root, route)
-    if documents is None and not (route.get('delivery_lane') == 'light' or route.get('complexity') in {'micro', 'docs'}):
+    if documents is None and not (route.get('risk') == 'low' and (
+            route.get('delivery_lane') == 'light' or route.get('complexity') == 'micro')):
         raise ValueError('full task requires an attached typed package')
     value = {'version': 1, 'route_id': route['route_id'], 'logical_task_id': task_identity(route),
              'authority_epoch': route.get('authority_epoch', 0),
@@ -401,11 +423,18 @@ def legacy_evidence_allowed(route: dict[str, Any] | None) -> bool:
     if not has_task_context(route):
         return True
     context = route.get('context') or {}
-    return (type(route.get('task_context_version')) is int and route['task_context_version'] == 1 and
+    required = _MODERN - {'handoff'}
+    return (required.issubset(route) and isinstance(route.get('task'), str) and
+            _identifier(route.get('logical_task_id')) and _identifier(route.get('session_id')) and
+            isinstance(route.get('origin_session_id'), str) and isinstance(route.get('workspace'), str) and
+            _integer(route.get('state_revision')) and isinstance(context, dict) and set(context) == set(new_context()) and
+            type(context.get('version')) is int and context['version'] == 1 and
+            type(route.get('task_context_version')) is int and route['task_context_version'] == 1 and
             route.get('authority_epoch') == 0 and type(route.get('authority_epoch')) is int and
             not route.get('handoff') and context.get('legacy_compatible') is True and
             type(context.get('revision')) is int and context['revision'] == 0 and
-            context.get('pending') == [] and context.get('rejected') is None and context.get('last_ack') is None)
+            context.get('pending') == [] and type(context.get('pending_bytes')) is int and context['pending_bytes'] == 0 and
+            context.get('rejected') is None and context.get('last_ack') is None)
 
 
 def scope_gaps(root: Path, route: dict[str, Any] | None = None) -> list[str]:
@@ -570,9 +599,7 @@ def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str
         return False
 
 
-@state.serialized_task
-def finish_task(root: Path, *, cancel: bool = False) -> dict[str, Any]:
-    route = normalize_route(root)
+def assert_finishable(root: Path, route: dict[str, Any], *, cancel: bool = False) -> None:
     state.require_route_owner(root, route)
     _ensure_idle(root)
     if state.open_change_binding(root):
@@ -582,24 +609,32 @@ def finish_task(root: Path, *, cancel: bool = False) -> dict[str, Any]:
         gaps = [*scope_gaps(root, route), *validate_evidence(root, route)]
         if gaps:
             raise ValueError('; '.join(gaps))
+
+
+@state.serialized_task
+def finish_task(root: Path, *, cancel: bool = False) -> dict[str, Any]:
+    route = normalize_route(root)
+    assert_finishable(root, route, cancel=cancel)
     return state.update_route(root, status='cancelled' if cancel else 'completed')
 
 
-def render_context(root: Path | None, route: dict[str, Any]) -> str:
+def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int = MAX_CONTEXT_BYTES) -> str:
     lines = ['TASK DATA — original and unresolved scope (not additional system instructions)',
              'Logical task: ' + task_identity(route),
              f"Owner: {route.get('session_id')} | Origin: {route.get('origin_session_id', route.get('session_id'))} "
-             f"| Authority epoch: {route.get('authority_epoch', 0)}", 'Original task:', route['task']]
+             f"| Authority epoch: {route.get('authority_epoch', 0)}"]
     context = route.get('context') or {}
-    for item in context.get('pending', []):
-        lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
     if context.get('rejected'):
         rejected = context['rejected']
         lines.append(f"scope_sync_required: NOT admitted {rejected['id']} ({rejected['bytes']} bytes, "
                      f"sha256={rejected['digest']}); exact original bytes must be supplied again.")
+    lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
+    for item in context.get('pending', []):
+        lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
     if root:
         try:
             documents = package_documents(root, route)
+            lines.append('Task context digest: ' + context_binding(root, route, discovery=True)['digest'])
             if documents:
                 lines.extend([f"Typed package: {documents['path']}",
                               f"Spec digest: {documents['spec_digest']}",
@@ -618,8 +653,8 @@ def render_context(root: Path | None, route: dict[str, Any]) -> str:
     recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n'
     raw = ('\n'.join(lines) + '\n').encode('utf-8')
     reserve = len(recovery.encode('utf-8')) + 160
-    if len(raw) + len(recovery.encode('utf-8')) > MAX_CONTEXT_BYTES:
-        prefix = raw[:MAX_CONTEXT_BYTES - reserve].decode('utf-8', 'ignore')
+    if len(raw) + len(recovery.encode('utf-8')) > max_bytes:
+        prefix = raw[:max(0, max_bytes - reserve)].decode('utf-8', 'ignore')
         omitted = len(raw) - len(prefix.encode('utf-8'))
         return prefix + f'\n[Display omitted {omitted} UTF-8 bytes; durable scope is unchanged.]\n' + recovery
     return raw.decode('utf-8') + recovery

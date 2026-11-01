@@ -17,7 +17,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, set_active_route
+from getzilla.state import add_approval, approvals_path
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 
@@ -33,7 +34,7 @@ class ShellStatePolicyTests(unittest.TestCase):
         cls.root = cls.stack.enter_context(project_copy(git=True))
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=cls.root, check=True)
-        set_active_route(cls.root, build_route(cls.root, 'Offline shell context fixture', 'shell-state').to_dict())
+        activate_owned_route(cls.root, build_route(cls.root, 'Offline shell context fixture', 'shell-state').to_dict())
         (cls.root / 'public.txt').write_text('Other/Project\n', encoding='utf-8')
         cls.sequence = 0
 

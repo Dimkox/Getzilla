@@ -12,7 +12,7 @@ class CiEvidenceTests(unittest.TestCase):
     def test_archive_exports_exact_referenced_immutable_verification_blob(self):
         from getzilla.ci_evidence import export_local_evidence
         from getzilla.receipts import MAX_RECEIPT_BYTES, write_receipt
-        from getzilla.state import set_active_route
+        from tests._support import activate_owned_route
         import zipfile
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -21,7 +21,7 @@ class CiEvidenceTests(unittest.TestCase):
             (root / 'app.py').write_text('value = 1\n')
             git(root, 'add', '.')
             git(root, 'commit', '-qm', 'source')
-            set_active_route(root, {'route_id': 'selected', 'required_evidence': ['verification']})
+            activate_owned_route(root, {'route_id': 'selected', 'required_evidence': ['verification']})
             receipt_path = write_receipt(root, 'verification', 'pass',
                                          details={'output': 'actual check output\n' * (MAX_RECEIPT_BYTES // 10)})
             envelope = json.loads(receipt_path.read_bytes())

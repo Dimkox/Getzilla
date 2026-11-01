@@ -452,7 +452,9 @@ def get_active_route(root: Path) -> dict[str, Any] | None:
                 return None
     route = discovered_route(root)
     if route and session and route.get('session_id') != session:
-        return None
+        legacy_owner = route.get('session_id')
+        if has_task_context(route) or (isinstance(legacy_owner, str) and legacy_owner != 'manual' and _SESSION_ID.fullmatch(legacy_owner)):
+            return None
     return route
 
 
@@ -502,6 +504,20 @@ def _publish_route_projections(root: Path, route: dict[str, Any]) -> None:
             pointer.update(logical_task_id=route['logical_task_id'], authority_epoch=route['authority_epoch'])
         durable_json(root, _session_pointer(root, session), pointer)
     durable_json(root, active_route_path(root), route)
+    if has_task_context(route) and route.get('change_id') is None:
+        selected = get_active_change(root)
+        if selected is not None:
+            if open_change_binding(root) is not None:
+                raise ValueError('open package cannot be detached by route projection')
+            handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
+            try:
+                if get_active_change(root) != selected:
+                    raise ValueError('package pointer changed before projection repair')
+                fsx.unlink_at(handles[-1], 'active-change.json')
+                fsx.fsync_dir(handles[-1])
+            finally:
+                for handle in reversed(handles):
+                    fsx.close_dir(handle)
 
 
 @serialized_task
@@ -527,9 +543,17 @@ def set_active_route(root: Path, route: dict[str, Any]) -> None:
         require_route_owner(root, route)
     path = _runtime(root) / 'routes' / f"{route['route_id']}.json"
     existing = canonical_route(root, route['route_id']) if path.exists() or path.is_symlink() else None
-    if existing is not None and existing != route:
+    if existing is not None and existing != route and (has_task_context(existing) or has_task_context(route)):
         raise ValueError('use a task transition to update canonical authority')
     if existing is None:
+        if has_task_context(route):
+            from .continuity import _ensure_idle
+            _ensure_idle(root)
+            for locator in (active_route_path(root), _session_pointer(root, route['session_id'])):
+                if locator.exists() or locator.is_symlink():
+                    selected = _route_document(root, locator)
+                    if selected.get('route_id') == route['route_id']:
+                        raise ValueError('canonical task authority is missing; restore the original record, never recreate it')
         binding = open_change_binding(root)
         if binding and binding[1] != route['route_id']:
             raise ActiveChangeConflict(binding[0], binding[1], route['route_id'])
@@ -550,6 +574,9 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
     require_route_owner(root, route)
     if expected_route is not None and route != expected_route:
         raise ValueError('route changed before atomic update')
+    if has_task_context(route) and updates.get('status') in {'completed', 'cancelled', 'released', 'archived'}:
+        from .continuity import assert_finishable
+        assert_finishable(root, route, cancel=updates['status'] == 'cancelled')
     immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
                  'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff'}
     if has_task_context(route) and any(key in updates and updates[key] != route.get(key) for key in immutable | {'change_id'}):
@@ -612,6 +639,18 @@ def _repository_identity(root: Path) -> str:
 def _active_change_id(root: Path) -> str | None:
     change = get_active_change(root) or {}
     value = change.get('change_id')
+    from .continuity import has_task_context
+    route = get_active_route(root)
+    if route and has_task_context(route):
+        from .workflow_storage import valid_package_path
+        if value != route.get('change_id'):
+            raise ValueError('grant package identity does not match canonical task')
+        if value is not None:
+            if not valid_package_path(change.get('path'), value):
+                raise ValueError('grant package path is invalid')
+            package = _route_document(root, root / change['path'] / 'state.json')
+            if package.get('change_id') != value or package.get('route_id') != route['route_id']:
+                raise ValueError('grant package state is not bound to this task')
     return str(value) if value else None
 
 
@@ -952,6 +991,8 @@ def active_change_path(root: Path) -> Path:
 def set_active_change(root: Path, data: dict[str, Any]) -> None:
     from .continuity import has_task_context
     route = get_active_route(root)
+    if not route and route_authority_present(root):
+        raise ValueError('task authority unavailable; cannot change its package projection')
     if route and has_task_context(route):
         require_route_owner(root, route)
         if route.get('change_id') != data.get('change_id'):

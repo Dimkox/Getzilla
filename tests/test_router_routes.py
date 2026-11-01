@@ -286,7 +286,8 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(can_reuse_active_route('делай', existing, 'session-1'))
         self.assertFalse(can_reuse_active_route('делай', existing, 'session-2'))
         ready = {'session_id': 'session-1', 'status': 'ready'}
-        self.assertFalse(can_reuse_active_route('делай', ready, 'session-1'))
+        self.assertTrue(can_reuse_active_route('делай', ready, 'session-1'))
+        self.assertTrue(can_reuse_active_route('qualified new acceptance condition', ready, 'session-1'))
         self.assertTrue(should_reuse_active_route('делай'))
 
     def test_bug_with_regression_test_keeps_bugfix_intent(self) -> None:

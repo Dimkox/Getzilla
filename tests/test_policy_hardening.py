@@ -25,7 +25,8 @@ from getzilla import _policy_legacy as legacy  # noqa: E402
 from getzilla import fsx  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, production_action, sensitive_action  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import add_approval, set_active_route  # noqa: E402
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy  # noqa: E402
 
 # A system tree far larger than the scan budget: /proc on Linux, the Windows directory there.
@@ -40,7 +41,7 @@ _HUGE_TREE = (
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
-        set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material and an ordinary source tree (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)
         (root / 'deploy/tls/server.key').write_text('synthetic\n', encoding='utf-8')

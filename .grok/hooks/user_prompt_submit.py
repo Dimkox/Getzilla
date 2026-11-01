@@ -46,8 +46,8 @@ def main() -> None:
             context = route_context(route, root) if route else ''
         except (ValueError, RuntimeError, OSError) as conflict:
             retained = get_active_route(root) or discovered_route(root)
-            context = (route_context(retained, root) + '\n\n') if retained else ''
-            context += f'Getzilla retained task authority: {conflict}'
+            notice = f'Getzilla retained task authority: {conflict}\n\n'
+            context = notice + (route_context(retained, root, max_bytes=16384 - len(notice.encode('utf-8'))) if retained else '')
     if context:
         hints = _named_paths(root, prompt)
         if len((context + hints).encode('utf-8')) <= 16384:

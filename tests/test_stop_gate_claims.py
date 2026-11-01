@@ -16,7 +16,7 @@ from getzilla.claim_check import claims_verification, last_assistant_text  # noq
 from getzilla.hook_health import degraded_events  # noqa: E402
 from getzilla.receipts import write_receipt  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import set_active_route  # noqa: E402
+from tests._support import activate_owned_route
 from tests._support import project_copy  # noqa: E402
 
 
@@ -57,7 +57,7 @@ class ClaimDetectionTests(unittest.TestCase):
 
 class StopGateClaimTests(unittest.TestCase):
     def prepare(self, root: Path, claim: str = 'Готово, все тесты прошли') -> dict:
-        set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
         (root / 'feature.txt').write_text('changed', encoding='utf-8')
         return {'transcript_path': str(transcript(root / '.getzilla' / 'runtime' / 't.jsonl', claim))}
 

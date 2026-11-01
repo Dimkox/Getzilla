@@ -36,10 +36,10 @@ class ReviewPlanTests(unittest.TestCase):
 
     def route(self, prompt='Implement a large ordinary feature'):
         from getzilla.router import build_route
-        from getzilla.state import set_active_route
+        from tests._support import activate_owned_route
         route = build_route(self.root, prompt).to_dict()
         route['base_commit'] = self.base
-        set_active_route(self.root, route)
+        activate_owned_route(self.root, route)
         return route
 
     def reconcile(self):

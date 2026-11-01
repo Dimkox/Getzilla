@@ -18,7 +18,8 @@ from getzilla.change import start_change, transition
 from getzilla.receipts import validate_evidence, write_receipt
 from getzilla.router import build_route
 from getzilla.spec import SpecError, _parse_canonical_json
-from getzilla.state import get_active_change, get_active_route, set_active_change, set_active_route
+from getzilla.state import get_active_change, get_active_route, set_active_change
+from tests._support import activate_owned_route
 from tests._support import prepare_review_source, project_copy, run_hook
 
 
@@ -39,7 +40,7 @@ class PackageStatusTests(unittest.TestCase):
         route = build_route(root, 'Fix interrupted local work', 'package-status').to_dict()
         route['required_evidence'] = ['verification', 'code_review', 'test_review']
         route['explicit_review_agents'] = ['test_reviewer']
-        set_active_route(root, route)
+        activate_owned_route(root, route)
         return route
 
     def prepare(self, root: Path, *, complete: bool = False):
@@ -699,7 +700,7 @@ class PackageStatusTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route, _, _, package = self.prepare(root)
             route['required_evidence'] = []
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self.update_state(package, status='implementing')
             code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root)})
             self.assertEqual(code, 0, error)

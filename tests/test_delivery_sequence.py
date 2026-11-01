@@ -10,7 +10,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.change import start_change, transition
 from getzilla.review_source import review_source_binding
 from getzilla.router import build_route
-from getzilla.state import get_active_change, set_active_route
+from getzilla.state import get_active_change
+from tests._support import activate_owned_route
 from tests._support import project_copy
 
 class DeliverySequenceTests(unittest.TestCase):
@@ -26,7 +27,7 @@ class DeliverySequenceTests(unittest.TestCase):
     def test_runtime_reports_and_ready_state_preserve_reviewed_source_identity(self):
         with project_copy(git=True) as root:
             route = build_route(root, 'Fix a bounded feature', 'sequence').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             state = start_change(root)
             package = root / get_active_change(root)['path']
             report = package / 'evidence/code-review.md'
@@ -42,7 +43,7 @@ class DeliverySequenceTests(unittest.TestCase):
     def test_transition_copies_legacy_package_before_writing(self):
         with project_copy(git=True) as root:
             route = build_route(root, 'Fix a bounded feature', 'legacy').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             state = start_change(root)
             runtime = root / get_active_change(root)['path']
             legacy = root / 'engineering/changes' / state['change_id']
