@@ -13,7 +13,8 @@ PASS_LINE = (
     "PASS: disposable PostgreSQL + API + effective roles + actual "
     "restart/reconciliation"
 )
-SECRET = "terminal-secret-sentinel"
+# Deliberately public test payload; terminal diagnostics must omit it.
+DIAGNOSTIC_SENTINEL = "test-only-diagnostic-payload"
 
 
 class DisposableExitTests(unittest.TestCase):
@@ -86,9 +87,9 @@ class DisposableExitTests(unittest.TestCase):
 
     def test_success_with_failed_cleanup_never_prints_pass(self):
         for venv_error, container_error in (
-            (None, RuntimeError(SECRET)),
-            (PermissionError(SECRET), None),
-            (PermissionError(SECRET), subprocess.TimeoutExpired([SECRET], 30)),
+            (None, RuntimeError(DIAGNOSTIC_SENTINEL)),
+            (PermissionError(DIAGNOSTIC_SENTINEL), None),
+            (PermissionError(DIAGNOSTIC_SENTINEL), subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 30)),
         ):
             with self.subTest(venv=type(venv_error), container=type(container_error)):
                 with self.harness(venv_error=venv_error, container_error=container_error) as run:
@@ -99,21 +100,89 @@ class DisposableExitTests(unittest.TestCase):
                 self.assertIn("primary=passed", run.stderr.getvalue())
                 self.assertIn("venv=", run.stderr.getvalue())
                 self.assertIn("container=", run.stderr.getvalue())
-                self.assertNotIn(SECRET, run.stderr.getvalue())
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, run.stderr.getvalue())
+
+    def test_real_container_removal_is_checked_bounded_and_controls_result(self):
+        for remove_exit in (0, 17):
+            with self.subTest(remove_exit=remove_exit):
+                calls, finalizers, owner = [], [], {}
+                stdout, stderr = io.StringIO(), io.StringIO()
+
+                def docker(command, **kwargs):
+                    calls.append((command, kwargs))
+                    if command[:2] == ["docker", "run"]:
+                        owner["name"] = command[command.index("--name") + 1]
+                        owner["nonce"] = command[command.index("--label") + 1].split("=", 1)[1]
+                        return subprocess.CompletedProcess(command, 0, CONTAINER_ID)
+                    if command[:2] == ["docker", "inspect"]:
+                        metadata = "\t".join((
+                            CONTAINER_ID, "/" + owner["name"], "postgres:17-alpine", "true", owner["nonce"],
+                        ))
+                        return subprocess.CompletedProcess(command, 0, metadata)
+                    if command == ["docker", "port", CONTAINER_ID, "5432/tcp"]:
+                        return subprocess.CompletedProcess(command, 0, "127.0.0.1:5432")
+                    if command[:2] == ["docker", "rm"]:
+                        finalizers.append("container")
+                        if remove_exit and kwargs.get("check"):
+                            raise subprocess.CalledProcessError(
+                                remove_exit, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL,
+                            )
+                        return subprocess.CompletedProcess(command, remove_exit, "")
+                    self.fail(f"unexpected subprocess: {command[:2]}")
+
+                venv = SimpleNamespace(
+                    name="/inert/disposable-venv", cleanup=lambda: finalizers.append("venv"),
+                )
+                with (
+                    patch.object(runner.subprocess, "run", side_effect=docker),
+                    patch.object(runner.tempfile, "TemporaryDirectory", return_value=venv),
+                    patch.object(runner, "_final_postgres_ready", return_value=True),
+                    patch.object(runner, "_run"),
+                    redirect_stdout(stdout), redirect_stderr(stderr),
+                ):
+                    self.assertEqual(runner._cli(), 1 if remove_exit else 0)
+                self.assertEqual(finalizers, ["venv", "container"])
+                removals = [(command, kwargs) for command, kwargs in calls if command[:2] == ["docker", "rm"]]
+                self.assertEqual(len(removals), 1)
+                command, kwargs = removals[0]
+                self.assertEqual(command, ["docker", "rm", "-f", CONTAINER_ID])
+                self.assertIs(kwargs.get("check"), True)
+                self.assertEqual(kwargs.get("timeout"), 30)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, stdout.getvalue() + stderr.getvalue())
+                if remove_exit:
+                    self.assertNotIn(PASS_LINE, stdout.getvalue())
+                    self.assertIn("primary=passed", stderr.getvalue())
+                    self.assertIn("container=unconfirmed", stderr.getvalue())
+                    self.assertIn("exit=17", stderr.getvalue())
+                else:
+                    self.assertEqual(stdout.getvalue().strip(), PASS_LINE)
+
+    def test_cleanup_only_failure_retains_both_original_exception_objects(self):
+        venv_error = PermissionError(DIAGNOSTIC_SENTINEL)
+        container_error = subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 30)
+        with self.harness(venv_error=venv_error, container_error=container_error) as run:
+            with self.assertRaises(runner._CleanupError) as raised:
+                runner.main()
+        self.assertEqual(tuple(name for name, _error in raised.exception.failures), ("venv", "container"))
+        self.assertIs(raised.exception.failures[0][1], venv_error)
+        self.assertIs(raised.exception.failures[1][1], container_error)
+        self.assertEqual(run.events[-2:], ["venv-cleanup", "container-cleanup"])
+        self.assertNotIn(PASS_LINE, run.stdout.getvalue())
+        self.assertNotIn(DIAGNOSTIC_SENTINEL, run.stderr.getvalue())
 
     def test_original_primary_survives_both_cleanup_failures(self):
         for primary in (
-            ValueError(SECRET),
-            subprocess.CalledProcessError(23, [SECRET]),
-            subprocess.TimeoutExpired([SECRET], 720),
-            KeyboardInterrupt(SECRET),
+            ValueError(DIAGNOSTIC_SENTINEL),
+            subprocess.CalledProcessError(23, [DIAGNOSTIC_SENTINEL]),
+            subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 720),
+            KeyboardInterrupt(DIAGNOSTIC_SENTINEL),
             SystemExit(0),
         ):
             with self.subTest(primary=type(primary).__name__):
                 with self.harness(
                     primary=primary,
-                    venv_error=PermissionError(SECRET),
-                    container_error=subprocess.TimeoutExpired([SECRET], 30),
+                    venv_error=PermissionError(DIAGNOSTIC_SENTINEL),
+                    container_error=subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 30),
                 ) as run:
                     with self.assertRaises(BaseException) as raised:
                         runner.main()
@@ -129,14 +198,14 @@ class DisposableExitTests(unittest.TestCase):
                 self.assertIn("container=unconfirmed", report)
                 self.assertIn("error=TimeoutExpired", report)
                 self.assertIn(f"container_id={CONTAINER_ID}", report)
-                self.assertNotIn(SECRET, report)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, report)
                 notes = "\n".join(getattr(primary, "__notes__", ()))
                 self.assertIn("venv=failed", notes)
                 self.assertIn("container=unconfirmed", notes)
-                self.assertNotIn(SECRET, notes)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, notes)
 
     def test_primary_survives_successful_cleanup(self):
-        primary = ValueError(SECRET)
+        primary = ValueError(DIAGNOSTIC_SENTINEL)
         with self.harness(primary=primary) as run:
             with self.assertRaises(ValueError) as raised:
                 runner.main()
@@ -147,13 +216,13 @@ class DisposableExitTests(unittest.TestCase):
         self.assertIn("container=removed", run.stderr.getvalue())
 
     def test_unwritable_diagnostics_preserve_primary_and_all_cleanup_notes(self):
-        primary = ValueError(SECRET)
+        primary = ValueError(DIAGNOSTIC_SENTINEL)
         with self.harness(
             primary=primary,
-            venv_error=PermissionError(SECRET),
-            container_error=RuntimeError(SECRET),
+            venv_error=PermissionError(DIAGNOSTIC_SENTINEL),
+            container_error=RuntimeError(DIAGNOSTIC_SENTINEL),
         ) as run:
-            with patch("builtins.print", side_effect=BrokenPipeError(SECRET)):
+            with patch("builtins.print", side_effect=BrokenPipeError(DIAGNOSTIC_SENTINEL)):
                 with self.assertRaises(ValueError) as raised:
                     runner.main()
         self.assertIs(raised.exception, primary)
@@ -164,23 +233,23 @@ class DisposableExitTests(unittest.TestCase):
 
     def test_cli_preserves_primary_exit_precedence_and_hides_exception_payloads(self):
         for primary, expected in (
-            (ValueError(SECRET), 1),
-            (subprocess.CalledProcessError(23, [SECRET], output=SECRET, stderr=SECRET), 1),
-            (subprocess.CalledProcessError(-9, [SECRET]), 1),
-            (subprocess.TimeoutExpired([SECRET], 720, output=SECRET, stderr=SECRET), 124),
-            (KeyboardInterrupt(SECRET), 130),
+            (ValueError(DIAGNOSTIC_SENTINEL), 1),
+            (subprocess.CalledProcessError(23, [DIAGNOSTIC_SENTINEL], output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL), 1),
+            (subprocess.CalledProcessError(-9, [DIAGNOSTIC_SENTINEL]), 1),
+            (subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 720, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL), 124),
+            (KeyboardInterrupt(DIAGNOSTIC_SENTINEL), 130),
             (SystemExit(0), 1),
         ):
             with self.subTest(primary=type(primary).__name__, expected=expected):
                 with self.harness(
                     primary=primary,
-                    venv_error=PermissionError(SECRET),
-                    container_error=subprocess.TimeoutExpired([SECRET], 30),
+                    venv_error=PermissionError(DIAGNOSTIC_SENTINEL),
+                    container_error=subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 30),
                 ) as run:
                     self.assertEqual(runner._cli(), expected)
                 self.assertNotIn(PASS_LINE, run.stdout.getvalue())
                 report = run.stderr.getvalue()
-                self.assertNotIn(SECRET, report)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, report)
                 self.assertNotIn("Traceback", report)
                 self.assertIn("phase=suite", report)
                 self.assertIn(f"error={type(primary).__name__}", report)
@@ -193,7 +262,7 @@ class DisposableExitTests(unittest.TestCase):
                     self.assertIn("signal=2", report)
 
     def test_cleanup_timeout_is_not_reported_as_a_primary_timeout(self):
-        with self.harness(container_error=subprocess.TimeoutExpired([SECRET], 30)) as run:
+        with self.harness(container_error=subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 30)) as run:
             self.assertEqual(runner._cli(), 1)
         self.assertNotIn(PASS_LINE, run.stdout.getvalue())
         self.assertIn("primary=passed", run.stderr.getvalue())
@@ -201,7 +270,7 @@ class DisposableExitTests(unittest.TestCase):
         self.assertIn("timeout_seconds=30", run.stderr.getvalue())
 
     def test_interrupt_in_venv_cleanup_still_attempts_container_cleanup(self):
-        interrupt = KeyboardInterrupt(SECRET)
+        interrupt = KeyboardInterrupt(DIAGNOSTIC_SENTINEL)
         with self.harness(venv_error=interrupt) as run:
             with self.assertRaises(KeyboardInterrupt) as raised:
                 runner.main()
@@ -217,8 +286,8 @@ class DisposableExitTests(unittest.TestCase):
                 calls.append(command)
                 self.assertEqual(command[:2], ["docker", "run"])
                 if failure_kind == "timeout":
-                    raise subprocess.TimeoutExpired(command, 60, output=SECRET, stderr=SECRET)
-                raise subprocess.CalledProcessError(125, command, output=SECRET, stderr=SECRET)
+                    raise subprocess.TimeoutExpired(command, 60, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
+                raise subprocess.CalledProcessError(125, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
 
             stdout, stderr = io.StringIO(), io.StringIO()
             with (
@@ -234,11 +303,11 @@ class DisposableExitTests(unittest.TestCase):
             self.assertIn("phase=container-create", report)
             self.assertIn("venv=not_created", report)
             self.assertIn("container=unbound", report)
-            for private in (SECRET, "POSTGRES_PASSWORD", "local-" + "e" * 32, "postgresql://"):
+            for private in (DIAGNOSTIC_SENTINEL, "POSTGRES_PASSWORD", "local-" + "e" * 32, "postgresql://"):
                 self.assertNotIn(private, report)
 
     def test_cli_does_not_echo_unvalidated_container_output(self):
-        result = subprocess.CompletedProcess(["docker", "run"], 0, SECRET)
+        result = subprocess.CompletedProcess(["docker", "run"], 0, DIAGNOSTIC_SENTINEL)
         stderr = io.StringIO()
         with (
             patch.object(runner.subprocess, "run", return_value=result) as called,
@@ -250,7 +319,7 @@ class DisposableExitTests(unittest.TestCase):
         remove.assert_not_called()
         self.assertIn("container=unbound", stderr.getvalue())
         self.assertIn("container_id=unknown", stderr.getvalue())
-        self.assertNotIn(SECRET, stderr.getvalue())
+        self.assertNotIn(DIAGNOSTIC_SENTINEL, stderr.getvalue())
 
     def test_changed_binding_at_cleanup_is_unconfirmed_and_never_removed(self):
         remove = runner._remove_bound_container
@@ -282,7 +351,7 @@ class DisposableExitTests(unittest.TestCase):
             subprocess.CompletedProcess([], 1, ""),
             subprocess.CompletedProcess([], 0, "malformed"),
             subprocess.TimeoutExpired(["docker", "inspect", CONTAINER_ID], 10),
-            OSError(SECRET),
+            OSError(DIAGNOSTIC_SENTINEL),
         ))
         for result in invalid:
             with self.subTest(result=type(result).__name__):
