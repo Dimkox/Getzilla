@@ -970,7 +970,7 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
         elif normalized is not None and normalized not in resources:
             reasons.append(f'the {scope} grant for {action} names {sorted(resources)}, not {normalized}')
         elif approval.get('route_id') != route:
-            reasons.append('the grant was recorded under an earlier route (each prompt starts a new one)')
+            reasons.append('the grant belongs to a different task route or owner; select the exact task with --session and --continue')
         elif approval.get('git_head') != head:
             reasons.append(f'the grant is bound to commit {str(approval.get("git_head"))[:12]}, '
                            f'but HEAD is now {head[:12]}')

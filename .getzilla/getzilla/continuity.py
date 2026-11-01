@@ -268,6 +268,9 @@ def _union_assessment(root: Path, route: dict[str, Any], text: str) -> None:
         route[field] = list(dict.fromkeys([*route.get(field, []), *assessed.get(field, [])]))
     if route.get('write_agent'):
         route['allowed_agents'] = list(dict.fromkeys([*route['allowed_agents'], route['write_agent']]))
+    # Intake keeps existing obligations, but the old exact-diff assessment no
+    # longer establishes readiness for the expanded scope.
+    route['risk_assessment'] = {'schema_version': 1, 'status': 'provisional'}
 
 
 @state.serialized_task
@@ -289,6 +292,8 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
         raise ValueError('new-task and continue are mutually exclusive')
     if continue_route is not None:
         route = state.canonical_route(root, continue_route)
+        if route.get('status') in TERMINAL:
+            raise ValueError('cannot continue a terminal task; use explicit --new-task')
         if not has_task_context(route):
             prior_owner = route.get('session_id')
             if (isinstance(prior_owner, str) and prior_owner != 'manual' and state._SESSION_ID.fullmatch(prior_owner)
@@ -343,7 +348,7 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
     route = normalize_route(root, route)
     state.require_route_owner(root, route)
     if _passive(text):
-        return route
+        return _sync_gate_projection(root, route)
     raw = text.encode('utf-8')
     value_digest = hashlib.sha256(raw).hexdigest()
     context = route['context']
@@ -352,7 +357,7 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
         if event_id is not None and item.get('event_id') == event_id:
             if item.get('digest') != value_digest or item.get('bytes') != len(raw):
                 raise ValueError('event identity collision')
-            return route
+            return _sync_gate_projection(root, route)
     if context['rejected'] is not None:
         rejected = context['rejected']
         if event_id is not None and rejected.get('event_id') == event_id and rejected['digest'] != value_digest:
@@ -375,7 +380,7 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
         updated['context']['pending_bytes'] += len(raw)
         _union_assessment(root, updated, text)
     result = state._commit_route(root, updated, expected=route)
-    _sync_gate_projection(root, result)
+    result = _sync_gate_projection(root, result)
     if reason:
         raise ValueError('scope_sync_required: input NOT admitted; prior scope retained')
     return result
@@ -386,17 +391,48 @@ def _rejection(raw: bytes, event_id: str | None, reason: str) -> dict[str, Any]:
             'digest': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'reason': reason, 'at': now_utc()}
 
 
-def _sync_gate_projection(root: Path, route: dict[str, Any]) -> None:
+def _sync_gate_projection(root: Path, route: dict[str, Any]) -> dict[str, Any]:
     if not route.get('change_id'):
-        return
+        return route
+    from .change import start_change, transition
     from .human_gates import route_gate_digest
-    from .workflow_storage import change_directory
-    path = change_directory(root, route['change_id'])
+    from .workflow_storage import RUNTIME_CHANGES, valid_package_path
+    selected = state.get_active_change(root)
+    if (not isinstance(selected, dict) or selected.get('change_id') != route['change_id'] or
+            not valid_package_path(selected.get('path'), route['change_id'])):
+        raise ValueError('scope projection requires the selected canonical package')
+    runtime = f"{RUNTIME_CHANGES}/{route['change_id']}"
+    if selected['path'] != runtime:
+        # The native start/recovery path copies historical packages. Never
+        # rewrite the tracked history to repair a runtime projection.
+        start_change(root)
+        selected = state.get_active_change(root)
+        if not selected or selected.get('path') != runtime:
+            raise ValueError('scope projection requires a runtime package')
+    path = root / selected['path']
     value = state._route_document(root, path / 'state.json')
     validate_package_state(value, route, route['change_id'])
-    value['human_gates'] = route.get('human_gates', [])
-    value['human_gates_digest'] = route_gate_digest(route['route_id'], value['human_gates'])
-    state.durable_json(root, path / 'state.json', value)
+    snapshot = state._route_document(root, path / 'route.json')
+    if snapshot.get('route_id') != route['route_id']:
+        raise ValueError('package route snapshot conflicts with scope projection')
+    gates = route.get('human_gates', [])
+    gate_digest = route_gate_digest(route['route_id'], gates)
+    # A partial write remains a declaration mismatch and grants no authority.
+    # Exact intake replay repairs either projection without duplicating scope.
+    if snapshot.get('human_gates') != gates:
+        snapshot['human_gates'] = gates
+        state.durable_json(root, path / 'route.json', snapshot)
+    if value.get('human_gates') != gates or value.get('human_gates_digest') != gate_digest:
+        value['human_gates'] = gates
+        value['human_gates_digest'] = gate_digest
+        state.durable_json(root, path / 'state.json', value)
+    context = route['context']
+    if (context['pending'] or context['rejected']) and (
+            value['status'] in {'verifying', 'reviewing', 'ready'} or
+            value['status'] == 'implementing' and route.get('status') in {'verifying', 'reviewing', 'ready'}):
+        transition(root, route['change_id'], 'implementing', 'scope synchronization required')
+        return state.canonical_route(root, route['route_id'])
+    return route
 
 
 @state.serialized_task
@@ -626,6 +662,9 @@ def ack_scope(root: Path, request: dict[str, Any]) -> dict[str, Any]:
     documents = package_documents(root, route, durable=True)
     if documents is None:
         raise ValueError('scope acknowledgment requires a typed package')
+    from .workflow_storage import RUNTIME_CHANGES
+    if documents['path'] != f"{RUNTIME_CHANGES}/{route['change_id']}":
+        raise ValueError('historical package is read-only; run scripts/getzilla_change.py start to copy it into runtime')
     for field in ('spec_digest', 'requirements_digest'):
         if request[field] != documents[field]:
             raise ValueError('scope acknowledgment document digest mismatch')
@@ -723,6 +762,8 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
              'Logical task: ' + task_identity(route),
              f"Owner: {route.get('session_id')} | Origin: {route.get('origin_session_id', route.get('session_id'))} "
              f"| Authority epoch: {route.get('authority_epoch', 0)}"]
+    if root and state.current_session() != route.get('session_id'):
+        lines.append('Read-only discovery: this session has no task authority; use explicit --session with --continue or --new-task.')
     context = route.get('context') or {}
     if context.get('rejected'):
         rejected = context['rejected']

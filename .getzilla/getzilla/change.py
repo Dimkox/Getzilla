@@ -87,7 +87,7 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
         raise RuntimeError('No active route. Submit a development task or run scripts/getzilla_route.py first.')
     route = normalize_route(root, route)
     title = title or route['task']
-    change_id = f"{route['created_at'][:10].replace('-', '')}-{public_change_slug(title)}-{route['route_id'][:6]}"
+    change_id = route.get('change_id') or f"{route['created_at'][:10].replace('-', '')}-{public_change_slug(title)}-{route['route_id'][:6]}"
     path = change_directory(root, change_id, writable=True)
     if path.exists():
         state = _complete_package(root, path, route, change_id)
@@ -123,12 +123,12 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
 
 
 def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: str) -> dict[str, Any]:
+    from .continuity import validate_package_state
     from .state import _route_document
     from .package_status import PACKAGE_MARKDOWN
     from .spec import _parse_canonical_json, _validate_document
     value = _route_document(root, path / 'state.json')
-    if value.get('change_id') != change_id or value.get('route_id') != route['route_id'] or not value.get('status'):
-        raise ValueError('existing package is partial or conflicts with the task; preserve it and diagnose')
+    validate_package_state(value, route, change_id)
     spec = _parse_canonical_json(read_package_file(root, (path / 'change-spec.yaml').relative_to(root).as_posix()),
                                  path / 'change-spec.yaml')
     _validate_document(spec, gate=False, root=root)

@@ -20,7 +20,7 @@ from getzilla.router import build_route
 from getzilla.spec import SpecError, _parse_canonical_json
 from getzilla.state import get_active_change, get_active_route, set_active_change
 from tests._support import activate_owned_route
-from tests._support import prepare_review_source, project_copy, run_hook
+from tests._support import observed_context, prepare_review_source, project_copy, run_hook
 
 
 class PackageStatusTests(unittest.TestCase):
@@ -142,7 +142,7 @@ class PackageStatusTests(unittest.TestCase):
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
             before = self.inventory(root)
             for _ in range(2):
                 proc = self.cli(root)
@@ -161,7 +161,7 @@ class PackageStatusTests(unittest.TestCase):
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
             path = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'
             original = json.loads(path.read_text())
             for mutation in ('missing', 'forged'):
@@ -364,6 +364,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIn('inspection_limit', self.codes(result))
             self.assertEqual(result['status'], 'incomplete')
             module = self.module()
+            route, active = get_active_route(root), get_active_change(root)
 
             def denied_open(*args, **kwargs):
                 raise PermissionError(13, 'permission denied')
@@ -371,7 +372,11 @@ class PackageStatusTests(unittest.TestCase):
             with patch.object(module.os, 'open', new=denied_open), patch.object(
                 module.os, 'supports_dir_fd', module.os.supports_dir_fd | {denied_open},
             ):
-                result = self.inspect(root)
+                # Capture the selected identity before injecting a package-read
+                # fault; the pointer itself now uses the same safe reader.
+                result = module.inspect_package(root, route, active)
+                with self.assertRaises(module.InspectionError):
+                    get_active_change(root)
             self.assertIn('file_unavailable', self.codes(result))
 
     @unittest.skipUnless(os.name == 'posix', 'Windows refuses to replace a file that is open for reading')
@@ -429,8 +434,8 @@ class PackageStatusTests(unittest.TestCase):
             for target in ('scoped', 'approved'):
                 transition(root, state['change_id'], target, 'scope ready')
             change = importlib.import_module('getzilla.change')
-            self.assertTrue(hasattr(change, 'atomic_write_text'), 'checkpoint mirror writer is missing')
-            with patch.object(change, 'atomic_write_text', side_effect=OSError('mirror unavailable')):
+            self.assertTrue(hasattr(change, 'durable_bytes'), 'checkpoint mirror writer is missing')
+            with patch.object(change, 'durable_bytes', side_effect=OSError('mirror unavailable')):
                 with self.assertRaisesRegex(OSError, 'mirror unavailable'):
                     transition(root, state['change_id'], 'implementing', 'start work')
             stored = json.loads((package / 'state.json').read_text())
@@ -708,14 +713,20 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIn('objective_unresolved', result.get('systemMessage', ''))
             self.assertNotEqual(get_active_route(root)['status'], 'completed')
 
-    def test_stop_does_not_hide_incomplete_package_behind_current_receipts(self):
+    def test_stop_does_not_hide_incomplete_package_behind_old_receipts(self):
         with project_copy(git=True) as root:
             route, _, _, package = self.prepare(root)
             self.update_state(package, status='implementing')
             review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {}))
-            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root)})
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
+            # Modern PASS first requires valid synchronized typed scope. An
+            # unsafe later edit cannot hide behind those same-source receipts.
+            spec_path = package / 'change-spec.yaml'
+            spec = json.loads(spec_path.read_text())
+            spec['acceptance_criteria'] = []
+            spec_path.write_text(json.dumps(spec))
+            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'session_id': route['session_id']})
             self.assertEqual(code, 0, error)
             self.assertNotEqual(result.get('decision'), 'block')
             self.assertIn('acceptance_criteria_missing', result.get('systemMessage', ''))
@@ -729,7 +740,8 @@ class PackageStatusTests(unittest.TestCase):
             report = package / 'evidence/code-review.md'
             report.write_text('Concrete review findings.\n', encoding='utf-8')
             review = prepare_review_source(root)
-            args = ('code_review', '--report', report.relative_to(root).as_posix(), '--reviewed-commit', review['reviewed_commit'])
+            args = ('code_review', '--report', report.relative_to(root).as_posix(),
+                    '--reviewed-commit', review['reviewed_commit'], '--reviewed-context', review['reviewed_context'])
             passed = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
             self.assertEqual(passed.returncode, 0, passed.stderr)
             receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'

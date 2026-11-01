@@ -914,6 +914,133 @@ class ContinuityTests(unittest.TestCase):
                     continuity.context_binding(root, discovery=True)
             self.assertEqual(state.get_active_route(root), before)
 
+    def test_ack_preserves_historical_package_and_native_start_copies_for_retry(self):
+        from getzilla.continuity import ack_scope, scope_gaps
+        with project_copy(git=True) as root:
+            self.route(root)
+            package, runtime = self.package(root)
+            legacy = root / 'engineering/changes' / package['change_id']
+            runtime.rename(legacy)
+            state.set_active_change(root, {'change_id': package['change_id'], 'path': legacy.relative_to(root).as_posix()})
+            before = {path.relative_to(legacy).as_posix(): path.read_bytes() for path in legacy.rglob('*') if path.is_file()}
+            request = self.ack_request(root)
+            with self.assertRaisesRegex(ValueError, 'historical|runtime'):
+                ack_scope(root, request)
+            start_change(root)
+            self.assertEqual(state.get_active_change(root)['path'], runtime.relative_to(root).as_posix())
+            ack_scope(root, request)
+            self.assertEqual(scope_gaps(root), [])
+            self.assertEqual({path.relative_to(legacy).as_posix(): path.read_bytes() for path in legacy.rglob('*') if path.is_file()}, before)
+
+    def test_existing_package_retry_refuses_malformed_complete_envelope(self):
+        with project_copy(git=True) as root:
+            self.route(root)
+            _, path = self.package(root)
+            original = json.loads((path / 'state.json').read_text())
+            original['schema_version'] = 99
+            (path / 'state.json').write_text(json.dumps(original))
+            before = (path / 'state.json').read_bytes()
+            with self.assertRaises(ValueError):
+                start_change(root)
+            self.assertEqual((path / 'state.json').read_bytes(), before)
+
+    def test_scope_amendment_regresses_ready_package_through_native_transition(self):
+        from getzilla.change import transition
+        from getzilla.continuity import ack_scope, scope_gaps
+        with project_copy(git=True) as root:
+            original = self.light_route(root)
+            package, path = self.package(root)
+            acknowledged = ack_scope(root, self.ack_request(root))['context']['last_ack']
+            for target in ('scoped', 'approved', 'implementing', 'verifying', 'reviewing', 'ready'):
+                transition(root, package['change_id'], target, 'fixture lifecycle')
+            current = self.submit(root, 'New acceptance for the unfinished ready delivery.')
+            package_state = json.loads((path / 'state.json').read_text())
+            self.assertEqual(current, state.get_active_route(root))
+            self.assertEqual(current['status'], 'implementing')
+            self.assertEqual(package_state['status'], 'implementing')
+            self.assertEqual(current['task'], original['task'])
+            self.assertEqual(len(current['context']['pending']), 1)
+            self.assertEqual(current['context']['last_ack'], acknowledged)
+            self.assertTrue(scope_gaps(root))
+
+    def test_scope_projection_crash_repairs_on_exact_event_retry(self):
+        from getzilla import continuity
+        from getzilla.human_gates import route_gate_digest
+        with project_copy(git=True) as root:
+            self.light_route(root)
+            _, path = self.package(root)
+            publish = state.durable_json
+            def fault(project, destination, value):
+                if destination == path / 'state.json':
+                    raise OSError('gate projection fault')
+                return publish(project, destination, value)
+            text = 'Deploy to production and run paid API calls with explicit bounded authority.'
+            with patch.object(state, 'durable_json', side_effect=fault):
+                with self.assertRaises(OSError):
+                    continuity.submit(root, text, 's1', event_id='gate-event')
+            admitted = state.get_active_route(root)
+            self.assertEqual(len(admitted['context']['pending']), 1)
+            repaired = continuity.submit(root, text, 's1', event_id='gate-event')
+            self.assertEqual(len(repaired['context']['pending']), 1)
+            package_state = json.loads((path / 'state.json').read_text())
+            self.assertEqual(package_state['human_gates'], repaired['human_gates'])
+            self.assertEqual(package_state['human_gates_digest'], route_gate_digest(repaired['route_id'], repaired['human_gates']))
+            self.assertEqual(json.loads((path / 'route.json').read_text())['human_gates'], repaired['human_gates'])
+
+    def test_exact_continue_refuses_terminal_target_without_rotating_epoch(self):
+        from getzilla.continuity import finish_task, submit
+        with project_copy(git=True) as root:
+            self.light_route(root)
+            terminal = finish_task(root, cancel=True)
+            for session in ('s1', 's2'):
+                with self.subTest(session=session):
+                    with self.assertRaisesRegex(ValueError, 'terminal|closed'):
+                        submit(root, '', session, continue_route=terminal['route_id'], expected_epoch=0,
+                               expected_revision=terminal['state_revision'], request_id='closed-task')
+                    self.assertEqual(state.canonical_route(root, terminal['route_id']), terminal)
+
+    def test_scope_intake_marks_reconciled_assessment_provisional(self):
+        from getzilla.review_plan import reconcile_route
+        with project_copy(git=True) as root:
+            original = self.light_route(root)
+            assessed = reconcile_route(root)
+            self.assertEqual(assessed['risk_assessment']['status'], 'complete')
+            amended = self.submit(root, 'An additional acceptance requirement.')
+            self.assertEqual(amended['risk_assessment']['status'], 'provisional')
+            self.assertEqual(amended['base_commit'], original['base_commit'])
+            self.assertEqual(amended['base_fingerprint'], original['base_fingerprint'])
+
+    def test_manual_show_labels_read_only_discovery_without_mutation(self):
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            shown = self.cli(root, '--show', '--session', 'manual')
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            self.assertIn('Read-only discovery', shown.stdout)
+            self.assertEqual(state.get_active_route(root), route)
+
+    def test_original_intake_preserves_exact_utf8_text(self):
+        text = '\n  Fix documentation with literal leading and trailing whitespace.  \n'
+        with project_copy(git=True) as root:
+            route = self.submit(root, text)
+            self.assertEqual(route['task'], text)
+            current = self.submit(root, 'continue')
+            self.assertEqual(current['task'].encode('utf-8'), text.encode('utf-8'))
+
+    def test_native_package_start_preserves_an_existing_legacy_change_identity(self):
+        from getzilla.continuity import _MODERN
+        with project_copy(git=True) as root:
+            route = build_route(root, ORIGINAL, 's1').to_dict()
+            route = {key: value for key, value in route.items() if key not in _MODERN}
+            route['change_id'] = '20200101-original-package-label'
+            state.bind_session('s1')
+            state.set_active_route(root, route)
+            package = start_change(root)
+            self.assertEqual(package['change_id'], route['change_id'])
+            current = state.get_active_route(root)
+            self.assertEqual(current['logical_task_id'], route['change_id'])
+            self.assertEqual(start_change(root), package)
+            self.assertEqual(state.get_active_route(root), current)
+
 
 if __name__ == '__main__':
     unittest.main()

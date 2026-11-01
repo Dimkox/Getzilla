@@ -18,6 +18,17 @@ PROJECT = Path(__file__).resolve().parents[1]
 CLEANUP_ATTEMPTS = 4
 
 
+@contextlib.contextmanager
+def windows_command_parser() -> Iterator[None]:
+    """Exercise Windows syntax while retaining the host's actual lock backend."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from getzilla import _policy_legacy, policy
+    parser_platform = SimpleNamespace(WINDOWS=True)
+    with patch.object(_policy_legacy, 'fsx', parser_platform), patch.object(policy, 'fsx', parser_platform):
+        yield
+
+
 def missing_history(what: str) -> None:
     """A test reads a commit or tag this clone lacks (#202): skip with the reason, but fail in CI,
     which checks out with fetch-depth: 0 and must not lose the check."""

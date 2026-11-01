@@ -146,7 +146,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
                 target.symlink_to(outside)
                 code, result = self._run(root, ["compile", "--change-id", change_id])
                 self.assertEqual(code, 1)
-                self.assertIn(result["code"], {"io", "file", "route", "change"})
+                self.assertIn(result["code"], {"io", "file", "file_unsafe", "route", "change"})
 
         with tempfile.TemporaryDirectory() as tmp:
             root, change_id = self._project(tmp)
@@ -167,7 +167,7 @@ class WorkflowArtifactsCliTests(unittest.TestCase):
             os.mkfifo(route)
             code, output = run_fifo_probe(_run_cli_process, (str(root), ["compile", "--change-id", change_id]))
             self.assertEqual(code, 1)
-            self.assertIn(json.loads(output)["code"], {"file", "io"})
+            self.assertIn(json.loads(output)["code"], {"file", "io", "file_unsafe"})
 
     def test_export_is_marked_non_authoritative_and_never_mutates_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -673,7 +673,7 @@ def build_route(
         route_id=route_id,
         created_at=now_utc(),
         session_id=session_id,
-        task=prompt.strip(),
+        task=prompt,
         intent=intent,
         domains=domains,
         task_domains=task_domains,
