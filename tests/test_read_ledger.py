@@ -4,7 +4,12 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
+import os
+import errno
+import tempfile
+import time
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 from pathlib import Path
 
@@ -12,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
 import getzilla.read_ledger as ledger  # noqa: E402
+import getzilla.state as state  # noqa: E402
 from getzilla.read_ledger import command_files, output_files, patch_targets, record, seen  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, set_active_route  # noqa: E402
@@ -133,18 +139,179 @@ class ReadLedgerHookTests(unittest.TestCase):
 
 
 class ReadLedgerUnitTests(unittest.TestCase):
-    def test_parallel_writers_keep_every_entry_and_a_full_ledger_drops_the_oldest(self) -> None:
+    def test_parallel_writers_keep_every_entry(self) -> None:
         with project_copy(git=True) as root:
-            threads = [threading.Thread(target=record, args=(root, 's', {f'f{index}.py'})) for index in range(40)]
+            start = threading.Barrier(40)
+            errors = []
+
+            def writer(index):
+                try:
+                    start.wait(timeout=5)
+                    record(root, 's', {f'f{index}.py'})
+                except BaseException as error:
+                    errors.append(error)
+
+            threads = [threading.Thread(target=writer, args=(index,)) for index in range(40)]
             for thread in threads:
                 thread.start()
+            deadline = time.monotonic() + 10
             for thread in threads:
-                thread.join()
-            self.assertEqual(len(seen(root, 's')), 40)
+                thread.join(max(0, deadline - time.monotonic()))
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(seen(root, 's'), {f'f{index}.py' for index in range(40)})
+
+    def test_a_full_ledger_drops_the_oldest(self) -> None:
+        with project_copy(git=True) as root:
             with mock.patch.object(ledger, 'MAX_ENTRIES', 3):
                 for name in ('z.py', 'y.py', 'a.py', 'b.py'):
                     record(root, 'cap', {name})
             self.assertEqual(seen(root, 'cap'), {'y.py', 'a.py', 'b.py'})
+
+    def _contended_schedule(self, *, empty_holder: bool) -> None:
+        # Only scheduling is instrumented: PID writes, identity reads, locks and
+        # ledger publication all use the real implementation and filesystem.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = state.runtime_dir(root) / '.reads.lock'
+            if not empty_holder:
+                lock.write_text('0\n', encoding='utf-8')
+            paused = threading.Event()
+            resume = threading.Event()
+            contender_scheduled = threading.Event()
+            owner_done = threading.Event()
+            errors, transitions, lock_errors = [], [], []
+            active = set()
+            overlaps = []
+            counts = {}
+            real_write, real_file_lock = os.write, state.fsx.lock_file
+            real_identity, real_lock = state._lock_identity, state.runtime_lock
+            real_entries = ledger._entries
+
+            def wait(event):
+                if not event.wait(4):
+                    raise AssertionError('schedule did not reach its next boundary')
+
+            def file_lock(fd, **kwargs):
+                try:
+                    return real_file_lock(fd, **kwargs)
+                except OSError:
+                    if threading.current_thread().name == 'ledger-B':
+                        contender_scheduled.set()
+                    raise
+
+            def written(fd, data):
+                if empty_holder and threading.current_thread().name == 'ledger-A':
+                    paused.set()
+                    wait(resume)
+                return real_write(fd, data)
+
+            def identity(path):
+                result = real_identity(path)
+                name = threading.current_thread().name
+                counts[name] = counts.get(name, 0) + 1
+                if not empty_holder and name == 'ledger-A' and counts[name] == 2:
+                    paused.set()
+                    wait(resume)
+                return result
+
+            @contextmanager
+            def observed_lock(*args, **kwargs):
+                name = threading.current_thread().name
+                try:
+                    with real_lock(*args, **kwargs):
+                        if active:
+                            overlaps.append((name, sorted(active)))
+                        active.add(name)
+                        transitions.append(('enter', name))
+                        try:
+                            yield
+                        finally:
+                            transitions.append(('exit', name))
+                            active.remove(name)
+                except (OSError, TimeoutError) as error:
+                    lock_errors.append(error)
+                    raise
+
+            def entries(path):
+                result = real_entries(path)
+                if threading.current_thread().name == 'ledger-B':
+                    contender_scheduled.set()
+                    wait(owner_done)
+                return result
+
+            def writer(name):
+                try:
+                    record(root, 's', {f'{name.lower()}.py'})
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    if name == 'A':
+                        owner_done.set()
+
+            threads = [threading.Thread(target=writer, args=(name,), name=f'ledger-{name}')
+                       for name in ('A', 'B')]
+            with mock.patch.object(state.fsx, 'lock_file', file_lock), mock.patch.object(os, 'write', written), \
+                    mock.patch.object(state, '_lock_identity', identity), \
+                    mock.patch.object(state, 'runtime_lock', observed_lock), \
+                    mock.patch.object(ledger, '_entries', entries):
+                try:
+                    threads[0].start()
+                    wait(paused)
+                    if empty_holder:
+                        time.sleep(state.LOCK_WRITE_GRACE_SECONDS + 0.1)
+                    threads[1].start()
+                    # B must reach real admission (old code) or OS contention
+                    # (repaired code). No scheduler-dependent admission window.
+                    wait(contender_scheduled)
+                    resume.set()
+                    deadline = time.monotonic() + 6
+                    for thread in threads:
+                        thread.join(max(0, deadline - time.monotonic()))
+                finally:
+                    resume.set()
+                    owner_done.set()
+                    for thread in threads:
+                        if thread.ident is not None:
+                            thread.join(5)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(lock_errors, [])
+            actual = seen(root, 's')
+            self.assertEqual((overlaps, actual), ([], {'a.py', 'b.py'}), transitions)
+
+    def test_live_holder_before_pid_publication_keeps_both_entries(self) -> None:
+        self._contended_schedule(empty_holder=True)
+
+    def test_successor_after_second_identity_read_keeps_both_entries(self) -> None:
+        self._contended_schedule(empty_holder=False)
+
+    def test_real_lock_timeout_is_advisory_and_later_record_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record(root, 's', {'before.py'})
+            real_lock = state.runtime_lock
+
+            def short_lock(root, name):
+                return real_lock(root, name, timeout=0.1)
+
+            with real_lock(root, 'reads'), mock.patch.object(state, 'runtime_lock', short_lock):
+                start = time.monotonic()
+                record(root, 's', {'dropped.py'})
+                self.assertLess(time.monotonic() - start, 1)
+            self.assertEqual(seen(root, 's'), {'before.py'})
+            record(root, 's', {'after.py'})
+            self.assertEqual(seen(root, 's'), {'before.py', 'after.py'})
+
+    def test_os_lock_failure_is_advisory_and_preserves_existing_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record(root, 's', {'before.py'})
+            with mock.patch.object(state.fsx, 'lock_file', side_effect=OSError(errno.EIO, 'device failed')):
+                record(root, 's', {'dropped.py'})
+            self.assertEqual(seen(root, 's'), {'before.py'})
+            record(root, 's', {'after.py'})
+            self.assertEqual(seen(root, 's'), {'before.py', 'after.py'})
 
     def test_cd_globs_and_printed_paths(self) -> None:
         with project_copy(git=True) as root:
