@@ -1,0 +1,719 @@
+{
+  "contract_version": "media-design-input.v1",
+  "compiler_version": "media-design-compiler.v1",
+  "mode": "design_dry_run",
+  "case": "webinar",
+  "source": {
+    "kind": "new_neutral_synthetic",
+    "revision": 1,
+    "content_digest": "8cc8ffd01a8c1b91201990db79b6549b0317cc7011547c7f0c14c5de731f56af"
+  },
+  "execution": {
+    "enabled": false,
+    "network": false,
+    "provider": null,
+    "model": null,
+    "paid_calls": 0,
+    "cap_micro_usd": 0
+  },
+  "fps": {
+    "numerator": 30,
+    "denominator": 1
+  },
+  "duration_frames": 81900,
+  "segments": [
+    {
+      "id": "segment-001",
+      "ordinal": 1,
+      "text": "Synthetic section 01 presents a simple geometric idea.",
+      "in_frame": 0,
+      "out_frame": 1620,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-002",
+      "ordinal": 2,
+      "text": "Synthetic section 02 presents a simple geometric idea.",
+      "in_frame": 1620,
+      "out_frame": 3240,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-003",
+      "ordinal": 3,
+      "text": "Synthetic section 03 presents a simple geometric idea.",
+      "in_frame": 3240,
+      "out_frame": 4860,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-004",
+      "ordinal": 4,
+      "text": "Synthetic section 04 presents a simple geometric idea.",
+      "in_frame": 4860,
+      "out_frame": 6480,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-005",
+      "ordinal": 5,
+      "text": "Synthetic section 05 presents a simple geometric idea.",
+      "in_frame": 6480,
+      "out_frame": 8100,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-006",
+      "ordinal": 6,
+      "text": "Synthetic section 06 presents a simple geometric idea.",
+      "in_frame": 8100,
+      "out_frame": 9720,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-007",
+      "ordinal": 7,
+      "text": "Synthetic section 07 presents a simple geometric idea.",
+      "in_frame": 9720,
+      "out_frame": 11340,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-008",
+      "ordinal": 8,
+      "text": "Synthetic section 08 presents a simple geometric idea.",
+      "in_frame": 11340,
+      "out_frame": 12960,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-009",
+      "ordinal": 9,
+      "text": "Synthetic section 09 presents a simple geometric idea.",
+      "in_frame": 12960,
+      "out_frame": 14580,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-010",
+      "ordinal": 10,
+      "text": "Synthetic section 10 presents a simple geometric idea.",
+      "in_frame": 14580,
+      "out_frame": 16200,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-011",
+      "ordinal": 11,
+      "text": "Synthetic section 11 presents a simple geometric idea.",
+      "in_frame": 16200,
+      "out_frame": 17820,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-012",
+      "ordinal": 12,
+      "text": "Synthetic section 12 presents a simple geometric idea.",
+      "in_frame": 17820,
+      "out_frame": 19440,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-013",
+      "ordinal": 13,
+      "text": "Synthetic section 13 presents a simple geometric idea.",
+      "in_frame": 19440,
+      "out_frame": 21060,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-014",
+      "ordinal": 14,
+      "text": "Synthetic section 14 presents a simple geometric idea.",
+      "in_frame": 21060,
+      "out_frame": 22680,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-015",
+      "ordinal": 15,
+      "text": "Synthetic section 15 presents a simple geometric idea.",
+      "in_frame": 22680,
+      "out_frame": 24300,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-016",
+      "ordinal": 16,
+      "text": "Synthetic section 16 presents a simple geometric idea.",
+      "in_frame": 24300,
+      "out_frame": 25920,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-017",
+      "ordinal": 17,
+      "text": "Synthetic section 17 presents a simple geometric idea.",
+      "in_frame": 25920,
+      "out_frame": 27540,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-018",
+      "ordinal": 18,
+      "text": "Synthetic section 18 presents a simple geometric idea.",
+      "in_frame": 27540,
+      "out_frame": 29160,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-019",
+      "ordinal": 19,
+      "text": "Synthetic section 19 presents a simple geometric idea.",
+      "in_frame": 29160,
+      "out_frame": 30780,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-020",
+      "ordinal": 20,
+      "text": "Synthetic section 20 presents a simple geometric idea.",
+      "in_frame": 30780,
+      "out_frame": 32400,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-021",
+      "ordinal": 21,
+      "text": "Synthetic section 21 presents a simple geometric idea.",
+      "in_frame": 32400,
+      "out_frame": 34020,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-022",
+      "ordinal": 22,
+      "text": "Synthetic section 22 presents a simple geometric idea.",
+      "in_frame": 34020,
+      "out_frame": 35640,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-023",
+      "ordinal": 23,
+      "text": "Synthetic section 23 presents a simple geometric idea.",
+      "in_frame": 35640,
+      "out_frame": 37260,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-024",
+      "ordinal": 24,
+      "text": "Synthetic section 24 presents a simple geometric idea.",
+      "in_frame": 37260,
+      "out_frame": 38880,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-025",
+      "ordinal": 25,
+      "text": "Synthetic section 25 presents a simple geometric idea.",
+      "in_frame": 38880,
+      "out_frame": 40500,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-026",
+      "ordinal": 26,
+      "text": "Synthetic section 26 presents a simple geometric idea.",
+      "in_frame": 40500,
+      "out_frame": 42120,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-027",
+      "ordinal": 27,
+      "text": "Synthetic section 27 presents a simple geometric idea.",
+      "in_frame": 42120,
+      "out_frame": 43740,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-028",
+      "ordinal": 28,
+      "text": "Synthetic section 28 presents a simple geometric idea.",
+      "in_frame": 43740,
+      "out_frame": 45360,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-029",
+      "ordinal": 29,
+      "text": "Synthetic section 29 presents a simple geometric idea.",
+      "in_frame": 45360,
+      "out_frame": 46980,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-030",
+      "ordinal": 30,
+      "text": "Synthetic section 30 presents a simple geometric idea.",
+      "in_frame": 46980,
+      "out_frame": 48600,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-031",
+      "ordinal": 31,
+      "text": "Synthetic section 31 presents a simple geometric idea.",
+      "in_frame": 48600,
+      "out_frame": 50220,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-032",
+      "ordinal": 32,
+      "text": "Synthetic section 32 presents a simple geometric idea.",
+      "in_frame": 50220,
+      "out_frame": 51840,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-033",
+      "ordinal": 33,
+      "text": "Synthetic section 33 presents a simple geometric idea.",
+      "in_frame": 51840,
+      "out_frame": 53460,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-034",
+      "ordinal": 34,
+      "text": "Synthetic section 34 presents a simple geometric idea.",
+      "in_frame": 53460,
+      "out_frame": 55080,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-035",
+      "ordinal": 35,
+      "text": "Synthetic section 35 presents a simple geometric idea.",
+      "in_frame": 55080,
+      "out_frame": 56700,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-036",
+      "ordinal": 36,
+      "text": "Synthetic section 36 presents a simple geometric idea.",
+      "in_frame": 56700,
+      "out_frame": 58320,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-037",
+      "ordinal": 37,
+      "text": "Synthetic section 37 presents a simple geometric idea.",
+      "in_frame": 58320,
+      "out_frame": 59940,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-038",
+      "ordinal": 38,
+      "text": "Synthetic section 38 presents a simple geometric idea.",
+      "in_frame": 59940,
+      "out_frame": 61560,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-039",
+      "ordinal": 39,
+      "text": "Synthetic section 39 presents a simple geometric idea.",
+      "in_frame": 61560,
+      "out_frame": 63180,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-040",
+      "ordinal": 40,
+      "text": "Synthetic section 40 presents a simple geometric idea.",
+      "in_frame": 63180,
+      "out_frame": 64800,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-041",
+      "ordinal": 41,
+      "text": "Synthetic section 41 presents a simple geometric idea.",
+      "in_frame": 64800,
+      "out_frame": 66420,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-042",
+      "ordinal": 42,
+      "text": "Synthetic section 42 presents a simple geometric idea.",
+      "in_frame": 66420,
+      "out_frame": 68040,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-043",
+      "ordinal": 43,
+      "text": "Synthetic section 43 presents a simple geometric idea.",
+      "in_frame": 68040,
+      "out_frame": 69660,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-044",
+      "ordinal": 44,
+      "text": "Synthetic section 44 presents a simple geometric idea.",
+      "in_frame": 69660,
+      "out_frame": 71280,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-045",
+      "ordinal": 45,
+      "text": "Synthetic section 45 presents a simple geometric idea.",
+      "in_frame": 71280,
+      "out_frame": 72900,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-005"
+      ]
+    },
+    {
+      "id": "segment-046",
+      "ordinal": 46,
+      "text": "Synthetic section 46 presents a simple geometric idea.",
+      "in_frame": 72900,
+      "out_frame": 74520,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-047",
+      "ordinal": 47,
+      "text": "Synthetic section 47 presents a simple geometric idea.",
+      "in_frame": 74520,
+      "out_frame": 76140,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-048",
+      "ordinal": 48,
+      "text": "Synthetic section 48 presents a simple geometric idea.",
+      "in_frame": 76140,
+      "out_frame": 77760,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-049",
+      "ordinal": 49,
+      "text": "Synthetic section 49 presents a simple geometric idea.",
+      "in_frame": 77760,
+      "out_frame": 79380,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-004"
+      ]
+    },
+    {
+      "id": "segment-050",
+      "ordinal": 50,
+      "text": "Synthetic section 50 presents a simple geometric idea.",
+      "in_frame": 79380,
+      "out_frame": 81900,
+      "transition_frames": 0,
+      "asset_ids": [
+        "asset-005"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset-001",
+      "label": "Synthetic geometric shape 1",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-002",
+      "label": "Synthetic geometric shape 2",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-003",
+      "label": "Synthetic geometric shape 3",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-004",
+      "label": "Synthetic geometric shape 4",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-005",
+      "label": "Synthetic geometric shape 5",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    }
+  ],
+  "profiles": [
+    {
+      "id": "main",
+      "width": 1920,
+      "height": 1080,
+      "duration_frames": 81900,
+      "count": 1,
+      "audio": "aac_stereo",
+      "subtitles": "sidecar",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "muted",
+      "width": 1920,
+      "height": 1080,
+      "duration_frames": 81900,
+      "count": 1,
+      "audio": "none",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "vertical",
+      "width": 1080,
+      "height": 1920,
+      "duration_frames": 1350,
+      "count": 2,
+      "audio": "aac_stereo",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "square",
+      "width": 1080,
+      "height": 1080,
+      "duration_frames": 1800,
+      "count": 2,
+      "audio": "aac_stereo",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    }
+  ],
+  "gates": [
+    {
+      "id": "final",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "identity_brand",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "paid_action",
+      "owner_role": "budget_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "publication",
+      "owner_role": "publication_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "rights",
+      "owner_role": "rights_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "scope",
+      "owner_role": "brief_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "storyboard_timing",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    }
+  ],
+  "unresolved": [
+    "asset_bytes",
+    "creative_review",
+    "derivative_edits",
+    "rights",
+    "voice_timing"
+  ],
+  "limits": {
+    "bytes": 1048576,
+    "segments": 60,
+    "assets": 64,
+    "families": 24,
+    "nodes": 500,
+    "edges": 4000,
+    "depth": 16
+  }
+}

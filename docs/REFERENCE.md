@@ -55,6 +55,8 @@ This starts the local task. Follow the [quickstart delivery steps](../QUICKSTART
 
 ## What this repository contains
 
+The [ADLC handoff map](adlc-handoffs.md) records phases, owners, existing artifacts and evidence gaps. The [media design](media-production.md) and [ADR](../engineering/adr/0002-media-production.md) include a bounded offline synthetic example under `examples/media-design/`. It is available in the source checkout/archive; the consumer installer does not install it. It performs planning only, with execution and paid operations disabled.
+
 - `scripts/install_into.py`: read-only install planning for existing repos and no-replace materialization for absent repos.
 - `.agents/skills/`: domain skills for agent work, including Bitrix, API/events, frontend, data, security and release tasks.
 - `.getzilla/`: local routing, verification, architecture, governance and receipt code.
