@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from . import fsx
 from .policy import DEFAULT_CONTROL_PLANE, DEFAULT_SECRET_READ, _configured_patterns, _matches_any
-from .state import has_valid_approval
+from .state import has_valid_approval, serialized_task
 from .util import file_sha256, load_json, safe_relative_path
 
 SCHEMA_VERSION = 1
@@ -110,6 +110,7 @@ def load_manifest(path: Path) -> list[ProtectedWriteOperation]:
     return operations
 
 
+@serialized_task
 def apply_manifest(root: Path, manifest_path: Path, *, dry_run: bool = False) -> dict[str, Any]:
     resolved_root = root.resolve()
     resolved_manifest = manifest_path.resolve()

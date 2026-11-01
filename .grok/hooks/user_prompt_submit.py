@@ -6,8 +6,9 @@ import sys
 
 try:
     from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
-    from getzilla.router import build_route, can_reuse_active_route, is_system_notice, route_context
-    from getzilla.state import ActiveChangeConflict, get_active_route, set_active_route
+    from getzilla.router import is_system_notice, route_context
+    from getzilla.continuity import submit
+    from getzilla.state import get_active_route, discovered_route
 except Exception:
     if os.name != 'nt':
         raise
@@ -33,23 +34,24 @@ def main() -> None:
     root = root_from(payload)
     prompt = prompt_text(payload)
     existing = get_active_route(root)
-    if existing and (is_child_payload(payload) or can_reuse_active_route(prompt, existing, session_id(payload))):
-        context = route_context(existing)
+    if is_child_payload(payload):
+        context = route_context(existing, root) if existing else ''
     elif existing is None and is_system_notice(prompt):
         # A harness notice is not a task (#185). With no route at all it creates none. A route that this
         # session cannot reuse (another session's, or closed) is replaced as before, so no fallback to it.
         context = ''
     else:
-        route = build_route(root, prompt or 'development task', session_id(payload))
         try:
-            set_active_route(root, route.to_dict())
-            context = route_context(route)
-        except ActiveChangeConflict as conflict:
-            # Keep the open change package's route; a new prompt must not orphan it.
-            context = (route_context(existing) + '\n\n') if existing else ''
-            context += f'Getzilla kept the active route: {conflict}'
+            route = submit(root, prompt, session_id(payload), event_id=payload.get('event_id'))
+            context = route_context(route, root) if route else ''
+        except (ValueError, RuntimeError, OSError) as conflict:
+            retained = get_active_route(root) or discovered_route(root)
+            context = (route_context(retained, root) + '\n\n') if retained else ''
+            context += f'Getzilla retained task authority: {conflict}'
     if context:
-        context += _named_paths(root, prompt)
+        hints = _named_paths(root, prompt)
+        if len((context + hints).encode('utf-8')) <= 16384:
+            context += hints
     emit({
         'hookSpecificOutput': {
             'hookEventName': 'UserPromptSubmit',

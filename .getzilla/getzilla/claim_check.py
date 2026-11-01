@@ -68,13 +68,14 @@ def claims_verification(text: str) -> bool:
 
 def has_current_verification(root: Path, route: Mapping[str, Any]) -> bool:
     from .receipts import get_receipt
+    from .continuity import receipt_context_current
     from .util import tree_fingerprint
     try:
         receipt = get_receipt(root, str(route.get('route_id')), 'verification')
     except RuntimeError:
         return False
     return isinstance(receipt, dict) and receipt.get('status') == 'pass' and not receipt.get('stale') and \
-        receipt.get('tree_fingerprint') == tree_fingerprint(root)
+        receipt.get('tree_fingerprint') == tree_fingerprint(root) and receipt_context_current(root, dict(route), receipt)
 
 
 def effective_risk(root: Path, route: Mapping[str, Any]) -> str:
@@ -84,6 +85,9 @@ def effective_risk(root: Path, route: Mapping[str, Any]) -> str:
     try:
         receipt = get_receipt(root, str(route.get('route_id')), 'verification')
     except RuntimeError:
+        receipt = None
+    from .continuity import receipt_context_current
+    if receipt is not None and not receipt_context_current(root, dict(route), receipt):
         receipt = None
     details = receipt.get('details') if isinstance(receipt, dict) and isinstance(receipt.get('details'), dict) else {}
     diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}

@@ -24,7 +24,7 @@ def main() -> None:
         try:
             from getzilla.package_status import collect_worktree, diagnostic_messages, inspect_package, receipt_inputs_unavailable
             from getzilla.receipts import validate_evidence
-            from getzilla.state import get_active_change, get_active_route, reset_stop_attempt, update_route
+            from getzilla.state import get_active_change, get_active_route, reset_stop_attempt
         except Exception:
             emit({})
             return
@@ -62,6 +62,8 @@ def main() -> None:
             ['package: receipt validation unavailable until unsafe or unreadable selected inputs are resolved']
             if unsafe_inputs else validate_evidence(root, route) if route.get('required_evidence') else []
         )
+        from getzilla.continuity import scope_gaps
+        gaps = [*scope_gaps(root, route), *gaps]
         if gaps:
             messages.insert(0, 'missing/stale evidence: ' + '; '.join(gaps))
         if claim:
@@ -77,7 +79,6 @@ def main() -> None:
             return
 
         reset_stop_attempt(root, route['route_id'])
-        update_route(root, status='completed')
         emit({})
     except Exception as error:
         record_degraded('stop_gate', error)

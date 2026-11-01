@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fsx
-from .state import agent_state_path, get_active_route, get_agent_state, runtime_lock
+from .state import agent_state_path, get_active_route, get_agent_state, runtime_lock, serialized_task, route_authority_present
 from .util import dump_json, runtime_dir
 
 ACTIVITIES = {'idle', 'tool', 'polling', 'waiting', 'test', 'analysis', 'io', 'model'}
@@ -105,23 +105,36 @@ def _save(root: Path, state: dict, event: str, agent_id: str, record: dict, now:
         'generation': record.get('generation'), 'route_id': record.get('route_id'),
         'generation_number': record.get('generation_number', 1),
         'task_id': record.get('task_id'), 'at': now.isoformat(timespec='seconds'),
+        'workspace': record.get('workspace'), 'authority_epoch': record.get('authority_epoch', 0),
     })
     state['history'] = state['history'][-200:]
     dump_json(agent_state_path(root), state)
     return copy.deepcopy(record)
 
 
+def _owned_route(root: Path) -> dict:
+    from .continuity import normalize_route
+    route = get_active_route(root)
+    if not route:
+        if route_authority_present(root):
+            raise ValueError('task authority unavailable; explicit --session with --continue is required')
+        return {}
+    return normalize_route(root, route)
+
+
+@serialized_task
 def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | None = None,
                 generation: str | None = None) -> dict:
     from .policy import write_roles
 
     agent_id, agent_type = _identity(agent_id), _identity(agent_type)
     current = _now(now)
+    route = _owned_route(root)
+    from .continuity import task_identity, _active_workers
+    _active_workers(root)
     with _locked(root):
-        route = get_active_route(root) or {}
         route_id = _identity(route.get('route_id') or 'unrouted')
-        source_task_id = route['change_id'] if 'change_id' in route else route.get('session_id', route_id)
-        task_id = _task_identity(source_task_id)
+        task_id = task_identity(route)
         state = get_agent_state(root)
         active = state.setdefault('active', {})
         existing = active.get(agent_id)
@@ -129,6 +142,8 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
             if (existing.get('agent_type') != agent_type or
                     existing.get('route_id', route_id) != route_id or
                     existing.get('task_id', task_id) != task_id or
+                    existing.get('workspace') != str(root.resolve()) or
+                    existing.get('authority_epoch', 0) != route.get('authority_epoch', 0) or
                     (generation is not None and existing.get('generation') != generation)):
                 raise ValueError('instance-conflict')
             return copy.deepcopy(existing)
@@ -141,6 +156,7 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
             raise ValueError('agent-outside-route')
         record = {
             'agent_type': agent_type, 'route_id': route_id, 'task_id': task_id,
+            'authority_epoch': route.get('authority_epoch', 0),
             'workspace': str(root.resolve()), 'generation': _identity(generation or secrets.token_hex(16)),
             'generation_number': 1 + max((item.get('generation_number', 1)
                 for item in state.get('history', []) if item.get('agent_id') == agent_id), default=0),
@@ -157,11 +173,13 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
 def _matching(root: Path, record: dict, generation: str, route_id: str, task_id: str) -> None:
     for value in (generation, route_id, task_id):
         _identity(value)
-    route = get_active_route(root) or {}
-    current_task = _task_identity(route['change_id'] if 'change_id' in route else
-                                  route.get('session_id', route.get('route_id') or 'unrouted'))
+    from .continuity import task_identity
+    route = _owned_route(root)
+    current_task = task_identity(route)
     if (record.get('generation') != generation or record.get('route_id') != route_id or
             record.get('task_id') != task_id or current_task != task_id or
+            record.get('workspace') != str(root.resolve()) or
+            record.get('authority_epoch', 0) != route.get('authority_epoch', 0) or
             (route.get('route_id') and route['route_id'] != route_id)):
         raise ValueError('stale-or-mismatched-instance')
 
@@ -192,6 +210,7 @@ def _ack(record: dict, kind: str, request_id: str | None, current: datetime) -> 
         record['lifecycle'] = 'interrupted'
 
 
+@serialized_task
 def update_agent(root: Path, agent_id: str, generation: str, route_id: str, task_id: str,
                  event: str, *, now: datetime | None = None, activity: str | None = None,
                  duration_seconds: int | None = None, checkpoint: str | None = None,
@@ -200,6 +219,7 @@ def update_agent(root: Path, agent_id: str, generation: str, route_id: str, task
         raise ValueError('unsupported-diagnostic-fields')
     agent_id = _identity(agent_id)
     current = _now(now)
+    _owned_route(root)
     with _locked(root):
         state = get_agent_state(root)
         record = state.get('active', {}).get(agent_id)
@@ -256,14 +276,18 @@ def update_agent(root: Path, agent_id: str, generation: str, route_id: str, task
         return _save(root, state, event, agent_id, record, current)
 
 
+@serialized_task
 def stop_agent(root: Path, agent_id: str, agent_type: str, *, generation: str | None = None,
                now: datetime | None = None, final: bool = False) -> bool:
     current = _now(now)
+    route = _owned_route(root)
     with _locked(root):
         state = get_agent_state(root)
         record = state.setdefault('active', {}).get(agent_id)
         if not record or record.get('agent_type') != agent_type:
             return False
+        if route:
+            _matching(root, record, record.get('generation'), record.get('route_id'), record.get('task_id'))
         if ((generation is not None and generation != record.get('generation')) or
                 (generation is None and record.get('generation_number', 1) != 1)):
             return False
@@ -274,10 +298,12 @@ def stop_agent(root: Path, agent_id: str, agent_type: str, *, generation: str | 
         return True
 
 
+@serialized_task
 def record_terminal_report(root: Path, agent_id: str, generation: str, route_id: str, task_id: str,
                            result: str, *, now: datetime | None = None) -> None:
     if result not in RESULTS:
         raise ValueError('invalid-result')
+    _owned_route(root)
     with _locked(root):
         state = get_agent_state(root)
         for record in reversed(state.get('history', [])):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-import hashlib
+import secrets
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -71,7 +71,7 @@ FOLLOW_UP_RE = re.compile(
 # Harness envelopes (a finished background command or subagent, a system reminder) arrive as prompts but
 # carry no user intent (#185). A prompt made only of them keeps the active route like a short reply.
 SYSTEM_ENVELOPE_RE = re.compile(r'<(task-notification|system-reminder)>.*?</\1>', re.DOTALL)
-CLOSED_ROUTE_STATUSES = frozenset({'ready', 'released', 'completed', 'cancelled', 'archived'})
+CLOSED_ROUTE_STATUSES = frozenset({'released', 'completed', 'cancelled', 'archived'})
 FEATURE_LIKE_INTENTS = frozenset({'feature', 'architecture', 'refactor', 'research'})
 DEFAULT_ANALYSIS_CAP = 10
 _ROUTE_STATE_UNSET = object()
@@ -194,6 +194,13 @@ class Route:
     matched_keywords: dict[str, list[str]] = field(default_factory=dict)
     delivery_lane: str = 'full'
     risk_assessment: dict[str, object] = field(default_factory=lambda: {'schema_version': 1, 'status': 'provisional'})
+    task_context_version: int = 1
+    logical_task_id: str = ''
+    origin_session_id: str = ''
+    authority_epoch: int = 0
+    state_revision: int = 0
+    workspace: str = ''
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -461,7 +468,7 @@ def should_reuse_active_route(prompt: str) -> bool:
 
 
 def can_reuse_active_route(prompt: str, existing: dict | None, session_id: str | None) -> bool:
-    if not existing or not should_reuse_active_route(prompt):
+    if not existing:
         return False
     if existing.get('session_id') != session_id:
         return False
@@ -649,8 +656,7 @@ def build_route(
         if base_commit_override is _ROUTE_STATE_UNSET
         else base_commit_override
     )
-    route_seed = f'{session_id}|{prompt}|{base_fingerprint}'
-    route_id = hashlib.sha256(route_seed.encode()).hexdigest()[:12]
+    route_id = secrets.token_hex(6)
     allowed = unique_ordered([*analysis, *(review or []), *([write_agent] if write_agent else [])])
 
     rationale.extend([
@@ -661,6 +667,7 @@ def build_route(
         f'analysis-wave={len(analysis)}/{cap}',
     ])
 
+    from .continuity import new_context
     return Route(
         schema_version=1,
         route_id=route_id,
@@ -688,6 +695,10 @@ def build_route(
         delivery_expected=delivery_expected,
         rationale=rationale,
         delivery_lane=delivery_lane,
+        logical_task_id='task:' + secrets.token_hex(16),
+        origin_session_id=session_id,
+        workspace=str(root.resolve()),
+        context=new_context(),
     )
 
 
@@ -742,13 +753,13 @@ def trivial_waiver(route: dict[str, object], effective_risk: str, profile: str, 
     return [kind for kind in required if kind in waivable]
 
 
-def route_context(route: Route | dict[str, object]) -> str:
+def route_context(route: Route | dict[str, object], root: Path | None = None) -> str:
     data = route.to_dict() if isinstance(route, Route) else route
     analysis = ', '.join(data.get('analysis_agents', [])) or 'none'
     reviews = ', '.join(data.get('review_agents', [])) or 'none'
     skills = ', '.join(f'${name}' for name in data.get('workflow_skills', []))
     gates = ', '.join(data.get('human_gates', [])) or 'none'
-    return (
+    metadata = (
         'ADAPTIVE GROK ROUTE\n'
         f"Route ID: {data.get('route_id')}\n"
         f"Intent: {data.get('intent')} | Risk: {data.get('risk')} | Complexity: {data.get('complexity')} "
@@ -767,3 +778,14 @@ def route_context(route: Route | dict[str, object]) -> str:
            'alert, limit_symbol) in the change package, test the limit, and do not run it live before paid_run_approval.'
            if PAID_RUN_GATE in data.get('human_gates', []) else '')
     )
+    from .continuity import MAX_CONTEXT_BYTES, render_context
+    context = render_context(root, data)
+    combined = metadata + '\n\n' + context
+    if len(combined.encode('utf-8')) <= MAX_CONTEXT_BYTES:
+        return combined
+    # Intake rendering already contains its full recovery path; reserve it rather than
+    # silently cutting the authoritative text or treating display truncation as intake.
+    remaining = MAX_CONTEXT_BYTES - len(context.encode('utf-8')) - 2
+    if remaining <= 0:
+        return context
+    return metadata.encode('utf-8')[:remaining].decode('utf-8', 'ignore') + '\n\n' + context

@@ -46,7 +46,7 @@ def main() -> None:
     change = get_active_change(root)
     if route:
         extra = f' Active route {route.get("route_id")}. Change: {(change or {}).get("change_id", "none")}.'
-        context = route_context(route) + extra
+        context = route_context(route, root) + extra
     else:
         context = 'No active route. Submit a development task to classify work.'
     context = f'{context} {startup_note(root, harness())}'
@@ -56,6 +56,8 @@ def main() -> None:
     capacity = _capacity_note(root)
     if capacity:
         context = f'{context} {capacity}'
+    if len(context.encode('utf-8')) > 16384 and route:
+        context = route_context(route, root)
     # Copilot consumes top-level additionalContext. Other harnesses use the
     # existing SessionStart envelope. See docs/model-continuation.md.
     if harness() == 'copilot':
