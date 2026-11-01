@@ -10,12 +10,13 @@ Every review requires a clean committed candidate; return dirty candidates to th
 
 Delivery order: bounded checks, commit source, independent reviews, save reports outside Git, then one final qualifying local gate. Record receipts only after the final gate passes.
 
-Reviewers return the complete report to the coordinator out-of-band. After all reviews finish, the coordinator saves reports here without changing the source commit. Runtime report receipts bind exact reviewed HEAD/tree, route/change and the report hash. A new source commit or edited report makes prior receipts stale. Runtime state updates do not change source. Never reuse evidence from another tree.
+Reviewers return the complete report to the coordinator out-of-band. After all reviews finish, the coordinator saves reports here without changing the source commit. Runtime report receipts bind exact reviewed HEAD/tree, route/logical-task/authority-epoch, context revision, package/spec/requirements and the hash of the actual report bytes. A new source commit, edited report, amendment, handoff or changed scope document makes prior receipts stale. Runtime status alone does not change source. Never reuse evidence from another tree or task context.
 
 Each report must include:
 
 - exact reviewed HEAD/tree and candidate tree fingerprint before/after, with clean-source observations;
 - `reviewed-tree-modified: no` for every review, plus the scratch path when probes run;
+- exactly one standalone `reviewed-context-digest: <64 lowercase hex>` line from the context actually inspected, matching the later `--reviewed-context` argument; never relabel an old report;
 - exact commands executed and concise observed output; when probes run, also each claim probed and mutant outcome (`killed`, `survived`, or `inconclusive`);
 - claims not executed and why; static claims without executable probes are unexecuted;
 - surviving mutants as findings or explicit limitations (no blanket mutation-score threshold unless a scoped policy requires it).

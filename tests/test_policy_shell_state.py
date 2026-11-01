@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import shlex
 import subprocess
@@ -36,7 +35,6 @@ class ShellStatePolicyTests(unittest.TestCase):
                        cwd=cls.root, check=True)
         activate_owned_route(cls.root, build_route(cls.root, 'Offline shell context fixture', 'shell-state').to_dict())
         (cls.root / 'public.txt').write_text('Other/Project\n', encoding='utf-8')
-        cls.sequence = 0
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -60,10 +58,8 @@ class ShellStatePolicyTests(unittest.TestCase):
         allowed, reason = evaluate_pre_tool(self.root, event)
         with self.subTest(layer='policy', command=command):
             self.assertEqual(allowed, expected, (command, reason))
-        type(self).sequence += 1
-        session = self.id() + str(self.sequence) + hashlib.sha256(command.encode()).hexdigest()
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
-            **event, 'cwd': str(self.root), 'session_id': session,
+            **event, 'cwd': str(self.root), 'session_id': 'shell-state',
         })
         with self.subTest(layer='hook', command=command):
             self.assertEqual(code, 0, error)

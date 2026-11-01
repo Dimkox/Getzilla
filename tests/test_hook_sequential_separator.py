@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import sys
 import unittest
@@ -34,7 +33,7 @@ class SequentialSeparatorTests(unittest.TestCase):
     def verdict(self, command: str) -> dict:
         _, result, error = run_hook(self.root, 'pre_tool_use.py', {
             'cwd': str(self.root),
-            'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'session_id': 'seq',
             'tool_name': 'exec_command',
             'tool_input': {'cmd': command, 'workdir': str(self.root)},
         })

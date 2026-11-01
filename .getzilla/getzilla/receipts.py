@@ -936,6 +936,7 @@ def write_receipt(
     path = receipt_dir(root, route['route_id']) / f'{kind}.json'
     spill = kind == 'verification'
     publication = None
+    receipt_publication_started = False
     try:
         assert_context()
         # Classification can fail to serialize; that must retire an older pass too.
@@ -951,10 +952,11 @@ def write_receipt(
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
         assert_context()
+        receipt_publication_started = True
         _publish_receipt(path, data, interrupt_check)
         assert_context()
     except BaseException:
-        if spill:
+        if spill or receipt_publication_started:
             directory_fd = None
             try:
                 directory_fd = _open_receipt_directory(root, route['route_id'])

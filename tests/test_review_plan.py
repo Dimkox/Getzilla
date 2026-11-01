@@ -61,7 +61,7 @@ class ReviewPlanTests(unittest.TestCase):
         self.assertEqual(len(set(plans)), 1)
 
     def test_category_and_threshold_select_only_relevant_dispatchable_audit(self):
-        from getzilla.agent_lifecycle import start_agent
+        from getzilla.agent_lifecycle import start_agent, stop_agent
         for path, expected in [('auth/login.py', 'security_reviewer'), ('migrations/001.sql', 'data_reviewer'),
                                ('.github/workflows/ci.yml', 'release_reviewer')]:
             with self.subTest(path=path):
@@ -73,7 +73,9 @@ class ReviewPlanTests(unittest.TestCase):
                 self.assertEqual(current['write_agent'], old['write_agent'])
                 self.assertEqual(current['analysis_agents'], old['analysis_agents'])
                 self.assertEqual(current['human_gates'], old['human_gates'])
-                self.assertEqual(start_agent(self.root, expected, expected)['lifecycle'], 'running')
+                worker = start_agent(self.root, expected, expected)
+                self.assertEqual(worker['lifecycle'], 'running')
+                self.assertTrue(stop_agent(self.root, expected, expected, generation=worker['generation'], final=True))
                 self.base = git(self.root, 'rev-parse', 'HEAD')
                 git(self.root, 'update-ref', 'refs/remotes/origin/main', self.base)
 
@@ -174,7 +176,8 @@ class ReviewPlanTests(unittest.TestCase):
         self.commit()
         self.route()
         current = self.reconcile()
-        write_receipt(self.root, 'verification', 'pass')
+        from tests._support import observed_context
+        write_receipt(self.root, 'verification', 'pass', expected_context=observed_context(self.root))
         self.assertFalse(any('review plan' in gap for gap in validate_evidence(self.root, current)))
         missing = dict(current)
         missing.pop('review_plan')

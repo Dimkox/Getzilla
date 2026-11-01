@@ -61,7 +61,7 @@ class HookDegradedTests(unittest.TestCase):
             write_event(root, '2999-01-01T00:00:00Z')
             self.assertEqual(len(route_degraded_events(root, get_active_route(root))), 1)
             self.assertTrue(created)
-            _, data, err = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'stop_hook_active': False})
+            _, data, err = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'session_id': 's1', 'stop_hook_active': False})
             self.assertIn('1 hook call(s) failed open', str(data.get('systemMessage')), err)
 
     def test_verify_fails_high_risk_pr_with_degraded_hooks(self) -> None:

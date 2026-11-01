@@ -660,6 +660,260 @@ class ContinuityTests(unittest.TestCase):
                         self.assertFalse(state.has_valid_approval(root, scope, action=action, resource=resource))
             self.assertEqual(state.canonical_route(root, route['route_id'])['authority_epoch'], moved['authority_epoch'])
 
+    def test_ack_cannot_inherit_original_mapping_to_removed_typed_target(self):
+        from getzilla.continuity import ack_scope, scope_gaps
+        from getzilla.spec import load_spec, dump_canonical_spec
+        with project_copy(git=True) as root:
+            self.route(root)
+            _, path = self.package(root)
+            ack_scope(root, self.ack_request(root))
+            spec = load_spec(path / 'change-spec.yaml')
+            spec['objective']['id'] = 'OBJ-002'
+            (path / 'change-spec.yaml').write_text(dump_canonical_spec(spec))
+            route = self.submit(root, 'A new requirement on the updated objective.')
+            request = self.ack_request(root, [route['context']['pending'][0]['id']])
+            del request['items']['original']
+            before = (path / 'state.json').read_bytes()
+            with self.assertRaisesRegex(ValueError, 'original|typed|mapping'):
+                ack_scope(root, request)
+            self.assertEqual(state.get_active_route(root), route)
+            self.assertEqual((path / 'state.json').read_bytes(), before)
+            request['items']['original'] = ['OBJ-002']
+            ack_scope(root, request)
+            self.assertEqual(scope_gaps(root), [])
+
+    def test_malformed_package_state_never_acknowledges_pending_scope(self):
+        from getzilla.continuity import ack_scope
+        with project_copy(git=True) as root:
+            self.route(root)
+            _, path = self.package(root)
+            route = self.submit(root, 'A pending condition must not be lost.')
+            request = self.ack_request(root, [route['context']['pending'][0]['id']])
+            original = json.loads((path / 'state.json').read_text())
+            for key, value in (('schema_version', 99), ('schema_version', True), ('status', None), ('history', 'invalid')):
+                with self.subTest(key=key, value=value):
+                    malformed = {**original, key: value}
+                    (path / 'state.json').write_text(json.dumps(malformed))
+                    before = (path / 'state.json').read_bytes()
+                    with self.assertRaises(ValueError):
+                        ack_scope(root, request)
+                    self.assertEqual(state.get_active_route(root), route)
+                    self.assertEqual((path / 'state.json').read_bytes(), before)
+
+    def test_malformed_ack_mirror_cannot_qualify(self):
+        from getzilla.continuity import ack_scope, scope_gaps, validate_route
+        import copy
+        with project_copy(git=True) as root:
+            self.route(root)
+            _, path = self.package(root)
+            route = ack_scope(root, self.ack_request(root))
+            package_state = json.loads((path / 'state.json').read_text())
+            for key, value in (('items', {'original': None}), ('version', 99),
+                               ('logical_task_id', 'foreign'), ('route_id', 'foreign'),
+                               ('acknowledged', [{}] * 17)):
+                with self.subTest(field=key):
+                    malformed = copy.deepcopy(route)
+                    malformed['context']['last_ack'][key] = value
+                    package_state['scope_ack'] = malformed['context']['last_ack']
+                    (path / 'state.json').write_text(json.dumps(package_state))
+                    state.durable_json(root, root / '.getzilla/runtime/routes' / (route['route_id'] + '.json'), malformed)
+                    with self.assertRaises(ValueError):
+                        validate_route(root, malformed)
+                    self.assertTrue(scope_gaps(root, malformed))
+
+    def test_failed_terminal_package_transition_preserves_prior_state(self):
+        from getzilla.change import transition
+        from getzilla.continuity import ack_scope
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            package, path = self.package(root)
+            before = (path / 'state.json').read_bytes()
+            prior_route = state.get_active_route(root)
+            worker = start_agent(root, 'active-child', route['write_agent'])
+            with self.assertRaisesRegex(ValueError, 'worker'):
+                transition(root, package['change_id'], 'cancelled', 'explicit cancellation')
+            self.assertEqual((path / 'state.json').read_bytes(), before)
+            self.assertEqual(state.get_active_route(root), prior_route)
+            from getzilla.agent_lifecycle import stop_agent
+            self.assertTrue(stop_agent(root, 'active-child', route['write_agent'], generation=worker['generation'], final=True))
+            ack_scope(root, self.ack_request(root))
+            for target in ('scoped', 'approved', 'implementing', 'verifying', 'reviewing', 'ready'):
+                transition(root, package['change_id'], target, 'fixture lifecycle')
+            before = (path / 'state.json').read_bytes()
+            route = state.get_active_route(root)
+            with self.assertRaises(ValueError):
+                transition(root, package['change_id'], 'released', 'evidence is intentionally absent')
+            self.assertEqual((path / 'state.json').read_bytes(), before)
+            self.assertEqual(state.get_active_route(root), route)
+
+    def test_small_receipt_postpublication_scope_mutation_retires_pass(self):
+        from getzilla import receipts
+        from getzilla.continuity import context_binding
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            state.update_route(root, risk_assessment=None)
+            observed = context_binding(root)
+            publish = receipts._publish_receipt
+            def mutate(*args, **kwargs):
+                result = publish(*args, **kwargs)
+                self.submit(root, 'New acceptance during small receipt publication.')
+                return result
+            with patch.object(receipts, '_publish_receipt', side_effect=mutate):
+                with self.assertRaisesRegex(ValueError, 'context|scope'):
+                    receipts.write_receipt(root, 'verification', 'pass', expected_context=observed)
+            self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
+
+    def test_terminal_package_projection_failure_has_exact_retry(self):
+        from getzilla import change
+        with project_copy(git=True) as root:
+            self.light_route(root)
+            package = start_change(root)
+            path = root / state.get_active_change(root)['path']
+            with patch.object(change, 'update_route', side_effect=OSError('publication fault')):
+                with self.assertRaises(OSError):
+                    change.transition(root, package['change_id'], 'cancelled', 'explicit fixture decision')
+            self.assertEqual(json.loads((path / 'state.json').read_text())['status'], 'cancelled')
+            self.assertNotEqual(state.get_active_route(root)['status'], 'cancelled')
+            change.transition(root, package['change_id'], 'cancelled', 'explicit fixture decision')
+            self.assertEqual(state.get_active_route(root)['status'], 'cancelled')
+
+    def test_new_route_refuses_symlinked_publication_parent(self):
+        with project_copy(git=True) as root:
+            runtime = root / '.getzilla/runtime'
+            routes = runtime / 'routes'
+            outside = root / 'unrelated-route-store'
+            outside.mkdir()
+            routes.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises((ValueError, OSError)):
+                self.light_route(root)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((runtime / 'active-route.json').exists())
+
+    def test_valid_owner_is_independent_of_unsafe_global_discovery(self):
+        from getzilla.continuity import submit
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            global_path = root / '.getzilla/runtime/active-route.json'
+            outside = root / 'unrelated.json'
+            outside.write_text(json.dumps(route))
+            global_path.unlink()
+            global_path.symlink_to(outside)
+            self.assertEqual(state.get_active_route(root), route)
+            state.bind_session(None)
+            self.assertIsNone(state.discovered_route(root))
+            with self.assertRaises(ValueError):
+                state.add_approval(root, 'protected-path', 'unbound', actions=['protected-path-write'], resources=['AGENTS.md'])
+            self.assertEqual(json.loads(outside.read_text()), route)
+            state.bind_session('s1')
+            with self.assertRaises((ValueError, OSError)):
+                submit(root, 'Pending despite refused unsafe projection.', 's1')
+            # Canonical commit may precede projection refusal; the owned session
+            # still reads authoritative scope and no external target is touched.
+            self.assertEqual(len(state.get_active_route(root)['context']['pending']), 1)
+            self.assertEqual(json.loads(outside.read_text()), route)
+
+    def test_new_same_session_task_rejects_old_grant(self):
+        from getzilla.continuity import submit, finish_task
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            subprocess.run(['git', 'remote', 'add', 'origin', 'https://github.com/example/fixture.git'], cwd=root, check=True)
+            state.add_approval(root, 'protected-path', 'explicit fixture authority',
+                               actions=['protected-path-write'], resources=['AGENTS.md'])
+            finish_task(root, cancel=True)
+            fresh = submit(root, route['task'], 's1', new_task=True)
+            self.assertNotEqual(fresh['logical_task_id'], route['logical_task_id'])
+            self.assertFalse(state.has_valid_approval(root, 'protected-path', action='protected-path-write', resource='AGENTS.md'))
+
+    def test_legacy_large_original_and_consistent_selected_package_migrate_once(self):
+        from getzilla.continuity import normalize_route, task_identity
+        from tests._support import activate_owned_route
+        with project_copy(git=True) as root:
+            route = {'route_id': 'legacy-open-package', 'session_id': 's1', 'task': 'я' * 40000,
+                     'created_at': '2026-11-01T00:00:00+00:00', 'status': 'implementing'}
+            activate_owned_route(root, route)
+            path = root / '.getzilla/runtime/changes/legacy-package'
+            path.mkdir(parents=True)
+            package = {'schema_version': 1, 'change_id': 'legacy-package', 'route_id': route['route_id'],
+                       'status': 'implementing', 'history': []}
+            state.durable_json(root, path / 'state.json', package)
+            state.set_active_change(root, {'change_id': 'legacy-package', 'path': path.relative_to(root).as_posix()})
+            identity = task_identity(route)
+            migrated = normalize_route(root)
+            self.assertEqual(migrated['logical_task_id'], identity)
+            self.assertEqual(migrated['task'], route['task'])
+            self.assertEqual(migrated['change_id'], 'legacy-package')
+            self.assertEqual(normalize_route(root), migrated)
+
+    def test_resume_and_stop_disclose_unavailable_authority(self):
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            canonical = root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')
+            canonical.write_text('{broken')
+            for hook in ('session_start.py', 'user_prompt_submit.py', 'stop_gate.py'):
+                with self.subTest(hook=hook):
+                    code, data, err = run_hook(root, hook, {'cwd': str(root), 'session_id': 's1',
+                        'prompt': '<system-reminder>Harness observation.</system-reminder>', 'stop_hook_active': False})
+                    self.assertEqual(code, 0, err)
+                    output = json.dumps(data, ensure_ascii=False)
+                    self.assertIn('authority unavailable', output)
+                    self.assertIn('--continue', output)
+                    self.assertEqual(canonical.read_text(), '{broken')
+
+    def test_manual_discovery_cannot_reconcile_complete_or_cancel(self):
+        from getzilla.review_plan import reconcile_route
+        from getzilla.continuity import finish_task
+        with project_copy(git=True) as root:
+            route = self.light_route(root)
+            state.bind_session(None)
+            self.assertEqual(state.get_active_route(root), route)
+            before = (root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')).read_bytes()
+            for operation in (lambda: reconcile_route(root), lambda: finish_task(root),
+                              lambda: finish_task(root, cancel=True)):
+                with self.assertRaises(ValueError):
+                    operation()
+            self.assertEqual((root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')).read_bytes(), before)
+
+    def test_context_capture_refuses_route_change_between_document_reads(self):
+        from getzilla import continuity
+        with project_copy(git=True) as root:
+            self.route(root)
+            self.package(root)
+            continuity.ack_scope(root, self.ack_request(root))
+            read = continuity.package_documents
+            changed = False
+            def interleave(*args, **kwargs):
+                nonlocal changed
+                documents = read(*args, **kwargs)
+                if not changed:
+                    changed = True
+                    self.submit(root, 'New scope during context capture.')
+                return documents
+            with patch.object(continuity, 'package_documents', side_effect=interleave):
+                with self.assertRaisesRegex(ValueError, 'context|changed'):
+                    continuity.context_binding(root)
+            self.assertEqual(len(state.get_active_route(root)['context']['pending']), 1)
+
+    def test_context_capture_refuses_document_change_without_route_change(self):
+        from getzilla import continuity
+        with project_copy(git=True) as root:
+            self.route(root)
+            _, path = self.package(root)
+            continuity.ack_scope(root, self.ack_request(root))
+            read = continuity.package_documents
+            changed = False
+            before = state.get_active_route(root)
+            def interleave(*args, **kwargs):
+                nonlocal changed
+                documents = read(*args, **kwargs)
+                if not changed:
+                    changed = True
+                    (path / 'requirements.md').write_text(ORIGINAL + '\nA concurrent document amendment.\n')
+                return documents
+            with patch.object(continuity, 'package_documents', side_effect=interleave):
+                with self.assertRaisesRegex(ValueError, 'context|changed'):
+                    continuity.context_binding(root, discovery=True)
+            self.assertEqual(state.get_active_route(root), before)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,7 @@ try:
     from getzilla.model_continuation import startup_note
     from getzilla.router import route_context
     from getzilla.state import get_active_change, get_active_route
+    from getzilla.continuity import unavailable_authority_notice
 except Exception:
     if os.name != 'nt':
         raise
@@ -43,12 +44,18 @@ def main() -> None:
     route = get_active_route(root)
     from getzilla.route_metrics import record
     record(root, 'session_start', (route or {}).get('route_id'))
-    change = get_active_change(root)
+    try:
+        change = get_active_change(root)
+        package_note = ''
+    except (ValueError, OSError):
+        change = None
+        package_note = ' Selected package authority unavailable; scope synchronization is blocked.'
     if route:
         extra = f' Active route {route.get("route_id")}. Change: {(change or {}).get("change_id", "none")}.'
         context = route_context(route, root) + extra
     else:
-        context = 'No active route. Submit a development task to classify work.'
+        context = unavailable_authority_notice(root) or 'No active route. Submit a development task to classify work.'
+    context += package_note
     context = f'{context} {startup_note(root, harness())}'
     note = _tool_update_note()
     if note:

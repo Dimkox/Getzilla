@@ -204,7 +204,8 @@ def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: st
 
 @serialized_task
 def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str, Any]:
-    from .continuity import normalize_route, scope_gaps
+    from .continuity import normalize_route, scope_gaps, _ensure_idle, validate_package_state
+    from .state import _route_document
     route = normalize_route(root)
     require_route_owner(root, route)
     if route.get('change_id') != change_id:
@@ -217,12 +218,27 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
     path = package / 'state.json'
     if not path.is_file():
         raise FileNotFoundError(path)
-    state = json.loads(path.read_text(encoding='utf-8'))
+    state = _route_document(root, path)
+    validate_package_state(state, route, change_id)
+    if target in {'released', 'archived', 'cancelled'}:
+        # Check before the first package write, while the outer transition lock
+        # prevents grant/worker/scope changes. Closing metadata is not evidence.
+        _ensure_idle(root)
+        if target != 'cancelled':
+            from .receipts import validate_evidence
+            gaps = validate_evidence(root, route)
+            if gaps:
+                raise ValueError('; '.join(gaps))
     set_active_change(root, {'change_id': change_id, 'path': package.relative_to(root).as_posix()})
     current = state['status']
-    if target == current and state.get('checkpoint_mirror_pending'):
+    last = state['history'][-1] if state['history'] else {}
+    route_stage = 'draft' if route.get('status') == 'routed' else route.get('status')
+    publication_retry = (target == current and route.get('status') != target and
+                         last.get('from') == route_stage and last.get('to') == target and
+                         last.get('reason') == reason)
+    if target == current and (state.get('checkpoint_mirror_pending') or publication_retry):
         _mirror_checkpoints(root, path.parent, state)
-        update_route(root, status=target)
+        update_route(root, expected_route=route, status=target)
         return state
     if target not in TRANSITIONS.get(current, set()):
         raise ValueError(f'Invalid transition {current} -> {target}')
@@ -242,7 +258,7 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
     if open_gates:
         entry['open_human_gates'] = open_gates  # flags: shown, never enforced
     state.setdefault('history', []).append(entry)
-    dump_json(path, state)
+    durable_json(root, path, state)
     _mirror_checkpoints(root, path.parent, state)
-    update_route(root, status=target)
+    update_route(root, expected_route=route, status=target)
     return state

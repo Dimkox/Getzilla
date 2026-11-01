@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import shlex
 import shutil
@@ -50,7 +49,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
 
     def hook_verdict(self, command: str) -> dict:
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
-            'cwd': str(self.root), 'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'cwd': str(self.root), 'session_id': 'gh-arguments',
             'tool_name': 'Bash',
             'tool_input': {'command': command},
         })

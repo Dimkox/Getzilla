@@ -7,7 +7,7 @@ import sys
 try:
     from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
     from getzilla.router import is_system_notice, route_context
-    from getzilla.continuity import submit
+    from getzilla.continuity import submit, unavailable_authority_notice
     from getzilla.state import get_active_route, discovered_route
 except Exception:
     if os.name != 'nt':
@@ -37,9 +37,8 @@ def main() -> None:
     if is_child_payload(payload):
         context = route_context(existing, root) if existing else ''
     elif existing is None and is_system_notice(prompt):
-        # A harness notice is not a task (#185). With no route at all it creates none. A route that this
-        # session cannot reuse (another session's, or closed) is replaced as before, so no fallback to it.
-        context = ''
+        # A harness notice is not task intake (#185); it cannot replace ownership.
+        context = unavailable_authority_notice(root)
     else:
         try:
             route = submit(root, prompt, session_id(payload), event_id=payload.get('event_id'))

@@ -12,7 +12,7 @@ from getzilla.review_source import review_source_binding
 from getzilla.router import build_route
 from getzilla.state import get_active_change
 from tests._support import activate_owned_route
-from tests._support import project_copy
+from tests._support import project_copy, synchronize_fixture_scope, observed_context
 
 class DeliverySequenceTests(unittest.TestCase):
     def test_delivery_guidance_reconciles_committed_diff_before_review_dispatch(self):
@@ -29,14 +29,16 @@ class DeliverySequenceTests(unittest.TestCase):
             route = build_route(root, 'Fix a bounded feature', 'sequence').to_dict()
             activate_owned_route(root, route)
             state = start_change(root)
+            synchronize_fixture_scope(root)
             package = root / get_active_change(root)['path']
             report = package / 'evidence/code-review.md'
-            report.write_text('Independent review.\n')
+            context = observed_context(root)['digest']
+            report.write_text('Independent review.\nreviewed-context-digest: ' + context + '\n')
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
-            binding = review_source_binding(root, head, report.relative_to(root).as_posix())
+            binding = review_source_binding(root, head, report.relative_to(root).as_posix(), reviewed_context=context)
             for target in ('scoped', 'approved', 'implementing', 'verifying', 'reviewing', 'ready'):
                 transition(root, state['change_id'], target, 'sequence test')
-            self.assertEqual(binding, review_source_binding(root, head, report.relative_to(root).as_posix()))
+            self.assertEqual(binding, review_source_binding(root, head, report.relative_to(root).as_posix(), reviewed_context=context))
             self.assertEqual(subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True), '')
             self.assertEqual(json.loads((package / 'state.json').read_text())['status'], 'ready')
 

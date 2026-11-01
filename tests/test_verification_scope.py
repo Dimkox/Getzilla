@@ -1080,6 +1080,11 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         # promotion/refusal has its own integration coverage.
         route.update(delivery_lane='full', review_agents=['code_reviewer', 'test_reviewer'],
                      required_evidence=['verification', 'code_review', 'test_review'])
+        # This historical tracked-package fixture predates the task envelope.
+        # Preserve that compatibility arm; modern context is exercised separately.
+        for field in ('task_context_version', 'logical_task_id', 'origin_session_id', 'authority_epoch',
+                      'state_revision', 'workspace', 'context', 'handoff'):
+            route.pop(field, None)
         activate_owned_route(root, route)
         from getzilla.state import set_active_change
         set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})

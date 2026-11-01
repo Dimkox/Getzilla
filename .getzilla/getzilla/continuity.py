@@ -61,6 +61,57 @@ def _hex(value: Any) -> bool:
     return isinstance(value, str) and bool(_HEX.fullmatch(value))
 
 
+def _typed_mapping(items: Any) -> bool:
+    return (isinstance(items, dict) and 1 <= len(items) <= MAX_PENDING + 1 and
+            all(_identifier(identifier) and isinstance(targets, list) and 1 <= len(targets) <= 32 and
+                all(_identifier(target) for target in targets) and len(set(targets)) == len(targets)
+                for identifier, targets in items.items()))
+
+
+def _validate_ack(route: dict[str, Any], ack: Any) -> None:
+    fields = {'version', 'operation_id', 'transaction_digest', 'route_id', 'logical_task_id',
+              'authority_epoch', 'previous_revision', 'revision', 'spec_digest', 'requirements_digest',
+              'items', 'acknowledged', 'rejected_resolution'}
+    if (not isinstance(ack, dict) or set(ack) != fields or type(ack['version']) is not int or ack['version'] != 1 or
+            not _identifier(ack['operation_id']) or
+            any(not _hex(ack[key]) for key in ('transaction_digest', 'spec_digest', 'requirements_digest')) or
+            ack['route_id'] != route['route_id'] or ack['logical_task_id'] != route['logical_task_id'] or
+            any(not _integer(ack[key]) for key in ('authority_epoch', 'previous_revision', 'revision')) or
+            ack['authority_epoch'] > route['authority_epoch'] or
+            ack['revision'] != ack['previous_revision'] + 1 or ack['revision'] > route['context']['revision'] or
+            not _typed_mapping(ack['items']) or 'original' not in ack['items'] or
+            not isinstance(ack['acknowledged'], list) or len(ack['acknowledged']) > MAX_PENDING):
+        raise ValueError('invalid acknowledged scope transaction')
+    ids, events = set(), set()
+    for item in ack['acknowledged']:
+        if (not isinstance(item, dict) or set(item) != {'id', 'event_id', 'digest', 'bytes'} or
+                not _identifier(item['id']) or item['id'] == 'original' or item['id'] in ids or
+                not _hex(item['digest']) or type(item['bytes']) is not int or not 1 <= item['bytes'] <= MAX_ITEM_BYTES or
+                item['event_id'] is not None and (not _identifier(item['event_id']) or item['event_id'] in events)):
+            raise ValueError('invalid acknowledged scope replay proof')
+        ids.add(item['id'])
+        if item['event_id'] is not None:
+            events.add(item['event_id'])
+    if set(ack['items']) != {'original', *ids}:
+        raise ValueError('acknowledged scope mapping and replay proof differ')
+    resolution = ack['rejected_resolution']
+    if resolution is not None:
+        common = {'id', 'action', 'digest', 'bytes'}
+        if (not isinstance(resolution, dict) or not _identifier(resolution.get('id')) or
+                not _hex(resolution.get('digest')) or not _integer(resolution.get('bytes')) or resolution['bytes'] == 0):
+            raise ValueError('invalid rejected scope resolution proof')
+        if resolution.get('action') == 'incorporated':
+            if set(resolution) != common | {'targets'} or not _typed_mapping({'rejected': resolution['targets']}):
+                raise ValueError('invalid rejected scope incorporation proof')
+        elif resolution.get('action') == 'withdrawn':
+            if (set(resolution) != common | {'user_event_id', 'decision'} or
+                    not _identifier(resolution['user_event_id']) or not isinstance(resolution['decision'], str) or
+                    not resolution['decision'].strip() or len(resolution['decision'].encode('utf-8')) > 4096):
+                raise ValueError('invalid rejected scope withdrawal proof')
+        else:
+            raise ValueError('invalid rejected scope resolution action')
+
+
 def validate_route(root: Path, route: dict[str, Any]) -> None:
     if not isinstance(route, dict):
         raise ValueError('invalid task envelope')
@@ -114,9 +165,8 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
     ):
         raise ValueError('invalid rejected scope latch')
     ack = context['last_ack']
-    if ack is not None and (not isinstance(ack, dict) or not _hex(ack.get('transaction_digest')) or
-                            not _integer(ack.get('revision')) or ack['revision'] > context['revision']):
-        raise ValueError('invalid acknowledged scope transaction')
+    if ack is not None:
+        _validate_ack(route, ack)
     if route.get('handoff') is not None:
         handoff = route['handoff']
         if (not isinstance(handoff, dict) or set(handoff) != {'request_id', 'from_session', 'to_session', 'from_epoch', 'from_revision'} or
@@ -170,6 +220,15 @@ def normalize_route(root: Path, route: dict[str, Any] | None = None) -> dict[str
     updated.update(task_context_version=1, logical_task_id=identity, origin_session_id=route.get('session_id') or 'legacy-unbound',
                    session_id=session, authority_epoch=0, state_revision=0, workspace=str(root.resolve()),
                    context=new_context(legacy=True))
+    binding = state.open_change_binding(root)
+    if binding:
+        if binding[1] != route['route_id'] or route.get('change_id') not in (None, binding[0]):
+            raise ValueError('legacy selected package conflicts with task authority; explicit recovery required')
+        active = state.get_active_change(root)
+        selected = state._route_document(root, root / active['path'] / 'state.json')
+        validate_package_state(selected, route, binding[0])
+        # Freeze the pre-attachment lifecycle identity first. Never retag workers.
+        updated['change_id'] = binding[0]
     path = root / '.getzilla/runtime/routes' / f"{route['route_id']}.json"
     expected = route if path.exists() or path.is_symlink() else None
     return state._commit_route(root, updated, expected=expected)
@@ -334,8 +393,7 @@ def _sync_gate_projection(root: Path, route: dict[str, Any]) -> None:
     from .workflow_storage import change_directory
     path = change_directory(root, route['change_id'])
     value = state._route_document(root, path / 'state.json')
-    if value.get('route_id') != route['route_id'] or value.get('change_id') != route['change_id']:
-        raise ValueError('package gate projection conflicts with canonical task')
+    validate_package_state(value, route, route['change_id'])
     value['human_gates'] = route.get('human_gates', [])
     value['human_gates_digest'] = route_gate_digest(route['route_id'], value['human_gates'])
     state.durable_json(root, path / 'state.json', value)
@@ -360,6 +418,23 @@ def attach_package(root: Path, route: dict[str, Any], change_id: str, path: Path
     return route
 
 
+def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_id: str) -> None:
+    from .package_status import STAGES, _timestamp
+    if (type(value.get('schema_version')) is not int or value['schema_version'] != 1 or
+            not isinstance(value.get('status'), str) or value['status'] not in STAGES or
+            value.get('change_id') != change_id or value.get('route_id') != route['route_id'] or
+            not isinstance(value.get('history'), list) or any(not isinstance(row, dict) for row in value['history'])):
+        raise ValueError('invalid selected package state envelope or identity')
+    checkpoints = value.get('checkpoints', [])
+    if (not isinstance(checkpoints, list) or len(checkpoints) > 2 or
+            any(not isinstance(row, dict) or not isinstance(row.get('kind'), str) or
+                row['kind'] not in {'initial', 'implementation'} or
+                row.get('route_id') != route['route_id'] or row.get('change_id') != change_id or
+                not _timestamp(row.get('observed_at')) for row in checkpoints) or
+            len({row['kind'] for row in checkpoints}) != len(checkpoints)):
+        raise ValueError('invalid selected package checkpoints')
+
+
 def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
@@ -376,8 +451,7 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
         raise ValueError('selected package does not match canonical task')
     path = root / active['path']
     package_state = state._route_document(root, path / 'state.json')
-    if package_state.get('change_id') != change_id or package_state.get('route_id') != route['route_id']:
-        raise ValueError('package state does not match canonical task')
+    validate_package_state(package_state, route, change_id)
     raw_spec = read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable)
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
     _validate_document(spec, gate=True, root=root)
@@ -393,6 +467,12 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
 
 
 def context_binding(root: Path, route: dict[str, Any] | None = None, *, discovery: bool = False) -> dict[str, Any]:
+    """Capture a bounded, revalidated observation; this is not a filesystem snapshot.
+
+    No diagnostic read creates a lock or state file. Two equal document reads
+    bracketed by canonical-route checks refuse observed concurrent changes.
+    Publication still compares the captured binding under task_transition.
+    """
     route = state.get_active_route(root) if route is None else route
     if not route:
         raise ValueError('task context unavailable')
@@ -407,6 +487,15 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
     if documents is None and not (route.get('risk') == 'low' and (
             route.get('delivery_lane') == 'light' or route.get('complexity') == 'micro')):
         raise ValueError('full task requires an attached typed package')
+    if has_task_context(route) and state.canonical_route(root, route['route_id']) != route:
+        raise ValueError('task context changed during capture')
+    if package_documents(root, route) != documents:
+        raise ValueError('task context documents changed during capture')
+    if has_task_context(route):
+        if state.canonical_route(root, route['route_id']) != route:
+            raise ValueError('task context changed during capture')
+        if not discovery and state.get_active_route(root) != route:
+            raise ValueError('selected task context changed during capture')
     value = {'version': 1, 'route_id': route['route_id'], 'logical_task_id': task_identity(route),
              'authority_epoch': route.get('authority_epoch', 0),
              'context_revision': (route.get('context') or {}).get('revision', 0),
@@ -415,6 +504,14 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'spec_digest': documents['spec_digest'] if documents else None,
              'requirements_digest': documents['requirements_digest'] if documents else None}
     return {**value, 'digest': digest(value)}
+
+
+def unavailable_authority_notice(root: Path) -> str:
+    if not state.route_authority_present(root):
+        return ''
+    return ('Task authority unavailable; scope remains unresolved. Inspect the canonical records under '
+            '.getzilla/runtime/routes/ and repair the original state; use exact --continue ROUTE_ID '
+            '--session SESSION. Global discovery cannot authorize mutation.')
 
 
 def legacy_evidence_allowed(route: dict[str, Any] | None) -> bool:
@@ -460,7 +557,8 @@ def scope_gaps(root: Path, route: dict[str, Any] | None = None) -> list[str]:
                     ack.get('authority_epoch') != route['authority_epoch'] or
                     ack.get('spec_digest') != binding['spec_digest'] or
                     ack.get('requirements_digest') != binding['requirements_digest'] or
-                    'original' not in ack.get('items', {}) or documents['state'].get('scope_ack') != ack):
+                    'original' not in ack.get('items', {}) or documents['state'].get('scope_ack') != ack or
+                    any(target not in _typed_targets(documents['spec']) for mapped in ack['items'].values() for target in mapped)):
                 gaps.append('scope_sync_required: original/acknowledged scope or package transaction is stale')
         return gaps
     except (ValueError, OSError, KeyError, TypeError) as error:
@@ -553,13 +651,15 @@ def ack_scope(root: Path, request: dict[str, Any]) -> dict[str, Any]:
         raise ValueError('scope acknowledgment names an unknown typed target')
     if 'original' not in items and not previous:
         raise ValueError('original task must receive explicit typed synchronization')
+    original = items.get('original') or (previous or {}).get('items', {}).get('original')
+    if not original or any(target not in targets for target in original):
+        raise ValueError('original scope mapping must name current typed targets')
     resolution = _resolution(root, request.get('resolve_rejected'), context['rejected'], targets)
     updated = _changed(route, scope=True)
     updated['context']['pending'] = [item for item in context['pending'] if item['id'] not in items]
     updated['context']['pending_bytes'] = sum(item['bytes'] for item in updated['context']['pending'])
     if resolution:
         updated['context']['rejected'] = None
-    original = items.get('original') or (previous or {}).get('items', {}).get('original')
     acknowledged = [{key: item[key] for key in ('id', 'event_id', 'digest', 'bytes')}
                     for item in context['pending'] if item['id'] in items]
     ack = {'version': 1, 'operation_id': request['operation_id'], 'transaction_digest': transaction_digest,

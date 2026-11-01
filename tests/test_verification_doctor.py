@@ -29,7 +29,7 @@ from getzilla.change import start_change
 from getzilla.router import build_route
 from getzilla.spec import dump_canonical_spec
 from getzilla.state import get_active_change
-from tests._support import activate_owned_route
+from tests._support import activate_owned_route, synchronize_fixture_scope
 from getzilla.verification import (
     CheckResult,
     GitRangeSelection,
@@ -798,7 +798,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability'},
+                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:
@@ -1287,8 +1287,9 @@ class VerificationTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
+            synchronize_fixture_scope(root)
             report = verify(root, mode='fast', record=True)
-            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['status'], 'pass', report)
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
 
@@ -1516,6 +1517,7 @@ class VerificationTests(unittest.TestCase):
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
+            synchronize_fixture_scope(root)
             architecture = root / 'architecture'
             architecture.mkdir(exist_ok=True)
             for name in ('system.yaml', 'rules.yaml'):
@@ -2430,6 +2432,7 @@ class FailFastVerificationTests(unittest.TestCase):
             start_change(root)
             active = get_active_change(root)
             (root / active['path'] / 'change-spec.yaml').write_text(dump_canonical_spec(_valid_change_spec(active['change_id'])))
+            synchronize_fixture_scope(root)
             yield root, route
 
     def test_unallowed_skip_and_unknown_status_block_actual_python_dispatch(self):

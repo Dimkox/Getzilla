@@ -17,7 +17,7 @@ from getzilla.hook_health import degraded_events  # noqa: E402
 from getzilla.receipts import write_receipt  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from tests._support import activate_owned_route
-from tests._support import project_copy  # noqa: E402
+from tests._support import project_copy, prepare_review_source, observed_context  # noqa: E402
 
 
 def transcript(path: Path, text: str) -> Path:
@@ -32,7 +32,7 @@ def stop(root: Path, payload: dict, harness: str = 'claude', mode: str | None = 
     if mode:
         env['GETZILLA_STOP_GATE_MODE'] = mode
     proc = subprocess.run([sys.executable, str(root / '.grok/hooks/stop_gate.py'), '--harness', harness], cwd=root,
-                          input=json.dumps({'cwd': str(root), 'stop_hook_active': False, **payload}).encode('utf-8'),
+                          input=json.dumps({'cwd': str(root), 'session_id': 's1', 'stop_hook_active': False, **payload}).encode('utf-8'),
                           capture_output=True, check=False, env=env)
     return json.loads(proc.stdout.decode('utf-8').strip() or '{}')
 
@@ -88,7 +88,8 @@ class StopGateClaimTests(unittest.TestCase):
     def test_current_receipt_or_no_claim_is_quiet(self) -> None:
         with project_copy(git=True) as root:
             payload = self.prepare(root)
-            write_receipt(root, 'verification', 'pass')
+            prepare_review_source(root)
+            write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             data = stop(root, payload, 'claude', 'strict')
             self.assertNotEqual(data.get('decision'), 'block')
             self.assertNotIn('unsupported verification claim', str(data.get('systemMessage')))

@@ -140,7 +140,7 @@ class GrantLifecycleTests(unittest.TestCase):
                     outside.write_text('initial dirty bytes\n')
                 self.assertFalse(valid(root), f'{layer} Git names must retain literal backslashes')
 
-    def test_a_new_route_keeps_a_branch_bound_grant_but_not_a_production_grant(self) -> None:
+    def test_a_new_task_revokes_both_branch_and_production_grants(self) -> None:
         with github_project() as root:
             add_approval(root, 'protected-path', 'one file', 15,
                          actions=['protected-path-write'], resources=[TARGET])
@@ -148,7 +148,7 @@ class GrantLifecycleTests(unittest.TestCase):
                          actions=['git-push-branch'], resources=['fix/x'])
             self.assertTrue(valid(root, 'production', 'fix/x'))
             activate_owned_route(root, build_route(root, 'Next prompt about something else', 's1').to_dict())
-            self.assertTrue(valid(root))
+            self.assertFalse(valid(root))
             self.assertFalse(valid(root, 'production', 'fix/x'))
 
     def test_a_route_of_another_session_voids_the_grant(self) -> None:
@@ -156,6 +156,7 @@ class GrantLifecycleTests(unittest.TestCase):
             add_approval(root, 'protected-path', 'one file', 15,
                          actions=['protected-path-write'], resources=[TARGET])
             activate_owned_route(root, build_route(root, 'Another session prompt', 's2').to_dict())
+            bind_session('s1')
             self.assertTrue(valid(root), 's1 still reads its own route')
             bind_session('s2')
             self.assertFalse(valid(root))
@@ -167,23 +168,27 @@ class GrantLifecycleTests(unittest.TestCase):
             activate_owned_route(root, build_route(root, 'Next prompt', 's1').to_dict())
             bind_session('s2')  # no route pointer of its own
             self.assertFalse(valid(root))
-            # Its own grant made over the shared route of s1 does not follow s1's next route either.
-            add_approval(root, 'protected-path', 'one file', 15,
-                         actions=['protected-path-write'], resources=[TARGET])
-            self.assertTrue(valid(root))
+            before = approvals_path(root).read_bytes()
+            with self.assertRaises(ValueError):
+                add_approval(root, 'protected-path', 'one file', 15,
+                             actions=['protected-path-write'], resources=[TARGET])
+            self.assertEqual(approvals_path(root).read_bytes(), before)
             activate_owned_route(root, build_route(root, 'Third prompt', 's1').to_dict())
             self.assertFalse(valid(root))
 
-    def test_a_manual_or_unbound_caller_needs_the_exact_route(self) -> None:
+    def test_a_manual_or_unbound_caller_cannot_issue_or_consume_modern_grants(self) -> None:
         for caller in ('manual', None):
             with self.subTest(caller=caller), github_project() as root:
-                bind_session(caller)
-                approval = add_approval(root, 'protected-path', 'one file', 15,
-                                        actions=['protected-path-write'], resources=[TARGET])
-                self.assertIsNone(approval['session_id'])
+                add_approval(root, 'protected-path', 'explicit owner', 15,
+                             actions=['protected-path-write'], resources=[TARGET])
                 self.assertTrue(valid(root))
-                activate_owned_route(root, build_route(root, 'Next prompt', 'manual').to_dict())
+                before = approvals_path(root).read_bytes()
+                bind_session(caller)
+                with self.assertRaises(ValueError):
+                    add_approval(root, 'protected-path', 'one file', 15,
+                                 actions=['protected-path-write'], resources=[TARGET])
                 self.assertFalse(valid(root))
+                self.assertEqual(approvals_path(root).read_bytes(), before)
 
     def test_the_cli_records_the_caller_session(self) -> None:
         with github_project() as root:
@@ -193,20 +198,26 @@ class GrantLifecycleTests(unittest.TestCase):
                             '--reason', 'one file', '--action', 'protected-path-write', '--resource', TARGET],
                            cwd=root, env=env, check=True, capture_output=True)
             self.assertEqual(json.loads(approvals_path(root).read_text(encoding='utf-8'))[-1]['session_id'], 's1')
-            activate_owned_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            from getzilla.continuity import submit
+            submit(root, 'A further acceptance condition on the same task.', 's1')
             self.assertTrue(valid(root))
 
-    def test_the_cli_falls_back_to_getzilla_session_id_and_prefers_claude_code(self) -> None:
+    def test_the_cli_prefers_getzilla_session_id_and_falls_back_to_claude_code(self) -> None:
         approve = [sys.executable, str(ROOT / 'scripts' / 'getzilla_approve.py'), 'protected-path',
                    '--reason', 'one file', '--action', 'protected-path-write', '--resource', TARGET]
         for env_extra, expected in (({'GETZILLA_SESSION_ID': 's1'}, 's1'),
-                                    ({'GETZILLA_SESSION_ID': 's2', 'CLAUDE_CODE_SESSION_ID': 's1'}, 's1')):
+                                    ({'GETZILLA_SESSION_ID': 's1', 'CLAUDE_CODE_SESSION_ID': 's2'}, 's1')):
             with self.subTest(env=env_extra), github_project() as root:
                 env = {key: value for key, value in os.environ.items()
                        if key not in {'CLAUDE_CODE_SESSION_ID', 'GETZILLA_SESSION_ID'}}
                 subprocess.run(approve, cwd=root, env={**env, **env_extra}, check=True, capture_output=True)
                 recorded = json.loads(approvals_path(root).read_text(encoding='utf-8'))[-1]['session_id']
                 self.assertEqual(recorded, expected)
+        with github_project() as root:
+            env = {**os.environ, 'GETZILLA_SESSION_ID': 's2', 'CLAUDE_CODE_SESSION_ID': 's1'}
+            result = subprocess.run(approve, cwd=root, env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(approvals_path(root).exists())
 
     def test_protected_write_cli_follows_the_caller_session(self) -> None:
         import base64
@@ -218,7 +229,8 @@ class GrantLifecycleTests(unittest.TestCase):
             target = root / 'AGENTS.md'
             add_approval(root, 'protected-path', 'one file', 15, actions=['protected-path-write'],
                          resources=['AGENTS.md'])
-            activate_owned_route(root, build_route(root, 'Next prompt', 's1').to_dict())
+            from getzilla.continuity import submit
+            submit(root, 'Next acceptance on the same task.', 's1')
             manifest = root.parent / 'protected-write.json'
             manifest.write_text(json.dumps({'schema_version': 1, 'operations': [{
                 'path': 'AGENTS.md', 'expected_sha256': file_sha256(target),
@@ -245,12 +257,12 @@ class GrantLifecycleTests(unittest.TestCase):
             self.assertFalse(valid(root))
 
     def test_a_new_change_package_still_voids_a_branch_bound_grant(self) -> None:
-        from getzilla.state import set_active_change
+        from getzilla.change import start_change
         with github_project() as root:
             add_approval(root, 'protected-path', 'one file', 15,
                          actions=['protected-path-write'], resources=[TARGET])
             self.assertTrue(valid(root))
-            set_active_change(root, {'change_id': 'another-change'})
+            start_change(root)
             self.assertFalse(valid(root))
 
     def test_a_forged_branch_binding_on_a_production_grant_keeps_the_route_check(self) -> None:

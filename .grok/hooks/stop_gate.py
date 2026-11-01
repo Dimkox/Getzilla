@@ -47,9 +47,19 @@ def main() -> None:
                 record_degraded('stop_gate', f'STRICT_BLOCK_UNSUPPORTED:{harness()}', payload)
         else:
             claim, degraded = None, []
-        active = get_active_change(root)
         messages = []
         unsafe_inputs = False
+        try:
+            active = get_active_change(root)
+        except (ValueError, OSError):
+            active = None
+            unsafe_inputs = True
+            messages.append('selected package authority unavailable; scope synchronization is blocked')
+        if not route:
+            from getzilla.continuity import unavailable_authority_notice
+            notice = unavailable_authority_notice(root)
+            if notice:
+                messages.append(notice)
         if active:
             package = inspect_package(root, route, active)
             worktree = collect_worktree(root, route, package['initial_checkpoint'])
