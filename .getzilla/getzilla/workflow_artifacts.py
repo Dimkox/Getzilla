@@ -68,6 +68,8 @@ RECEIPT_KINDS = frozenset(
     }
 )
 RUNTIME_ROUTE_KEYS = {
+    "task_context_version", "logical_task_id", "origin_session_id", "authority_epoch",
+    "state_revision", "workspace", "context", "handoff",
     "allowed_agents",
     "analysis_agents",
     "base_commit",
@@ -575,7 +577,19 @@ def load_runtime_authority(root: Path, kind: str) -> dict[str, Any]:
     }.get(kind)
     if relative is None:
         raise WorkflowArtifactError("runtime authority kind is invalid", code="route")
-    data = _strict_json(_read_regular(root, relative, limit=MAX_MANIFEST_BYTES), limit=MAX_MANIFEST_BYTES)
+    if kind == 'route':
+        from .state import get_active_route, _route_document
+        from .continuity import has_task_context, validate_route
+        selected = get_active_route(root)
+        if selected is not None and has_task_context(selected):
+            data = selected
+            validate_route(root, data)
+        else:
+            data = _route_document(root, root / relative, limit=1_048_576)
+            if has_task_context(data):
+                raise WorkflowArtifactError('canonical owned route is unavailable', code='route')
+    else:
+        data = _strict_json(_read_regular(root, relative, limit=MAX_MANIFEST_BYTES), limit=MAX_MANIFEST_BYTES)
     if not isinstance(data, dict):
         raise WorkflowArtifactError(f"active {kind} must be an object", code=kind)
     if kind == "route":

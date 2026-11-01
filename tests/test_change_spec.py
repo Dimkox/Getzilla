@@ -482,6 +482,7 @@ class ChangeSpecTests(unittest.TestCase):
             code, out = _run_cli(['x', 'validate', explicit.relative_to(fake_root).as_posix(), '--gate'], root=fake_root)
             self.assertEqual(code, 0, out)
             route = {
+                "route_id": "generated-route-sample",
                 "change_id": "20260823-generated-route-sample",
                 "risk": "low",
                 "domains": ["generic"],

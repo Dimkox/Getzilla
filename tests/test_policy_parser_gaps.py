@@ -12,23 +12,21 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Iterator
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla import fsx  # noqa: E402
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import set_active_route  # noqa: E402
-from tests._support import project_copy  # noqa: E402
+from tests._support import activate_owned_route
+from tests._support import project_copy, windows_command_parser  # noqa: E402
 
 
 @contextlib.contextmanager
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
-        set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)
         (root / 'deploy/tls/server.key').write_text('synthetic\n', encoding='utf-8')
@@ -103,14 +101,14 @@ class AuthorityParserTests(_Case):
 
 class WindowsParserTests(_Case):
     def test_start_process_argument_array_is_consumed(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 "Start-Process gh -ArgumentList 'pr', 'merge', '1'",
                 "Start-Process -FilePath git -ArgumentList 'push' , 'origin', 'main'",
             ))
 
     def test_every_mutating_web_method_is_a_write(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 'Invoke-WebRequest -Method Merge https://example.com/api',
                 'Invoke-WebRequest -CustomMethod POST https://example.com/api',
@@ -122,7 +120,7 @@ class WindowsParserTests(_Case):
             ))
 
     def test_format_matched_by_executable_basename(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((r'C:\Windows\System32\format.com /q C:', r'"C:\Windows\System32\format.com" /q C:'), 'destructive')
 
 
@@ -138,7 +136,7 @@ class SecretReadTests(_Case):
                 self.assertTrue(allowed, f'{path}: {reason}')
 
     def test_nonrecursive_robocopy_scans_the_source_directory(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((r'robocopy pub C:\out', r'xcopy pub C:\out'), 'secret')
 
     def test_named_select_string_path(self) -> None:
@@ -174,7 +172,7 @@ class ReviewFollowUpTests(_Case):
         self.assert_allowed(("git commit -m 'document pwsh -en handling'", 'pwsh -NoProfile -File build.ps1'))
 
     def test_non_literal_web_method_is_a_write(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 'Invoke-WebRequest -Method $m https://example.com/api',
                 'irm -Method ($verb) https://example.com/api',
@@ -201,7 +199,7 @@ class ReviewFollowUpTests(_Case):
         self.assert_allowed(('Select-String -Pattern:TODO -Path:src/app.py',))
 
     def test_start_process_argument_expressions_are_scanned(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 "Start-Process git -ArgumentList @('push', 'origin', 'main')",
                 "Start-Process git -ArgumentList ('push', 'origin', 'main')",
@@ -221,7 +219,7 @@ class ReviewFollowUpTests(_Case):
         self.assert_allowed(('cargo -Z a -Z b -Z c build', 'npm --foo a --bar b test'))
 
     def test_robocopy_source_with_trailing_backslash(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((r'robocopy pub\ C:\out', r'robocopy "pub\\" C:\out', r"robocopy 'pub\' C:\out", r'xcopy pub\ C:\out'), 'secret')
 
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import copy
+import json
 import errno
 import re
 import secrets
@@ -9,6 +11,7 @@ import time
 import urllib.parse
 import contextvars
 from contextlib import contextmanager
+from functools import wraps
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -248,7 +251,9 @@ def active_route_path(root: Path) -> Path:
     return root / '.getzilla/runtime/active-route.json'
 
 
-_SESSION: contextvars.ContextVar[str | None] = contextvars.ContextVar('getzilla_session', default=None)
+_UNBOUND = object()
+_SESSION: contextvars.ContextVar = contextvars.ContextVar('getzilla_session', default=_UNBOUND)
+_TRANSITIONS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar('getzilla_transitions', default=())
 _SESSION_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
 _ROUTE_ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
 
@@ -259,21 +264,198 @@ def bind_session(session_id: str | None) -> None:
     _SESSION.set(session_id if valid else None)
 
 
+def current_session() -> str | None:
+    selected = _SESSION.get()
+    if selected is _UNBOUND:
+        selected = os.environ.get('GETZILLA_SESSION_ID') or os.environ.get('CLAUDE_CODE_SESSION_ID')
+    return selected if isinstance(selected, str) and selected != 'manual' and _SESSION_ID.fullmatch(selected) else None
+
+
+def _runtime(root: Path) -> Path:
+    return root / '.getzilla/runtime'
+
+
+def _safe_parents(root: Path, relative: Path) -> tuple[list[fsx.DirHandle], list[tuple]]:
+    handles = [fsx.open_dir(root, flags=fsx.O_CLOEXEC)]
+    identities = []
+    try:
+        for name in relative.parts:
+            if name in {'', '.', '..'}:
+                raise ValueError('unsafe-state-path')
+            try:
+                fsx.mkdir_at(handles[-1], name, 0o700)
+            except FileExistsError:
+                pass
+            child = fsx.open_dir_at(handles[-1], name, flags=fsx.O_CLOEXEC)
+            info = fsx.fstat_dir(child)
+            identities.append((handles[-1], name, info.st_dev, info.st_ino))
+            handles.append(child)
+        return handles, identities
+    except BaseException:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+        raise
+
+
+def durable_json(root: Path, path: Path, value: Any) -> None:
+    """Publish through pinned no-follow directories, with file and directory durability."""
+    raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
+    durable_bytes(root, path, raw)
+
+
+def durable_bytes(root: Path, path: Path, raw: bytes) -> None:
+    relative = path.relative_to(root)
+    handles, identities = _safe_parents(root, relative.parent)
+    temporary = '.task-' + secrets.token_hex(16) + '.tmp'
+    created = False
+    try:
+        descriptor = fsx.open_at(handles[-1], temporary,
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+        created = True
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(raw)
+            output.flush()
+            os.fsync(output.fileno())
+        for parent, name, device, inode in identities:
+            info = fsx.lstat_at(parent, name)
+            if fsx.is_link(info) or (info.st_dev, info.st_ino) != (device, inode):
+                raise ValueError('state-directory-changed')
+        try:
+            info = fsx.lstat_at(handles[-1], relative.name)
+        except FileNotFoundError:
+            pass
+        else:
+            if fsx.is_link(info) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('unsafe-state-target')
+        fsx.replace_at(handles[-1], temporary, handles[-1], relative.name)
+        created = False
+        fsx.fsync_dir(handles[-1])
+    finally:
+        if created:
+            fsx.unlink_at(handles[-1], temporary)
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+
+
+@contextmanager
+def task_transition(root: Path) -> Iterator[None]:
+    """Outer lock order: task transition, route, agents/approvals. Never hold over tools."""
+    key = str(root.resolve())
+    active = _TRANSITIONS.get()
+    if key in active:
+        yield
+        return
+    handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
+    for handle in reversed(handles):
+        fsx.close_dir(handle)
+    with runtime_lock(root, 'task-transition'):
+        token = _TRANSITIONS.set((*active, key))
+        try:
+            yield
+        finally:
+            _TRANSITIONS.reset(token)
+
+
+def serialized_task(function):
+    @wraps(function)
+    def wrapped(root: Path, *args, **kwargs):
+        with task_transition(root):
+            return function(root, *args, **kwargs)
+    return wrapped
+
+
+def _route_document(root: Path, path: Path, *, limit: int = 1_048_576) -> dict[str, Any]:
+    from .package_status import read_package_file
+    from .spec import _pairs_object, _reject_constant
+    raw = read_package_file(root, path.relative_to(root).as_posix(), limit=limit)
+    value = json.loads(raw, object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
+    if not isinstance(value, dict):
+        raise ValueError('invalid-route-document')
+    return value
+
+
+def canonical_route(root: Path, route_id: str) -> dict[str, Any]:
+    from .continuity import validate_route
+    if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
+        raise ValueError('invalid-route-id')
+    route = _route_document(root, _runtime(root) / 'routes' / f'{route_id}.json')
+    if route.get('route_id') != route_id:
+        raise ValueError('canonical-route-mismatch')
+    validate_route(root, route)
+    return route
+
+
+def discovered_route(root: Path) -> dict[str, Any] | None:
+    """Read-only global discovery never changes session or grants mutation authority."""
+    from .continuity import has_task_context, validate_route
+    path = _runtime(root) / 'active-route.json'
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        locator = _route_document(root, path)
+        route_id = locator.get('route_id')
+        if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
+            return None
+        canonical = _runtime(root) / 'routes' / f'{route_id}.json'
+        if canonical.exists() or canonical.is_symlink():
+            return canonical_route(root, route_id)
+        if not has_task_context(locator):
+            validate_route(root, locator)
+            return locator
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def route_authority_present(root: Path) -> bool:
+    paths = [_runtime(root) / 'active-route.json']
+    session = current_session()
+    if session:
+        paths.append(_session_pointer(root, session))
+    return any(path.exists() or path.is_symlink() for path in paths)
+
+
+def require_route_owner(root: Path, route: dict[str, Any] | None = None) -> dict[str, Any]:
+    from .continuity import has_task_context
+    route = get_active_route(root) if route is None else route
+    if not route:
+        raise ValueError('task authority unavailable; use explicit --session with --continue or --new-task')
+    if has_task_context(route) and current_session() != route.get('session_id'):
+        raise ValueError('task owner required; use explicit --session with --continue or --new-task')
+    return route
+
+
 def _session_pointer(root: Path, session_id: str) -> Path:
-    return runtime_dir(root) / 'sessions' / f'{session_id}.json'
+    return _runtime(root) / 'sessions' / f'{session_id}.json'
 
 
 def get_active_route(root: Path) -> dict[str, Any] | None:
-    session = _SESSION.get()
+    from .continuity import has_task_context
+    session = current_session()
     if session:
-        pointer = load_json(_session_pointer(root, session))
-        route_id = pointer.get('route_id') if isinstance(pointer, dict) else None
-        if isinstance(route_id, str) and _ROUTE_ID.fullmatch(route_id):
-            route = load_json(runtime_dir(root) / 'routes' / f'{route_id}.json')
-            if isinstance(route, dict) and route.get('route_id') == route_id:
+        path = _session_pointer(root, session)
+        if path.exists() or path.is_symlink():
+            try:
+                pointer = _route_document(root, path, limit=4096)
+                route = canonical_route(root, pointer.get('route_id'))
+                fields = {'route_id', 'session_id', 'logical_task_id', 'authority_epoch'} if has_task_context(route) else {'route_id', 'session_id'}
+                if set(pointer) != fields or pointer.get('session_id') != session or route.get('session_id') != session:
+                    return None
+                if has_task_context(route) and (
+                    type(pointer.get('authority_epoch')) is not int or
+                    pointer['authority_epoch'] != route['authority_epoch'] or
+                    pointer['logical_task_id'] != route['logical_task_id']
+                ):
+                    return None
                 return route
-    data = load_json(active_route_path(root))
-    return data if isinstance(data, dict) else None
+            except (OSError, ValueError, TypeError):
+                return None
+    route = discovered_route(root)
+    if route and session and route.get('session_id') != session:
+        legacy_owner = route.get('session_id')
+        if has_task_context(route) or (isinstance(legacy_owner, str) and legacy_owner != 'manual' and _SESSION_ID.fullmatch(legacy_owner)):
+            return None
+    return route
 
 
 CLOSED_CHANGE_STATUSES = frozenset({'released', 'archived', 'cancelled'})
@@ -294,53 +476,119 @@ class ActiveChangeConflict(RuntimeError):
 
 def open_change_binding(root: Path) -> tuple[str, str] | None:
     """Return (change_id, route_id) of the active change package while it is still open."""
-    change = get_active_change(root) or {}
+    change = get_active_change(root)
+    if change is None:
+        return None
     change_id, rel = change.get('change_id'), change.get('path')
     if not isinstance(change_id, str) or not isinstance(rel, str) or not rel:
-        return None
+        raise ValueError('selected change pointer is malformed')
     from .workflow_storage import valid_package_path
     package = (root / rel).resolve()
     if not valid_package_path(rel, change_id) or not package.is_relative_to(root.resolve()):
-        return None
-    state = load_json(package / 'state.json')
-    if not isinstance(state, dict) or state.get('status') in CLOSED_CHANGE_STATUSES:
-        return None
+        raise ValueError('selected change path is unsafe')
+    state = _route_document(root, root / rel / 'state.json')
     route_id = state.get('route_id')
-    return (change_id, route_id) if isinstance(route_id, str) and route_id else None
+    if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
+        raise ValueError('selected change state is malformed')
+    from .continuity import validate_package_state
+    validate_package_state(state, {'route_id': route_id}, change_id)
+    if state['status'] in CLOSED_CHANGE_STATUSES:
+        return None
+    return change_id, route_id
 
 
-def set_active_route(root: Path, route: dict[str, Any]) -> None:
+def _publish_route_projections(root: Path, route: dict[str, Any]) -> None:
+    from .continuity import has_task_context
+    session = route.get('session_id')
+    if isinstance(session, str) and session != 'manual' and _SESSION_ID.fullmatch(session):
+        pointer = {'route_id': route['route_id'], 'session_id': session}
+        if has_task_context(route):
+            pointer.update(logical_task_id=route['logical_task_id'], authority_epoch=route['authority_epoch'])
+        durable_json(root, _session_pointer(root, session), pointer)
+    durable_json(root, active_route_path(root), route)
+    if has_task_context(route) and route.get('change_id') is None:
+        selected = get_active_change(root)
+        if selected is not None:
+            if open_change_binding(root) is not None:
+                raise ValueError('open package cannot be detached by route projection')
+            handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
+            try:
+                if get_active_change(root) != selected:
+                    raise ValueError('package pointer changed before projection repair')
+                fsx.unlink_at(handles[-1], 'active-change.json')
+                fsx.fsync_dir(handles[-1])
+            finally:
+                for handle in reversed(handles):
+                    fsx.close_dir(handle)
+
+
+@serialized_task
+def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any] | None) -> dict[str, Any]:
+    from .continuity import validate_route
+    validate_route(root, route)
     with runtime_lock(root, 'route'):
+        path = _runtime(root) / 'routes' / f"{route['route_id']}.json"
+        exists = path.exists() or path.is_symlink()
+        actual = canonical_route(root, route['route_id']) if exists else None
+        if actual != expected:
+            raise ValueError('route changed before atomic update')
+        durable_json(root, path, route)
+        _publish_route_projections(root, route)
+    return copy.deepcopy(route)
+
+
+@serialized_task
+def set_active_route(root: Path, route: dict[str, Any]) -> None:
+    from .continuity import has_task_context
+    route = copy.deepcopy(route)
+    if has_task_context(route):
+        require_route_owner(root, route)
+    path = _runtime(root) / 'routes' / f"{route['route_id']}.json"
+    existing = canonical_route(root, route['route_id']) if path.exists() or path.is_symlink() else None
+    if existing is not None and existing != route and (has_task_context(existing) or has_task_context(route)):
+        raise ValueError('use a task transition to update canonical authority')
+    if existing is None:
+        if has_task_context(route):
+            from .continuity import _ensure_idle
+            _ensure_idle(root)
+            for locator in (active_route_path(root), _session_pointer(root, route['session_id'])):
+                if locator.exists() or locator.is_symlink():
+                    selected = _route_document(root, locator)
+                    if selected.get('route_id') == route['route_id']:
+                        raise ValueError('canonical task authority is missing; restore the original record, never recreate it')
         binding = open_change_binding(root)
         if binding and binding[1] != route['route_id']:
             raise ActiveChangeConflict(binding[0], binding[1], route['route_id'])
-        dump_json(active_route_path(root), route)
-        route_dir = runtime_dir(root) / 'routes'
-        route_dir.mkdir(parents=True, exist_ok=True)
-        new_route = not (route_dir / f"{route['route_id']}.json").exists()
-        dump_json(route_dir / f"{route['route_id']}.json", route)
-        session = route.get('session_id')
-        if isinstance(session, str) and session != 'manual' and _SESSION_ID.fullmatch(session):
-            dump_json(_session_pointer(root, session), {'route_id': route['route_id'], 'session_id': session})
-    if new_route:
+    _commit_route(root, route, expected=existing)
+    if existing is None:
         from .route_metrics import record_route
         record_route(root, route)
 
 
+@serialized_task
 def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **updates: Any) -> dict[str, Any] | None:
-    with runtime_lock(root, 'route'):
-        route = get_active_route(root)
-        if not route:
-            return None
-        if expected_route is not None and route != expected_route:
-            raise ValueError('route changed before atomic update')
-        route.update(updates)
-        route['updated_at'] = now_utc()
-        shared = load_json(active_route_path(root))
-        if not isinstance(shared, dict) or shared.get('route_id') == route.get('route_id'):
-            dump_json(active_route_path(root), route)
-        dump_json(runtime_dir(root) / 'routes' / f"{route['route_id']}.json", route)
-        return route
+    from .continuity import has_task_context
+    route = get_active_route(root)
+    if not route:
+        if route_authority_present(root):
+            require_route_owner(root)
+        return None
+    require_route_owner(root, route)
+    if expected_route is not None and route != expected_route:
+        raise ValueError('route changed before atomic update')
+    if has_task_context(route) and updates.get('status') in {'completed', 'cancelled', 'released', 'archived'}:
+        from .continuity import assert_finishable
+        assert_finishable(root, route, cancel=updates['status'] == 'cancelled')
+    immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
+                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff'}
+    if has_task_context(route) and any(key in updates and updates[key] != route.get(key) for key in immutable | {'change_id'}):
+        raise ValueError('immutable task authority requires an explicit task transition')
+    changed = copy.deepcopy(route)
+    changed.update(updates)
+    changed['updated_at'] = now_utc()
+    if has_task_context(route):
+        changed['state_revision'] += 1
+    return _commit_route(root, changed, expected=route)
 
 
 def agent_state_path(root: Path) -> Path:
@@ -393,6 +641,18 @@ def _repository_identity(root: Path) -> str:
 def _active_change_id(root: Path) -> str | None:
     change = get_active_change(root) or {}
     value = change.get('change_id')
+    from .continuity import has_task_context
+    route = get_active_route(root)
+    if route and has_task_context(route):
+        from .workflow_storage import valid_package_path
+        if value != route.get('change_id'):
+            raise ValueError('grant package identity does not match canonical task')
+        if value is not None:
+            if not valid_package_path(change.get('path'), value):
+                raise ValueError('grant package path is invalid')
+            package = _route_document(root, root / change['path'] / 'state.json')
+            from .continuity import validate_package_state
+            validate_package_state(package, route, value)
     return str(value) if value else None
 
 
@@ -460,6 +720,7 @@ def _normalize_grant_resource(scope: str, raw: str) -> str:
     return resource
 
 
+@serialized_task
 def add_approval(
     root: Path,
     scope: str,
@@ -471,6 +732,14 @@ def add_approval(
     source: str = 'standing-user-consent',
 ) -> dict[str, Any]:
     """Bind protected edits to a branch/file set; other actions retain exact source binding."""
+    from .continuity import normalize_route, task_identity
+    route = get_active_route(root)
+    if route:
+        route = normalize_route(root, route)
+        require_route_owner(root, route)
+    elif route_authority_present(root):
+        raise ValueError('task authority unavailable; cannot issue an unrouted grant')
+    route = route or {}
     normalized_scope = scope.strip()
     normalized_reason = reason.strip()
     normalized_source = source.strip()
@@ -520,7 +789,6 @@ def add_approval(
     branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
     if normalized_scope == 'protected-path' and not branch:
         raise ValueError('a named Git branch is required for protected-path approval')
-    route = get_active_route(root) or {}
     now = datetime.now(timezone.utc)
     approval = {
         'schema_version': 2,
@@ -533,10 +801,13 @@ def add_approval(
         'reason': normalized_reason,
         'repository': _repository_identity(root),
         'route_id': route.get('route_id'),
+        'logical_task_id': task_identity(route),
+        'authority_epoch': route.get('authority_epoch', 0),
+        'owner_session_id': route.get('session_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
         **({'binding': BRANCH_RESOURCES_BINDING, 'git_branch': branch, 'anchor_commit': head,
-            'session_id': _SESSION.get()}
+            'session_id': current_session()}
            if normalized_scope == 'protected-path' else {}),
         'grant_binding_digest': tree_fingerprint(
             root, normalized_resources if normalized_scope == 'protected-path' else (),
@@ -556,6 +827,7 @@ def add_approval(
     return approval
 
 
+@serialized_task
 def has_valid_approval(
     root: Path,
     scope: str,
@@ -563,9 +835,17 @@ def has_valid_approval(
     action: str | None = None,
     resource: str | None = None,
 ) -> bool:
-    """Recheck scope-specific source binding plus repository, change and TTL, and the route; a
-    branch-bound protected-path grant checks the caller's bound session instead of the route when the
-    route and the grant name that same session."""
+    """Recheck exact task/epoch/owner and all existing source, resource and TTL fences."""
+    from .continuity import has_task_context, legacy_evidence_allowed, task_identity
+    route = get_active_route(root)
+    if route:
+        try:
+            require_route_owner(root, route)
+        except ValueError:
+            return False
+    elif route_authority_present(root):
+        return False
+    route = route or {}
     if scope in {'production', 'external-write'} and action:
         from .human_gates import gate_block_reason
 
@@ -582,11 +862,14 @@ def has_valid_approval(
     head = git_head(root)
     if not head:
         return False
-    route = get_active_route(root) or {}
+    try:
+        change_id = _active_change_id(root)
+    except (ValueError, OSError):
+        return False
     bindings = {
         'repository': repository,
         'route_id': route.get('route_id'),
-        'change_id': _active_change_id(root),
+        'change_id': change_id,
         'git_head': head,
     }
     current_binding_digest = tree_fingerprint(root)
@@ -609,14 +892,18 @@ def has_valid_approval(
         if approval.get('scope') != scope:
             continue
         branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
-        # Every new prompt starts a new route, so a branch-bound grant follows its session instead:
-        # later prompts of the same session keep it, another session never gets it. The session is the
-        # caller's bound one; unless caller, route and grant all name it the exact route is required.
-        session = _SESSION.get()
-        session_bound = (branch_bound and bool(session) and route.get('session_id') == session
-                         and approval.get('session_id') == session)
+        continuity_fields = {'logical_task_id', 'authority_epoch', 'owner_session_id'}
+        if continuity_fields.intersection(approval):
+            if (not continuity_fields.issubset(approval) or type(approval.get('authority_epoch')) is not int or
+                    approval['logical_task_id'] != task_identity(route) or
+                    approval['authority_epoch'] != route.get('authority_epoch', 0) or
+                    approval['owner_session_id'] != route.get('session_id')):
+                continue
+        elif has_task_context(route) and (
+                not legacy_evidence_allowed(route) or route.get('origin_session_id') != route.get('session_id')):
+            continue
         if any(approval.get(key) != value for key, value in bindings.items()
-               if not (branch_bound and key == 'git_head') and not (session_bound and key == 'route_id')):
+               if not (branch_bound and key == 'git_head')):
             continue
         grant_binding_digest = approval.get('grant_binding_digest')
         legacy_tree_fingerprint = approval.get('tree_fingerprint')
@@ -650,8 +937,6 @@ def has_valid_approval(
         if normalized_resource is not None and normalized_resource not in resources:
             continue
         matched = True
-    if len(kept) != len(approvals):
-        dump_json(approvals_path(root), kept)
     return matched
 
 
@@ -687,7 +972,7 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
         elif normalized is not None and normalized not in resources:
             reasons.append(f'the {scope} grant for {action} names {sorted(resources)}, not {normalized}')
         elif approval.get('route_id') != route:
-            reasons.append('the grant was recorded under an earlier route (each prompt starts a new one)')
+            reasons.append('the grant belongs to a different task route or owner; select the exact task with --session and --continue')
         elif approval.get('git_head') != head:
             reasons.append(f'the grant is bound to commit {str(approval.get("git_head"))[:12]}, '
                            f'but HEAD is now {head[:12]}')
@@ -704,13 +989,24 @@ def active_change_path(root: Path) -> Path:
     return root / '.getzilla/runtime/active-change.json'
 
 
+@serialized_task
 def set_active_change(root: Path, data: dict[str, Any]) -> None:
-    dump_json(active_change_path(root), data)
+    from .continuity import has_task_context
+    route = get_active_route(root)
+    if not route and route_authority_present(root):
+        raise ValueError('task authority unavailable; cannot change its package projection')
+    if route and has_task_context(route):
+        require_route_owner(root, route)
+        if route.get('change_id') != data.get('change_id'):
+            raise ValueError('package projection does not match canonical task attachment')
+    durable_json(root, active_change_path(root), data)
 
 
 def get_active_change(root: Path) -> dict[str, Any] | None:
-    data = load_json(active_change_path(root))
-    return data if isinstance(data, dict) else None
+    path = active_change_path(root)
+    if not path.exists() and not path.is_symlink():
+        return None
+    return _route_document(root, path, limit=4096)
 
 
 def stop_attempts_path(root: Path) -> Path:

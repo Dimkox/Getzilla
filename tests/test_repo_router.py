@@ -19,7 +19,7 @@ from getzilla.repo import detect_repo
 from getzilla.router import (
     build_route,
 )
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from getzilla.workflow_artifacts import load_runtime_authority
 from tests._support import project_copy
 
@@ -71,7 +71,7 @@ class RouteRecordTests(unittest.TestCase):
             self.assertIn('bitrix', route.domains)
             self.assertEqual(route.review_agents, ['code_reviewer'])
             self.assertEqual(build_route(root, route.task, 'again').to_dict().get('matched_keywords'), expected)
-            set_active_route(root, route.to_dict())
+            activate_owned_route(root, route.to_dict())
             self.assertEqual(load_runtime_authority(root, 'route')['matched_keywords'], expected)
             archived = root / f'.getzilla/runtime/routes/{route.route_id}.json'
             self.assertEqual(json.loads(archived.read_text())['matched_keywords'], expected)

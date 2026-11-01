@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import state  # noqa: E402
+from getzilla.continuity import submit  # noqa: E402
 from tests._support import project_copy, run_hook  # noqa: E402
 
 
@@ -44,7 +45,12 @@ class ShortReplyTests(unittest.TestCase):
                           'где результат?', 'статус', 'да', 'продолжай'):
                 with self.subTest(reply=reply):
                     self.assertEqual(prompt(root, 's1', reply), task)
-            self.assertNotEqual(prompt(root, 's1', 'Add a CSV export to the reports page'), task)
+            state.bind_session('s1')
+            self.assertEqual(state.get_active_route(root)['context']['pending'], [])
+            amendment = 'Add a CSV export to the reports page'
+            self.assertEqual(prompt(root, 's1', amendment), task)
+            self.assertEqual([item['text'] for item in state.get_active_route(root)['context']['pending']], [amendment])
+            self.assertNotEqual(submit(root, amendment, 's1', new_task=True)['route_id'], task)
 
 
 class SessionIsolationTests(unittest.TestCase):
@@ -52,10 +58,10 @@ class SessionIsolationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/app.git'], cwd=root, check=True)
             first = prompt(root, 's1', 'Fix the login timeout bug in the auth module')
-            state.bind_session(None)
+            state.bind_session('s1')
             state.add_approval(root, 'protected-path', 'edit AGENTS.md', 5,
                                actions=['protected-path-write'], resources=['AGENTS.md'])
-            second = prompt(root, 's2', 'Write a new landing page for the pricing plans')
+            second = submit(root, 'Write a new landing page for the pricing plans', 's2', new_task=True)['route_id']
             self.assertNotEqual(first, second)
             self.assertEqual(prompt(root, 's1', 'и'), first, 's2 must not replace the route s1 continues')
             for session, expected in (('s1', first), ('s2', second)):

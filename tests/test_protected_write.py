@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.protected_write import ProtectedWriteError, apply_manifest, load_manifest
 from getzilla.router import build_route
-from getzilla.state import add_approval, set_active_route
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from getzilla.util import file_sha256
 from tests._support import project_copy
 
@@ -27,7 +28,7 @@ def github_project() -> Iterator[Path]:
             cwd=root,
             check=True,
         )
-        set_active_route(root, build_route(root, 'Обновить control plane', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Обновить control plane', 's1').to_dict())
         yield root
 
 

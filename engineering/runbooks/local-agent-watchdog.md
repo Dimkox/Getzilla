@@ -4,7 +4,9 @@ Issue #229 local lifecycle instrumentation is included in the 2.1.1 source slice
 
 SubagentStart records an explicit child ID and emits its route, task and generation. For integrations without this hook, register the known native child with `python3 scripts/getzilla_agent.py start --agent-id child-1 --agent-type general_implementer`. Save the returned generation and task identity. Duplicate registration returns the current instance. Only one writer may be active, including same-role writers.
 
-Use the exact returned `task_id` for all commands. Valid ASCII change/session identifiers retain their existing token. A bounded Unicode identifier, including a Russian change slug, becomes `task:<SHA256 of its UTF-8 bytes>`; the original text is not stored in lifecycle diagnostics. Identifier sources must contain 1–128 letters, numbers, underscores or `. : / -` punctuation; spaces, controls and malformed values are refused.
+Use the exact returned `task_id` for all commands. New tasks have a stable `logical_task_id`; package attachment, scope acknowledgment and review-plan reconciliation do not retag workers or change the progress bucket. Bind the real owner with `GETZILLA_SESSION_ID` (preferred over `CLAUDE_CODE_SESSION_ID`); global/manual discovery cannot start a modern task worker. Exact cross-session continuation rotates the authority epoch only when the worker ledger is provably idle.
+
+For a consistent legacy route, the existing lifecycle identity is frozen once before package attachment. Valid ASCII change/session identifiers retain their token; a bounded Unicode identifier becomes `task:<SHA256 of its UTF-8 bytes>`. Identifier sources contain 1–128 letters, numbers, underscores or `. : / -` punctuation. Unknown or inconsistent active records require diagnosis and an explicit restart, never aliases or in-place worker retagging. If the native platform does not expose a child ID or generation, record that limitation; do not invent lifecycle proof.
 
 The following commands use the same binding on every update:
 

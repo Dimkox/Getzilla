@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from . import fsx
 from .review_source import review_source_binding
+from .state import serialized_task, require_route_owner
 from .architecture import (
     ArchitectureError,
     RULES_PATH,
@@ -824,6 +825,7 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
                 pass
 
 
+@serialized_task
 def write_receipt(
     root: Path,
     kind: str,
@@ -837,11 +839,39 @@ def write_receipt(
     expected_tree_fingerprint: str | None = None,
     interrupt_check: Callable[[], None] | None = None,
     reviewed_commit: str | None = None,
+    reviewed_context: str | None = None,
+    expected_context: dict[str, Any] | None = None,
 ) -> Path:
     route = get_active_route(root)
     if not route:
         raise RuntimeError('no active route')
-    review_source = review_source_binding(root, reviewed_commit, report) if kind != 'verification' and status == 'pass' else None
+    from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
+    require_route_owner(root, route)
+    modern = not legacy_evidence_allowed(route)
+    if modern and kind == 'verification' and status == 'pass' and expected_context is None:
+        raise ValueError('verification PASS requires the task context observed before work')
+    review_source = review_source_binding(root, reviewed_commit, report, reviewed_context=reviewed_context) if kind != 'verification' and status == 'pass' else None
+    observed = expected_context
+    if modern and review_source is not None:
+        observed = context_binding(root, route)
+    if observed is not None and observed != context_binding(root, route):
+        raise ValueError('observed task context changed before receipt publication')
+    if modern and status == 'pass':
+        gaps = scope_gaps(root, route)
+        if gaps:
+            raise ValueError('; '.join(gaps))
+
+    def assert_context() -> None:
+        current_route = get_active_route(root)
+        if not current_route or current_route.get('route_id') != route['route_id']:
+            raise ValueError('task context changed during receipt publication')
+        require_route_owner(root, current_route)
+        if observed is not None and context_binding(root, current_route) != observed:
+            raise ValueError('task context changed during receipt publication')
+        if observed is None and status == 'pass' and not legacy_evidence_allowed(current_route):
+            raise ValueError('legacy evidence cannot qualify a changed task context')
+        if modern and status == 'pass' and scope_gaps(root, current_route):
+            raise ValueError('scope changed during receipt publication')
     before_tree = tree_fingerprint(root)
     before_head = _exact_head(root)
     plan_digest = (route.get('review_plan') or {}).get('digest')
@@ -885,6 +915,7 @@ def write_receipt(
         'report': report,
         'details': details or {},
         **({'review_source': review_source} if review_source is not None else {}),
+        **({'continuity': observed} if observed is not None else {}),
         **binding,
         **(current_architecture or {}),
         **(current_governance or {}),
@@ -894,7 +925,7 @@ def write_receipt(
     after_architecture = active_architecture_binding(root, route)
     after_governance = active_governance_binding(root, route, after_architecture)
     if (
-        (review_source is not None and review_source_binding(root, reviewed_commit, report) != review_source)
+        (review_source is not None and review_source_binding(root, reviewed_commit, report, reviewed_context=reviewed_context) != review_source)
         or after_tree != before_tree
         or _exact_head(root) != before_head
         or after_binding != current
@@ -905,11 +936,14 @@ def write_receipt(
     path = receipt_dir(root, route['route_id']) / f'{kind}.json'
     spill = kind == 'verification'
     publication = None
+    receipt_publication_started = False
     try:
+        assert_context()
         # Classification can fail to serialize; that must retire an older pass too.
         spill = spill and len((json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + '\n').encode('utf-8')) > MAX_RECEIPT_BYTES
         if spill:
             publication = _publish_verification_report(root, route['route_id'], data, interrupt_check)
+            assert_context()
             report_architecture = active_architecture_binding(root, route)
             if (tree_fingerprint(root) != before_tree or _exact_head(root) != before_head
                     or _active_spec_binding(root, route, kind) != current
@@ -917,9 +951,12 @@ def write_receipt(
                     or active_governance_binding(root, route, report_architecture) != current_governance):
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
+        assert_context()
+        receipt_publication_started = True
         _publish_receipt(path, data, interrupt_check)
+        assert_context()
     except BaseException:
-        if spill:
+        if spill or receipt_publication_started:
             directory_fd = None
             try:
                 directory_fd = _open_receipt_directory(root, route['route_id'])
@@ -969,7 +1006,8 @@ def validate_evidence(
     *,
     current_fingerprint: str | None = None,
 ) -> list[str]:
-    missing: list[str] = []
+    from .continuity import scope_gaps, receipt_context_current
+    missing: list[str] = scope_gaps(root, route)
     if 'risk_assessment' in route:
         from .review_plan import validate_review_plan
         missing.extend(validate_review_plan(root, route))
@@ -1012,6 +1050,8 @@ def validate_evidence(
         if not receipt:
             missing.append(f'{kind}: missing receipt')
             continue
+        if not receipt_context_current(root, route, receipt):
+            missing.append(f'{kind}: task context binding stale or unavailable')
         if (
             not base_fields.issubset(receipt)
             or receipt.get('schema_version') != 1
@@ -1037,7 +1077,7 @@ def validate_evidence(
         if kind != 'verification' and receipt.get('status') == 'pass':
             try:
                 source = receipt.get('review_source')
-                if not isinstance(source, dict) or review_source_binding(root, source.get('reviewed_commit'), receipt.get('report')) != source:
+                if not isinstance(source, dict) or review_source_binding(root, source.get('reviewed_commit'), receipt.get('report'), reviewed_context=source.get('reviewed_context')) != source:
                     raise RuntimeError('missing or forged reviewed source binding')
             except (RuntimeError, ValueError, OSError, UnicodeError) as exc:
                 missing.append(f'{kind}: review source invalid: {exc}')
@@ -1087,6 +1127,9 @@ def _escalated_evidence(root: Path, route_id: str, required: list[str], current:
         return []
     if not isinstance(receipt, dict) or receipt.get('tree_fingerprint') != current:
         return []
+    from .continuity import receipt_context_current
+    if not receipt_context_current(root, get_active_route(root) or {}, receipt):
+        return []
     details = receipt.get('details') if isinstance(receipt.get('details'), dict) else {}
     diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}
     added = diff.get('added_evidence') if isinstance(diff.get('added_evidence'), list) else []
@@ -1103,6 +1146,9 @@ def _waived_evidence(root: Path, route_id: str, required: list[str], current: st
         return []
     if not isinstance(receipt, dict) or receipt.get('status') != 'pass' or receipt.get('stale') is True \
             or receipt.get('tree_fingerprint') != current:
+        return []
+    from .continuity import receipt_context_current
+    if not receipt_context_current(root, get_active_route(root) or {}, receipt):
         return []
     details = receipt.get('details') if isinstance(receipt.get('details'), dict) else {}
     diff = details.get('diff_risk') if isinstance(details.get('diff_risk'), dict) else {}

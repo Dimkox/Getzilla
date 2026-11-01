@@ -28,7 +28,8 @@ from getzilla import verification as verification_module
 from getzilla.change import start_change
 from getzilla.router import build_route
 from getzilla.spec import dump_canonical_spec
-from getzilla.state import get_active_change, set_active_route
+from getzilla.state import get_active_change
+from tests._support import activate_owned_route, synchronize_fixture_scope
 from getzilla.verification import (
     CheckResult,
     GitRangeSelection,
@@ -764,7 +765,7 @@ class VerificationTests(unittest.TestCase):
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'focused-static-landing',
                 'base_commit': base,
                 'quality_profiles': ['base', 'contracts'],
@@ -797,7 +798,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability'},
+                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:
@@ -805,7 +806,7 @@ class VerificationTests(unittest.TestCase):
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'full-pr-no-downgrade',
                 'base_commit': base,
                 'quality_profiles': ['base'],
@@ -834,7 +835,7 @@ class VerificationTests(unittest.TestCase):
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'focused-rejected-no-contract',
                 'base_commit': base,
                 'quality_profiles': ['base'],
@@ -903,7 +904,7 @@ class VerificationTests(unittest.TestCase):
         with _divergent_pr_graph({'legacy.md': 'legacy  \n'}) as (
             root, route_base, target, merge_base
         ):
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'committed-pr-whitespace',
                 'base_commit': route_base,
                 'quality_profiles': ['base'],
@@ -992,7 +993,7 @@ class VerificationTests(unittest.TestCase):
         with _divergent_pr_graph({contract: '{\n'}) as (
             root, route_base, target, merge_base
         ):
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'pr-range-inventory',
                 'base_commit': route_base,
                 'quality_profiles': ['base'],
@@ -1044,7 +1045,7 @@ class VerificationTests(unittest.TestCase):
         with _divergent_pr_graph({'legacy.md': 'legacy\n'}) as (
             root, route_base, target, merge_base
         ):
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'clean-pr-ranges',
                 'base_commit': route_base,
                 'quality_profiles': ['base'],
@@ -1073,7 +1074,7 @@ class VerificationTests(unittest.TestCase):
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'staged-whitespace',
                 'base_commit': base,
                 'quality_profiles': ['base'],
@@ -1124,7 +1125,7 @@ class VerificationTests(unittest.TestCase):
                     subprocess.run(['git', 'add', 'head.txt'], cwd=root, check=True)
                     subprocess.run(['git', 'commit', '-qm', 'head'], cwd=root, check=True)
                     expected_code = 'route-base-non-ancestor'
-                set_active_route(root, {
+                activate_owned_route(root, {
                     'route_id': f'invalid-route-{case}',
                     'base_commit': route_base,
                     'quality_profiles': ['base'],
@@ -1167,7 +1168,7 @@ class VerificationTests(unittest.TestCase):
                 cwd=root,
                 check=True,
             )
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'ambiguous-pr-target',
                 'base_commit': route_base,
                 'quality_profiles': ['base'],
@@ -1189,7 +1190,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_pr_git_diff_check_fails_closed_for_multiple_best_merge_bases(self) -> None:
         with _criss_cross_pr_graph() as (root, left, right, target):
-            set_active_route(root, {
+            activate_owned_route(root, {
                 'route_id': 'criss-cross-pr-target',
                 'base_commit': left,
                 'quality_profiles': ['base'],
@@ -1226,7 +1227,7 @@ class VerificationTests(unittest.TestCase):
                 route_base = subprocess.check_output(
                     ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
                 ).strip()
-                set_active_route(root, {
+                activate_owned_route(root, {
                     'route_id': f'topic-only-{delivery_expected}',
                     'base_commit': route_base,
                     'quality_profiles': ['base'],
@@ -1285,9 +1286,10 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
+            synchronize_fixture_scope(root)
             report = verify(root, mode='fast', record=True)
-            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['status'], 'pass', report)
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
 
@@ -1297,7 +1299,7 @@ class VerificationTests(unittest.TestCase):
             self._adopt_governance(root)
             route = build_route(root, 'Review governed architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt governance'], cwd=root, check=True)
             (root / 'governance/rules/index.json').write_text('{', encoding='utf-8')
@@ -1318,7 +1320,7 @@ class VerificationTests(unittest.TestCase):
             self._adopt_architecture(root)
             self._adopt_governance(root)
             route = build_route(root, 'Review governed architecture', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt governance'], cwd=root, check=True)
             checked = receipts_module.active_architecture_binding(root, route)
@@ -1349,7 +1351,7 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
 
             def mutate_after_governance(*args, **kwargs):
                 result = _governance_check(*args, **kwargs)
@@ -1383,7 +1385,7 @@ class VerificationTests(unittest.TestCase):
             subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
             route = build_route(root, 'Review current architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             report = verify(root, mode='fast', record=False)
             metadata = report['architecture']
             self.assertEqual(metadata['head_kind'], 'worktree')
@@ -1432,7 +1434,7 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self.assertEqual(verify(root, mode='fast', record=False)['architecture']['status'], 'not_configured')
             self._adopt_architecture(root)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
@@ -1446,7 +1448,7 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self._adopt_architecture(root)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
@@ -1468,7 +1470,7 @@ class VerificationTests(unittest.TestCase):
             with self.subTest(delete_models=delete_models, committed=committed), project_copy(git=True) as root:
                 route = build_route(root, 'Review current architecture', 's1').to_dict()
                 route['quality_profiles'] = ['base']
-                set_active_route(root, route)
+                activate_owned_route(root, route)
                 self._adopt_architecture(root)
                 subprocess.run(['git', 'add', '.'], cwd=root, check=True)
                 subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
@@ -1488,7 +1490,7 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self._adopt_architecture(root)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
@@ -1514,7 +1516,8 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
+            synchronize_fixture_scope(root)
             architecture = root / 'architecture'
             architecture.mkdir(exist_ok=True)
             for name in ('system.yaml', 'rules.yaml'):
@@ -1539,7 +1542,7 @@ class VerificationTests(unittest.TestCase):
             self._adopt_architecture(root)
             route = build_route(root, 'Review current architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch.object(architecture_module.os, 'O_NOFOLLOW', 0):
                 report = verify(root, mode='fast', record=False)
             self.assertEqual(report['status'], 'fail')
@@ -1551,7 +1554,7 @@ class VerificationTests(unittest.TestCase):
             (root / 'architecture').mkdir(exist_ok=True)
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch.object(architecture_module.os, 'O_NOFOLLOW', 0):
                 report = verify(root, mode='fast', record=False)
             self.assertEqual(report['architecture']['status'], 'not_configured')
@@ -1564,7 +1567,7 @@ class VerificationTests(unittest.TestCase):
                 shutil.rmtree(architecture)
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             real_stat = receipts_module.os.stat
             real_open = receipts_module.os.open
 
@@ -1619,7 +1622,7 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             legacy = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
@@ -1668,7 +1671,7 @@ class VerificationTests(unittest.TestCase):
                 cwd=clone,
                 check=True,
             )
-            set_active_route(clone, {
+            activate_owned_route(clone, {
                 'base_commit': adopted,
                 'quality_profiles': ['base'],
                 'route_id': 'shallow-adoption-deletion',
@@ -1704,7 +1707,7 @@ class VerificationTests(unittest.TestCase):
                 cwd=clone,
                 check=True,
             )
-            set_active_route(clone, {
+            activate_owned_route(clone, {
                 'base_commit': legacy,
                 'quality_profiles': ['base'],
                 'route_id': 'shallow-legacy-route-after-deletion',
@@ -1734,7 +1737,7 @@ class VerificationTests(unittest.TestCase):
             (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             report = verify(root, mode='fast', record=True)
             check = _check(report, 'python-unittest')
             self.assertIsNotNone(check)
@@ -1747,7 +1750,7 @@ class VerificationTests(unittest.TestCase):
             (tests_dir / 'test_fail.py').write_text(_FAILING_UNITTEST, encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             report = verify(root, mode='fast', record=True)
             self.assertEqual(report['status'], 'fail')
             check = _check(report, 'python-unittest')
@@ -1998,7 +2001,7 @@ class TypedSpecVerificationTests(unittest.TestCase):
         ):
             with self.subTest(category=category), project_copy(git=True) as root:
                 route = build_route(root, 'Добавить функцию', 's1').to_dict()
-                set_active_route(root, route)
+                activate_owned_route(root, route)
                 start_change(root)
                 active = get_active_change(root) or {}
                 rel = f"{active['path']}/change-spec.yaml"
@@ -2016,7 +2019,7 @@ class TypedSpecVerificationTests(unittest.TestCase):
     def test_pr_selects_active_and_every_changed_spec(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             active_rel = f"{active['path']}/change-spec.yaml"
@@ -2032,7 +2035,7 @@ class TypedSpecVerificationTests(unittest.TestCase):
     def test_changed_v1_and_missing_selected_spec_fail(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             active_path = root / str(active['path']) / 'change-spec.yaml'
@@ -2051,7 +2054,7 @@ class TypedSpecVerificationTests(unittest.TestCase):
     def test_fast_is_draft_but_pr_is_gate(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             rel = f"{active['path']}/change-spec.yaml"
@@ -2132,7 +2135,7 @@ class QualityContourTests(unittest.TestCase):
             (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             recorded: list[str] = []
             real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
 
@@ -2213,7 +2216,7 @@ class QualityContourTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch('getzilla.verification.command_exists', side_effect=_which_except('bandit')):
                 report = verify(root, mode='fast', record=False)
             bandit = _check(report, 'bandit')
@@ -2305,7 +2308,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (root / 'config.php').write_text("<?php $" + "api_key = '" + fake_secret + "';", encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with _PathTools({'bandit': _FAKE_BANDIT}):
                 report = verify(root, mode='fast', record=False)
             secret = _check(report, 'secret-scan')
@@ -2320,7 +2323,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch('getzilla.verification.command_exists', side_effect=_which_except('coverage', 'ruff', 'bandit', 'pytest')):
                 report = verify(root, mode='pr', record=False, keep_going=True)
             coverage = _check(report, 'coverage')
@@ -2341,7 +2344,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (root / '.coveragerc').write_text('[report]\nfail_under = 100\n', encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with _PathTools({'coverage': _FAKE_COVERAGE_FAIL_REPORT}):
                 report = verify(root, mode='fast', record=False)
             unittest_check = _check(report, 'python-unittest')
@@ -2359,7 +2362,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (root / '.coveragerc').write_text('[report]\nfail_under = 100\n', encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with _PathTools({'coverage': _FAKE_COVERAGE_FAIL_REPORT}):
                 report = verify(root, mode='pr', record=False, keep_going=True)
             coverage = _check(report, 'coverage')
@@ -2374,7 +2377,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             self.assertFalse((root / 'semgrep.yaml').exists())
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             report = verify(root, mode='fast', record=False)
             names = [item['name'] for item in report['checks']]
             self.assertNotIn('semgrep', names)
@@ -2386,7 +2389,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (root / 'semgrep.yaml').write_text('rules: []\n', encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch('getzilla.verification.command_exists', side_effect=_which_except('semgrep')):
                 report = verify(root, mode='fast', record=False)
             semgrep = _check(report, 'semgrep')
@@ -2398,7 +2401,7 @@ json.dump({"results": [], "metrics": metrics}, open(out, "w"))
             (root / 'Dockerfile').write_text('FROM scratch\n', encoding='utf-8')
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch('getzilla.verification.command_exists', side_effect=_which_except('trivy')):
                 report = verify(root, mode='fast', record=False)
             trivy = _check(report, 'trivy-config')
@@ -2425,10 +2428,11 @@ class FailFastVerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 'fail-fast').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root)
             (root / active['path'] / 'change-spec.yaml').write_text(dump_canonical_spec(_valid_change_spec(active['change_id'])))
+            synchronize_fixture_scope(root)
             yield root, route
 
     def test_unallowed_skip_and_unknown_status_block_actual_python_dispatch(self):

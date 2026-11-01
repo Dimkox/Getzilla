@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import sys
 import unittest
@@ -12,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.router import build_route
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 STEP_ZERO = 'lscpu; lscpu -p=CPU,CORE,SOCKET,ONLINE; nproc --all; nproc; taskset -pc $$; cat /proc/self/cgroup'
@@ -25,7 +24,7 @@ class SequentialSeparatorTests(unittest.TestCase):
         cls.root = cls.stack.enter_context(project_copy(git=True))
         cls.other = cls.stack.enter_context(project_copy(git=True))
         for root in (cls.root, cls.other):
-            set_active_route(root, build_route(root, 'Fix startup capacity step zero', 'seq').to_dict())
+            activate_owned_route(root, build_route(root, 'Fix startup capacity step zero', 'seq').to_dict())
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -34,7 +33,7 @@ class SequentialSeparatorTests(unittest.TestCase):
     def verdict(self, command: str) -> dict:
         _, result, error = run_hook(self.root, 'pre_tool_use.py', {
             'cwd': str(self.root),
-            'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'session_id': 'seq',
             'tool_name': 'exec_command',
             'tool_input': {'cmd': command, 'workdir': str(self.root)},
         })

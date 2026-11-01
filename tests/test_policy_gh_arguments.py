@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import shlex
 import shutil
@@ -17,7 +16,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla._policy_legacy import _http_write_resource, analyze_command_authority, production_targets  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, sensitive_action  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import add_approval, approvals_path, set_active_route  # noqa: E402
+from getzilla.state import add_approval, approvals_path
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
 
 
@@ -28,7 +28,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
         cls.root = cls.stack.enter_context(project_copy(git=True))
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=cls.root, check=True)
-        set_active_route(cls.root, build_route(cls.root, 'Offline argument fixture', 'gh-arguments').to_dict())
+        activate_owned_route(cls.root, build_route(cls.root, 'Offline argument fixture', 'gh-arguments').to_dict())
         (cls.root / '.env').write_text('SYNTHETIC_TEST_VALUE=fixture\n', encoding='utf-8')
         (cls.root / '.env.example').write_text('PUBLIC_TEMPLATE=fixture\n', encoding='utf-8')
         (cls.root / 'body.md').write_text('Public fixture\n', encoding='utf-8')
@@ -49,7 +49,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
 
     def hook_verdict(self, command: str) -> dict:
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
-            'cwd': str(self.root), 'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'cwd': str(self.root), 'session_id': 'gh-arguments',
             'tool_name': 'Bash',
             'tool_input': {'command': command},
         })

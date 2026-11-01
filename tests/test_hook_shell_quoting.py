@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla._policy_legacy import _simple_commands, analyze_command_authority
 from getzilla.router import build_route
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 
@@ -27,7 +27,7 @@ class ShellQuotingTests(unittest.TestCase):
         for root in (cls.root, cls.other):
             (root / 'README.md').write_bytes(b'allow deny' + bytes([10]))
         for root in (cls.root, cls.other):
-            set_active_route(root, build_route(root, 'Fix shell quoting regression', 'quoted-data').to_dict())
+            activate_owned_route(root, build_route(root, 'Fix shell quoting regression', 'quoted-data').to_dict())
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -36,7 +36,7 @@ class ShellQuotingTests(unittest.TestCase):
     def verdict(self, command: str, **workdirs: str) -> dict:
         _, result, error = run_hook(self.root, 'pre_tool_use.py', {
             'cwd': str(self.root),
-            'session_id': self.id() + hashlib.sha256(command.encode()).hexdigest(),
+            'session_id': 'quoted-data',
             'tool_name': 'exec_command',
             'tool_input': {'cmd': command, 'workdir': str(self.root), **workdirs},
         })

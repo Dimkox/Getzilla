@@ -13,7 +13,8 @@ from getzilla.change import start_change, transition
 from getzilla.human_gates import gate_block_reason, gate_statuses, record_gate_decision
 from getzilla.policy import evaluate_pre_tool
 from getzilla.router import build_route
-from getzilla.state import add_approval, set_active_route
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy
 
 
@@ -26,7 +27,7 @@ class HumanGateTests(unittest.TestCase):
         )
         route = build_route(root, 'Prepare production release and canary', 'gate-test').to_dict()
         route['human_gates'] = gates
-        set_active_route(root, route)
+        activate_owned_route(root, route)
         state = start_change(root)
         transition(root, state['change_id'], 'scoped', 'package scope prepared')
         return state

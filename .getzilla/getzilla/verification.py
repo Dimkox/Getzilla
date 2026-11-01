@@ -11,6 +11,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from .bitrix_checks import check_bitrix
 from .architecture import (
@@ -92,6 +93,36 @@ class _RunState:
     results: list[CheckResult] = field(default_factory=list)
     stage: str = 'pre-dispatch'
     receipt_eligible: bool = True
+    context: dict[str, Any] | None = None
+    context_route_id: str | None = None
+    context_error: str | None = None
+
+
+def _task_context_check(root: Path, state: _RunState) -> CheckResult:
+    from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
+    from .state import task_transition, route_authority_present
+    error = state.context_error
+    with task_transition(root):
+        route = get_active_route(root)
+        if not error:
+            try:
+                if state.context_route_id != (route or {}).get('route_id'):
+                    raise ValueError('task context changed during verification')
+                if state.context is not None:
+                    if context_binding(root, route) != state.context:
+                        raise ValueError('task context changed during verification')
+                    gaps = scope_gaps(root, route)
+                    if gaps:
+                        raise ValueError('; '.join(gaps))
+                elif (route and not legacy_evidence_allowed(route) or
+                      not route and route_authority_present(root)):
+                    raise ValueError('task context is unavailable or changed from legacy evidence')
+            except (ValueError, RuntimeError, OSError, TypeError, KeyError) as exc:
+                error = str(exc)
+    if error:
+        state.receipt_eligible = False
+    return CheckResult('task-context', 'fail' if error else 'pass',
+                       error or 'observed task context remained current')
 
 
 class _CheckDispatch:
@@ -141,13 +172,15 @@ def _failure_message(exc: BaseException) -> str:
     return f'{type(exc).__name__}: {message}'[:512]
 
 
-def _record_verification_receipt(root: Path, report: dict[str, object], fingerprint: str, *, interrupt_check=None) -> None:
+def _record_verification_receipt(root: Path, report: dict[str, object], fingerprint: str, *, interrupt_check=None,
+                                 expected_context=None) -> None:
     report.setdefault('check_status', report['status'])
     report.setdefault('terminal_state', 'completed')
     report['evidence_status'] = 'recorded'
     try:
         write_receipt(root, 'verification', report['status'], details=report,
-                      expected_tree_fingerprint=fingerprint, interrupt_check=interrupt_check)
+                      expected_tree_fingerprint=fingerprint, interrupt_check=interrupt_check,
+                      expected_context=expected_context)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         report['status'] = 'fail'
         report['evidence_status'] = 'failed'
@@ -2398,6 +2431,8 @@ def _verify_focused_static_seo_landing(
             if source_stable else 'repository changed during verification checks',
         )
     )
+    if state:
+        results.append(_task_context_check(root, state))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
         'status': 'not_run',
@@ -2426,10 +2461,11 @@ def _verify_focused_static_seo_landing(
     })
     with _cancellation() as cancellation:
         cancellation.check()
-    if record and route and source_stable:
+    if record and route and source_stable and (not state or state.receipt_eligible):
         if state:
             state.stage = 'receipt-publication'
-        _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check)
+        _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check,
+                                     expected_context=state.context if state else None)
     return report
 
 
@@ -2684,7 +2720,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
                 stable = report['tree_fingerprint'] in (None, fingerprint)
                 report['tree_fingerprint'] = fingerprint
                 if record and state.receipt_eligible and report['route_id'] and stable:
-                    _record_verification_receipt(root, report, fingerprint)
+                    _record_verification_receipt(root, report, fingerprint, expected_context=state.context)
             except (OSError, RuntimeError, TypeError, ValueError) as cleanup:
                 report['evidence_status'] = 'failed' if state.receipt_eligible else 'not_recorded'
                 report['checks'].append(CheckResult('cancellation-finalization', 'fail', _failure_message(cleanup)).to_dict())
@@ -2697,6 +2733,20 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     checked_fingerprint = tree_fingerprint(root)
     route = get_active_route(root)
+    from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
+    state.context_route_id = (route or {}).get('route_id')
+    if route and not legacy_evidence_allowed(route):
+        try:
+            state.context = context_binding(root, route)
+            report['continuity'] = state.context
+            gaps = scope_gaps(root, route)
+            if gaps:
+                raise ValueError('; '.join(gaps))
+        except (ValueError, RuntimeError, OSError, TypeError, KeyError) as exc:
+            state.context_error = str(exc)
+    initial_context = _task_context_check(root, state)
+    if initial_context.status == 'fail':
+        state.results.append(initial_context)
     active_profiles = profiles or (route.get('quality_profiles', ['base']) if route else ['base'])
     report.update(tree_fingerprint=checked_fingerprint, route_id=route.get('route_id') if route else None,
                   profiles=active_profiles)
@@ -2920,6 +2970,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             ),
         )
     )
+    results.append(_task_context_check(root, state))
     quality_gate = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope)
     results.append(
         CheckResult(
@@ -2956,6 +3007,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     if record and state.receipt_eligible and route and governance_check.status != 'fail' and source_stable:
         state.stage = 'receipt-publication'
-        _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check)
+        _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check,
+                                     expected_context=state.context)
     cancellation.check()
     return report

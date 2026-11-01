@@ -30,7 +30,8 @@ from getzilla.receipts import (
     write_receipt,
 )
 from getzilla.router import build_route
-from getzilla.state import get_active_change, get_active_route, set_active_route
+from getzilla.state import get_active_change, get_active_route
+from tests._support import activate_owned_route
 from getzilla.verification import _architecture_check, verify
 from getzilla.spec import dump_canonical_spec
 from tests._support import prepare_review_source, project_copy
@@ -53,7 +54,7 @@ class ChangeTests(unittest.TestCase):
     def test_start_creates_durable_package(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Добавить Битрикс модуль синхронизации', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             state = start_change(root)
             active = get_active_change(root)
             self.assertEqual(state['status'], 'draft')
@@ -76,7 +77,7 @@ class ChangeTests(unittest.TestCase):
     def test_change_path_does_not_depend_on_title_and_start_is_idempotent(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             first = start_change(root, 'First private title')
             second = start_change(root, 'Another private title')
             self.assertEqual(first['change_id'], second['change_id'])
@@ -84,7 +85,7 @@ class ChangeTests(unittest.TestCase):
 
     def test_valid_transitions(self) -> None:
         with project_copy() as root:
-            set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             state = start_change(root)
             change_id = state['change_id']
             self.assertEqual(transition(root, change_id, 'scoped', 'scope ready')['status'], 'scoped')
@@ -92,7 +93,7 @@ class ChangeTests(unittest.TestCase):
 
     def test_invalid_transition_is_rejected(self) -> None:
         with project_copy() as root:
-            set_active_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
             state = start_change(root)
             with self.assertRaises(ValueError):
                 transition(root, state['change_id'], 'ready', 'skip')
@@ -102,6 +103,9 @@ def _legacy_receipt_route(root, task, session):
     """Exercise the preserved pre-assessment receipt schema independently of new routing."""
     route = build_route(root, task, session).to_dict()
     route.pop('risk_assessment')
+    for name in ('task_context_version', 'logical_task_id', 'origin_session_id', 'authority_epoch',
+                 'state_revision', 'workspace', 'context', 'handoff'):
+        route.pop(name, None)
     return route
 
 
@@ -259,7 +263,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             path = root / str(active['path']) / 'change-spec.yaml'
@@ -290,7 +294,7 @@ class ReceiptTests(unittest.TestCase):
             self._adopt_architecture(root)
             route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             self._install_spec(root, active, {'AC-001': {'receipt': 'verification'}})
@@ -313,7 +317,7 @@ class ReceiptTests(unittest.TestCase):
             self._adopt_governance(root)
             route = _legacy_receipt_route(root, 'Review governed code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt governed architecture'], cwd=root, check=True)
 
@@ -353,7 +357,7 @@ class ReceiptTests(unittest.TestCase):
             self._adopt_governance(root)
             route = _legacy_receipt_route(root, 'Review governed code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt governed architecture'], cwd=root, check=True)
             (root / 'governance/rules/index.json').write_text('{', encoding='utf-8')
@@ -374,7 +378,7 @@ class ReceiptTests(unittest.TestCase):
             self._adopt_governance(root)
             route = _legacy_receipt_route(root, 'Review governed code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(
                 ['git', 'commit', '-qm', 'adopt governed architecture'],
@@ -401,7 +405,7 @@ class ReceiptTests(unittest.TestCase):
             self._adopt_architecture(root)
             self._adopt_governance(root)
             route = _legacy_receipt_route(root, 'Review governed architecture', 's1')
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'adopt governed architecture'], cwd=root, check=True)
             original = active_governance_binding(root, route)
@@ -478,7 +482,7 @@ class ReceiptTests(unittest.TestCase):
                 'required_evidence': ['verification'],
                 'route_id': 'consumer-bootstrap',
             }
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self.assertNotEqual(
                 subprocess.run(
                     ['git', 'cat-file', '-e', ARCHITECTURE_DIFF.ADOPTION_BASE_SHA + '^{commit}'],
@@ -546,7 +550,7 @@ class ReceiptTests(unittest.TestCase):
                 'required_evidence': ['verification'],
                 'route_id': 'receipt-base-regression',
             }
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch.object(ARCHITECTURE_DIFF, 'ADOPTION_BASE_SHA', frozen_base):
                 selection = select_architecture_comparison_base(root, route)
                 receipt = json.loads(
@@ -567,7 +571,7 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(receipt['architecture_route_base_sha'], selection.route_base_sha)
 
             route['base_commit'] = alternate_route_base
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             with patch.object(ARCHITECTURE_DIFF, 'ADOPTION_BASE_SHA', frozen_base):
                 current = active_architecture_binding(root, route)
                 gaps = validate_evidence(root, route)
@@ -585,7 +589,7 @@ class ReceiptTests(unittest.TestCase):
             )
 
             route['base_commit'] = 'f' * 40
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             self.assertTrue(
                 any(
                     'architecture binding stale' in gap
@@ -597,7 +601,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review current code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             path = write_receipt(root, 'verification', 'pass')
             receipt = json.loads(path.read_text(encoding='utf-8'))
             self.assertNotIn('architecture_digest', receipt)
@@ -607,7 +611,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review current code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             receipt_path = write_receipt(root, 'verification', 'pass')
             original_receipt = receipt_path.read_bytes()
             scratch = root / '.qwen/tmp/probe'
@@ -630,7 +634,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review current code', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             rel = os.fsdecode(b'source-\xff.py')
             (root / rel).write_text('one', encoding='utf-8')
             path = write_receipt(root, 'verification', 'pass', details={'changed_files': [rel]})
@@ -645,7 +649,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
             route['required_evidence'] = kinds
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             self._install_spec(root, active, {
@@ -661,7 +665,7 @@ class ReceiptTests(unittest.TestCase):
     def test_explicit_binding_mismatch_is_rejected(self) -> None:
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             self._install_spec(root, active, {'AC-001': {'receipt': 'verification'}})
@@ -674,7 +678,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root) or {}
             self._install_spec(root, active, {'AC-001': {'receipt': 'verification'}})
@@ -692,7 +696,7 @@ class ReceiptTests(unittest.TestCase):
             with self.subTest(mutation=mutation), project_copy(git=True) as root:
                 route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
                 route['required_evidence'] = ['verification']
-                set_active_route(root, route)
+                activate_owned_route(root, route)
                 start_change(root)
                 active = get_active_change(root) or {}
                 contract = root / 'contracts/schema.json'
@@ -711,7 +715,7 @@ class ReceiptTests(unittest.TestCase):
                     contract.write_text('{"changed":true}\n', encoding='utf-8')
                 elif mutation == 'route':
                     route['base_commit'] = 'f' * 40
-                    set_active_route(root, route)
+                    activate_owned_route(root, route)
                 else:
                     (root / 'head-change.txt').write_text('changed\n', encoding='utf-8')
                     subprocess.run(['git', 'add', 'head-change.txt'], cwd=root, check=True)
@@ -722,7 +726,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Исправить PHP баг', 's1')
             route['required_evidence'] = ['verification', 'code_review']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             review = prepare_review_source(root)
             write_receipt(root, 'verification', 'pass')
             write_receipt(root, 'code_review', 'pass', **review)
@@ -732,7 +736,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Исправить PHP баг', 's1')
             route['required_evidence'] = ['verification']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             write_receipt(root, 'verification', 'pass')
             (root / 'new.php').write_text('<?php echo 1;')
             gaps = validate_evidence(root, route)
@@ -742,7 +746,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review this PR', 's1')
             route['required_evidence'] = ['code_review']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             write_receipt(root, 'code_review', 'fail')
             self.assertTrue(any('status=fail' in item for item in validate_evidence(root, route)))
 
@@ -750,7 +754,7 @@ class ReceiptTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review this PR', 's1')
             route['required_evidence'] = ['code_review']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             path = write_receipt(root, 'code_review', 'pass', **prepare_review_source(root))
             invalidate_receipts(root, route['route_id'], 'changed')
             self.assertIn('"stale": true', path.read_text(encoding='utf-8'))
@@ -772,7 +776,7 @@ class ContourTests(unittest.TestCase):
             route['required_evidence'] = ['verification', 'code_review', 'test_review']
             route['quality_profiles'] = ['base']
             route['delivery_lane'] = 'full'
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             start_change(root)
             active = get_active_change(root)
             self.assertIsNotNone(active)

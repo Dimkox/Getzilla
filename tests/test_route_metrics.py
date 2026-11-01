@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
 from getzilla.route_metrics import METRICS, load, profile_of, record, record_verify, summarize  # noqa: E402
-from getzilla.state import set_active_route  # noqa: E402
+from tests._support import activate_owned_route
 
 T0 = datetime(2026, 10, 18, 9, 0, tzinfo=timezone.utc)
 
@@ -75,8 +75,8 @@ class RecordingTests(unittest.TestCase):
         self.assertNotIn('add payments', json.dumps(item))
 
     def test_a_new_route_and_a_verification_run_are_recorded(self) -> None:
-        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
-        set_active_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
+        activate_owned_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
+        activate_owned_route(self.root, {'route_id': 'r9', 'intent': 'bugfix', 'risk': 'medium', 'quality_profiles': ['base']})
         record_verify(self.root, {'route_id': 'r9', 'mode': 'pr', 'status': 'fail', 'diff_risk': {'effective_risk': 'medium'},
                                   'checks': [{'name': 'ruff', 'status': 'fail'}, {'name': 'bandit', 'status': 'pass'}]})
         events = self.lines()

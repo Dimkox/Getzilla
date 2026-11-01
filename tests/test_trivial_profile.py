@@ -40,8 +40,8 @@ class TrivialProfileTests(unittest.TestCase):
         git(self.repo, 'commit', '-q', '-m', path)
 
     def check(self, route=TYPO, mode='pr'):
-        from getzilla.state import set_active_route
-        set_active_route(self.repo, dict(route))
+        from tests._support import activate_owned_route
+        activate_owned_route(self.repo, dict(route))
         head = git(self.repo, 'rev-parse', 'HEAD')
         ranges = verification.GitRangeSelection(bases=[verification.GitRangeBase('route', 't', head, self.base)])
         return verification._diff_risk_check(self.repo, route, mode, ranges, tree_fingerprint(self.repo))

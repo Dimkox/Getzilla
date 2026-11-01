@@ -29,7 +29,8 @@ def _safe_path(value: Any) -> str:
     return value
 
 
-def review_source_binding(root: Path, reviewed_commit: str | None, report: str | None) -> dict[str, Any]:
+def review_source_binding(root: Path, reviewed_commit: str | None, report: str | None, *,
+                          reviewed_context: str | None = None) -> dict[str, Any]:
     """Re-derive the full binding at write and consumption; no caller claims qualify."""
     if not isinstance(reviewed_commit, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', reviewed_commit):
         raise ValueError('reviewed commit must be an exact full commit SHA')
@@ -105,9 +106,20 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
 
     report = _safe_path(report)
     report_bytes = regular_report(report, head)
+    from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
+    context_claim = {}
+    if not legacy_evidence_allowed(route) or reviewed_context is not None:
+        marker_lines = [line for line in report_bytes.decode('utf-8', 'strict').splitlines()
+                        if 'reviewed-context-digest:' in line]
+        if (not isinstance(reviewed_context, str) or not re.fullmatch(r'[0-9a-f]{64}', reviewed_context) or
+                marker_lines != ['reviewed-context-digest: ' + reviewed_context]):
+            raise ValueError('reviewed context requires one exact report marker and matching --reviewed-context')
+        if reviewed_context != context_binding(root, route)['digest'] or scope_gaps(root, route):
+            raise ValueError('reviewed context is stale or has unresolved scope; obtain a fresh independent report')
+        context_claim['reviewed_context'] = reviewed_context
     if report.startswith('.getzilla/runtime/'):
         tree = (_git(root, ['rev-parse', head + '^{tree}']) or b'').decode('ascii').strip()
-        return {'contract': 'getzilla.review-source/runtime-v1', 'route_id': route_id,
+        return {'contract': 'getzilla.review-source/runtime-v1', 'route_id': route_id, **context_claim,
                 'change_id': active.get('change_id') if isinstance(active, dict) else None,
                 'report_namespace': report.rsplit('/', 1)[0], 'report_paths': [report],
                 'reviewed_commit': reviewed_commit, 'reviewed_tree': tree,
@@ -131,6 +143,7 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
         changed.append(path)
     return {
         'contract': 'getzilla.review-source/v1',
+        **context_claim,
         'route_id': route_id,
         'report_namespace': report.rsplit('/', 1)[0],
         'reviewed_commit': reviewed_commit,

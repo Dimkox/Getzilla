@@ -5,7 +5,7 @@ Project hooks need `/hooks-trust` in the Grok TUI.
 ## Soft mode (default since v2.0.4)
 
 - **PreToolUse**: real policy when import works; on any error → **allow**
-- **Stop**: evidence gaps are **warnings only**, never block the agent
+- **Stop**: evidence gaps are warnings; configured unsupported-completion-claim checks retain their existing refusal behavior
 
 Hard lockouts (exit 2 / infinite stop loops) are intentional bugs — fixed in 2.0.4.
 Canonical source hooks live in `.grok/hooks/`. For older `adaptive.json` files that call `python3 pre_tool_use.py` from a consumer project root, the installer generates nine compatibility aliases from `.getzilla/templates/hook_root_shim.py`; these aliases dispatch to canonical hooks or preserve the fail-open JSON fallback. Generated consumer aliases are not tracked source-root files.
@@ -20,6 +20,10 @@ mv .grok/hooks .grok/hooks.disabled
 ```
 
 Then restart `grok`.
+
+## Task continuation
+
+`UserPromptSubmit` and the route CLI share the same canonical intake operation. Ordinary prompts preserve the unfinished original task and append substantive amendments; explicit `--new-task` and exact `--continue` govern new identity and handoff. `SessionStart` and prompt context show the original, unresolved amendments/rejection, typed scope and evidence gaps as task data, with a 16384 UTF-8 byte display bound and recovery path. Overflow remains visibly NOT admitted until exact synchronization. `Stop` reports unresolved scope and evidence and never auto-completes a ready/open task. Existing claim-blocking policy remains separate from advisory warnings.
 
 ## Local child lifecycle
 

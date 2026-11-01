@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import shlex
 import subprocess
 import sys
@@ -14,7 +13,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool, sensitive_action
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, set_active_route
+from getzilla.state import add_approval, approvals_path
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 
@@ -42,10 +42,9 @@ class CompoundWritePolicyTests(unittest.TestCase):
         cls.root = cls.stack.enter_context(project_copy(git=True))
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=cls.root, check=True)
-        set_active_route(cls.root, build_route(cls.root, 'Offline compound mutation fixture', 'compound').to_dict())
+        activate_owned_route(cls.root, build_route(cls.root, 'Offline compound mutation fixture', 'compound').to_dict())
         (cls.root / 'body.md').write_text('Public fixture\n', encoding='utf-8')
         (cls.root / 'request.cfg').write_text('url = https://api.example.test/items\n', encoding='utf-8')
-        cls.sequence = 0
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -65,10 +64,8 @@ class CompoundWritePolicyTests(unittest.TestCase):
         with self.subTest(layer='policy', command=command):
             self.assertEqual(allowed, expected, (command, reason))
         if hook:
-            type(self).sequence += 1
-            session = self.id() + str(self.sequence) + hashlib.sha256(command.encode()).hexdigest()
             code, result, error = run_hook(self.root, 'pre_tool_use.py', {
-                **event, 'cwd': str(self.root), 'session_id': session,
+                **event, 'cwd': str(self.root), 'session_id': 'compound',
             })
             with self.subTest(layer='hook', command=command):
                 self.assertEqual(code, 0, error)

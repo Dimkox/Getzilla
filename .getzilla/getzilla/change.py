@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import shutil
 from pathlib import Path
 from typing import Any
 
 from .package_status import collect_worktree, read_package_file
-from .state import get_active_route, set_active_change, update_route
+from .state import (get_active_route, set_active_change, update_route, serialized_task,
+                    require_route_owner, durable_json, durable_bytes, _safe_parents)
 from .spec import dump_canonical_spec, generate_spec
-from .util import atomic_write_text, dump_json, now_utc
+from .util import dump_json, now_utc
 from .workflow_storage import change_directory
 
 GOVERNANCE_AUTHORITY_NOTICE = (
@@ -70,26 +73,80 @@ def _mirror_checkpoints(root: Path, path: Path, state: dict[str, Any]) -> None:
         if checkpoint['kind'] == 'initial':
             content += '\nInitial evidence accounting (current records are in `state.json`):\n\n```json\n'
             content += json.dumps(state['evidence_accounting'], ensure_ascii=True, indent=2) + '\n```\n'
-    atomic_write_text(readme, content)
+    durable_bytes(root, readme, content.encode('utf-8'))
     state['checkpoint_mirror_pending'] = False
-    dump_json(path / 'state.json', state)
+    durable_json(root, path / 'state.json', state)
 
 
+@serialized_task
 def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
+    from .continuity import normalize_route, attach_package
+    from . import fsx
     route = get_active_route(root)
     if not route:
         raise RuntimeError('No active route. Submit a development task or run scripts/getzilla_route.py first.')
+    route = normalize_route(root, route)
     title = title or route['task']
-    change_id = f"{route['created_at'][:10].replace('-', '')}-{public_change_slug(title)}-{route['route_id'][:6]}"
+    change_id = route.get('change_id') or f"{route['created_at'][:10].replace('-', '')}-{public_change_slug(title)}-{route['route_id'][:6]}"
     path = change_directory(root, change_id, writable=True)
     if path.exists():
-        state = json.loads((path / 'state.json').read_text(encoding='utf-8'))
-        set_active_change(root, {'change_id': change_id, 'path': path.relative_to(root).as_posix()})
+        state = _complete_package(root, path, route, change_id)
+        attach_package(root, route, change_id, path)
         _mirror_checkpoints(root, path, state)
         return state
+    handles, _ = _safe_parents(root, path.parent.relative_to(root))
+    staging_name = '.creating-' + secrets.token_hex(16)
+    staging = path.parent / staging_name
+    try:
+        fsx.mkdir_at(handles[-1], staging_name, 0o700)
+        state = _create_package(root, staging, route, change_id, title)
+        _complete_package(root, staging, route, change_id)
+        for directory, _, names in os.walk(staging, topdown=False):
+            for name in names:
+                read_package_file(root, (Path(directory) / name).relative_to(root).as_posix(),
+                                  limit=1_048_576 if name == 'route.json' else 262_144, sync=True)
+            handle = fsx.open_dir(directory)
+            try:
+                fsx.fsync_dir(handle)
+            finally:
+                fsx.close_dir(handle)
+        from .workflow_artifacts import _rename_noreplace
+        _rename_noreplace(handles[-1], staging_name, path.name)
+        fsx.fsync_dir(handles[-1])
+    finally:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+        # Interrupted staging is intentionally retained for diagnosis, never accepted as complete.
+    attach_package(root, route, change_id, path)
+    _mirror_checkpoints(root, path, state)
+    return state
+
+
+def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: str) -> dict[str, Any]:
+    from .continuity import validate_package_state
+    from .state import _route_document
+    from .package_status import PACKAGE_MARKDOWN
+    from .spec import _parse_canonical_json, _validate_document
+    value = _route_document(root, path / 'state.json')
+    validate_package_state(value, route, change_id)
+    spec = _parse_canonical_json(read_package_file(root, (path / 'change-spec.yaml').relative_to(root).as_posix()),
+                                 path / 'change-spec.yaml')
+    _validate_document(spec, gate=False, root=root)
+    if spec.get('change_id') != change_id:
+        raise ValueError('existing package spec identity conflicts with the task')
+    for name in PACKAGE_MARKDOWN:
+        read_package_file(root, (path / name).relative_to(root).as_posix()).decode('utf-8', 'strict')
+    return value
+
+
+def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: str, title: str) -> dict[str, Any]:
     template = root / '.getzilla/templates/change'
-    shutil.copytree(template, path)
+    if any(item.is_symlink() for item in template.rglob('*')):
+        raise ValueError('unsafe change template')
+    shutil.copytree(template, path, dirs_exist_ok=True)
     generated_route = {**route, 'change_id': change_id}
+    if len(route['task']) > 4096:
+        generated_route['task'] = 'UNRESOLVED: explicitly map the complete original from the canonical route into bounded typed criteria.'
     (path / 'change-spec.yaml').write_text(
         dump_canonical_spec(generate_spec(generated_route)),
         encoding='utf-8',
@@ -141,24 +198,47 @@ def start_change(root: Path, title: str | None = None) -> dict[str, Any]:
             ],
         },
     }
-    dump_json(path / 'state.json', state)
-    set_active_change(root, {'change_id': change_id, 'path': path.relative_to(root).as_posix()})
-    update_route(root, change_id=change_id)
-    _mirror_checkpoints(root, path, state)
+    durable_json(root, path / 'state.json', state)
     return state
 
 
+@serialized_task
 def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str, Any]:
+    from .continuity import normalize_route, scope_gaps, _ensure_idle, validate_package_state
+    from .state import _route_document
+    route = normalize_route(root)
+    require_route_owner(root, route)
+    if route.get('change_id') != change_id:
+        raise ValueError('package transition requires its canonical task owner')
+    if target in {'verifying', 'reviewing', 'ready', 'released'}:
+        gaps = scope_gaps(root, route)
+        if gaps:
+            raise ValueError('; '.join(gaps))
     package = change_directory(root, change_id, writable=True)
     path = package / 'state.json'
     if not path.is_file():
         raise FileNotFoundError(path)
-    state = json.loads(path.read_text(encoding='utf-8'))
+    state = _route_document(root, path)
+    validate_package_state(state, route, change_id)
+    if target in {'released', 'archived', 'cancelled'}:
+        # Check before the first package write, while the outer transition lock
+        # prevents grant/worker/scope changes. Closing metadata is not evidence.
+        _ensure_idle(root)
+        if target != 'cancelled':
+            from .receipts import validate_evidence
+            gaps = validate_evidence(root, route)
+            if gaps:
+                raise ValueError('; '.join(gaps))
     set_active_change(root, {'change_id': change_id, 'path': package.relative_to(root).as_posix()})
     current = state['status']
-    if target == current and state.get('checkpoint_mirror_pending'):
+    last = state['history'][-1] if state['history'] else {}
+    route_stage = 'draft' if route.get('status') == 'routed' else route.get('status')
+    publication_retry = (target == current and route.get('status') != target and
+                         last.get('from') == route_stage and last.get('to') == target and
+                         last.get('reason') == reason)
+    if target == current and (state.get('checkpoint_mirror_pending') or publication_retry):
         _mirror_checkpoints(root, path.parent, state)
-        update_route(root, status=target)
+        update_route(root, expected_route=route, status=target)
         return state
     if target not in TRANSITIONS.get(current, set()):
         raise ValueError(f'Invalid transition {current} -> {target}')
@@ -178,7 +258,7 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
     if open_gates:
         entry['open_human_gates'] = open_gates  # flags: shown, never enforced
     state.setdefault('history', []).append(entry)
-    dump_json(path, state)
+    durable_json(root, path, state)
     _mirror_checkpoints(root, path.parent, state)
-    update_route(root, status=target)
+    update_route(root, expected_route=route, status=target)
     return state

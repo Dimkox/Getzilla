@@ -70,8 +70,8 @@ if args.profile == 'release':
 if not actions:
     parser.error('at least one --action or --profile is required')
 
-# A grant follows the caller's session across its later routes; an unknown session keeps the exact route.
-bind_session(os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('GETZILLA_SESSION_ID'))
+# Explicit caller identity never transfers a grant to another task or authority epoch.
+bind_session(os.environ.get('GETZILLA_SESSION_ID') or os.environ.get('CLAUDE_CODE_SESSION_ID'))
 try:
     result = add_approval(
         find_root(),

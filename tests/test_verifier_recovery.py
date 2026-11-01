@@ -25,8 +25,8 @@ from getzilla import receipts
 from getzilla import util
 from getzilla import verification as verifier
 from getzilla.router import build_route
-from getzilla.state import set_active_route
-from tests._support import prepare_review_source, project_copy as full_project_copy
+from tests._support import activate_owned_route
+from tests._support import prepare_review_source, observed_context, synchronize_fixture_scope, project_copy as full_project_copy
 
 
 def project_copy(*, git: bool = False):
@@ -34,13 +34,19 @@ def project_copy(*, git: bool = False):
 
 
 @contextlib.contextmanager
-def routed_fixture():
+def routed_fixture(*, legacy=False):
     with project_copy(git=True) as root:
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
         route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
-        set_active_route(root, route)
+        if legacy:
+            for name in ('task_context_version', 'logical_task_id', 'origin_session_id', 'authority_epoch',
+                         'state_revision', 'workspace', 'context', 'handoff', 'risk_assessment'):
+                route.pop(name, None)
+        activate_owned_route(root, route)
         from getzilla.review_plan import reconcile_route
-        route = reconcile_route(root)
+        if not legacy:
+            synchronize_fixture_scope(root)
+            route = reconcile_route(root)
         # Tool availability is unrelated to these deterministic boundary faults.
         previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
         try:
@@ -63,7 +69,7 @@ def verification_only_legacy_route(root, route):
     route.pop('risk_assessment', None)
     route.pop('review_plan', None)
     route['required_evidence'] = ['verification']
-    set_active_route(root, route)
+    activate_owned_route(root, route)
 
 
 @contextlib.contextmanager
@@ -97,6 +103,28 @@ def output_close_faults(failing_labels, *, signal_on_close=None):
 
 
 class VerifierRecoveryTests(unittest.TestCase):
+    def test_cli_publication_failure_does_not_rebind_observed_context(self):
+        from getzilla.continuity import submit
+        from getzilla.review_plan import reconcile_route
+        with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
+            report = verifier.verify(root, mode='fast')
+            observed = report['continuity']
+
+            class ChangedOutput(io.StringIO):
+                def write(self, text):
+                    submit(root, 'Acceptance arrived after checks completed.', 'recovery')
+                    reconcile_route(root)
+                    raise OSError('publication failed after context changed')
+
+            with patch.object(verifier, 'verify', return_value=report), patch.object(util, 'find_root', return_value=root), \
+                 patch.object(sys, 'argv', ['getzilla_verify.py', '--json']), \
+                 contextlib.redirect_stdout(ChangedOutput()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
+            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(report['continuity'], observed)
+            self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
+
     def test_publication_error_retires_recorded_pass(self):
         class BrokenOutput(io.StringIO):
             def write(self, text):
@@ -208,7 +236,7 @@ class VerifierRecoveryTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_before_dispatch_spawns_nothing_and_overwrites_old_pass(self):
         with routed_fixture() as (root, route):
-            receipts.write_receipt(root, 'verification', 'pass')
+            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             real_inventory = verifier._changed_file_inventory
 
             def cancel_before_checks(*args, **kwargs):
@@ -604,21 +632,21 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             for attempt in range(3):
                 with self.subTest(attempt=attempt), patch.object(receipts, '_publish_receipt', side_effect=OSError('envelope failed')):
                     with self.assertRaisesRegex(OSError, 'envelope failed'):
-                        receipts.write_receipt(root, 'verification', 'pass', details={'captured': str(attempt) * receipts.MAX_RECEIPT_BYTES})
+                        receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': str(attempt) * receipts.MAX_RECEIPT_BYTES})
                 self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
                 self.assertFalse(list(receipts.receipt_dir(root, route['route_id']).rglob('reports/*.json')))
 
     def test_aborted_reused_report_preserves_preexisting_referenced_digest(self):
         with routed_fixture() as (root, route), patch.object(receipts, 'now_utc', return_value='2026-10-04T00:00:00Z'):
             details = {'captured': 'x' * receipts.MAX_RECEIPT_BYTES}
-            path = receipts.write_receipt(root, 'verification', 'pass', details=details)
+            path = receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details=details)
             envelope = json.loads(path.read_bytes())
             artifact = root / envelope['details']['_verification_report']['path']
             original_bytes = artifact.read_bytes()
             original_identity = artifact.stat().st_ino
             with patch.object(receipts, '_publish_receipt', side_effect=OSError('envelope failed')):
                 with self.assertRaises(OSError):
-                    receipts.write_receipt(root, 'verification', 'pass', details=details)
+                    receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details=details)
             self.assertEqual(artifact.read_bytes(), original_bytes)
             self.assertEqual(artifact.stat().st_ino, original_identity)
             self.assertEqual(list(artifact.parent.glob('*.json')), [artifact])
@@ -626,7 +654,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_report_helper_abort_preserves_a_referenced_reused_artifact(self):
         with routed_fixture() as (root, route):
             details = {'captured': 'x' * receipts.MAX_RECEIPT_BYTES}
-            path = receipts.write_receipt(root, 'verification', 'pass', details=details)
+            path = receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details=details)
             envelope = json.loads(path.read_bytes())
             artifact = root / envelope['details']['_verification_report']['path']
             before = (artifact.read_bytes(), artifact.stat().st_ino)
@@ -651,11 +679,11 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                 artifact.write_bytes(b'foreign replacement bytes')
                 raise OSError('envelope failed after report identity changed')
             with patch.object(receipts, '_publish_receipt', side_effect=replace_before_envelope_failure), self.assertRaises(OSError):
-                receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
             self.assertEqual(artifact.read_bytes(), b'foreign replacement bytes')
 
     def test_large_scope_metadata_roundtrips_through_bounded_report(self):
-        with routed_fixture() as (root, route):
+        with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
             fingerprint = util.tree_fingerprint(root)
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
@@ -665,14 +693,14 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(len(scope['checked_files']), 1442)
             self.assertEqual(len(scope['rejected_files']), 488)
             self.assertGreater(len(json.dumps(report, ensure_ascii=True, separators=(',', ':')).encode()), receipts.MAX_RECEIPT_BYTES)
-            verifier._record_verification_receipt(root, report, fingerprint)
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
             self.assertEqual(report['status'], 'pass', report['checks'][-1])
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(receipt['details'], report)
             self.assertEqual(receipts.validate_evidence(root, route), [])
 
     def test_large_verification_report_preserves_complete_logs_and_scope(self):
-        with routed_fixture() as (root, route):
+        with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
             fingerprint = util.tree_fingerprint(root)
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
@@ -684,7 +712,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             checks.append(verifier.CheckResult('historical-only-check', 'skip', 'historical evidence is not current execution').to_dict())
             report = {'status': 'pass', 'mode': 'pr', 'route_id': route['route_id'], 'tree_fingerprint': fingerprint, 'changed_files': paths, 'changed_file_inventory': {'bases': [{'base': head, 'target': head}], 'union_count': len(paths)}, 'docs_state_scope': scope, 'checks': checks}
             self.assertGreater(len(json.dumps(report).encode()), receipts.MAX_RECEIPT_BYTES)
-            verifier._record_verification_receipt(root, report, fingerprint)
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
             self.assertEqual(report['status'], 'pass', report['checks'][-1])
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertIsNotNone(receipt)
@@ -714,7 +742,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_bounded_report_does_not_bypass_expected_tree_binding(self):
         with routed_fixture() as (root, route):
             report = {'status': 'pass', 'route_id': route['route_id'], 'checks': [verifier.CheckResult('python-unittest', 'pass', 'exit=0', stdout='x' * receipts.MAX_RECEIPT_BYTES).to_dict()]}
-            verifier._record_verification_receipt(root, report, '0' * 64)
+            verifier._record_verification_receipt(root, report, '0' * 64, expected_context=observed_context(root))
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(report['checks'][-1]['name'], 'receipt-recording')
             self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
@@ -723,11 +751,11 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_oversized_report_still_fails_and_invalidates_prior_receipt(self):
         with routed_fixture() as (root, route):
             fingerprint = util.tree_fingerprint(root)
-            receipts.write_receipt(root, 'verification', 'pass')
+            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             paths = [f'engineering/changes/example/evidence/checked-{index:05d}.md' for index in range(10000)]
             report = {'status': 'pass', 'route_id': route['route_id'], 'tree_fingerprint': fingerprint, 'changed_files': paths, 'checks': [verifier.CheckResult('python-unittest', 'pass', 'exit=0').to_dict()]}
             with patch.object(receipts, 'MAX_VERIFICATION_REPORT_BYTES', 65536):
-                verifier._record_verification_receipt(root, report, fingerprint)
+                verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(report['evidence_status'], 'failed')
             self.assertEqual(report['changed_files'], paths)
@@ -739,7 +767,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
         mutations = ('missing', 'tampered', 'symlink-file', 'symlink-directory', 'fifo', 'oversized')
         for mutation in (m for m in mutations if m != 'fifo' or hasattr(os, 'mkfifo')):
             with self.subTest(mutation=mutation), routed_fixture() as (root, route):
-                receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
                 receipt = receipts.get_receipt(root, route['route_id'], 'verification')
                 artifact = root / receipt['details_reference']['path']
                 content = artifact.read_bytes()
@@ -767,7 +795,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_spilled_report_reference_and_all_envelope_bindings_are_closed(self):
         with routed_fixture() as (root, route):
-            path = receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+            path = receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
             original = json.loads(path.read_bytes())
             changes = [('path', '../outside.json'), ('sha256', 'f' * 64), ('bytes', True), ('bytes', 0), ('bytes', original['details']['_verification_report']['bytes'] + 1), ('contract', 'unknown'), ('extra', 'unknown')]
             for field, value in changes:
@@ -793,7 +821,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_spilled_report_rejects_invalid_json_even_with_matching_hash(self):
         for content in (b'{"schema_version":1,"schema_version":1}', b'{"schema_version":NaN}', b'[]', b'{"schema_version":1}'):
             with self.subTest(content=content), routed_fixture() as (root, route):
-                path = receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+                path = receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
                 envelope = json.loads(path.read_bytes())
                 reference = envelope['details']['_verification_report']
                 digest = hashlib.sha256(content).hexdigest()
@@ -808,7 +836,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
         boundaries = ('write', 'link', 'file-fsync', 'directory-fsync', 'cancel', 'post-rename-cancel')
         for boundary in boundaries if os.name == 'posix' else ('write', 'link', 'file-fsync', 'cancel'):
             with self.subTest(boundary=boundary), routed_fixture() as (root, route):
-                receipts.write_receipt(root, 'verification', 'pass')
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
                 original_fsync = receipts.os.fsync
                 original_link = receipts.os.link
                 report_renamed = False
@@ -833,21 +861,21 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                          if boundary == 'link' else patch.object(receipts.os, 'fsync', side_effect=fsync_fault))
                 observer = contextlib.nullcontext() if boundary == 'link' else patch.object(receipts.os, 'link', side_effect=observe_link)
                 with fault, observer, self.assertRaises((OSError, RuntimeError)):
-                    receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, interrupt_check=cancel if boundary in ('cancel', 'post-rename-cancel') else None)
+                    receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, interrupt_check=cancel if boundary in ('cancel', 'post-rename-cancel') else None)
                 self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
                 self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('*.tmp')))
                 self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_verification_classification_serialization_faults_retire_prior_pass(self):
         for failure, error in (('circular', ValueError), ('unserializable', TypeError)):
-            with self.subTest(failure=failure), routed_fixture() as (root, route):
+            with self.subTest(failure=failure), routed_fixture(legacy=True) as (root, route):
                 verification_only_legacy_route(root, route)
-                receipts.write_receipt(root, 'verification', 'pass')
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
                 self.assertEqual(receipts.validate_evidence(root, route), [])
                 details = {}
                 details['bad'] = details if failure == 'circular' else object()
                 with self.assertRaises(error):
-                    receipts.write_receipt(root, 'verification', 'pass', details=details)
+                    receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details=details)
                 self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
                 self.assertEqual(receipts.validate_evidence(root, route), ['verification: missing receipt'])
                 self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('*.tmp')))
@@ -855,25 +883,25 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
     def test_report_publication_rejects_symlink_directory_without_external_write(self):
         with routed_fixture() as (root, route):
-            receipts.write_receipt(root, 'verification', 'pass')
+            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             outside = root / 'outside-reports'
             outside.mkdir()
             before = util.tree_fingerprint(root)
             (receipts.receipt_dir(root, route['route_id']) / 'reports').symlink_to(outside, target_is_directory=True)
             with self.assertRaises(OSError):
-                receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES})
             self.assertEqual(list(outside.iterdir()), [])
             self.assertEqual(util.tree_fingerprint(root), before)
             self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
 
     def test_report_publication_rechecks_source_before_receipt(self):
         with routed_fixture() as (root, route):
-            receipts.write_receipt(root, 'verification', 'pass')
+            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             fingerprint = util.tree_fingerprint(root)
             def mutate():
                 (root / 'VERSION').write_text('changed during publication\n', encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'changed while verification report'):
-                receipts.write_receipt(root, 'verification', 'pass', details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, expected_tree_fingerprint=fingerprint, interrupt_check=mutate)
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details={'captured': 'x' * receipts.MAX_RECEIPT_BYTES}, expected_tree_fingerprint=fingerprint, interrupt_check=mutate)
             self.assertIsNone(receipts.get_receipt(root, route['route_id'], 'verification'))
 
     def test_spilled_report_preserves_failed_cancelled_and_skipped_results(self):
@@ -894,10 +922,10 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertFalse(list((root / '.getzilla/runtime/receipts').rglob('reports/*.json')))
 
     def test_same_tree_new_head_invalidates_receipt(self):
-        with routed_fixture() as (root, route):
+        with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
             receipt_route = route
-            receipts.write_receipt(root, 'verification', 'pass')
+            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
             self.assertEqual(receipts.validate_evidence(root, receipt_route), [])
             subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'new exact head'], cwd=root, check=True)
             self.assertTrue(any('head' in gap for gap in receipts.validate_evidence(root, receipt_route)))
@@ -905,7 +933,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_faults_never_leave_a_valid_pass_or_partial_receipt(self):
         for boundary in ('write', 'replace', 'file-fsync', *(('directory-fsync',) if os.name == 'posix' else ())):
             with self.subTest(boundary=boundary), routed_fixture() as (root, route):
-                receipts.write_receipt(root, 'verification', 'pass')
+                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
                 original_fsync = receipts.os.fsync
                 calls = 0
 
@@ -922,7 +950,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                          if boundary == 'replace' else patch.object(receipts.os, 'fsync', side_effect=fsync_fault))
                 with fault:
                     with self.assertRaises(OSError):
-                        receipts.write_receipt(root, 'verification', 'pass')
+                        receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
                 self.assertFalse(target.exists())
                 self.assertFalse(list(target.parent.glob('.verification.json.*')))
 
