@@ -30,10 +30,10 @@ def _posix_shell() -> str | None:
 
 
 class HarnessHookPayloadTests(unittest.TestCase):
-    def _pre_tool(self, root, tool: str, tool_input: dict) -> dict:
+    def _pre_tool(self, root, tool: str, tool_input: dict, *, session: str = 'qwen') -> dict:
         code, data, stderr = run_hook(root, 'pre_tool_use.py', {
             'cwd': str(root),
-            'session_id': 'qwen',
+            'session_id': session,
             'hook_event_name': 'PreToolUse',
             'tool_name': tool,
             'tool_input': tool_input,
@@ -225,7 +225,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertIn(route['route_id'], output['hookSpecificOutput']['additionalContext'])
 
     def test_codex_cmd_respects_command_workdir(self) -> None:
-        """#73: with an exact push grant only the workdir differs, so only root resolution can deny."""
+        """An exact push grant requires both its owner and the intended project workdir."""
         from getzilla.router import build_route
         from getzilla.state import add_approval
         from tests._support import activate_owned_route
@@ -234,11 +234,14 @@ class HarnessHookPayloadTests(unittest.TestCase):
             subprocess.run(['git', 'checkout', '-qb', 'feature'], cwd=root, check=True)
             activate_owned_route(root, build_route(root, 'Publish the reviewed fix', 'workdir-test').to_dict())
             add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
-            inside = self._pre_tool(root, 'exec_command', {'cmd': 'git push origin feature', 'workdir': str(root)})
+            command = {'cmd': 'git push origin feature', 'workdir': str(root)}
+            foreign = self._pre_tool(root, 'exec_command', command, session='foreign-session')
+            self.assertEqual(foreign['decision'], 'deny', foreign)
+            inside = self._pre_tool(root, 'exec_command', command, session='workdir-test')
             self.assertEqual(inside['decision'], 'allow', inside)
             data = self._pre_tool(root, 'exec_command', {
                 'cmd': 'git push origin feature', 'workdir': str(root.parent),
-            })
+            }, session='workdir-test')
             self.assertEqual(data['decision'], 'deny', data)
             self.assertIn('root resolution', data['reason'])
 

@@ -26,8 +26,8 @@ def main() -> int:
     parser.add_argument('--manifest', required=True, type=Path)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    # The caller's session, as in getzilla_approve.py, so a session-bound grant follows its later routes (#134).
-    bind_session(os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('GETZILLA_SESSION_ID'))
+    # Use the same explicit owner precedence as grant creation and other CLI commands.
+    bind_session(os.environ.get('GETZILLA_SESSION_ID') or os.environ.get('CLAUDE_CODE_SESSION_ID'))
     try:
         result = apply_manifest(find_root(ROOT), args.manifest, dry_run=args.dry_run)
     except ProtectedWriteError as exc:
