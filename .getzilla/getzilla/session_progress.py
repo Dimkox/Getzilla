@@ -49,12 +49,13 @@ def scope_id(root, session, agent='unknown', generation=None):
     route = get_active_route(root) or {}
     if route.get('session_id') != session:
         return None
-    task = route.get('change_id') or route.get('route_id')
+    from .continuity import task_identity
+    task = task_identity(route)
     if not isinstance(task, str) or not task or len(task) > 256:
         return None
     if not isinstance(agent, str) or len(agent) > 256 or generation is not None and (not isinstance(generation, str) or len(generation) > 256):
         return None
-    return _digest('scope', [str(root.resolve()), session, task, agent or 'unknown', generation])
+    return _digest('scope', [str(root.resolve()), session, task, route.get('authority_epoch', 0), agent or 'unknown', generation])
 
 
 def _eligible(command):

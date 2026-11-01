@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tests.test_architecture_model import ARCH, DIAGRAMS, ROOT, _rules, _system
 from getzilla.doctor import run_doctor
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from getzilla.verification import verify
 from getzilla import verification as verifier
 from getzilla.python_test_runner import RunCancelled
@@ -239,7 +239,7 @@ class ArchitectureInputTests(unittest.TestCase):
     def test_refused_inputs_with_active_route_return_report_without_binding_receipt(self) -> None:
         root = self._project()
         self._bad_path(root)
-        set_active_route(root, {"route_id": "input-refusal", "quality_profiles": ["base"], "delivery_expected": False})
+        activate_owned_route(root, {"route_id": "input-refusal", "quality_profiles": ["base"], "delivery_expected": False})
         report = verify(root, mode="fast", record=True)
         self.assertEqual(report["status"], "fail")
         self.assertEqual(report["architecture"]["receipt_status"], "not_recorded")
@@ -250,7 +250,7 @@ class ArchitectureInputTests(unittest.TestCase):
     def test_refusal_followed_by_cancellation_never_rebinds_receipt(self) -> None:
         root = self._project()
         self._bad_path(root)
-        set_active_route(root, {"route_id": "input-refusal", "quality_profiles": ["base"], "delivery_expected": False})
+        activate_owned_route(root, {"route_id": "input-refusal", "quality_profiles": ["base"], "delivery_expected": False})
         with patch.object(verifier, "_workflow_artifacts_check", side_effect=RunCancelled(signal.SIGTERM)), \
              patch.object(verifier, "_record_verification_receipt") as publish:
             with self.assertRaises(verifier.VerificationCancelled) as caught:

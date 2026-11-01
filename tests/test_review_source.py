@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla.receipts import write_receipt, validate_evidence
-from getzilla.state import set_active_route
+from tests._support import activate_owned_route
 from getzilla.util import dump_json
 
 
@@ -30,7 +30,7 @@ class ReviewSourceTests(unittest.TestCase):
         self.commit()
         self.source = self.git('rev-parse', 'HEAD').strip()
         self.route = {'route_id': 'test', 'required_evidence': ['code_review']}
-        set_active_route(self.root, self.route)
+        activate_owned_route(self.root, self.route)
         dump_json(self.root / '.getzilla/runtime/active-change.json', {'path': 'engineering/changes/test', 'change_id': 'test'})
 
     def git(self, *args):
@@ -47,7 +47,7 @@ class ReviewSourceTests(unittest.TestCase):
     def test_micro_route_without_package_admits_global_reports_and_consumption(self):
         (self.root / '.getzilla/runtime/active-change.json').unlink()
         self.route.update(complexity='micro', risk='low')
-        set_active_route(self.root, self.route)
+        activate_owned_route(self.root, self.route)
         self.report = 'engineering/reviews/code-review.md'
         (self.root / self.report).parent.mkdir(parents=True)
         (self.root / self.report).write_text('Independent micro review.\n')
@@ -83,19 +83,19 @@ class ReviewSourceTests(unittest.TestCase):
         for active in (None, {}, {'path': '../escape', 'change_id': 'escape'}, []):
             selected.write_text(json.dumps(active))
             self.route.update(complexity='micro', risk='low')
-            set_active_route(self.root, self.route)
+            activate_owned_route(self.root, self.route)
             with self.assertRaises((RuntimeError, ValueError)):
                 self.record()
         selected.unlink()
         for complexity, risk in (('standard', 'low'), ('high-risk', 'high'), ('micro', 'high')):
             self.route.update(complexity=complexity, risk=risk)
-            set_active_route(self.root, self.route)
+            activate_owned_route(self.root, self.route)
             with self.assertRaises((RuntimeError, ValueError)):
                 self.record()
 
     def test_micro_unsafe_selected_metadata_does_not_fall_back(self):
         self.route.update(complexity='micro', risk='low')
-        set_active_route(self.root, self.route)
+        activate_owned_route(self.root, self.route)
         selected = self.root / '.getzilla/runtime/active-change.json'
         selected.unlink()
         try:
@@ -200,7 +200,7 @@ class ReviewSourceTests(unittest.TestCase):
     def test_micro_unsafe_selected_metadata_with_global_report_does_not_fall_back(self):
         """#73: a committed conventional global report would be admitted if an unsafe read counted as absent."""
         self.route.update(complexity='micro', risk='low')
-        set_active_route(self.root, self.route)
+        activate_owned_route(self.root, self.route)
         self.report = 'engineering/reviews/code-review.md'
         (self.root / self.report).parent.mkdir(parents=True)
         (self.root / self.report).write_text('Independent micro review.\n')

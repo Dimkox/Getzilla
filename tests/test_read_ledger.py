@@ -20,7 +20,8 @@ import getzilla.read_ledger as ledger  # noqa: E402
 import getzilla.state as state  # noqa: E402
 from getzilla.read_ledger import command_files, output_files, patch_targets, record, seen  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import add_approval, set_active_route  # noqa: E402
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
 
 
@@ -69,7 +70,7 @@ class ReadLedgerHookTests(unittest.TestCase):
             self.assertTrue(ledger.unread(root, 'other-session', read_patch, root))
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/project.git'],
                            cwd=root, check=True)
-            set_active_route(root, build_route(root, 'fix read ledger regression', 'ledger-session').to_dict())
+            activate_owned_route(root, build_route(root, 'fix read ledger regression', 'ledger-session').to_dict())
             add_approval(root, 'protected-path', 'fixture', 5, actions=['protected-path-write'],
                          resources=['.getzilla/runtime/worktrees/ledger-child/app/unread.py'])
             self.assertEqual(self._patch(root, read_patch)['decision'], 'allow')

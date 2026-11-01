@@ -22,11 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import _policy_legacy as legacy  # noqa: E402
-from getzilla import fsx  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, production_action, sensitive_action  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
-from getzilla.state import add_approval, set_active_route  # noqa: E402
-from tests._support import project_copy  # noqa: E402
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
+from tests._support import project_copy, windows_command_parser  # noqa: E402
 
 # A system tree far larger than the scan budget: /proc on Linux, the Windows directory there.
 _HUGE_TREE = (
@@ -40,7 +40,7 @@ _HUGE_TREE = (
 def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
-        set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material and an ordinary source tree (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)
         (root / 'deploy/tls/server.key').write_text('synthetic\n', encoding='utf-8')
@@ -102,7 +102,7 @@ class GitPushSpellingTests(_Case):
         ))
 
     def test_windows_git_core_helper_is_a_push(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((r'C:\Git\mingw64\libexec\git-core\git-push.exe origin main',))
 
     def test_alias_definitions_are_sensitive(self) -> None:
@@ -169,7 +169,7 @@ class RecursiveRemoveTests(_Case):
         self.assert_allowed(('rm -rf build dist', 'rm -rf ./node_modules', 'rm -r --verbose build', 'rm -f a.txt b.txt'))
 
     def test_windows_recursive_removes(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 r'del /s /q C:\*',
                 r'rd /s /q C:\\',
@@ -513,7 +513,7 @@ class Review2PosixTests(_Case):
     def test_secret_scan_memo_never_crosses_readings(self) -> None:
         legacy._SECRET_SCAN_CACHE.clear()
         command, patterns = r'cat .e\nv', legacy.DEFAULT_SECRET_READ
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assertIsNone(legacy.shell_secret_reference(self.root, command, patterns))
             with legacy.posix_reading():
                 self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), '.env')
@@ -566,14 +566,14 @@ class Review2WindowsTests(_Case):
     """Round-2 review (S59-6): Windows parity for carets, publish/HTTP, destructive and secret reads."""
 
     def test_caret_escapes_and_start_process_do_not_hide_authority(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 'g^it push origin main', 'git^ push origin main', 'cmd /c g^it push origin main',
                 "Start-Process git -ArgumentList 'push','origin','main'", "saps git 'push origin main'",
             ))
 
     def test_powershell_web_cmdlet_writes_need_a_grant(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 'Invoke-WebRequest -Method POST https://api.github.com/repos/a/b/issues',
                 'iwr -Method Put https://api.github.com/repos/a/b/pulls/1/merge',
@@ -582,26 +582,26 @@ class Review2WindowsTests(_Case):
             ))
 
     def test_windows_destructive_commands_are_blocked(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 r'robocopy C:\empty C:\ /MIR', 'Format-Volume -DriveLetter C', r'format /q C:',
                 'Clear-Disk -Number 0',
             ), 'destructive')
 
     def test_windows_recursive_secret_reads_are_blocked(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((
                 r'Copy-Item -Recurse deploy C:\out', 'Compress-Archive -Path deploy -DestinationPath x.zip',
                 r'robocopy deploy C:\out /E', r'xcopy deploy C:\out /s /e', r'findstr /s BEGIN deploy\*',
             ), 'secret')
 
     def test_encoded_powershell_fails_closed(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied(('powershell -EncodedCommand ZwBpAHQAIABwAHUAcwBo',))
 
     def test_git_bash_reading_of_backslashes_is_enforced_too(self) -> None:
         # Claude Code runs Git Bash on Windows, where a backslash escapes: `.e\nv` is `.env`.
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_denied((r'cat .e\nv', r'cat .\e\nv'), 'secret')
             for command in (r'cat .e\nv', r'cat .\e\nv'):
                 event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
@@ -609,7 +609,7 @@ class Review2WindowsTests(_Case):
             self.assert_allowed((r'type src\app.py', r'findstr TODO src\app.py'))
 
     def test_quoted_text_naming_a_delete_is_an_argument(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_allowed(('git commit -m "remove rm -rf / note"', "grep -rn 'rm -r /' docs"))
             self.assert_denied((
                 'cmd /c "rm -rf /"', '"rm" -rf /', 'r"m" -rf /', 'rm -rf C:\\', 'rm -rf "C:\\\\"',
@@ -617,7 +617,7 @@ class Review2WindowsTests(_Case):
             ), 'destructive')
 
     def test_windows_benign_commands_stay_allowed(self) -> None:
-        with mock.patch.object(fsx, 'WINDOWS', True):
+        with windows_command_parser():
             self.assert_allowed((
                 'git status', r'robocopy a b file.txt', r'findstr TODO src\app.py', 'del out.txt',
             ))

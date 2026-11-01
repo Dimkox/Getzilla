@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import shlex
 import subprocess
@@ -17,7 +16,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, set_active_route
+from getzilla.state import add_approval, approvals_path
+from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 
@@ -33,9 +33,8 @@ class ShellStatePolicyTests(unittest.TestCase):
         cls.root = cls.stack.enter_context(project_copy(git=True))
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                        cwd=cls.root, check=True)
-        set_active_route(cls.root, build_route(cls.root, 'Offline shell context fixture', 'shell-state').to_dict())
+        activate_owned_route(cls.root, build_route(cls.root, 'Offline shell context fixture', 'shell-state').to_dict())
         (cls.root / 'public.txt').write_text('Other/Project\n', encoding='utf-8')
-        cls.sequence = 0
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -59,10 +58,8 @@ class ShellStatePolicyTests(unittest.TestCase):
         allowed, reason = evaluate_pre_tool(self.root, event)
         with self.subTest(layer='policy', command=command):
             self.assertEqual(allowed, expected, (command, reason))
-        type(self).sequence += 1
-        session = self.id() + str(self.sequence) + hashlib.sha256(command.encode()).hexdigest()
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
-            **event, 'cwd': str(self.root), 'session_id': session,
+            **event, 'cwd': str(self.root), 'session_id': 'shell-state',
         })
         with self.subTest(layer='hook', command=command):
             self.assertEqual(code, 0, error)

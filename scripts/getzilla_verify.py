@@ -99,7 +99,8 @@ except (RunCancelled, OSError, TypeError, ValueError) as exc:
     report['checks'].append(CheckResult('report-publication', 'cancelled' if isinstance(exc, RunCancelled) else 'fail',
                                        f'{type(exc).__name__}: {str(exc)[:512]}').to_dict())
     if not args.no_record and report.get('route_id') and report.get('tree_fingerprint'):
-        _record_verification_receipt(root, report, report['tree_fingerprint'])
+        _record_verification_receipt(root, report, report['tree_fingerprint'],
+                                     expected_context=report.get('continuity'))
     try:
         print(json.dumps(report, ensure_ascii=True, indent=2), file=sys.stderr)
     except (OSError, TypeError, ValueError):

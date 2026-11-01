@@ -66,7 +66,7 @@ def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
     return fsx.directory_identity(info, _identity(info))
 
 
-def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) -> bytes:
+def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *, sync: bool = False) -> bytes:
     """Open every component without following links; never block on a FIFO."""
     parts = _relative(relative)
     if not fsx.WINDOWS and (
@@ -86,7 +86,7 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
             directories.append((directory, component, _directory_identity(fsx.fstat_dir(child))))
             directory = child
         descriptor = fsx.open_at(
-            directory, parts[-1], os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK
+            directory, parts[-1], (os.O_RDWR if sync and fsx.WINDOWS else os.O_RDONLY) | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK
         )
         descriptors.append(descriptor)
         before = os.fstat(descriptor)
@@ -114,6 +114,8 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES) ->
             )
         ):
             raise InspectionError('file_changed', 'selected input changed during the read')
+        if sync:
+            os.fsync(descriptor)
         return b''.join(chunks)
     except InspectionError:
         raise

@@ -18,7 +18,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool, production_action, sensitive_action
 from getzilla.router import build_route
-from getzilla.state import add_approval, set_active_route
+from getzilla.state import add_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy
 
 
@@ -31,7 +32,7 @@ def github_project() -> Iterator[Path]:
             check=True,
         )
         route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-        set_active_route(root, route)
+        activate_owned_route(root, route)
         yield root
 
 

@@ -101,6 +101,75 @@ The second startup step records trusted base/HEAD and dirty inventory. The merge
 
 The past observation of **controller + 12 child-agent slots**, the route's routing cap and test-process workers are separate limits; discover the current harness slots at startup. Keep one writer per isolated task/route/branch/worktree; independent isolated writers may run concurrently. An exact delegated branch push before verification is labelled **UNVERIFIED transport only**. Protected/shared branches prohibit direct pushes; merge requires a PR, the configured public Actions or private Trust CI checks on the exact head and all applicable approvals.
 
+## Task continuity and context binding
+
+The canonical task envelope is `.getzilla/runtime/routes/<route-id>.json`. Session and global active-route files are projections; a global read is discovery, not permission to mutate a modern task. Bind the actual caller with `GETZILLA_SESSION_ID` (preferred over `CLAUDE_CODE_SESSION_ID`) or the route CLI's `--session`. Missing or `manual` session identity cannot authorize worker start, grant issue/consumption, reconciliation, completion or cancellation.
+
+Ordinary substantive input continues the same unfinished task, including `ready`, without replacing its original text, source/base or writer. Each amendment remains ordered until explicitly synchronized into the selected typed package. A bare status/continue, empty input or system notice adds no amendment. Identical text is retained unless an actual stable input event ID proves exact replay; session IDs are not event IDs. A collision is refused.
+
+```bash
+python3 scripts/getzilla_route.py --show --session SESSION --json
+python3 scripts/getzilla_route.py "An additional acceptance condition" --session SESSION --event-id INPUT_EVENT
+python3 scripts/getzilla_route.py --continue ROUTE_ID --session SESSION
+python3 scripts/getzilla_route.py --continue ROUTE_ID --session NEW_SESSION --expected-epoch EPOCH --expected-revision REVISION --request-id HANDOFF_ID
+python3 scripts/getzilla_route.py --new-task "A deliberately new task" --session SESSION
+```
+
+Cross-session handoff uses the exact observed route epoch and state revision, requires a provably idle worker ledger and rotates authority once. Retry the same request after partial projection publication; never copy an old grant or change a worker's task identity. A new task always receives fresh route/logical identities, even with identical text, and refuses an open package or active/interrupted worker. Close the prior package/task through the normal lifecycle first. `Stop` reports unresolved scope/evidence and never completes a ready task automatically.
+
+| Field or boundary | Meaning |
+| --- | --- |
+| `task`, `logical_task_id`, `origin_session_id` | Original task and originating identity; unchanged across package attachment, acknowledgement and reconciliation |
+| `session_id`, `authority_epoch` | Current owner and monotonic ownership generation; old authority fails for both callers after handoff |
+| `state_revision` | Canonical route compare-and-swap revision; handoff expects the exact observed value |
+| `context.revision` | Scope revision; intake, rejection and acknowledgement invalidate earlier context evidence |
+| Pending queue | At most 16 entries, 8192 UTF-8 bytes each and 65536 bytes in total |
+| Original input | New task at most 65536 UTF-8 bytes; larger stored legacy originals remain intact |
+| Rejected input | One bounded NOT-admitted digest/byte-count latch; qualification remains blocked until exact resolution |
+| Display | At most 16384 UTF-8 bytes, with omitted-byte count and a full canonical recovery path |
+
+Overflow does not discard earlier scope or imply that the new input was accepted. After making queue capacity available, an exact rejected queue input can be resubmitted. An oversized input requires its original UTF-8 bytes again, either in the acknowledgement request or a safe repository-relative file of at most 8 MiB. Incorporation names existing typed IDs; withdrawal names a genuine current user decision and event. Do not invent withdrawal, summarize away scope or infer approval from incorporation.
+
+For a package route, update both `change-spec.yaml` and `requirements.md`, validate their real contents, then submit a repository-relative JSON file with `python3 scripts/getzilla_route.py --session SESSION --ack-scope PATH`. The closed request has these fields; replace all illustrative identities and digests with the observed values:
+
+```json
+{
+  "version": 1,
+  "operation_id": "scope-sync-1",
+  "route_id": "ROUTE_ID",
+  "logical_task_id": "LOGICAL_TASK_ID",
+  "authority_epoch": 0,
+  "revision": 1,
+  "spec_digest": "<64 lowercase hex>",
+  "requirements_digest": "<64 lowercase hex>",
+  "items": {
+    "original": ["OBJ-001"],
+    "scope-item-id": ["AC-001", "INV-001"]
+  }
+}
+```
+
+Only named pending IDs clear. Every mapping names an objective, acceptance criterion, invariant or forbidden-outcome ID in the validated current spec. Original scope also needs explicit mapping; this is incorporation metadata, not semantic acceptance or a passing checkpoint. The raw requirements digest and canonical typed-spec digest bind the same selected package. A package-first interrupted transaction is recoverable only by exact retry; altered/ahead transactions remain blocked. Scope acknowledgements live outside the bounded source-checkpoint collection.
+
+Optional `resolve_rejected` contains `id`, `action`, and exactly one of `text` or `text_path`. For `action: incorporated`, add `targets`; for `action: withdrawn`, add the actual `user_event_id` and a nonempty `decision` of at most 4096 UTF-8 bytes. The resupplied input's digest and byte count must match the rejection. Its raw bytes are not copied into the route metadata.
+
+Python consumers use the shared APIs after adding the repository's `.getzilla` directory to their module path:
+
+```python
+from getzilla import continuity, state
+
+state.bind_session(actual_session_id)
+route = state.get_active_route(root)
+task_id = continuity.task_identity(route)
+observed = continuity.context_binding(root, route)
+```
+
+`context_binding(root, route=None, *, discovery=False)` returns a fresh versioned value containing `route_id`, `logical_task_id`, `authority_epoch`, `context_revision`, `change_id`, explicit package/no-package `variant`, `package_path`, `spec_digest`, `requirements_digest` and canonical `digest`. `discovery=True` is read-only and grants no mutation authority. Keep the captured value unchanged. A no-package binding is allowed only for an actually eligible low-risk light/docs-micro route, never as fallback for unsafe or mismatched package state. Lifecycle/progress consumers use `task_identity` across package attachment; a one-time consistent legacy migration freezes its prior identity and never retags active workers.
+
+Verification captures context before work and compares it under the task transition lock at publication, storing the observed value unchanged. Pending/rejected scope, stale acknowledgements and changed package documents block qualifying fast/full/focused evidence even at unchanged HEAD. Every receipt consumer and completion-claim check revalidates that binding. Cancelled/interrupted observations never become PASS.
+
+Each modern review report contains exactly one standalone line `reviewed-context-digest: <64 lowercase hex>` from the context actually inspected. Registration passes that same digest using `--reviewed-context`, together with `--reviewed-commit`. The hash binds those actual report bytes. Missing, duplicate or old markers are refused; a current CLI argument cannot relabel an old report. Existing report/source/architecture/review-plan and security checks remain in force. Legacy evidence is compatible only with a proven unchanged, unamended legacy task without handoff; draining an amended queue does not restore legacy compatibility.
+
 ## Current state
 
 Identity: **2.3.1 source candidate**, unpublished. Fetch current refs to establish the source head; dated observations below do not cap the current source inventory. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0) is immutable: published 2026-10-21T11:01:37Z, annotated tag `815aeabc5d215d65e72651692a6457920de9fa71`, commit `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, tree `81076df2cd7db8713f7178ead66ebaa2728f861e`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
@@ -545,14 +614,14 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |
 | `cpu` | `scripts/getzilla_startup_cpu.py` | Startup step zero: measure and record usable CPUs (`--reserve`, `--attach`) |
 | `par` | `scripts/getzilla_par.py` | Run independent commands in parallel on the measured CPUs (`-j`, `--each`) |
-| `route` | `scripts/getzilla_route.py` | Classify, show, reconcile, complete or cancel the task route; `--reconcile --add-reviewer <role>` keeps an extra reviewer |
+| `route` | `scripts/getzilla_route.py` | Continue ordinary input; explicit `--new-task`, exact `--continue`, `--ack-scope`, show/reconcile/complete/cancel under the real session; `--reconcile --add-reviewer <role>` retains an extra reviewer |
 | `status` | `scripts/getzilla_status.py` | Local runtime status: route, change package, evidence gaps, agents |
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
 | `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, checkpoints, watchdog, `progress-inspect` and one-shot `progress-recover` |
 | `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
-| `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` |
+| `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` and the report's matching `--reviewed-context` marker |
 | `gate` | `scripts/getzilla_gate.py` | Inspect or record route-bound local human-gate decisions |
 | `vulns` | `scripts/getzilla_vulns.py` | Known vulnerabilities in pinned dependencies from OSV (`--online`, `--db DIR`, `--download-db DIR`) |
 | `duplicates` | `scripts/getzilla_duplicates.py` | Read-only source duplication analysis; uses jscpd when it is installed |

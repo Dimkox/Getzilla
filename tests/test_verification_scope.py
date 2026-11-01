@@ -762,11 +762,11 @@ class VerifyReportScopeFieldTests(unittest.TestCase):
     def test_report_always_carries_the_scope_decision_and_its_evidence_kind(self) -> None:
         with project_copy(git=True) as root:
             from getzilla.router import build_route
-            from getzilla.state import set_active_route
+            from tests._support import activate_owned_route
 
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
-            set_active_route(root, route)
+            activate_owned_route(root, route)
 
             report = verify(root, mode='fast', record=False)
 
@@ -1070,7 +1070,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         base = _git_head(root)
 
         from getzilla.router import build_route
-        from getzilla.state import set_active_route
+        from tests._support import activate_owned_route
 
         route = build_route(root, 'Refresh release documentation and dated state', 'e2e-205').to_dict()
         route['base_commit'] = base
@@ -1080,7 +1080,12 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         # promotion/refusal has its own integration coverage.
         route.update(delivery_lane='full', review_agents=['code_reviewer', 'test_reviewer'],
                      required_evidence=['verification', 'code_review', 'test_review'])
-        set_active_route(root, route)
+        # This historical tracked-package fixture predates the task envelope.
+        # Preserve that compatibility arm; modern context is exercised separately.
+        for field in ('task_context_version', 'logical_task_id', 'origin_session_id', 'authority_epoch',
+                      'state_revision', 'workspace', 'context', 'handoff'):
+            route.pop(field, None)
+        activate_owned_route(root, route)
         from getzilla.state import set_active_change
         set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})
         return git, base

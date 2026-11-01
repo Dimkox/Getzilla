@@ -13,13 +13,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import WRITE_ROLES, evaluate_pre_tool, production_action, write_roles
 from getzilla.router import build_route
-from getzilla.state import (
-    add_approval,
-    approvals_path,
-    has_valid_approval,
-    record_agent_start,
-    set_active_route,
-)
+from getzilla.state import add_approval, approvals_path, has_valid_approval, record_agent_start
+from tests._support import activate_owned_route
 from tests._support import project_copy
 
 
@@ -32,7 +27,7 @@ def github_project() -> Iterator[Path]:
             check=True,
         )
         route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-        set_active_route(root, route)
+        activate_owned_route(root, route)
         yield root
 
 
@@ -263,7 +258,7 @@ class PolicyTests(unittest.TestCase):
     def test_blocks_agent_outside_route_and_allows_selected_writer(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Agent', 'tool_input': {'agent_type': 'ai_implementer'}})
             self.assertFalse(allowed)
             self.assertIn('outside active route', reason or '')
@@ -282,7 +277,7 @@ class PolicyTests(unittest.TestCase):
         with project_copy() as root:
             route = build_route(root, 'Исправить PHP баг', 's1').to_dict()
             route['allowed_agents'].append('general_implementer')
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             record_agent_start(root, 'a1', route['write_agent'])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Agent', 'tool_input': {'agent_type': 'general_implementer'}})
             self.assertFalse(allowed)
@@ -291,7 +286,7 @@ class PolicyTests(unittest.TestCase):
     def test_blocks_second_same_role_writer(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'Fix a PHP bug', 's1').to_dict()
-            set_active_route(root, route)
+            activate_owned_route(root, route)
             record_agent_start(root, 'first-writer', route['write_agent'])
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Agent',
                 'tool_input': {'agent_type': route['write_agent']}})
@@ -471,7 +466,7 @@ class PolicyTests(unittest.TestCase):
                                                        'tool_input': {'owner': 'other', 'repo': 'project'}})
             self.assertTrue(allowed, reason)
         with project_copy(git=True) as root:
-            set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+            activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool,
                                                        'tool_input': {'owner': 'Dimkox', 'repo': 'Getzilla'}})
             self.assertFalse(allowed)

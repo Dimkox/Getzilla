@@ -67,10 +67,11 @@ third failure completes; this version does not reserve or cancel in-flight work.
 
 ## Isolation, storage and limits
 
-Records are isolated by repository, explicit session, matching change/task (route
-when no change exists), agent/generation, exact command/input and working directory.
-A new route for the same change keeps the task's observations. Missing/manual
-sessions and unrelated global route fallbacks are never pooled. Harnesses that omit
+Records are isolated by repository, explicit owner session, stable logical task
+and authority epoch, agent/generation, exact command/input and working directory.
+Package attachment, scope acknowledgment and review-plan reconciliation keep the
+same task bucket. A deliberate new task or cross-session handoff creates a distinct
+scope. Missing/manual sessions and unrelated global route fallbacks are never pooled. Harnesses that omit
 child identity cannot distinguish that child from the session's main bucket.
 
 The ignored runtime files are `session-progress.json` and the stable

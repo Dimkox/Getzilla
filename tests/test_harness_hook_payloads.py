@@ -227,11 +227,12 @@ class HarnessHookPayloadTests(unittest.TestCase):
     def test_codex_cmd_respects_command_workdir(self) -> None:
         """#73: with an exact push grant only the workdir differs, so only root resolution can deny."""
         from getzilla.router import build_route
-        from getzilla.state import add_approval, set_active_route
+        from getzilla.state import add_approval
+        from tests._support import activate_owned_route
         with project_copy(git=True) as root:
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Example/app.git'], cwd=root, check=True)
             subprocess.run(['git', 'checkout', '-qb', 'feature'], cwd=root, check=True)
-            set_active_route(root, build_route(root, 'Publish the reviewed fix', 'workdir-test').to_dict())
+            activate_owned_route(root, build_route(root, 'Publish the reviewed fix', 'workdir-test').to_dict())
             add_approval(root, 'production', 'ship', 5, actions=['git-push-branch'], resources=['feature'])
             inside = self._pre_tool(root, 'exec_command', {'cmd': 'git push origin feature', 'workdir': str(root)})
             self.assertEqual(inside['decision'], 'allow', inside)

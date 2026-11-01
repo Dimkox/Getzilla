@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool, production_action
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, has_valid_approval, set_active_route
+from getzilla.state import add_approval, approvals_path, has_valid_approval
+from tests._support import activate_owned_route
 from tests._support import project_copy
 
 PATTERNS = ('*', '**', '.grok/**', '.getzilla/*', 'AGENTS.m?', '[A]GENTS.md', 'trust-ci/**/api.py')
@@ -34,7 +35,7 @@ def github_project() -> Iterator[Path]:
             cwd=root,
             check=True,
         )
-        set_active_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
+        activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         yield root
 
 

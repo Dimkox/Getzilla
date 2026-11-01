@@ -18,6 +18,17 @@ PROJECT = Path(__file__).resolve().parents[1]
 CLEANUP_ATTEMPTS = 4
 
 
+@contextlib.contextmanager
+def windows_command_parser() -> Iterator[None]:
+    """Exercise Windows syntax while retaining the host's actual lock backend."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from getzilla import _policy_legacy, policy
+    parser_platform = SimpleNamespace(WINDOWS=True)
+    with patch.object(_policy_legacy, 'fsx', parser_platform), patch.object(policy, 'fsx', parser_platform):
+        yield
+
+
 def missing_history(what: str) -> None:
     """A test reads a commit or tag this clone lacks (#202): skip with the reason, but fail in CI,
     which checks out with fetch-depth: 0 and must not lose the check."""
@@ -61,9 +72,57 @@ def _scanner_environment(minimal_runtime: bool) -> Iterator[None]:
 
 
 @contextlib.contextmanager
+def _session_environment() -> Iterator[None]:
+    """Every fixture owns its explicit caller; never inherit the author's task authority."""
+    if str(PROJECT / '.getzilla') not in sys.path:
+        sys.path.insert(0, str(PROJECT / '.getzilla'))
+    from getzilla import state
+    token = state._SESSION.set(None)
+    keys = ('GETZILLA_SESSION_ID', 'CLAUDE_CODE_SESSION_ID')
+    previous = {key: os.environ.pop(key, None) for key in keys}
+    try:
+        yield
+    finally:
+        state._SESSION.reset(token)
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def activate_owned_route(root: Path, route: dict) -> None:
+    """Select the fixture's named owner through real APIs; negative unbound tests bypass this helper."""
+    from getzilla import state
+    from getzilla.continuity import has_task_context
+    owner = route.get('session_id')
+    modern = has_task_context(route)
+    if not isinstance(owner, str) or owner == 'manual' or not state._SESSION_ID.fullmatch(owner):
+        owner = 'fixture-owner'
+        if modern:
+            route['session_id'] = owner
+            route['origin_session_id'] = owner
+    if not modern:
+        route.setdefault('task', 'Synthetic legacy fixture task.')
+        route.setdefault('created_at', '2026-01-01T00:00:00+00:00')
+    state.bind_session(owner)
+    os.environ['GETZILLA_SESSION_ID'] = owner
+    existing = state.get_active_route(root)
+    if existing and existing.get('route_id') == route.get('route_id') and has_task_context(existing):
+        immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
+                     'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff', 'change_id'}
+        for name in immutable - {'state_revision', 'context'}:
+            if name in route and route[name] != existing.get(name):
+                raise ValueError('fixture task authority changes require an explicit transition')
+        route.update(state.update_route(root, **{key: value for key, value in route.items() if key not in immutable}))
+        return
+    state.set_active_route(root, route)
+
+
+@contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
     """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
-    with _test_directory() as tmp, _scanner_environment(minimal_runtime):
+    with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -133,14 +192,65 @@ def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     return proc.returncode, data, proc.stderr.decode('utf-8', errors='replace')
 
 
+def synchronize_fixture_scope(root: Path) -> None:
+    """Declare and acknowledge actual fixture scope once; never repair a stale acknowledgment."""
+    from getzilla import state
+    from getzilla.continuity import ack_scope, context_binding, legacy_evidence_allowed
+    from getzilla.change import start_change
+    from getzilla.spec import load_spec, dump_canonical_spec
+    route = state.get_active_route(root)
+    if not route or legacy_evidence_allowed(route) or route['context']['last_ack'] is not None:
+        return
+    if not route.get('change_id'):
+        if route.get('risk') == 'low' and (route.get('delivery_lane') == 'light' or route.get('complexity') == 'micro'):
+            return
+        start_change(root)
+    route = state.get_active_route(root)
+    active = state.get_active_change(root)
+    path = root / active['path']
+    spec = load_spec(path / 'change-spec.yaml')
+    generated = (spec['objective'].get('success_metric') == 'UNKNOWN' and
+                 spec['objective'].get('target') == 'UNKNOWN' and not spec['acceptance_criteria'])
+    if generated:
+        spec['objective'].update(success_metric='fixture boundary verification', target='all checks preserve their fences')
+        spec['acceptance_criteria'] = [{'id': 'AC-001', 'statement': route['task'][:4096],
+                                       'evidence': [{'receipt': 'verification'}]}]
+        if spec['risk']['tier'] == 'red':
+            spec['forbidden_outcomes'] = [{'id': 'FORBID-001', 'statement': 'No stale evidence admitted.',
+                                           'evidence': [{'receipt': 'verification'}]}]
+            spec['approvals']['required_scopes'] = ['scope_and_design_approval']
+        (path / 'change-spec.yaml').write_text(dump_canonical_spec(spec), encoding='utf-8')
+        (path / 'requirements.md').write_text(route['task'] + '\n' +
+            '\n'.join(item['text'] for item in route['context']['pending']) + '\n', encoding='utf-8')
+    binding = context_binding(root)
+    target = spec['acceptance_criteria'][0]['id']
+    ack_scope(root, {'version': 1, 'operation_id': 'fixture-scope-' + str(route['context']['revision']),
+                    'route_id': route['route_id'], 'logical_task_id': route['logical_task_id'],
+                    'authority_epoch': route['authority_epoch'], 'revision': route['context']['revision'],
+                    'spec_digest': binding['spec_digest'], 'requirements_digest': binding['requirements_digest'],
+                    'items': {'original': [spec['objective']['id']],
+                              **{item['id']: [target] for item in route['context']['pending']}}})
+
+
+def observed_context(root: Path):
+    from getzilla.state import get_active_route
+    from getzilla.continuity import context_binding, legacy_evidence_allowed
+    route = get_active_route(root)
+    return None if legacy_evidence_allowed(route) else context_binding(root, route)
+
+
 def prepare_review_source(root: Path) -> dict[str, str]:
     """Freeze a real Git candidate and return explicit independent-review inputs."""
-    from getzilla.state import get_active_change, set_active_change
+    from getzilla.state import get_active_change, get_active_route, set_active_change
+    from getzilla.continuity import legacy_evidence_allowed
+    synchronize_fixture_scope(root)
+    route = get_active_route(root)
     active = get_active_change(root)
-    if not active:
+    if not active and legacy_evidence_allowed(route):
         active = {'path': 'engineering/changes/test-review', 'change_id': 'test-review'}
         set_active_change(root, active)
-    report = str(active['path']) + '/evidence/code-review.md'
+    report = (str(active['path']) + '/evidence/code-review.md' if active else
+              f".getzilla/runtime/reviews/{route['route_id']}/code-review.md")
     path = root / report
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('Fixture independent review of the committed candidate.\n', encoding='utf-8')
@@ -152,12 +262,15 @@ def prepare_review_source(root: Path) -> dict[str, str]:
     subprocess.run(['git', 'add', '.'], cwd=root, check=True)
     subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'freeze reviewed fixture'], cwd=root, check=True)
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
-    from getzilla.state import get_active_route
     route = get_active_route(root)
     if route and 'risk_assessment' in route:
         from getzilla.review_plan import reconcile_route
         reconcile_route(root)
-    return {'report': report, 'reviewed_commit': head}
+    binding = observed_context(root)
+    if binding:
+        path.write_text('Fixture independent review of the committed candidate.\nreviewed-context-digest: ' +
+                        binding['digest'] + '\n', encoding='utf-8')
+    return {'report': report, 'reviewed_commit': head, **({'reviewed_context': binding['digest']} if binding else {})}
 
 
 def offline_mirror(base: Path) -> Path:

@@ -19,6 +19,7 @@ parser.add_argument('kind', choices=['code_review', 'test_review', 'bitrix_revie
 parser.add_argument('--status', choices=['pass', 'fail'], required=True)
 parser.add_argument('--report', required=True)
 parser.add_argument('--reviewed-commit', help='Exact full commit SHA inspected by the independent reviewer; required for pass.')
+parser.add_argument('--reviewed-context', help='Observed task context digest, also present as one exact standalone reviewed-context-digest line in the report.')
 args = parser.parse_args()
 if args.status == 'pass' and not args.reviewed_commit:
     parser.error('--reviewed-commit is required for pass')
@@ -37,7 +38,8 @@ if active:
     if args.status == 'pass' and any(item['severity'] == 'error' for item in package['findings']):
         raise SystemExit('Passing review was not recorded: resolve package completeness errors first.')
 try:
-    path = write_receipt(root, args.kind, args.status, args.report, reviewed_commit=args.reviewed_commit)
+    path = write_receipt(root, args.kind, args.status, args.report, reviewed_commit=args.reviewed_commit,
+                         reviewed_context=args.reviewed_context)
 except (RuntimeError, ValueError, OSError) as exc:
     raise SystemExit(f'Review was not recorded: {exc}') from None
 print(path.relative_to(root))
