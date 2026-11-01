@@ -1,0 +1,597 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:example:media-design-plan:v1",
+  "$defs": {
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "media-design-input.v1"
+        },
+        "compiler_version": {
+          "type": "string",
+          "const": "media-design-compiler.v1"
+        },
+        "mode": {
+          "type": "string",
+          "const": "design_dry_run"
+        },
+        "case": {
+          "type": "string",
+          "enum": [
+            "promo",
+            "webinar"
+          ]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "new_neutral_synthetic"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "content_digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "kind",
+            "revision",
+            "content_digest"
+          ],
+          "additionalProperties": false
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "const": false
+            },
+            "network": {
+              "type": "boolean",
+              "const": false
+            },
+            "provider": {
+              "type": "null",
+              "const": null
+            },
+            "model": {
+              "type": "null",
+              "const": null
+            },
+            "paid_calls": {
+              "type": "integer",
+              "const": 0
+            },
+            "cap_micro_usd": {
+              "type": "integer",
+              "const": 0
+            }
+          },
+          "required": [
+            "enabled",
+            "network",
+            "provider",
+            "model",
+            "paid_calls",
+            "cap_micro_usd"
+          ],
+          "additionalProperties": false
+        },
+        "fps": {
+          "type": "object",
+          "properties": {
+            "numerator": {
+              "type": "integer",
+              "const": 30
+            },
+            "denominator": {
+              "type": "integer",
+              "const": 1
+            }
+          },
+          "required": [
+            "numerator",
+            "denominator"
+          ],
+          "additionalProperties": false
+        },
+        "duration_frames": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 81900
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "in_frame": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 81900
+              },
+              "out_frame": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 81900
+              },
+              "transition_frames": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 120
+              },
+              "asset_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9_.-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "text",
+              "in_frame",
+              "out_frame",
+              "transition_frames",
+              "asset_ids"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 60,
+          "uniqueItems": false
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "kind": {
+                "type": "string",
+                "const": "synthetic_slot"
+              },
+              "rights": {
+                "type": "string",
+                "const": "unverified"
+              },
+              "binary_digest": {
+                "type": "null",
+                "const": null
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind",
+              "rights",
+              "binary_digest"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": false
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "muted",
+                  "vertical",
+                  "square"
+                ]
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1920
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1920
+              },
+              "duration_frames": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 81900
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 24
+              },
+              "audio": {
+                "type": "string",
+                "enum": [
+                  "aac_stereo",
+                  "none"
+                ]
+              },
+              "subtitles": {
+                "type": "string",
+                "enum": [
+                  "sidecar",
+                  "burn_in"
+                ]
+              },
+              "edit_list": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9_.-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 0,
+                "uniqueItems": false
+              },
+              "output_digest": {
+                "type": "null",
+                "const": null
+              }
+            },
+            "required": [
+              "id",
+              "width",
+              "height",
+              "duration_frames",
+              "count",
+              "audio",
+              "subtitles",
+              "edit_list",
+              "output_digest"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 24,
+          "uniqueItems": false
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "scope",
+                  "rights",
+                  "paid_action",
+                  "identity_brand",
+                  "storyboard_timing",
+                  "final",
+                  "publication"
+                ]
+              },
+              "owner_role": {
+                "type": "string",
+                "enum": [
+                  "brief_owner",
+                  "budget_owner",
+                  "creative_owner",
+                  "publication_owner",
+                  "rights_owner"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "const": "not_requested"
+              },
+              "approval_digest": {
+                "type": "null",
+                "const": null
+              }
+            },
+            "required": [
+              "id",
+              "owner_role",
+              "status",
+              "approval_digest"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": false
+        },
+        "unresolved": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "asset_bytes",
+              "rights",
+              "voice_timing",
+              "derivative_edits",
+              "creative_review"
+            ]
+          },
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "const": 1048576
+            },
+            "segments": {
+              "type": "integer",
+              "const": 60
+            },
+            "assets": {
+              "type": "integer",
+              "const": 64
+            },
+            "families": {
+              "type": "integer",
+              "const": 24
+            },
+            "nodes": {
+              "type": "integer",
+              "const": 500
+            },
+            "edges": {
+              "type": "integer",
+              "const": 4000
+            },
+            "depth": {
+              "type": "integer",
+              "const": 16
+            }
+          },
+          "required": [
+            "bytes",
+            "segments",
+            "assets",
+            "families",
+            "nodes",
+            "edges",
+            "depth"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "contract_version",
+        "compiler_version",
+        "mode",
+        "case",
+        "source",
+        "execution",
+        "fps",
+        "duration_frames",
+        "segments",
+        "assets",
+        "profiles",
+        "gates",
+        "unresolved",
+        "limits"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "media-design-plan.v1"
+    },
+    "schema_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "input_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "inputs": {
+      "$ref": "#/$defs/inputs"
+    },
+    "graph": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "source",
+                  "gate",
+                  "asset",
+                  "voice",
+                  "layout",
+                  "segment",
+                  "assembly",
+                  "variant",
+                  "qa",
+                  "publication"
+                ]
+              },
+              "depends_on": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9_.-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "input_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[a-z][a-z0-9_.:-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              },
+              "state": {
+                "type": "string",
+                "const": "planned_not_run"
+              },
+              "output_digest": {
+                "type": "null",
+                "const": null
+              },
+              "planning_key": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "minLength": 64,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "depends_on",
+              "input_refs",
+              "state",
+              "output_digest",
+              "planning_key"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "uniqueItems": false
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 4000,
+          "uniqueItems": true
+        },
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z][a-z0-9_.-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "uniqueItems": true
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "order",
+        "digest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "schema_digest",
+    "input_digest",
+    "inputs",
+    "graph"
+  ],
+  "additionalProperties": false
+}

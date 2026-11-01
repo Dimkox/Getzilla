@@ -1,0 +1,254 @@
+{
+  "contract_version": "media-design-input.v1",
+  "compiler_version": "media-design-compiler.v1",
+  "mode": "design_dry_run",
+  "case": "promo",
+  "source": {
+    "kind": "new_neutral_synthetic",
+    "revision": 1,
+    "content_digest": "332c927eae25ce50a64b249e1061f0884848fa3d441c7c8d2860f3649739f31b"
+  },
+  "execution": {
+    "enabled": false,
+    "network": false,
+    "provider": null,
+    "model": null,
+    "paid_calls": 0,
+    "cap_micro_usd": 0
+  },
+  "fps": {
+    "numerator": 30,
+    "denominator": 1
+  },
+  "duration_frames": 2760,
+  "segments": [
+    {
+      "id": "segment-001",
+      "ordinal": 1,
+      "text": "Synthetic section 01 presents a simple geometric idea.",
+      "in_frame": 0,
+      "out_frame": 240,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-002",
+      "ordinal": 2,
+      "text": "Synthetic section 02 presents a simple geometric idea.",
+      "in_frame": 240,
+      "out_frame": 540,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-003",
+      "ordinal": 3,
+      "text": "Synthetic section 03 presents a simple geometric idea.",
+      "in_frame": 540,
+      "out_frame": 840,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-004",
+      "ordinal": 4,
+      "text": "Synthetic section 04 presents a simple geometric idea.",
+      "in_frame": 840,
+      "out_frame": 1140,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-005",
+      "ordinal": 5,
+      "text": "Synthetic section 05 presents a simple geometric idea.",
+      "in_frame": 1140,
+      "out_frame": 1440,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-006",
+      "ordinal": 6,
+      "text": "Synthetic section 06 presents a simple geometric idea.",
+      "in_frame": 1440,
+      "out_frame": 1740,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-003"
+      ]
+    },
+    {
+      "id": "segment-007",
+      "ordinal": 7,
+      "text": "Synthetic section 07 presents a simple geometric idea.",
+      "in_frame": 1740,
+      "out_frame": 2040,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-001"
+      ]
+    },
+    {
+      "id": "segment-008",
+      "ordinal": 8,
+      "text": "Synthetic section 08 presents a simple geometric idea.",
+      "in_frame": 2040,
+      "out_frame": 2340,
+      "transition_frames": 12,
+      "asset_ids": [
+        "asset-002"
+      ]
+    },
+    {
+      "id": "segment-009",
+      "ordinal": 9,
+      "text": "Synthetic section 09 presents a simple geometric idea.",
+      "in_frame": 2340,
+      "out_frame": 2760,
+      "transition_frames": 0,
+      "asset_ids": [
+        "asset-003"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset-001",
+      "label": "Synthetic geometric shape 1",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-002",
+      "label": "Synthetic geometric shape 2",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    },
+    {
+      "id": "asset-003",
+      "label": "Synthetic geometric shape 3",
+      "kind": "synthetic_slot",
+      "rights": "unverified",
+      "binary_digest": null
+    }
+  ],
+  "profiles": [
+    {
+      "id": "main",
+      "width": 1920,
+      "height": 1080,
+      "duration_frames": 2760,
+      "count": 1,
+      "audio": "aac_stereo",
+      "subtitles": "sidecar",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "muted",
+      "width": 1920,
+      "height": 1080,
+      "duration_frames": 2760,
+      "count": 1,
+      "audio": "none",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "vertical",
+      "width": 1080,
+      "height": 1920,
+      "duration_frames": 1800,
+      "count": 1,
+      "audio": "aac_stereo",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    },
+    {
+      "id": "square",
+      "width": 1080,
+      "height": 1080,
+      "duration_frames": 450,
+      "count": 1,
+      "audio": "aac_stereo",
+      "subtitles": "burn_in",
+      "edit_list": [],
+      "output_digest": null
+    }
+  ],
+  "gates": [
+    {
+      "id": "final",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "identity_brand",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "paid_action",
+      "owner_role": "budget_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "publication",
+      "owner_role": "publication_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "rights",
+      "owner_role": "rights_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "scope",
+      "owner_role": "brief_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    },
+    {
+      "id": "storyboard_timing",
+      "owner_role": "creative_owner",
+      "status": "not_requested",
+      "approval_digest": null
+    }
+  ],
+  "unresolved": [
+    "asset_bytes",
+    "creative_review",
+    "derivative_edits",
+    "rights",
+    "voice_timing"
+  ],
+  "limits": {
+    "bytes": 1048576,
+    "segments": 60,
+    "assets": 64,
+    "families": 24,
+    "nodes": 500,
+    "edges": 4000,
+    "depth": 16
+  }
+}
