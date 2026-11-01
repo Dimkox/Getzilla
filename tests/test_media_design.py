@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from contextlib import redirect_stderr, redirect_stdout
+import errno
 import hashlib
 import importlib.util
 import io
@@ -18,6 +19,8 @@ from tests.json_schema_subset import SubsetValidator
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples/media-design"
+READER_SUPPORTED = all(type(getattr(os, flag, None)) is int and getattr(os, flag) > 0
+                       for flag in ("O_NOFOLLOW", "O_NONBLOCK"))
 
 
 def load_example():
@@ -30,6 +33,49 @@ def load_example():
     return module
 
 
+def reader_race_child(directory):
+    """Run the real FIFO replacement in an owned, parent-time-bounded child."""
+    media = load_example()
+    target = Path(directory) / "owned-fixture.json"
+    target.write_bytes(b"{}\n")
+    real_open = os.open
+    descriptors = []
+    observed = {}
+
+    def replace_at_open(path, flags, *args, **kwargs):
+        if Path(path) == target:
+            target.unlink()
+            os.mkfifo(target, 0o600)
+            observed.update(race_fired=True, nonblocking=bool(flags & os.O_NONBLOCK),
+                            nofollow=bool(flags & os.O_NOFOLLOW))
+            print(json.dumps({"stage": "before_open", **observed}), flush=True)
+        descriptor = real_open(path, flags, *args, **kwargs)
+        descriptors.append(descriptor)
+        return descriptor
+
+    try:
+        with patch.object(os, "open", side_effect=replace_at_open):
+            try:
+                media.read_json(target)
+            except ValueError:
+                observed["refused"] = True
+            else:
+                observed["refused"] = False
+        closed = []
+        for descriptor in descriptors:
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                closed.append(error.errno == errno.EBADF)
+            else:
+                closed.append(False)
+        observed["all_descriptors_closed"] = bool(closed) and all(closed)
+        print(json.dumps(observed), flush=True)
+        return 0
+    finally:
+        target.unlink(missing_ok=True)
+
+
 class MediaDesignTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -37,8 +83,17 @@ class MediaDesignTests(unittest.TestCase):
 
     def setUp(self):
         self.assertIsNotNone(self.media, "bounded media design example is not implemented")
+        if not READER_SUPPORTED:
+            # Pure schema/DAG tests remain available on platforms whose real
+            # file reader must refuse. Reader and subprocess CLI tests stay real.
+            trusted = json.loads((EXAMPLE / "media-plan-v1.schema.json").read_bytes())
+            fixture_schema = patch.object(self.media, "load_schema", side_effect=lambda: copy.deepcopy(trusted))
+            fixture_schema.start()
+            self.addCleanup(fixture_schema.stop)
 
     def inputs(self, case="promo"):
+        if not READER_SUPPORTED:
+            return json.loads((EXAMPLE / (case + ".json")).read_bytes())
         return self.media.load_case(case)
 
     def plan(self, case="promo"):
@@ -269,6 +324,78 @@ class MediaDesignTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.media.read_json(link)
 
+    @unittest.skipUnless(READER_SUPPORTED and hasattr(os, "mkfifo"), "real FIFO/open primitives unavailable")
+    def test_reader_fifo_replacement_refuses_without_blocking_or_descriptor_leak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = [sys.executable, "-m", "tests.test_media_design", "--reader-race", directory]
+            try:
+                result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                        timeout=3, check=False)
+            except subprocess.TimeoutExpired as error:
+                self.fail("owned FIFO open blocked until child timeout: " + repr(error.stdout))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = json.loads(result.stdout.splitlines()[-1])
+            self.assertEqual(observed, {"race_fired": True, "nonblocking": True, "nofollow": True,
+                                        "refused": True, "all_descriptors_closed": True})
+
+    def test_reader_requires_nonblocking_and_nofollow_before_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            target.write_bytes(b"{}\n")
+            for flag in ("O_NOFOLLOW", "O_NONBLOCK"):
+                for value in (None, 0, False):
+                    with self.subTest(flag=flag, value=value):
+                        with patch.dict(os.__dict__, {flag: value}):
+                            if value is None:
+                                delattr(os, flag)
+                            with patch.object(os, "open", side_effect=AssertionError("unsupported reader reached open")) as opened:
+                                with self.assertRaisesRegex(ValueError, "safe reader unavailable"):
+                                    self.media.read_json(target)
+                                opened.assert_not_called()
+
+    @unittest.skipUnless(READER_SUPPORTED, "safe reader primitives unavailable")
+    def test_reader_closes_descriptor_on_success_and_fdopen_or_fstat_failure(self):
+        real_open, real_fstat = os.open, os.fstat
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            target.write_bytes(b"{}\n")
+            for stage in ("success", "fdopen", "fstat"):
+                with self.subTest(stage=stage):
+                    descriptors = []
+                    def record_open(*args, **kwargs):
+                        descriptor = real_open(*args, **kwargs)
+                        descriptors.append(descriptor)
+                        return descriptor
+                    try:
+                        with patch.object(os, "open", side_effect=record_open):
+                            if stage == "success":
+                                self.assertEqual(self.media.read_json(target), {})
+                            else:
+                                with patch.object(os, stage, side_effect=OSError(errno.EIO, "owned test failure")):
+                                    with self.assertRaises(ValueError):
+                                        self.media.read_json(target)
+                        self.assertEqual(len(descriptors), 1)
+                        for descriptor in descriptors:
+                            with self.assertRaises(OSError) as refused:
+                                real_fstat(descriptor)
+                            self.assertEqual(refused.exception.errno, errno.EBADF)
+                    finally:
+                        for descriptor in descriptors:
+                            try:
+                                os.close(descriptor)
+                            except OSError:
+                                pass
+
+    def test_cli_discloses_missing_reader_capability_without_payload(self):
+        output, errors = io.BytesIO(), io.StringIO()
+        stream = io.TextIOWrapper(output, encoding="utf-8")
+        with patch.object(os, "O_NONBLOCK", 0, create=True):
+            with redirect_stdout(stream), redirect_stderr(errors):
+                status = self.media.main(["--case", "promo"])
+        self.assertEqual(status, 2)
+        self.assertEqual(output.getvalue(), b"")
+        self.assertEqual(errors.getvalue(), "media-design: safe reader unavailable on this platform\n")
+
     def test_planning_has_no_network_process_or_write_effects(self):
         active = [False]
         effects = []
@@ -290,7 +417,11 @@ class MediaDesignTests(unittest.TestCase):
         active[0] = True
         try:
             self.media.validate_plan(self.plan("webinar"))
-            self.media.benchmark(1)
+            if READER_SUPPORTED:
+                self.media.benchmark(1)
+            else:
+                with self.assertRaisesRegex(ValueError, "safe reader unavailable"):
+                    self.media.benchmark(1)
         finally:
             active[0] = False
         self.assertEqual(effects, [])
@@ -300,9 +431,14 @@ class MediaDesignTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run([sys.executable, str(EXAMPLE / "dry_run.py"), "--case", "both"],
                                     cwd=directory, capture_output=True, text=True, timeout=30, check=False)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stderr, "")
-            self.assertEqual(len(json.loads(result.stdout)["plans"]), 2)
+            if READER_SUPPORTED:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(len(json.loads(result.stdout)["plans"]), 2)
+            else:
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "media-design: safe reader unavailable on this platform\n")
             self.assertEqual(list(Path(directory).iterdir()), [])
             for arguments in (["--input", "foreign.json"], ["--case", "foreign"], ["--benchmark", "21"]):
                 denied = subprocess.run([sys.executable, str(EXAMPLE / "dry_run.py"), *arguments],
@@ -311,6 +447,10 @@ class MediaDesignTests(unittest.TestCase):
                 self.assertEqual(denied.stdout, "")
 
     def test_benchmark_is_bounded_and_outside_semantic_identity(self):
+        if not READER_SUPPORTED:
+            with self.assertRaisesRegex(ValueError, "safe reader unavailable"):
+                self.media.benchmark(2)
+            return
         before = self.media.canonical(self.plan())
         measured = self.media.benchmark(2)
         self.assertEqual(measured["iterations"], 2)
@@ -340,4 +480,6 @@ class MediaDesignTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--reader-race":
+        raise SystemExit(reader_race_child(sys.argv[2]))
     unittest.main()

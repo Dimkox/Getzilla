@@ -106,6 +106,10 @@ def parse_bytes(raw):
     return value
 
 
+class ReaderUnavailable(ValueError):
+    """The platform cannot admit a no-follow, nonblocking file open."""
+
+
 def read_json(path):
     """Read one fixed local fixture/schema; the CLI does not accept path input."""
     path = Path(path)
@@ -115,14 +119,24 @@ def read_json(path):
             raise ValueError("input must be a regular non-link file")
         if before.st_size > LIMITS["bytes"]:
             raise ValueError("input size bound")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        required = (getattr(os, "O_NOFOLLOW", None), getattr(os, "O_NONBLOCK", None))
+        if any(type(flag) is not int or flag <= 0 for flag in required):
+            raise ReaderUnavailable("safe reader unavailable on this platform")
+        # Do not wait for a FIFO writer before checking the opened descriptor.
+        flags = os.O_RDONLY | required[0] | required[1] | getattr(os, "O_BINARY", 0)
         descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as stream:
-            opened = os.fstat(stream.fileno())
+        try:
+            opened = os.fstat(descriptor)
             if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                 raise ValueError("input changed or is not regular")
-            raw = stream.read(LIMITS["bytes"] + 1)
-            after = os.fstat(stream.fileno())
+            stream = os.fdopen(descriptor, "rb")
+            descriptor = None  # The stream owns it only after fdopen succeeds.
+            with stream:
+                raw = stream.read(LIMITS["bytes"] + 1)
+                after = os.fstat(stream.fileno())
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError("input changed while reading")
     except OSError as error:
@@ -354,6 +368,9 @@ def main(argv=None):
         if args.benchmark is not None:
             result["benchmark"] = benchmark(args.benchmark)
         payload = canonical(result)
+    except ReaderUnavailable:
+        print("media-design: safe reader unavailable on this platform", file=sys.stderr)
+        return 2
     except ValueError:
         print("media-design: invalid built-in input or plan", file=sys.stderr)
         return 2

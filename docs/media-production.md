@@ -14,6 +14,8 @@ python3 -m unittest tests.test_media_design
 
 An absolute path to the script also works from an unrelated directory. The command accepts only promo, webinar or both and an optional benchmark count from 1 to 20. It reads its own fixed schema/fixtures and prints JSON to stdout. It has no arbitrary file/URL input, output-writing option, provider call, subprocess, inference, renderer or native state mutation.
 
+File admission requires no-follow and nonblocking open primitives. A platform without either returns status 2 and a fixed capability message before opening an input; no plan is emitted. This is also the contract for native Windows, whose execution is not claimed here. The [example README](../examples/media-design/README.md) explains the FIFO replacement check and why it does not guarantee a hard deadline for arbitrary filesystem calls.
+
 These files are source-archive content. The explicit consumer installer inventory does not install the example or register a media command. No VERSION, release state, Core schema inventory, dependency or client mirror changes are needed.
 
 ## Two neutral synthetic cases

@@ -49,6 +49,8 @@ Validation covers exact segment order and contiguous frame coverage, asset ident
 
 The fixed ceilings are 1 MiB per JSON input/plan, depth 16, 60 segments, 64 assets, 24 families, 500 nodes and 4000 edges. Input cannot raise them. Reads are bounded and regular-file-only. Strict parsing rejects duplicate keys, nonfinite/floating semantic values and non-NFC strings.
 
+File opens require `O_NOFOLLOW` and `O_NONBLOCK` before descriptor type/identity checks. Missing primitives cause an explicit capability refusal; there is no blocking fallback. This prevents a FIFO replacement from waiting for a writer, but does not provide a hard timeout for arbitrary filesystem calls. The example closes a descriptor on refusal even if creation of its buffered stream fails.
+
 ## Planning identity and dependencies
 
 Canonical bytes are ASCII JSON with sorted object keys, compact separators, finite integer numbers and one final newline. Ordered segments retain order; unordered asset/dependency inventories have a required order and reject duplicates.
