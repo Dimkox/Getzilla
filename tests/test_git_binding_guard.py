@@ -703,6 +703,34 @@ class GitOperationCacheCapacityTests(_GuardFixture):
 class GitBindingGuardFallbackTests(_GuardFixture):
     require_native = False
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux descriptor capabilities")
+    def test_unavailable_directory_capabilities_keep_strict_mutation_checks(self) -> None:
+        root, admin, _, head = self.repository()
+        real_open = os.open
+
+        def legacy_open(path, flags, *args, **kwargs):
+            if kwargs.get("dir_fd") is not None:
+                self.fail("unavailable descriptor-relative open was attempted")
+            return real_open(path, flags, *args, **kwargs)
+
+        variants = (
+            mock.patch.object(native.os, "O_NOFOLLOW", 0),
+            mock.patch.object(native.os, "supports_dir_fd", set()),
+            mock.patch.object(native.os, "open", side_effect=legacy_open),
+        )
+        before = len(os.listdir("/proc/self/fd"))
+        for index, unavailable in enumerate(variants):
+            with self.subTest(capability=index), unavailable:
+                with diff._GitOperation(root) as scope:
+                    self.assertEqual(scope.mode, "strict")
+                    self.assertIsNone(scope.guard)
+                    self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"], _scope=scope),
+                                     (head + "\n").encode())
+                binding = diff._git_binding(root)
+                self.churn(admin)
+                self.refused(binding.verify, "directory")
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
     @unittest.skipUnless(os.name == "posix", "POSIX directory aliases")
     def test_ancestor_alias_is_reacquired_with_original_strict_binding(self) -> None:
         root, _, _, head = self.repository()
@@ -781,6 +809,50 @@ class GitBindingGuardFallbackTests(_GuardFixture):
 
 
 class GitBindingGuardResourceTests(_GuardFixture):
+    def assert_capability_rejected_before_acquisition(self, patch, *, missing: str | None = None) -> None:
+        api = native._native_api()
+        real_init = api.inotify_init1
+        allocated = []
+
+        def observe(flags):
+            descriptor = real_init(flags)
+            if descriptor >= 0:
+                allocated.append(descriptor)
+            return descriptor
+
+        before = len(os.listdir("/proc/self/fd"))
+        guard = None
+        with mock.patch.object(native.ctypes, "CDLL", return_value=api) as load_library, \
+                mock.patch.object(api, "inotify_init1", side_effect=observe), patch:
+            if missing is not None:
+                delattr(native.os, missing)
+            try:
+                with self.assertRaisesRegex(native.GuardUnavailable, "^directory-capabilities$"):
+                    guard = native.LinuxGitGuard()
+            finally:
+                if guard is not None:
+                    guard.close()
+        load_library.assert_not_called()
+        self.assertEqual(allocated, [])
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_missing_or_zero_directory_flags_refuse_before_native_acquisition(self) -> None:
+        for flag in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_CLOEXEC"):
+            for missing in (False, True):
+                with self.subTest(flag=flag, missing=missing):
+                    self.assert_capability_rejected_before_acquisition(
+                        mock.patch.object(native.os, flag, 0),
+                        missing=flag if missing else None,
+                    )
+
+    def test_unsupported_directory_primitives_refuse_before_native_acquisition(self) -> None:
+        for support, primitive in (("supports_dir_fd", os.open), ("supports_dir_fd", os.stat),
+                                   ("supports_follow_symlinks", os.stat), ("supports_fd", os.scandir)):
+            with self.subTest(support=support, primitive=primitive.__name__):
+                self.assert_capability_rejected_before_acquisition(
+                    mock.patch.object(native.os, support, getattr(os, support) - {primitive}),
+                )
+
     def test_real_owned_descriptors_are_nonblocking_and_not_inheritable(self) -> None:
         root, _, _, _ = self.repository()
         with diff._GitOperation(root) as scope:

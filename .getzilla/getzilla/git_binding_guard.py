@@ -69,6 +69,14 @@ def _native_api():
     if (sys.platform != "linux" or fsx.WINDOWS or platform.machine() != "x86_64"
             or ctypes.sizeof(ctypes.c_long) != 8):
         raise GuardUnavailable("platform")
+    # Qualify the fsx primitives before acquiring any native descriptor. A
+    # missing capability is setup unavailability, never a late guard downgrade.
+    flags = (getattr(os, name, 0) for name in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_CLOEXEC"))
+    if (any(not isinstance(flag, int) or flag <= 0 for flag in flags)
+            or not {os.open, os.stat}.issubset(getattr(os, "supports_dir_fd", set()))
+            or os.stat not in getattr(os, "supports_follow_symlinks", set())
+            or os.scandir not in getattr(os, "supports_fd", set())):
+        raise GuardUnavailable("directory-capabilities")
     try:
         library = ctypes.CDLL(None, use_errno=True)
         library.inotify_init1.argtypes = [ctypes.c_int]
