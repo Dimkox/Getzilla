@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -50,6 +52,36 @@ def operation(path: str, expected_sha256: str, content: bytes) -> dict[str, str]
 
 
 class ProtectedWriteTests(unittest.TestCase):
+    def test_cli_uses_getzilla_owner_before_claude_fallback(self) -> None:
+        cases = (
+            ('s1', 'other-session', True),
+            ('other-session', 's1', False),
+            (None, 's1', True),
+            ('manual', 's1', False),
+            ('s1', None, True),
+        )
+        for getzilla_session, claude_session, allowed in cases:
+            with self.subTest(getzilla=getzilla_session, claude=claude_session), github_project() as root:
+                script = root / 'scripts/getzilla_protected_write.py'
+                script.parent.mkdir()
+                shutil.copy2(ROOT / 'scripts/getzilla_protected_write.py', script)
+                target = root / 'AGENTS.md'
+                original = target.read_bytes()
+                replacement = original + b'\n# owned CLI write\n'
+                add_approval(root, 'protected-path', 'owned CLI fixture', 5,
+                             actions=['protected-path-write'], resources=['AGENTS.md'])
+                manifest = write_manifest(root, [operation('AGENTS.md', file_sha256(target), replacement)])
+                environment = {key: value for key, value in os.environ.items()
+                               if key not in {'GETZILLA_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'}}
+                for key, value in (('GETZILLA_SESSION_ID', getzilla_session),
+                                   ('CLAUDE_CODE_SESSION_ID', claude_session)):
+                    if value is not None:
+                        environment[key] = value
+                result = subprocess.run([sys.executable, str(script), '--manifest', str(manifest)],
+                                        cwd=root, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0 if allowed else 2, result.stdout + result.stderr)
+                self.assertEqual(target.read_bytes(), replacement if allowed else original)
+
     def test_one_tree_bound_grant_applies_atomic_multi_file_batch(self) -> None:
         with github_project() as root:
             first = root / 'AGENTS.md'
