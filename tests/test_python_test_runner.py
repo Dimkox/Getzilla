@@ -116,6 +116,30 @@ def windows_process_running(pid: int, recorded_ns: int) -> bool:
 
 
 class NamedSmokeTests(unittest.TestCase):
+    def test_run_cleanup_retains_prior_capture_and_process_cleanup_errors(self):
+        original_cleanup = tempfile.TemporaryDirectory.cleanup
+        original_stop = python_test_runner._stop
+        failures = []
+
+        def failed_cleanup(directory):
+            original_cleanup(directory)
+            message = 'storage cleanup fault: ' + Path(directory.name).name
+            failures.append(message)
+            raise OSError(message)
+
+        def failed_stop(process):
+            original_stop(process)
+            raise OSError('owned process cleanup fault')
+
+        with fixture() as root, patch.object(tempfile.TemporaryDirectory, 'cleanup', failed_cleanup), \
+             patch.object(python_test_runner, '_stop', side_effect=failed_stop):
+            result = python_test_runner.run_named_tests(root, ['tests.test_sample'], budget=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('OK', result.stderr)
+        self.assertIn('owned process cleanup fault', result.cleanup_error)
+        for message in failures:
+            self.assertIn(message, result.cleanup_error)
+
     def test_temp_files_a_killed_child_leaves_are_removed_with_the_run(self):
         with fixture() as root, tempfile.TemporaryDirectory() as report_dir:
             report = Path(report_dir) / 'leaked.txt'

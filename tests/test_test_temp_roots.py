@@ -42,6 +42,43 @@ print(json.dumps({'root': str(root), 'fixture_parent': fixture_parent, 'payload'
                   'child': json.loads(child.stdout), 'descendant': descendant.stdout.strip()}))
 """
 
+_CAPTURE_CHILD = """
+import os, pathlib, sys
+from unittest.mock import patch
+from getzilla.git_binding_guard import GuardUnavailable, LinuxGitGuard
+from getzilla.architecture import ArchitectureError
+fixture = pathlib.Path(sys.argv[1])
+guard = None
+try:
+    try:
+        guard = LinuxGitGuard()
+        guard.directory(fixture, 'fixture root')
+        guard.protect(fixture, 'HEAD', 'HEAD selector')
+        guard.seal()
+    except GuardUnavailable:
+        raise SystemExit(77)
+    original_read = os.read
+    def capture_activity(descriptor, length):
+        if descriptor == guard._descriptor:
+            os.write(1, b'.')
+            os.write(2, b'.')
+        return original_read(descriptor, length)
+    with patch.object(os, 'read', capture_activity):
+        guard.check()
+    selector = fixture / 'HEAD'
+    selector.write_bytes(b'transient')
+    selector.unlink()
+    try:
+        guard.check()
+    except ArchitectureError:
+        print('protected-selector-refused')
+    else:
+        raise SystemExit('protected selector was admitted')
+finally:
+    if guard is not None:
+        guard.close()
+"""
+
 
 class TestTemporaryRootsTests(unittest.TestCase):
     def _worker(self, parent: Path, identity: str | None) -> dict:
@@ -130,6 +167,54 @@ class TestTemporaryRootsTests(unittest.TestCase):
             finally:
                 if guard is not None:
                     guard.close()
+
+    def test_native_output_capture_cannot_exhaust_a_child_fixture_guard(self):
+        from getzilla.python_test_runner import execute
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            fixture = parent / 'fixtures' / 'worker' / 'repo'
+            fixture.mkdir(parents=True)
+            child = parent / 'capture_child.py'
+            child.write_text(_CAPTURE_CHILD, encoding='utf-8')
+            environment = {**os.environ, 'PYTHONPATH': str(ROOT / '.getzilla'),
+                           'PYTHONDONTWRITEBYTECODE': '1', 'TMPDIR': str(fixture.parent),
+                           'TMP': str(fixture.parent), 'TEMP': str(fixture.parent)}
+            with patch.object(tempfile, 'tempdir', str(parent)):
+                result = execute([sys.executable, '-B', str(child), str(fixture)],
+                                 parent, environment, timeout=20)
+            if result.returncode == 77:
+                self.skipTest('qualified native filesystem guard is unavailable')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith('.'), result.stdout)
+            self.assertTrue(result.stdout.endswith('protected-selector-refused\n'), result.stdout)
+            self.assertEqual(result.cleanup_error, '')
+
+    def test_native_capture_storage_is_private_and_removed(self):
+        from getzilla.python_test_runner import execute
+        original_file = tempfile.TemporaryFile
+        locations = []
+        modes = []
+
+        def observe_file(*args, **kwargs):
+            location = Path(kwargs.get('dir') or tempfile.gettempdir()).resolve()
+            locations.append(location)
+            modes.append(stat.S_IMODE(location.stat().st_mode))
+            return original_file(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            with patch.object(tempfile, 'tempdir', str(parent)), \
+                 patch.object(tempfile, 'TemporaryFile', observe_file):
+                result = execute([sys.executable, '-c', 'print("captured")'], parent, os.environ.copy())
+            self.assertEqual((result.returncode, result.stdout, result.cleanup_error), (0, 'captured\n', ''))
+            self.assertTrue(locations)
+            for location, mode in zip(locations, modes):
+                self.assertNotEqual(location, parent)
+                self.assertTrue(location.is_relative_to(parent))
+                if os.name != 'nt':
+                    self.assertEqual(mode, 0o700)
+                self.assertFalse(location.exists())
+            self.assertEqual(list(parent.iterdir()), [])
 
 
 if __name__ == '__main__':

@@ -242,9 +242,8 @@ def _cancellation():
 
 
 @contextmanager
-def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
-    """Close each output file without replacing a result or primary exception."""
-    manager = tempfile.TemporaryFile()
+def _output_resource(manager, retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+    """Close capture resources without replacing a result or primary exception."""
     handle = manager.__enter__()
     primary: BaseException | None = None
     try:
@@ -269,6 +268,17 @@ def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: C
                 primary.add_note(diagnostic)
         if primary is None and retained.get('result') is not None:
             cancellation.check(retained['result'])
+
+
+@contextmanager
+def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+    # Anonymous files still emit parent-directory events on Linux. Keep their
+    # continuous writes below a stable sibling of child fixture trees, so a
+    # fixture's bounded ancestor guard does not consume runner output noise.
+    with _output_resource(tempfile.TemporaryDirectory(prefix='grok-capture-'), retained,
+                          f'{label} directory', cancellation) as directory:
+        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation) as handle:
+            yield handle
 
 
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
@@ -555,10 +565,11 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
             directory.cleanup()
         except Exception as cleanup:
             result = retained.get('tests')
+            if result is None and isinstance(primary, RunCancelled):
+                result = primary.result
             if result is not None:
-                result.cleanup_error = f'{type(cleanup).__name__}: {cleanup}'[:512]
-            elif isinstance(primary, RunCancelled) and primary.result is not None:
-                primary.result.cleanup_error = f'{type(cleanup).__name__}: {cleanup}'[:512]
+                diagnostic = f'{type(cleanup).__name__}: {cleanup}'[:512]
+                result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
             elif primary is None:
                 raise
             if primary is not None:
