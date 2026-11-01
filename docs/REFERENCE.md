@@ -403,6 +403,17 @@ Declared repository paths are exclusive ownership boundaries. A more-specific ne
 
 The [architecture CLI](../scripts/getzilla_architecture.py) is dependency-free and bounded. `validate`, `summary`, and `drift` inspect the current target-owned model. `diagram` renders all five literal artifacts to stdout without mutating the repository; `diagram --check` performs a no-follow comparison against the checked-in projections. `diff` and `fitness` require an explicit base plus an exact 40-character head SHA or `--worktree`; exact inputs are read from Git objects and do not consult mutable route state. Worktree evidence is diagnostic and never claims an exact head SHA.
 
+Git input binding uses one scope for discovery, ordinary and streamed reads, component reads, and cache admission. Harmless neighboring files can change while the covered directory identities and protected registrations stay valid.
+
+| Backend and read graph | Directory churn behavior |
+| --- | --- |
+| Linux x86-64, overlayfs on every named directory, closed supported Git configuration | Inotify history and stable directory identities permit harmless neighbor creation/removal. Local overlayfs controls cover ordinary and attached/detached linked worktrees. |
+| Other Linux filesystems or ABIs; Windows; macOS | Original strict directory metadata checks. No relaxed native support is claimed. |
+| Includes, worktree config, alternates, promisor stores, aliases, unhandled configuration/reference targets or incomplete setup capability | Discard partial setup and acquire a fresh strict binding. Detected mutation or a failed live guard always rejects the operation. |
+| Unclassified command forms or arbitrary pseudoref selectors | Use strict binding before discovery. Guarded reads use HEAD or exact object identities and closed tree, batch, ancestry and diff forms. |
+
+The supported config set is deliberately small: basic core metadata, user identity, remote URL/fetch and branch remote/merge entries, plus SHA-1 or SHA-256 object format. Git parses the config syntax; quoted and conditional includes do not bypass fallback. Selector subtrees and config files must have bounded, link-free coverage. Safe refusal is finite and names the affected registration class. This Linux delivery does not close the remaining portable directory-churn work. See [Git input binding](SECURITY.md#git-input-binding) for budgets and mount/network limits.
+
 Architecture change growth is governed by six finite overlapping error rules. The original M2 rule remains unchanged over its exact six non-factory prefixes (`1,000,000` bytes / `10,820` lines / `5,000` AST); separate rules bound the seven-prefix aggregate and the `factory`, `factory/src`, `factory/contracts`, and `factory/tests` scopes. Every matching rule is enforced independently with complete path-segment matching, and unknown line metrics fail closed; minification and stacked-route partitioning are not budget substitutes.
 
 ```bash

@@ -2113,6 +2113,15 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         self.assertEqual(analysis.signals, ("import:queue",))
         self.assertFalse(analysis.uncertain)
 
+    def test_git_guard_helpers_do_not_add_queue_operations(self) -> None:
+        prefix = "import queue\nfrom getzilla.git_binding_guard import LinuxGitGuard\n"
+        for helper in (architecture_diff._GitOperation, architecture_diff._qualify_git_configuration,
+                       architecture_diff._guarded_git_arguments):
+            with self.subTest(helper=helper.__name__):
+                analysis = analyze_queue_tree(ast.parse(prefix + inspect.getsource(helper)))
+                self.assertEqual(analysis.signals, ("import:queue",))
+                self.assertFalse(analysis.uncertain)
+
     def _repository(self, *, object_format: str = "sha1") -> tuple[Path, str]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -2178,11 +2187,12 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         subprocess.run(["git", "worktree", "add", "-q", "--detach", str(root), head], cwd=main, check=True)
         return root, common / "worktrees" / root.name, common, head
 
-    def _assert_git_binding_refused(self, operation: Callable[[], object], label: str, root: Path) -> None:
+    def _assert_git_binding_refused(self, operation: Callable[[], object], label: str | tuple[str, ...], root: Path) -> None:
         with self.assertRaises(ArchitectureError) as caught:
             operation()
         self.assertEqual(caught.exception.code, "git")
-        self.assertIn(f"Git {label} ", str(caught.exception))
+        labels = (label,) if isinstance(label, str) else label
+        self.assertTrue(any(f"Git {item} " in str(caught.exception) for item in labels), str(caught.exception))
         self.assertNotIn(str(root), str(caught.exception))
         self.assertNotIn("gitdir:", str(caught.exception))
 
@@ -2329,7 +2339,9 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 with mock.patch.object(architecture_diff, "_run_capped", side_effect=redirect_after_read):
                     self._assert_git_binding_refused(
                         lambda: architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]),
-                        "common-directory registration" if linked else "directory", root,
+                        # A live name guard reports the exact absent registration.
+                        # The unqualified strict backend reports its changed parent.
+                        "common-directory registration" if linked else ("directory", "common-directory registration"), root,
                     )
 
     def test_linked_worktree_registrations_rewritten_later_still_bind(self) -> None:
