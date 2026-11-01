@@ -12,6 +12,18 @@ This page answers the external handoff review in #63. Everything here describes 
 | An insider with repository write access | Trust CI runs a holdout bundle that a pull request cannot modify, verifies its digest before checkout, and needs human-signed approvals for protected actions. | A person who controls the Trust CI host, its keys or the GitHub App can bypass it. |
 | A tampered installer | The README commands download the installer from a release tag and compare its SHA-256 with the published digest before running it. The test suite binds that digest to the installer bytes. | The digest is only as trustworthy as the README you read it from. |
 
+## Git input binding
+
+Architecture and governance Git reads hold their results until repository binding passes. On the qualified Linux backend, one operation owns directory descriptors and inotify watches from registration discovery through subprocess collection and cache admission. It checks the worktree, Git administration, common directory, object store and each named ancestor. Present and absent registration names remain protected. Neighbor file creation and removal can pass; directory substitution, restored moves, registration rewrites and protected selector changes fail. Regular registration files retain strict identity checks.
+
+The enabled backend is Linux x86-64 with overlayfs on every covered directory. Real controls ran with Linux 6.18.57, glibc 2.39 and Git 2.51.1 on a local overlayfs fixture. Windows, macOS, other Linux ABIs and other filesystems retain the original strict directory checks. This is partial platform support for directory churn, not portable closure.
+
+The relaxed mode accepts a bounded, closed Git read graph. Git parses the checked local config with includes disabled. Unhandled keys, includes, worktree config, alternates, promisor stores, path aliases, symbolic references outside the covered refs tree or unknown formats make relaxed acquisition unavailable. Unclassified commands and arbitrary pseudoref selectors start with strict binding. Supported guarded commands use HEAD or exact object identities and closed tree, batch, ancestry and diff forms. On unavailable setup, all partial resources and output are discarded before a fresh strict acquisition. Strict fallback can still refuse harmless directory churn.
+
+Mutation, watch loss, overflow, malformed events, read errors and exhausted budgets terminate the operation. There is no fallback after invalidation and no retry until the directory becomes quiet. Setup has a five-second budget. An operation has a 120-second budget, at most 256 directory handles, 4,096 selector entries, 8,192 events and one MiB of event data; each drain permits at most 32 reads. Existing subprocess time and output limits also apply. Handles close on all exits. Caches retain durable identities and admitted values, never live guards. Binding errors name a fixed registration class without disclosing private names, config bytes or foreign stderr.
+
+This boundary prevents admission of substituted output. It does not prevent every foreign read. Inotify is not mount-namespace protection, and remote or out-of-band filesystem changes do not have a completeness guarantee. The overlayfs controls cover changes through the watched local namespace; they do not qualify direct changes to another mount of its underlying layers. See the [Linux inotify contract](https://man7.org/linux/man-pages/man7/inotify.7.html) and the [backend matrix](REFERENCE.md#executable-architecture).
+
 ## Keys
 
 No key material is stored in this repository.
