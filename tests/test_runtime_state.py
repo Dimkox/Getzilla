@@ -183,6 +183,50 @@ class RuntimeStateTests(unittest.TestCase):
             with runtime_lock(root, timeout=0.1):
                 pass
 
+    def test_expired_guard_wait_never_admits_a_free_pid_marker(self) -> None:
+        for delayed_at in ('wake', 'acquired'):
+            with self.subTest(delayed_at=delayed_at), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                guard = runtime_dir(root) / '.state.guard.lock'
+                holder = os.open(guard, os.O_CREAT | os.O_RDWR | fsx.O_BINARY | fsx.O_NOINHERIT, 0o600)
+                holder_locked = False
+                clock, attempts, sleeps = [0.0], [], []
+                real_lock = fsx.lock_file
+
+                def attempted(fd, **kwargs):
+                    attempts.append((fd, clock[0]))
+                    real_lock(fd, **kwargs)
+                    if delayed_at == 'acquired':
+                        clock[0] = 0.6
+
+                def delayed_sleep(seconds):
+                    nonlocal holder_locked
+                    sleeps.append(seconds)
+                    fsx.unlock_file(holder)
+                    holder_locked = False
+                    clock[0] = 0.6 if delayed_at == 'wake' else 0.1
+
+                try:
+                    real_lock(holder, exclusive=True, blocking=False)
+                    holder_locked = True
+                    with mock.patch.object(time, 'monotonic', lambda: clock[0]), \
+                            mock.patch.object(time, 'sleep', delayed_sleep), \
+                            mock.patch.object(fsx, 'lock_file', attempted):
+                        with self.assertRaises(TimeoutError):
+                            with runtime_lock(root, timeout=0.5):
+                                self.fail(f'writer admitted after expiry at {clock[0]}')
+                    self.assertEqual(sleeps, [0.05])
+                    self.assertFalse((runtime_dir(root) / '.state.lock').exists())
+                    self.assertTrue(all(at < 0.5 for _, at in attempts), attempts)
+                    with self.assertRaises(OSError):
+                        os.fstat(attempts[-1][0])
+                    with runtime_lock(root, timeout=0):
+                        pass
+                finally:
+                    if holder_locked:
+                        fsx.unlock_file(holder)
+                    os.close(holder)
+
     def test_guard_and_pid_wait_share_one_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

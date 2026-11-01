@@ -165,10 +165,10 @@ def _open_lock_guard(guard: Path) -> int:
 
 
 @contextmanager
-def _pid_lock(lock: Path, deadline: float) -> Iterator[None]:
+def _pid_lock(lock: Path, deadline: float, *, allow_immediate: bool) -> Iterator[None]:
     """Legacy marker, always acquired and released under the retained guard."""
     fd: int | None = None
-    first_attempt = True
+    first_attempt = allow_immediate
     while fd is None:
         if not first_attempt and time.monotonic() >= deadline:
             raise TimeoutError(f'could not acquire runtime lock: {lock}')
@@ -215,8 +215,11 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
     guard = lock.with_name(f'.{name}.guard.lock')
     descriptor = _open_lock_guard(guard)
     locked = False
+    contended = False
     try:
         while True:
+            if contended and time.monotonic() >= deadline:
+                raise TimeoutError(f'could not acquire runtime lock: {lock}')
             try:
                 fsx.lock_file(descriptor, exclusive=True, blocking=False)
                 locked = True
@@ -225,8 +228,11 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
                 if not (isinstance(error, BlockingIOError)
                         or (fsx.WINDOWS and error.errno in {errno.EACCES, errno.EDEADLK})):
                     raise
+                contended = True
                 _wait_for_lock(lock, deadline)
-        with _pid_lock(lock, deadline):
+        # Only an uncontended acquisition gets the timeout=0 immediate attempt.
+        # A retry must still have budget when it reaches the PID stage.
+        with _pid_lock(lock, deadline, allow_immediate=not contended):
             yield
     finally:
         try:
