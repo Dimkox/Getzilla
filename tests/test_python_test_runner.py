@@ -624,6 +624,83 @@ class CoreWorkerAllocationTests(unittest.TestCase):
 
 
 class PythonTestRunnerTests(unittest.TestCase):
+    def test_coverage_artifacts_are_separate_from_guarded_fixtures_and_cleaned(self):
+        from getzilla.git_binding_guard import GuardUnavailable, LinuxGitGuard
+        guard = None
+        try:
+            try:
+                guard = LinuxGitGuard()
+                guard.directory(Path(tempfile.gettempdir()).resolve(), 'temporary root')
+            except GuardUnavailable:
+                self.skipTest('qualified native filesystem guard is unavailable')
+        finally:
+            if guard is not None:
+                guard.close()
+        if not parallel_engine_ready(measured=True):
+            self.skipTest('pinned xdist and coverage tools are unavailable')
+        source = '''
+import json, os, pathlib, stat, tempfile, unittest
+from unittest.mock import patch
+from getzilla.git_binding_guard import LinuxGitGuard
+from getzilla.architecture import ArchitectureError
+import subject
+
+class CoverageLayout(unittest.TestCase):
+    def test_real_output_writes_preserve_fixture_guard(self):
+        self.assertEqual(subject.VALUE, 7)
+        artifacts = pathlib.Path(os.environ['COVERAGE_FILE']).parent.resolve()
+        temporary = pathlib.Path(tempfile.gettempdir()).resolve()
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile(dir=artifacts) as output:
+            fixture = pathlib.Path(directory)
+            guard = LinuxGitGuard()
+            try:
+                guard.directory(fixture, 'fixture root')
+                guard.protect(fixture, 'HEAD', 'HEAD selector')
+                guard.seal()
+                original_read = os.read
+                def write_artifact(descriptor, length):
+                    if descriptor == guard._descriptor:
+                        os.write(output.fileno(), b'coverage output')
+                    return original_read(descriptor, length)
+                with patch.object(os, 'read', write_artifact):
+                    guard.check()
+                selector = fixture / 'HEAD'
+                selector.write_bytes(b'transient')
+                selector.unlink()
+                with self.assertRaises(ArchitectureError):
+                    guard.check()
+            finally:
+                guard.close()
+        pathlib.Path(os.environ['LAYOUT_OBSERVATION']).write_text(json.dumps({
+            'artifacts': str(artifacts), 'temporary': str(temporary),
+            'artifact_mode': stat.S_IMODE(artifacts.stat().st_mode),
+        }))
+'''
+        for ready, expected in ((True, 'pytest-xdist'), (False, 'coverage-unittest-parallel')):
+            with self.subTest(engine=expected), fixture(workers=2) as root:
+                (root / '.coveragerc').write_text('[run]\nbranch = True\nsource = subject\n')
+                (root / 'subject.py').write_text('VALUE = 7\n')
+                (root / 'tests/test_coverage_guard.py').write_text(source)
+                observation = root / 'layout.json'
+                with patch.dict(os.environ, {'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla'),
+                                             'LAYOUT_OBSERVATION': str(observation)}), \
+                     patch.object(python_test_runner, 'parallel_engine_ready', return_value=ready):
+                    result = python_test_runner.run_core_tests(root, 'pr', 2)
+                self.assertEqual(result.tests.returncode, 0, result.tests.stdout + result.tests.stderr)
+                self.assertEqual(result.versions['engine'], expected)
+                self.assertEqual(result.tests.cleanup_error, '')
+                self.assertIsNotNone(result.coverage)
+                self.assertEqual(result.coverage.returncode, 0, result.coverage.stderr)
+                self.assertTrue(result.coverage_metadata['branch_coverage'])
+                self.assertEqual(result.coverage_metadata['files'], ['subject.py'])
+                observed = json.loads(observation.read_text())
+                artifacts, temporary = Path(observed['artifacts']), Path(observed['temporary'])
+                self.assertEqual(artifacts.parent, temporary.parent)
+                self.assertNotEqual(artifacts, temporary)
+                self.assertEqual(observed['artifact_mode'], 0o700)
+                self.assertFalse(artifacts.exists())
+                self.assertFalse(temporary.exists())
+
     @unittest.skipUnless(os.name == 'posix', 'POSIX directory permission contract')
     def test_child_scratch_is_private_under_permissive_umask(self):
         for ambient in (0o000, 0o002, 0o022):

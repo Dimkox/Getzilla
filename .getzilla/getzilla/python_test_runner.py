@@ -345,10 +345,10 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         return result
 
 
-def _environment(root: Path, data_file: Path) -> dict[str, str]:
+def _environment(root: Path, data_file: Path, *, temporary_root: Path | None = None) -> dict[str, str]:
     # Test children write temporary files inside this run's folder, so the run's own cleanup also
     # removes what a killed or timed-out child left behind (#168).
-    scratch = data_file.parent / 'tmp'
+    scratch = temporary_root if temporary_root is not None else data_file.parent / 'tmp'
     scratch.mkdir(mode=0o700, exist_ok=True)
     environment = {
         key: value for key, value in os.environ.items()
@@ -592,9 +592,13 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         raise RunnerError('required .coveragerc is missing')
     retained: dict[str, ProcessResult] = {}
     with _run_directory('grok-core-coverage-', retained) as directory:
-        data_file = Path(directory) / '.coverage'
-        report_file = Path(directory) / 'coverage.json'
-        environment = _environment(root, data_file)
+        # Worker coverage/SQLite writes must stay below a sibling of fixture
+        # storage, outside the fixture guards' nonrecursive ancestor watches.
+        coverage_root = Path(directory) / 'coverage'
+        coverage_root.mkdir(mode=0o700)
+        data_file = coverage_root / '.coverage'
+        report_file = coverage_root / 'coverage.json'
+        environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
         if workers and engine == 'pytest-xdist':
             command = _pytest_command(workers, 'worksteal')
             if measured:
