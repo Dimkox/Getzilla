@@ -478,17 +478,22 @@ class InstallerTests(unittest.TestCase):
             (root / ".coveragerc").write_bytes(b"tampered\n")
             with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "digest"):
                 MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
+            (root / ".coveragerc").write_bytes((ROOT / ".coveragerc").read_bytes())
+            with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "digest"):
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_keep_record_validation_fails_closed(self) -> None:
         cases = (
             ("unknown key", {"schema_version": 1, "kept_local": [], "extra": 1}),
             ("bad schema", {"schema_version": 2, "kept_local": []}),
+            ("boolean schema", {"schema_version": True, "kept_local": []}),
             ("kept_local not list", {"kept_local": ".coveragerc"}),
             ("non-string entry", {"kept_local": [1]}),
             ("absolute path", {"kept_local": ["/etc/passwd"]}),
             ("traversal", {"kept_local": ["../x"]}),
             ("non-canonical", {"kept_local": ["./.coveragerc"]}),
             ("duplicates", {"kept_local": ["bandit.yaml", "bandit.yaml"]}),
+            ("case aliases", {"kept_local": ["bandit.yaml", "BANDIT.yaml"]}),
         )
         for label, payload in cases:
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:

@@ -25,6 +25,9 @@ from getzilla.component_state import (
     COMPLIANCE_COMPONENT_PATHS as COMPLIANCE_COMPONENT_PATHS, KNOWN_COMPLIANCE, ComponentStateError,
     MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest,
     agent_of as _agent_of, component_of, parse_agents, validate_agents,
+    STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, MAX_SYNC_RECORD_BYTES,
+    LEGACY_PATH_RULES as LEGACY_PATH_RULES, legacy_to_current_path as legacy_to_current_path,
+    decode_keep_contract, kept_file_state, match_kept_local,
 )
 
 MANAGED_DIRS = (
@@ -139,13 +142,10 @@ TARGET_OWNED_GOVERNANCE = frozenset(
 )
 # A consumer repository declares its own-overridden managed paths in this record;
 # MANAGED_* answers what the stack owns, kept_local answers what this repo overrode.
-STACK_SYNC_RECORD = ".getzilla/AGBP_SYNC.json"
-MAX_SYNC_RECORD_BYTES = 65536
 # Targets installed before the Getzilla rename carry the stack under these names.
 # The planner reads their sync record and reports their files for retirement; it
 # never deletes them itself.
 LEGACY_STACK_DIR = ".grok-stack"
-LEGACY_STACK_SYNC_RECORD = ".grok-stack/AGBP_SYNC.json"
 FRESH_SYNC_RECORD = b'{"kept_local": [], "kept_local_sha256": {}, "schema_version": 1}\n'
 # Directories an install made before the rename owns entirely.
 LEGACY_MANAGED_DIRS = (
@@ -153,13 +153,6 @@ LEGACY_MANAGED_DIRS = (
     "factory/src/adaptive_factory",
     ".agents/skills/adaptive-delivery",
     ".grok/skills/adaptive-delivery",
-)
-LEGACY_PATH_RULES = (
-    (re.compile(r"^\.grok-stack/adaptive_grok/"), ".getzilla/getzilla/"),
-    (re.compile(r"^\.grok-stack/"), ".getzilla/"),
-    (re.compile(r"^scripts/grok_([a-z_]+)\.py$"), r"scripts/getzilla_\1.py"),
-    (re.compile(r"^factory/src/adaptive_factory/"), "factory/src/getzilla_factory/"),
-    (re.compile(r"^(\.agents|\.grok)/skills/adaptive-delivery/"), r"\1/skills/getzilla-delivery/"),
 )
 LEGACY_SCRIPT_PATTERN = re.compile(r"^grok_[a-z_]+\.py$")
 MAX_LEGACY_REPORT_ENTRIES = 4096
@@ -1043,15 +1036,6 @@ def _read_target_relative(target: Path, relative: str, *, limit: int) -> bytes |
         binding.close()
 
 
-def legacy_to_current_path(path: str) -> str:
-    """Map a pre-rename managed path (.grok-stack, scripts/grok_*) to its Getzilla path."""
-    for pattern, replacement in LEGACY_PATH_RULES:
-        mapped, count = pattern.subn(replacement, path)
-        if count:
-            return mapped
-    return path
-
-
 def _sync_record(target: Path) -> tuple[bytes | None, bool]:
     """Raw sync record and whether it came from a pre-rename (legacy) stack."""
     raw = _read_target_relative(target, STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
@@ -1061,56 +1045,21 @@ def _sync_record(target: Path) -> tuple[bytes | None, bool]:
     return raw, raw is not None
 
 
+def _keep_contract(target: Path) -> tuple[frozenset[str], dict[str, str]]:
+    raw, legacy = _sync_record(target)
+    try:
+        return decode_keep_contract(raw, legacy=legacy)
+    except ComponentStateError as exc:
+        raise UnsafeInstallTarget(str(exc)) from exc
+
+
 def _kept_local(target: Path) -> frozenset[str]:
     """Paths the target declares it owns, from its stack sync record (may be absent)."""
-    raw, legacy = _sync_record(target)
-    if raw is None:
-        return frozenset()
-    try:
-        record = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise UnsafeInstallTarget("stack sync record is not valid UTF-8 JSON") from exc
-    if not isinstance(record, dict) or set(record) - {"schema_version", "kept_local", "kept_local_sha256"}:
-        raise UnsafeInstallTarget("stack sync record has unknown shape or keys")
-    if record.get("schema_version", 1) != 1:
-        raise UnsafeInstallTarget("stack sync record schema_version must be 1")
-    paths = record.get("kept_local", [])
-    if not isinstance(paths, list):
-        raise UnsafeInstallTarget("stack sync record kept_local must be a list")
-    kept: list[str] = []
-    for item in paths:
-        if not isinstance(item, str):
-            raise UnsafeInstallTarget("stack sync record kept_local entries must be strings")
-        _path_parts(item)
-        kept.append(item)
-    if len(set(kept)) != len(kept):
-        raise UnsafeInstallTarget("stack sync record kept_local has duplicates")
-    digests = record.get("kept_local_sha256", {})
-    if not isinstance(digests, dict) or set(digests) - set(kept):
-        raise UnsafeInstallTarget("stack sync record kept_local_sha256 must map declared paths only")
-    for path, digest in digests.items():
-        if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise UnsafeInstallTarget("stack sync record kept_local_sha256 has invalid digest")
-    if legacy:
-        kept = [legacy_to_current_path(item) for item in kept]
-        if len(set(kept)) != len(kept):
-            raise UnsafeInstallTarget("legacy stack sync record kept_local collides after the Getzilla rename")
-    return frozenset(kept)
+    return _keep_contract(target)[0]
 
 
 def _kept_local_digests(target: Path) -> dict[str, str]:
-    raw, legacy = _sync_record(target)
-    if raw is None:
-        return {}
-    try:
-        record = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise UnsafeInstallTarget("stack sync record is not valid UTF-8 JSON") from exc
-    value = record.get("kept_local_sha256", {}) if isinstance(record, dict) else {}
-    digests = dict(value) if isinstance(value, dict) else {}
-    if legacy:
-        digests = {legacy_to_current_path(path): digest for path, digest in digests.items()}
-    return digests
+    return _keep_contract(target)[1]
 
 
 def _is_link_path(path: Path) -> bool:
@@ -1228,6 +1177,7 @@ def _make_plan(
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
     selection: PayloadSelection | None = None,
+    accepted_kept_digests: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
@@ -1236,9 +1186,17 @@ def _make_plan(
     state = _target_state(target)
     if state == "absent" and payload is None:
         selected_payload = with_fresh_sync_record(selected_payload, selection)
-    kept = _kept_local(target) if state == "directory" else frozenset()
-    kept_digests = _kept_local_digests(target) if state == "directory" else {}
     payload_by_path = {entry.path: entry for entry in selected_payload}
+    kept, kept_digests = _keep_contract(target) if state == "directory" else (frozenset(), {})
+    try:
+        if accepted_kept_digests is not None:
+            kept, kept_digests = decode_keep_contract(json.dumps({
+                'schema_version': 1, 'kept_local': sorted(kept),
+                'kept_local_sha256': accepted_kept_digests,
+            }, ensure_ascii=False).encode('utf-8'))
+        kept, kept_digests = match_kept_local(kept, kept_digests, payload_by_path)
+    except ComponentStateError as exc:
+        raise UnsafeInstallTarget(str(exc)) from exc
     keep_reports: list[dict[str, str]] = []
     for path in sorted(kept):
         if path in TARGET_OWNED_ARCHITECTURE or path in TARGET_OWNED_GOVERNANCE:
@@ -1254,18 +1212,10 @@ def _make_plan(
             existing = _read_target_relative(target, path, limit=MAX_SOURCE_FILE_BYTES)
         except UnsafeInstallTarget as exc:
             raise UnsafeInstallTarget(f"kept path is not safely readable: {path}") from exc
-        if existing is None:
-            keep_state = "absent"
-        elif existing == entry.content:
-            keep_state = "identical"
-        elif path in kept_digests and hashlib.sha256(existing).hexdigest() != kept_digests[path]:
-            raise UnsafeInstallTarget(f"kept path digest no longer matches its declared divergence: {path}")
-        elif path in kept_digests:
-            keep_state = "divergent"
-        else:
-            raise UnsafeInstallTarget(
-                f"kept path conflicts with the stack update, which would change it: {path}"
-            )
+        try:
+            keep_state = kept_file_state(path, existing, entry.content, kept_digests.get(path))
+        except ComponentStateError as exc:
+            raise UnsafeInstallTarget(str(exc)) from exc
         keep_reports.append({"action": "KEEP", "path": path, "state": keep_state,
                              "reason": "declared by target"})
     deliverable = tuple(entry for entry in selected_payload if entry.path not in kept)

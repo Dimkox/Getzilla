@@ -18,7 +18,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from . import fsx
 
@@ -28,6 +28,16 @@ V2 = 'getzilla-managed-components-v2'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_FILES = 20_000
+STACK_SYNC_RECORD = '.getzilla/AGBP_SYNC.json'
+LEGACY_STACK_SYNC_RECORD = '.grok-stack/AGBP_SYNC.json'
+MAX_SYNC_RECORD_BYTES = 65536
+LEGACY_PATH_RULES = (
+    (re.compile(r'^\.grok-stack/adaptive_grok/'), '.getzilla/getzilla/'),
+    (re.compile(r'^\.grok-stack/'), '.getzilla/'),
+    (re.compile(r'^scripts/grok_([a-z_]+)\.py$'), r'scripts/getzilla_\1.py'),
+    (re.compile(r'^factory/src/adaptive_factory/'), 'factory/src/getzilla_factory/'),
+    (re.compile(r'^(\.agents|\.grok)/skills/adaptive-delivery/'), r'\1/skills/getzilla-delivery/'),
+)
 AGENT_COMPONENT_PATHS = {
     'claude': ('.claude/',), 'codex': ('.codex/',), 'qwen': ('.qwen/',),
     'gemini': ('.gemini/',), 'grok': ('.grok/skills/',),
@@ -174,6 +184,87 @@ def encode_manifest(manifest: dict[str, Any]) -> bytes:
     data = (json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + '\n').encode('utf-8')
     decode_manifest(data)
     return data
+
+
+def legacy_to_current_path(path: str) -> str:
+    """Map an existing pre-rename keep declaration to its current managed path."""
+    for pattern, replacement in LEGACY_PATH_RULES:
+        mapped, count = pattern.subn(replacement, path)
+        if count:
+            return mapped
+    return path
+
+
+def decode_keep_contract(content: bytes | None, *, legacy: bool = False) -> tuple[frozenset[str], dict[str, str]]:
+    """The existing AGBP_SYNC keep contract, shared by installer and generator."""
+    if content is None:
+        return frozenset(), {}
+    if len(content) > MAX_SYNC_RECORD_BYTES:
+        raise ComponentStateError('stack sync record exceeds the size limit')
+    try:
+        record = json.loads(content.decode('utf-8'), object_pairs_hook=_unique)
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise ComponentStateError(f'stack sync record is not valid UTF-8 JSON: {exc}') from exc
+    if type(record) is not dict or set(record) - {'schema_version', 'kept_local', 'kept_local_sha256'}:
+        raise ComponentStateError('stack sync record has unknown shape or keys')
+    version = record.get('schema_version', 1)
+    if type(version) is not int or version != 1:
+        raise ComponentStateError('stack sync record schema_version must be 1')
+    paths = record.get('kept_local', [])
+    if type(paths) is not list or len(paths) > MAX_FILES:
+        raise ComponentStateError('stack sync record kept_local must be a bounded list')
+    for path in paths:
+        path_parts(path)
+    if len({path.casefold() for path in paths}) != len(paths):
+        raise ComponentStateError('stack sync record kept_local has duplicates or case aliases')
+    digests = record.get('kept_local_sha256', {})
+    if type(digests) is not dict or set(digests) - set(paths):
+        raise ComponentStateError('stack sync record kept_local_sha256 must map declared paths only')
+    if any(type(value) is not str or re.fullmatch('[0-9a-f]{64}', value) is None for value in digests.values()):
+        raise ComponentStateError('stack sync record kept_local_sha256 has invalid digest')
+    if legacy:
+        paths = [legacy_to_current_path(path) for path in paths]
+        if len({path.casefold() for path in paths}) != len(paths):
+            raise ComponentStateError('legacy stack sync record kept_local collides after the Getzilla rename')
+        digests = {legacy_to_current_path(path): digest for path, digest in digests.items()}
+    return frozenset(paths), dict(digests)
+
+
+def read_keep_contract(binding: BoundRoot | ComponentTransaction) -> tuple[frozenset[str], dict[str, str]]:
+    current = binding.read(STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    if current is not None:
+        return decode_keep_contract(current.content)
+    legacy = binding.read(LEGACY_STACK_SYNC_RECORD, limit=MAX_SYNC_RECORD_BYTES)
+    return decode_keep_contract(legacy.content if legacy else None, legacy=True)
+
+
+def match_kept_local(kept: frozenset[str], digests: dict[str, str], managed: Iterable[str]) -> tuple[frozenset[str], dict[str, str]]:
+    """Match Windows path spelling to the exact managed inventory without losing keep intent."""
+    if not fsx.WINDOWS:
+        return kept, digests
+    canonical: dict[str, str] = {}
+    for path in managed:
+        key = path.casefold()
+        if key in canonical and canonical[key] != path:
+            raise ComponentStateError('managed inventory contains ambiguous Windows path aliases')
+        canonical[key] = path
+    mapped = {path: canonical.get(path.casefold(), path) for path in kept}
+    return frozenset(mapped.values()), {mapped[path]: digest for path, digest in digests.items()}
+
+
+def kept_file_state(path: str, current: bytes | None, desired: bytes | None, digest: str | None) -> str:
+    """Validate a declared digest before accepting even identical incoming bytes."""
+    if current is None:
+        return 'absent'
+    if digest is not None and hashlib.sha256(current).hexdigest() != digest:
+        raise ComponentStateError(f'kept path digest no longer matches its declared divergence: {path}')
+    if desired is None:
+        return 'unmanaged'
+    if current == desired:
+        return 'identical'
+    if digest is not None:
+        return 'divergent'
+    raise ComponentStateError(f'kept path conflicts with the stack update, which would change it: {path}')
 
 
 @dataclass(frozen=True)

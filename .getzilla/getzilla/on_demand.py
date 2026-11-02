@@ -22,6 +22,7 @@ from .component_state import (
     MANIFEST, V2, BoundRoot, ComponentStateError, ComponentTransaction,
     FileSnapshot, agent_of, component_transaction, component_of, encode_manifest,
     mode_matches, read_state, record_owned, validate_agents,
+    read_keep_contract, match_kept_local, kept_file_state,
 )
 
 # A synced project has the sync record; a fresh install has the core package and no record.
@@ -144,12 +145,16 @@ class _AdditionPlan:
     manifest_bytes: bytes | None
 
 
-def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[str, Any]) -> None:
+def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[str, Any],
+                     kept: frozenset[str]) -> None:
+    kept_pair = bool(kept & {'.codex/hooks.json', '.codex/config.toml'})
     for path in ('.codex/hooks.json', '.codex/config.toml'):
         entry = payload.get(path)
         if entry is None:
             raise ComponentStateError(f'Codex source activation unit is incomplete: {path}')
         current = binding.read(path)
+        if current is None and kept_pair:
+            raise ComponentStateError(f'kept-local Codex activation requires the complete existing pair: {path}')
         if current is not None and (current.content != entry.content or not mode_matches(current.mode, entry.mode)):
             raise ComponentStateError(f'custom Codex activation must be reconciled before adding files: {path}')
     source_overlay = payload.get('.grok/codex-hooks.json')
@@ -172,8 +177,10 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
     if state.kind == 'selected':
         manifest['agents'] = list(agents)
     by_path = {entry.path: entry for entry in payload}
+    kept, kept_digests = read_keep_contract(binding)
+    kept, kept_digests = match_kept_local(kept, kept_digests, {*by_path, '.getzilla/config/compliance.json'})
     if 'codex' in requested_agents:
-        _codex_preflight(binding, by_path)
+        _codex_preflight(binding, by_path, kept)
     results: list[Added] = []
     operations: list[tuple[Any, FileSnapshot | None]] = []
     planned: set[str] = set()
@@ -186,6 +193,13 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
         else:
             record = manifest['components'].setdefault(component_of(entry.path), {'files': []})
             record['files'] = sorted(set(record['files']) | {entry.path})
+
+    def preserve(path: str, current: FileSnapshot | None, desired: bytes) -> None:
+        status = kept_file_state(path, current.content if current else None, desired, kept_digests.get(path))
+        if status == 'absent':
+            raise ComponentStateError(f'kept-local path is absent; reconcile it before adding the component: {path}')
+        for record in manifest['components'].values():
+            record.get('owned', {}).pop(path, None)
 
     for need in needs:
         added = Added(need)
@@ -202,6 +216,10 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
             if entry.path in planned:
                 continue
             current = binding.read(entry.path)
+            if entry.path in kept:
+                preserve(entry.path, current, entry.content)
+                added.kept.append(entry.path)
+                continue
             if current is not None:
                 if current.content != entry.content or not mode_matches(current.mode, entry.mode):
                     added.kept.append(entry.path)
@@ -230,10 +248,16 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
                                'enabled': sorted(set(current['enabled']) | set(layers))}, indent=2, sort_keys=True) + '\n').encode()
         # Use the same immutable entry type without importing the source installer again.
         entry = type(payload[0])(config_path, content, 0o644)
-        if previous is None or previous.content != content:
-            operations.append((entry, previous))
-            changed_components.add('core')
-        remember(entry)
+        if config_path in kept:
+            preserve(config_path, previous, previous.content if previous else content)
+            if not set(layers) <= set(current['enabled']):
+                raise ComponentStateError('kept-local compliance configuration does not enable the requested layers')
+            next(item for item in results if item.component.startswith('compliance:')).kept.append(config_path)
+        else:
+            if previous is None or previous.content != content:
+                operations.append((entry, previous))
+                changed_components.add('core')
+            remember(entry)
     for name in changed_components:
         record = manifest['components'][name]
         record['added_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')

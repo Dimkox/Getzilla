@@ -211,6 +211,86 @@ class ProjectSyncTests(unittest.TestCase):
         upgrade.sync_project(ROOT, self.project)
         self.assertEqual((self.project / 'ruff.toml').read_bytes(), local)
 
+    def test_kept_paths_drop_owned_proofs_and_retain_history_on_repeated_update(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
+        manifest = self.select(())
+        contents = {'scripts/getzilla_route.py': b'# retained route\n',
+                    '.codex/hooks.json': b'{"user": "unselected hooks"}\n'}
+        for path, content in contents.items():
+            target = self.project / path
+            target.parent.mkdir(parents=True)
+            target.write_bytes(content)
+            os.chmod(target, 0o644)
+            record_owned(manifest, path, content, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': list(contents),
+            'kept_local_sha256': {path: hashlib.sha256(content).hexdigest() for path, content in contents.items()},
+        }))
+        self.commit('retain formerly owned files')
+        for _ in range(2):
+            upgrade.sync_project(ROOT, self.project)
+            records = read_state(self.project).manifest['components']
+            for path, content in contents.items():
+                self.assertEqual((self.project / path).read_bytes(), content)
+                self.assertTrue(any(path in record['files'] for record in records.values()))
+                self.assertFalse(any(path in record.get('owned', {}) for record in records.values()))
+
+    def test_kept_codex_config_refuses_missing_hooks_before_branch_publication(self) -> None:
+        self.select(('codex',))
+        (self.project / '.codex').mkdir()
+        content = (ROOT / '.codex/config.toml').read_bytes()
+        (self.project / '.codex/config.toml').write_bytes(content)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': ['.codex/config.toml'],
+            'kept_local_sha256': {'.codex/config.toml': hashlib.sha256(content).hexdigest()},
+        }))
+        self.commit('keep Codex config without hooks')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'Codex'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertFalse((self.project / '.codex/hooks.json').exists())
+
+    def test_kept_codex_pair_is_preserved_without_owned_proofs(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
+        manifest = self.select(('codex',))
+        installer = upgrade.load_installer(ROOT)
+        payload = {entry.path: entry for entry in installer.build_payload(ROOT, selection=installer.PayloadSelection(('codex',)))}
+        pair = ('.codex/hooks.json', '.codex/config.toml')
+        (self.project / '.codex').mkdir()
+        for path in pair:
+            (self.project / path).write_bytes(payload[path].content)
+            os.chmod(self.project / path, payload[path].mode)
+            record_owned(manifest, path, payload[path].content, payload[path].mode)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': list(pair),
+            'kept_local_sha256': {path: hashlib.sha256(payload[path].content).hexdigest() for path in pair},
+        }))
+        self.commit('keep coherent Codex activation')
+        upgrade.sync_project(ROOT, self.project)
+        owned = read_state(self.project).manifest['components']['agent:codex']['owned']
+        for path in pair:
+            self.assertEqual((self.project / path).read_bytes(), payload[path].content)
+            self.assertNotIn(path, owned)
+
+    def test_kept_sync_log_cannot_be_created_by_the_legacy_migration(self) -> None:
+        path = '.getzilla/AGBP_SYNC.log.jsonl'
+        (self.project / '.grok-stack').mkdir()
+        (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_bytes(b'{"sync": 1}\n')
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [path], 'kept_local_sha256': {},
+        }))
+        self.commit('keep the new log absent')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'kept'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertFalse((self.project / path).exists())
+
     def test_accept_local_records_the_current_digest_of_a_changed_kept_file(self) -> None:
         old = (self.project / 'AGENTS.md').read_bytes()
         record = {'schema_version': 1, 'kept_local': ['AGENTS.md'],

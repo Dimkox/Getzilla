@@ -11,6 +11,7 @@ from .component_state import (
     MANIFEST, V2, KNOWN_AGENTS, BoundRoot, ComponentTransaction, FileSnapshot,
     ManifestState, agent_of, component_transaction, encode_manifest,
     matches_owned, mode_matches, owned_proof, read_state, record_owned,
+    read_keep_contract, kept_file_state, match_kept_local,
 )
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
@@ -322,7 +323,35 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
     problems: list[str] = []
     changes: list[tuple[str, bytes, FileSnapshot | None]] = []
     retirements: list[tuple[str, FileSnapshot]] = []
+    generated = set(expected) | {
+        path for record in manifest['components'].values() for path in record.get('owned', {})
+        if agent_of(path) in selected and _GENERATED_PATH.fullmatch(path)
+    }
+    kept, kept_digests = read_keep_contract(binding)
+    kept, kept_digests = match_kept_local(kept, kept_digests, generated)
+    codex_pair = {'.codex/hooks.json', '.codex/config.toml'}
+    if 'codex' in selected and codex_pair & kept:
+        # A keep declaration never activates or rebuilds the other half of the
+        # Codex pair. Preserve only an already coherent unit; otherwise refuse.
+        for relative in sorted(codex_pair):
+            try:
+                current = binding.read(relative)
+                if current is None or current.content != expected[relative] or not mode_matches(current.mode, 0o644):
+                    problems.append(f'conflict kept-local Codex pair: {relative}')
+            except (OSError, ValueError):
+                problems.append(f'conflict kept-local Codex pair: {relative}')
+    for relative in sorted(generated & kept):
+        try:
+            current = binding.read(relative)
+            kept_file_state(relative, current.content if current else None, expected.get(relative), kept_digests.get(relative))
+        except (OSError, ValueError) as exc:
+            problems.append(f'conflict kept-local {relative}: {exc}')
+            continue
+        for record in manifest['components'].values():
+            record.get('owned', {}).pop(relative, None)
     for relative, content in sorted(expected.items()):
+        if relative in kept:
+            continue
         try:
             current = binding.read(relative)
         except (OSError, ValueError):
@@ -340,7 +369,7 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
         record_owned(manifest, relative, content, 0o644)
     for record in manifest['components'].values():
         for relative, proof in list(record.get('owned', {}).items()):
-            if relative in expected or agent_of(relative) not in selected or not _GENERATED_PATH.fullmatch(relative):
+            if relative in expected or relative in kept or agent_of(relative) not in selected or not _GENERATED_PATH.fullmatch(relative):
                 continue
             try:
                 current = binding.read(relative)
