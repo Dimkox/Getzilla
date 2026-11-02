@@ -6,9 +6,13 @@ this Getzilla installation do. Arguments pass through unchanged: `getzilla route
 """
 from __future__ import annotations
 
+import sys
+
+if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
+    sys.dont_write_bytecode = True
+
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
@@ -44,7 +48,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'git': ('getzilla_git.py', 'Git platform capabilities and offline remote identity'),
     'entire': ('getzilla_entire.py', 'optional Entire transport and Trails (extra:entire)'),
     'trust-ci': ('getzilla_trust_ci.py', 'set up and check the self-hosted Trust CI host (init, status)'),
-    'deploy': ('getzilla_deploy.py', 'prepare human-owned publish commands'),
+    'deploy': ('getzilla_deploy.py', 'prepare publish commands or observe a local package with preflight'),
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),

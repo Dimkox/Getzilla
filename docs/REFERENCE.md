@@ -425,7 +425,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [`scripts/getzilla_verify.py`](../scripts/getzilla_verify.py)
 - [`scripts/getzilla_review.py`](../scripts/getzilla_review.py)
 - [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only
-- [`scripts/getzilla_deploy.py`](../scripts/getzilla_deploy.py)
+- [`scripts/getzilla_deploy.py`](../scripts/getzilla_deploy.py) — [local deployment preflight](deploy-preflight.md) and release preparation
 - [`scripts/getzilla_doctor.py`](../scripts/getzilla_doctor.py)
 - [`scripts/getzilla_demo.py`](../scripts/getzilla_demo.py)
 - [local demo assets and fixtures](../.getzilla/demo/index.html)
@@ -641,7 +641,7 @@ Component writers share a persistent advisory guard. It coordinates cooperating 
 
 ## Scripts
 
-Local loop: measured route → change package when required → bounded committed-HEAD observations → independent selected reviews → persist reports outside Git → one final local gate selected by the delivery lane, parallel with the required exact-head external gate (public Actions or private Trust CI) after exact delegated UNVERIFIED branch transport → current receipts/protected PR eligibility. `scripts/getzilla_deploy.py` is prepare-only and must not bypass protected-branch or exact-SHA requirements.
+Local loop: measured route → change package when required → bounded committed-HEAD observations → independent selected reviews → persist reports outside Git → one final local gate selected by the delivery lane, parallel with the required exact-head external gate (public Actions or private Trust CI) after exact delegated UNVERIFIED branch transport → current receipts/protected PR eligibility. The release branch of `scripts/getzilla_deploy.py` is prepare-only and must not bypass protected-branch or exact-SHA requirements. Its explicit-root [preflight](deploy-preflight.md) observes local package consistency and grants no execution or merge authority.
 
 MCP tools fail closed: a tool of any server is an external write, and needs an exact external-write grant, unless its name, in plain ASCII, starts or ends with a read verb (`get`, `list`, `search`, `read`, `lookup`, `describe`, `download`) and holds no write verb anywhere (`get_or_create_user` is a write); a name that starts with `run` or `request` is a write, and `query`/`fetch` tools are writes unless listed. A project lists its own read tools with other names, exactly, in `.getzilla/config/policy.json` under `"mcp_read_tools": {"Server": ["tool"]}`. A GitHub write is also checked against this repository; a GitHub proxy whose server name does not contain `github` gets the grant check only.
 
@@ -684,7 +684,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `protected-write` | `scripts/getzilla_protected_write.py` | Apply an approved protected-path write from a manifest (`--dry-run` first) |
 | `ci` | `scripts/getzilla_ci.py` | Select the CI gate by visibility; `--write` renders the pinned public workflow; `--protect-plan` shows branch protection |
 | `trust-ci` | `scripts/getzilla_trust_ci.py` | Trust CI host: `init`, `status`, `github-app`, `trust-key` |
-| `deploy` | `scripts/getzilla_deploy.py` | Prepare-only delivery commands |
+| `deploy` | `scripts/getzilla_deploy.py` | Prepare-only release commands; `preflight --root PATH --manifest REL --json` performs a [local observation](deploy-preflight.md) |
 | — | `scripts/getzilla_evidence.py` | Export bounded local workflow evidence, without approvals or secrets, with `--output <file>` |
 | `cleanup` | `scripts/getzilla_cleanup.py` | `inventory` (read-only disk report with repository copies), `worktrees [--remove]` (guarded removal), `snapshot <commit>` / `snapshot --remove <path>` (review copies) |
 | `branches` | `scripts/branch_lifecycle.py` | Branch retention `report`; `apply` deletes only from a reviewed plan with `--allow-delete` |

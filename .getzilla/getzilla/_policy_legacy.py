@@ -13,7 +13,7 @@ import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Any, Callable
 
 from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
@@ -2994,6 +2994,18 @@ def _same_file(root: Path, word: str, rel: str) -> bool:
     return os.path.isfile(target) and os.path.realpath(os.path.join(str(root), word)) == target
 
 
+def consumer_secret_paths(consumers: object, *, script_matches: Callable[[str], bool]) -> frozenset[str]:
+    """Select decoded registration metadata using the caller's identity predicate; no I/O."""
+    if not isinstance(consumers, list):
+        return frozenset()
+    allowed: set[str] = set()
+    for item in consumers:
+        if (isinstance(item, dict) and isinstance(item.get('script'), str) and isinstance(item.get('secrets'), list)
+                and script_matches(item['script'])):
+            allowed.update(secret for secret in item['secrets'] if isinstance(secret, str) and secret)
+    return frozenset(allowed)
+
+
 def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozenset[str]]:
     """Secret paths the owner lets an exact script receive (project policy ``secret_consumers``).
 
@@ -3037,11 +3049,7 @@ def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozen
         first = _executable_name(raw[0])
         interpreter = _CONSUMER_INTERPRETER.fullmatch(first) is not None
         script = raw[1] if interpreter and len(raw) > 1 else raw[0]
-        allowed: set[str] = set()
-        for item in consumers:
-            if (isinstance(item, dict) and isinstance(item.get('script'), str) and isinstance(item.get('secrets'), list)
-                    and _same_file(root, script, item['script'])):
-                allowed.update(secret for secret in item['secrets'] if isinstance(secret, str) and secret)
+        allowed = consumer_secret_paths(consumers, script_matches=lambda listed: _same_file(root, script, listed))
         if not allowed:
             continue
         sinks = {*redirected, *written}

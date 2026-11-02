@@ -266,6 +266,9 @@ class ManifestTests(unittest.TestCase):
         rels = {path.relative_to(ROOT).as_posix() for path in included_files(ROOT)}
         required = {
             '.getzilla/getzilla/architecture.py',
+            '.getzilla/getzilla/deploy_preflight.py',
+            'schemas/deploy-preflight-manifest-v1.schema.json',
+            'docs/deploy-preflight.md',
             '.getzilla/getzilla/architecture_diagrams.py',
             '.getzilla/getzilla/architecture_diff.py',
             '.getzilla/getzilla/architecture_fitness.py',
