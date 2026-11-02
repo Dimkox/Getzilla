@@ -7,6 +7,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -14,6 +15,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval
+from getzilla import _policy_legacy as legacy
 from tests._support import activate_owned_route
 from tests._support import project_copy  # noqa: E402
 
@@ -66,6 +68,36 @@ class PushOptInTests(unittest.TestCase):
             self.assertFalse(allowed)
             allowed, _ = evaluate_pre_tool(root, bash('git push --all origin'))
             self.assertFalse(allowed)
+
+
+class ConsumerSelectionTests(unittest.TestCase):
+    def test_selection_is_pure_and_preserves_filtering_and_unions(self) -> None:
+        consumers = [None, {}, {'script': 1, 'secrets': ['a']}, {'script': 'a.py', 'secrets': 'bad'},
+                     {'script': 'a.py', 'secrets': ['a', '', 4, None], 'metadata': 'kept'},
+                     {'script': 'b.py', 'secrets': ['other']}, {'script': 'a.py', 'secrets': ['b', 'a']}]
+        called = []
+        def matches(script):
+            called.append(script)
+            return script == 'a.py'
+        with patch.object(legacy.os.path, 'realpath', side_effect=AssertionError('unexpected I/O')), \
+                patch.object(legacy.os.path, 'isfile', side_effect=AssertionError('unexpected I/O')), \
+                patch('builtins.open', side_effect=AssertionError('unexpected I/O')):
+            result = legacy.consumer_secret_paths(consumers, script_matches=matches)
+        self.assertEqual(result, frozenset({'a', 'b'}))
+        self.assertEqual(called, ['a.py', 'b.py', 'a.py'])
+        for invalid in (None, {}, 'text', (), 2):
+            self.assertEqual(legacy.consumer_secret_paths(invalid, script_matches=matches), frozenset())
+
+    def test_legacy_caller_keeps_its_existing_identity_predicate(self) -> None:
+        root = Path('/synthetic-root')
+        records = [{'script': 'listed.py', 'secrets': ['selector']},
+                   {'script': 'other.py', 'secrets': ['another']}]
+        with patch.object(legacy, 'project_policy', return_value={'secret_consumers': records}), \
+                patch.object(legacy, '_same_file', side_effect=[True, False]) as identity:
+            result = legacy._consumer_handoffs(root, 'python3 actual.py --option value')
+        self.assertEqual(result, {('python3', 'actual.py', '--option', 'value'): frozenset({'selector'})})
+        self.assertEqual([call.args for call in identity.call_args_list],
+                         [(root, 'actual.py', 'listed.py'), (root, 'actual.py', 'other.py')])
 
 
 class SecretConsumerTests(unittest.TestCase):

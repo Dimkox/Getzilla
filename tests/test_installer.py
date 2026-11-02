@@ -677,6 +677,9 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("AGENTS.md", generic_paths)
         for expected in (
             ".getzilla/getzilla/governance.py",
+            ".getzilla/getzilla/deploy_preflight.py",
+            "schemas/deploy-preflight-manifest-v1.schema.json",
+            "docs/deploy-preflight.md",
             ".getzilla/templates/change/architecture.md",
             ".getzilla/templates/change/requirements.md",
             "scripts/getzilla_governance.py",

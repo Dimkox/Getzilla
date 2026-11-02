@@ -173,6 +173,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla entire --context <name> status\|clone\|fetch\|push\|trails\|checks` | Optional Entire adapter; explicit grants for writes, no automated merge or session upload |
 | | `getzilla trust-ci init\|status\|github-app\|trust-key` | Sets up and checks a self-hosted Trust CI host |
 | | `getzilla deploy` | Prints, never runs, the publish commands a person runs |
+| | `getzilla deploy preflight --root PATH --manifest REL --json` | [Observe a local deployment package](docs/deploy-preflight.md); grants no execution |
 | Keep clean | `getzilla cleanup inventory` | Lists what Getzilla keeps on disk, with sizes and repository copies; deletes nothing |
 | | `getzilla cleanup worktrees [--remove]` | Lists worktrees and the reasons to keep them; `--remove` removes only those with no unique work |
 | | `getzilla cleanup snapshot <commit>`, `snapshot --remove <path>` | Makes a review copy of one commit and removes it after the review |

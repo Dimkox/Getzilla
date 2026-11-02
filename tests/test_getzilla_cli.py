@@ -77,6 +77,18 @@ class GetzillaCliTests(unittest.TestCase):
         for option in ('--session', '--continue', '--new-task'):
             self.assertIn(option, proc.stdout)
 
+    def test_deploy_preflight_arguments_pass_through_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / '.getzilla').mkdir()
+            (project / 'scripts').mkdir()
+            (project / 'scripts/getzilla_deploy.py').write_text(
+                'import json, sys\nprint(json.dumps(sys.argv[1:]))\nraise SystemExit(23)\n', encoding='utf-8')
+            arguments = ('preflight', '--root', 'root with spaces', '--manifest', 'public.json', '--json')
+            proc = run('deploy', *arguments, cwd=project)
+            self.assertEqual(proc.returncode, 23, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout), list(arguments))
+
     def test_every_command_answers_help_with_usage(self) -> None:
         for name in cli.COMMANDS:
             with self.subTest(command=name):
