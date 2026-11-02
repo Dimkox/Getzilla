@@ -3,7 +3,7 @@
 The stop gate reads the agent's last message. Claim phrases come from the risk vocabulary
 (`verification-claim`, English base plus language packs). When the message claims tests or
 checks passed and no passing verification receipt matches the current tree fingerprint, the stop
-gate warns, or in strict mode blocks the stop where the agent supports it (Claude Code, Codex).
+gate warns, or in strict mode blocks eligible stops on Claude Code, Codex and Grok Build.
 """
 from __future__ import annotations
 
@@ -15,8 +15,19 @@ from typing import Any, Mapping
 from .risk_terms import load_vocabulary
 
 CLAIM_ID = 'verification-claim'
-BLOCKING_HARNESSES = frozenset({'claude', 'codex'})
+BLOCKING_HARNESSES = frozenset({'claude', 'codex', 'grok'})
 MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
+
+
+def can_block_stop(harness: str, payload: Mapping[str, Any]) -> bool:
+    """Grok permits continuation only for a native end_turn Stop, never session shutdown."""
+    if harness not in BLOCKING_HARNESSES:
+        return False
+    if harness != 'grok':
+        return True
+    return payload.get('reason') == 'end_turn' and any(
+        isinstance(payload.get(key), str) and payload[key].casefold() == 'stop'
+        for key in ('hook_event_name', 'hookEventName'))
 
 
 def _text_of(content: Any) -> str:

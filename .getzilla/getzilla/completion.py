@@ -13,8 +13,10 @@ STOP_ATTEMPT_LIMIT = 2
 
 def is_root_stop(payload: dict[str, Any], owner: str | None) -> bool:
     """Use native event and owner identity, not the root's optional agent profile."""
-    event = payload.get('hook_event_name', payload.get('hookEventName'))
-    if event not in (None, 'Stop', 'AfterAgent'):
+    events = [payload[key] for key in ('hook_event_name', 'hookEventName') if payload.get(key) is not None]
+    if any(not isinstance(event, str) or event.casefold() not in ('stop', 'afteragent') for event in events):
+        return False
+    if len({event.casefold() for event in events}) > 1:
         return False
     if any(payload.get(key) not in (None, '') for key in
            ('subagent_id', 'subagentId', 'subagent_type', 'subagentType')):

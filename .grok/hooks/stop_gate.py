@@ -26,6 +26,7 @@ def main() -> None:
             from getzilla.receipts import validate_evidence
             from getzilla.state import current_session, get_active_change, get_active_route, increment_stop_attempt, reset_stop_attempt
             from getzilla.completion import STOP_ATTEMPT_LIMIT, continuation_reason, is_root_stop, observe_remaining
+            from getzilla.claim_check import BLOCKING_HARNESSES, can_block_stop, stop_mode, unsupported_claim
         except Exception:
             emit({})
             return
@@ -35,13 +36,13 @@ def main() -> None:
             emit({})
             return
         owned = bool(route and current_session() and current_session() == route.get('session_id'))
+        can_block = can_block_stop(harness(), payload)
         from getzilla.continuity import TERMINAL
         if route and route.get('status') in TERMINAL:
             emit({})
             return
         if route:
             try:
-                from getzilla.claim_check import BLOCKING_HARNESSES, stop_mode, unsupported_claim
                 from getzilla.hook_health import route_degraded_events
 
                 claim = unsupported_claim(root, route, payload)
@@ -50,10 +51,11 @@ def main() -> None:
                 record_degraded('stop_gate', error, payload)
                 claim, degraded = None, []
             if owned and claim and stop_mode(root, route) == 'strict' and not stop_hook_active(payload):
-                if harness() in BLOCKING_HARNESSES:
+                if can_block:
                     emit({'decision': 'block', 'reason': continuation_reason([claim])})
                     return
-                record_degraded('stop_gate', f'STRICT_BLOCK_UNSUPPORTED:{harness()}', payload)
+                if harness() not in BLOCKING_HARNESSES:
+                    record_degraded('stop_gate', f'STRICT_BLOCK_UNSUPPORTED:{harness()}', payload)
         else:
             claim, degraded = None, []
         messages = []
@@ -92,6 +94,8 @@ def main() -> None:
                 messages.insert(0, 'task paused: ' + observation['blocked_reason'] + '; ' + summary)
             elif harness() not in BLOCKING_HARNESSES:
                 messages.insert(0, summary + '; automatic Stop continuation is unsupported by this harness')
+            elif not can_block:
+                messages.insert(0, summary + '; this native event does not permit Stop continuation')
             elif stop_hook_active(payload):
                 messages.insert(0, summary + '; native continuation already used; task remains open')
             else:
@@ -119,7 +123,7 @@ def main() -> None:
             emit({})
             return
 
-        if owned:
+        if owned and can_block:
             reset_stop_attempt(root, route['route_id'])
         emit({})
     except Exception as error:
