@@ -13,6 +13,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
 import getzilla_upgrade as upgrade  # noqa: E402
 
@@ -34,6 +35,10 @@ class ProjectSyncTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.project = Path(tmp.name).resolve() / 'project'
         (self.project / '.getzilla').mkdir(parents=True)
+        from getzilla.component_state import MANIFEST, V2, encode_manifest
+        (self.project / MANIFEST).write_bytes(encode_manifest({'schema_version': V2, 'agents': ['claude'], 'components': {}}))
+        (self.project / '.getzilla/runtime').mkdir()
+        (self.project / '.getzilla/runtime/.gitignore').write_bytes((ROOT / '.getzilla/runtime/.gitignore').read_bytes())
         (self.project / 'ruff.toml').write_text('line-length = 80\n', encoding='utf-8')
         (self.project / 'AGENTS.md').write_text('# Project rules\n\nKeep this.\n', encoding='utf-8')
         git(self.project, 'init', '--quiet', '--initial-branch=main')
@@ -42,6 +47,137 @@ class ProjectSyncTests(unittest.TestCase):
     def commit(self, message: str) -> None:
         git(self.project, 'add', '-A')
         git(self.project, 'commit', '--quiet', '-m', message)
+
+    def select(self, agents: tuple[str, ...]) -> dict:
+        from getzilla.component_state import MANIFEST, V2, encode_manifest
+        manifest = {'schema_version': V2, 'agents': list(agents), 'components': {}}
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        return manifest
+
+    def test_empty_selection_keeps_unselected_custom_files_and_records_target_ownership(self) -> None:
+        from getzilla.component_state import read_state
+        self.select(())
+        (self.project / '.codex').mkdir()
+        (self.project / '.codex/custom.txt').write_text('user file')
+        self.commit('explicit empty selection')
+        with mock.patch.dict(os.environ, {'GETZILLA_AGENT': 'codex'}):
+            upgrade.sync_project(ROOT, self.project)
+        state = read_state(self.project)
+        self.assertEqual(state.require_selection(), ())
+        self.assertIn('scripts/getzilla_route.py', state.manifest['components']['core']['owned'])
+        self.assertFalse((self.project / '.codex/hooks.json').exists())
+        self.assertFalse((self.project / '.claude').exists())
+        self.assertEqual((self.project / '.codex/custom.txt').read_text(), 'user file')
+
+    def test_unknown_custom_managed_file_refuses_without_new_branch(self) -> None:
+        target = self.project / 'scripts/getzilla_route.py'
+        target.parent.mkdir()
+        target.write_text('# custom route implementation\n')
+        self.commit('custom managed path')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'conflict'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertEqual(target.read_text(), '# custom route implementation\n')
+
+    def test_owned_old_file_upgrades_with_its_proof_in_the_same_commit(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
+        manifest = self.select(('claude',))
+        target = self.project / 'scripts/getzilla_route.py'
+        target.parent.mkdir()
+        target.write_bytes(b'# old managed route\n')
+        os.chmod(target, 0o644)
+        record_owned(manifest, 'scripts/getzilla_route.py', target.read_bytes(), 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('record an older managed version')
+        upgrade.sync_project(ROOT, self.project)
+        current = read_state(self.project).manifest['components']['core']['owned']['scripts/getzilla_route.py']
+        self.assertEqual(current['sha256'], hashlib.sha256(target.read_bytes()).hexdigest())
+        self.assertEqual(target.read_bytes(), (ROOT / 'scripts/getzilla_route.py').read_bytes())
+
+    def test_ignored_uncommitted_selection_cannot_authorize_an_update(self) -> None:
+        from getzilla.component_state import MANIFEST
+        git(self.project, 'rm', '--cached', '--quiet', MANIFEST)
+        (self.project / '.gitignore').write_text(MANIFEST + '\n')
+        self.commit('selection is not committed')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'committed'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+
+    def test_codex_update_preserves_canonical_overlay_and_custom_enabled_configuration(self) -> None:
+        self.select(('codex',))
+        overlay = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo user-stop'}]}]}}
+        (self.project / '.grok').mkdir()
+        overlay_path = self.project / '.grok/codex-hooks.json'
+        overlay_path.write_text(json.dumps(overlay))
+        (self.project / '.codex').mkdir()
+        config = self.project / '.codex/config.toml'
+        config.write_bytes(b'[features]\ncodex_hooks = true\n[custom]\nkeep = true\n')
+        saved_overlay, saved_config = overlay_path.read_bytes(), config.read_bytes()
+        self.commit('custom Codex overlay and settings')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(overlay_path.read_bytes(), saved_overlay)
+        self.assertEqual(config.read_bytes(), saved_config)
+        hooks = json.loads((self.project / '.codex/hooks.json').read_text())['hooks']['Stop']
+        self.assertIn('stop_gate.py', hooks[0]['hooks'][0]['command'])
+        self.assertEqual(hooks[1:], overlay['hooks']['Stop'])
+
+    def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
+        original = upgrade.planned_changes
+        def moving(*args, **kwargs):
+            result = original(*args, **kwargs)
+            git(self.project, 'commit', '--allow-empty', '--quiet', '-m', 'concurrent commit')
+            return result
+        with mock.patch.object(upgrade, 'planned_changes', side_effect=moving):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'changed'):
+                upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertFalse((self.project / 'scripts').exists())
+
+    def test_changed_files_after_checkout_report_the_retained_branch_as_incomplete(self) -> None:
+        original = upgrade.git
+        def changed_after_switch(project, *args, **kwargs):
+            result = original(project, *args, **kwargs)
+            if args[0] == 'switch' and result.returncode == 0:
+                (project / 'scripts/getzilla_route.py').write_text('# changed after checkout\n')
+            return result
+        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
+                upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'branch', '--show-current'), upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
+        self.assertEqual((self.project / 'scripts/getzilla_route.py').read_text(), '# changed after checkout\n')
+
+    def test_manifest_changed_after_checkout_is_detected_even_when_git_status_is_clean(self) -> None:
+        from getzilla.component_state import MANIFEST
+        original = upgrade.git
+        def changed_after_switch(project, *args, **kwargs):
+            result = original(project, *args, **kwargs)
+            if args[0] == 'switch' and result.returncode == 0:
+                git(project, 'update-index', '--skip-worktree', MANIFEST)
+                manifest = json.loads((project / MANIFEST).read_bytes())
+                manifest['agents'] = []
+                (project / MANIFEST).write_text(json.dumps(manifest))
+            return result
+        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
+                upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual(json.loads((self.project / MANIFEST).read_bytes())['agents'], [])
+
+    def test_branch_changed_after_checkout_is_detected_even_at_the_same_commit(self) -> None:
+        original = upgrade.git
+        def changed_after_switch(project, *args, **kwargs):
+            result = original(project, *args, **kwargs)
+            if args[0] == 'switch' and result.returncode == 0:
+                git(project, 'switch', '--quiet', '-c', 'post-checkout')
+            return result
+        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
+                upgrade.sync_project(ROOT, self.project)
+        branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
+        self.assertEqual(git(self.project, 'branch', '--show-current'), 'post-checkout')
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), git(self.project, 'rev-parse', branch))
 
     def test_sync_commits_on_a_new_branch_and_is_idempotent(self) -> None:
         result = upgrade.sync_project(ROOT, self.project)

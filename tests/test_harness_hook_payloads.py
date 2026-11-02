@@ -188,7 +188,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
         spec.loader.exec_module(module)
         with project_copy() as root:
             target = root.parent / 'installed'
-            module.materialize_new(PROJECT, target)
+            module.materialize_new(PROJECT, target, selection=module.PayloadSelection(('codex',), engine_archive=True))
             self.assertIn('canonical project root', (target / 'AGENTS.md').read_text())
             self.assertIn('outside the reviewed candidate', (target / 'AGENTS.md').read_text())
             for consumer, configuration in ((root, PROJECT), (target, target)):
@@ -391,7 +391,9 @@ class GeneratedHookCommandTests(unittest.TestCase):
         import sys
         sys.path.insert(0, str(PROJECT / '.getzilla'))
         with project_copy(git=True) as outer:
+            from getzilla.component_state import MANIFEST, V2, encode_manifest
             from getzilla.harnesses import write
+            (outer / MANIFEST).write_bytes(encode_manifest({'schema_version': V2, 'agents': ['codex'], 'components': {}}))
             write(outer)
             subprocess.run(['git', 'add', '.'], cwd=outer, check=True, capture_output=True)
             subprocess.run(['git', 'commit', '-qm', 'generated launchers'], cwd=outer, check=True)

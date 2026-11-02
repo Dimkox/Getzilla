@@ -5,8 +5,9 @@
 2. project: the project around the current folder, or the path given. The managed files of the
    updated Getzilla (the same set `install_into.py --plan` lists) are committed on a new branch
    `getzilla-update-<version>`, which is then checked out. The commit is built in a private Git
-   index, so a failure at any step leaves the project as it was. The project must be a clean Git
-   work tree. Nothing is pushed, nothing is deleted without --retire-legacy, and an up-to-date
+   index. A failure before branch publication leaves product files unchanged; a later failure
+   reports the retained branch or incomplete checkout. The project must be a clean Git
+   work tree with committed v2 adapter selection. Nothing is pushed, nothing is deleted without --retire-legacy, and an up-to-date
    project gets no branch. Paths the
    project keeps (`.getzilla/AGBP_SYNC.json`) are left alone; in AGENTS.md only the managed block
    is replaced. The project's own ruff.toml, bandit.yaml and .coveragerc stay; --retire-legacy also removes
@@ -19,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -27,9 +29,20 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HOME / '.getzilla'))
+
+from getzilla import fsx
+from getzilla.component_state import (
+    MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
+    component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
+    owned_proof, read_state, record_owned,
+)
+from getzilla.harnesses import render_codex_hooks
+
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
 OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
@@ -121,9 +134,9 @@ def merge_agents(installer, existing: bytes | None, block: bytes) -> bytes:
     return (text[:start] + managed + text[end:]).encode('utf-8')
 
 
-def head_tree(project: Path) -> dict[str, tuple[str, str]]:
+def head_tree(project: Path, ref: str = 'HEAD') -> dict[str, tuple[str, str]]:
     """path -> (mode, object id) for every file and link committed at HEAD."""
-    raw = git(project, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', data=b'')
+    raw = git(project, 'ls-tree', '-r', '-z', '--full-tree', ref, data=b'')
     if raw.returncode != 0:
         raise UpdateError(f'{project} has no commit yet: commit once first')
     tree = {}
@@ -142,13 +155,13 @@ def blob_id(content: bytes, object_format: str) -> str:
     return digest.hexdigest()
 
 
-def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None, list[str]]:
+def accept_local(installer, project: Path, ref: str = 'HEAD') -> tuple[dict[str, str], bytes | None, list[str]]:
     """Digests of the kept paths as committed now: (digests, new sync record or None, accepted paths).
 
     A kept path with a recorded digest stops the update once its bytes change. `--accept-local`
     records the committed bytes as the project's chosen version instead; it never changes them.
     """
-    raw = git(project, 'cat-file', 'blob', f'HEAD:{installer.STACK_SYNC_RECORD}', data=b'')
+    raw = git(project, 'cat-file', 'blob', f'{ref}:{installer.STACK_SYNC_RECORD}', data=b'')
     if raw.returncode != 0:
         return {}, None, []
     installer._kept_local(project)  # the same shape checks the plan applies
@@ -156,7 +169,7 @@ def accept_local(installer, project: Path) -> tuple[dict[str, str], bytes | None
     digests = dict(record.get('kept_local_sha256', {}))
     accepted = []
     for path, digest in sorted(digests.items()):
-        blob = git(project, 'cat-file', 'blob', f'HEAD:{path}', data=b'')
+        blob = git(project, 'cat-file', 'blob', f'{ref}:{path}', data=b'')
         if blob.returncode != 0:
             continue  # an absent kept path is already allowed
         current = hashlib.sha256(blob.stdout).hexdigest()
@@ -174,7 +187,7 @@ HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[
 
 
 def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
-                  incoming: set[str]) -> tuple[list[str], list[str], list[str]]:
+                  incoming: set[str], ref: str = 'HEAD') -> tuple[list[str], list[str], list[str]]:
     """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
 
     Only a pre-rename file whose Getzilla replacement is committed or arrives with this update is
@@ -193,10 +206,10 @@ def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
     needles = ['-e', 'adaptive_grok', '-e', '.grok-stack/']
     if any(path.startswith('factory/src/adaptive_factory/') for path in retire):
         needles += ['-e', 'adaptive_factory']  # only when the old factory is retired, not while it is the live one
-    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', *needles, 'HEAD', '--', '*.py')
+    found = git(project, '-c', 'core.quotepath=off', 'grep', '-l', '-I', '-F', *needles, ref, '--', '*.py')
     importers = sorted({line.split(':', 1)[1] for line in found.stdout.splitlines() if ':' in line} - retired) \
         if found.returncode == 0 else []
-    record = git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}')
+    record = git(project, 'cat-file', 'blob', f'{ref}:{installer.LEGACY_STACK_SYNC_RECORD}')
     kept = []
     if record.returncode == 0:
         try:
@@ -207,13 +220,13 @@ def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
     return retire, importers, kept
 
 
-def sync_record(installer, project: Path, tree: dict[str, tuple[str, str]]) -> bytes | None:
+def sync_record(installer, project: Path, tree: dict[str, tuple[str, str]], ref: str = 'HEAD') -> bytes | None:
     """The sync record to add when the project has none: the pre-rename one with its paths renamed, or a fresh one."""
     if installer.STACK_SYNC_RECORD in tree:
         return None
     if installer.LEGACY_STACK_SYNC_RECORD not in tree:
         return installer.FRESH_SYNC_RECORD
-    record = json.loads(git(project, 'cat-file', 'blob', f'HEAD:{installer.LEGACY_STACK_SYNC_RECORD}').stdout)
+    record = json.loads(git(project, 'cat-file', 'blob', f'{ref}:{installer.LEGACY_STACK_SYNC_RECORD}').stdout)
     rename = installer.legacy_to_current_path
     record['kept_local'] = [rename(path) for path in record.get('kept_local', [])]
     record['kept_local_sha256'] = {rename(path): digest for path, digest in record.get('kept_local_sha256', {}).items()}
@@ -222,43 +235,69 @@ def sync_record(installer, project: Path, tree: dict[str, tuple[str, str]]) -> b
 
 def planned_changes(installer, home: Path, project: Path,
                     digests: dict[str, str] | None = None,
-                    kept_configs: list[str] | None = None) -> list[tuple[str, bytes, str]]:
+                    kept_configs: list[str] | None = None, *, expected_head: str | None = None,
+                    binding: BoundRoot | ComponentTransaction | None = None,
+                    tree: dict[str, tuple[str, str]] | None = None,
+                    observations: dict | None = None) -> list[tuple[str, bytes, str]]:
     """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD.
 
     A lint or coverage configuration the project already commits is its own and stays; its path
     goes to kept_configs.
     """
+    if binding is None:
+        with BoundRoot(project) as bound:
+            return planned_changes(installer, home, project, digests, kept_configs,
+                                   expected_head=expected_head, binding=bound, tree=tree, observations=observations)
+    state = read_state(project, binding=binding)
+    selected = state.require_selection()
+    manifest = copy.deepcopy(state.manifest)
+    expected_head = expected_head or _git_out(project, 'rev-parse', 'HEAD')
+    tree = tree if tree is not None else head_tree(project, expected_head)
     if digests is not None:
         # This installer module was loaded for this run only, so the override stays local to it.
         installer._kept_local_digests = lambda _target: digests
     selection = installer.PayloadSelection(
-        installer.detect_agents(project),
-        extras=installer.detect_extras(project),
+        selected,
+        factory='factory' in manifest['components'],
+        extras=tuple(sorted(set(installer.detect_extras(project)) |
+                            {name.split(':', 1)[1] for name in manifest['components'] if name.startswith('extra:')})),
+        compliance=tuple(sorted(name.split(':', 1)[1] for name in manifest['components'] if name.startswith('compliance:'))),
         root_shims=installer.has_root_shims(project),
         engine_archive=installer.wants_engine_archive(project),
     )
+    payload = installer.build_payload(home, selection=selection)
+    if any(entry.path == MANIFEST for entry in payload):
+        raise UpdateError('source component state must never enter a consumer payload')
     plan = installer._make_plan(home, project, include_dependencies=False, include_optional=False,
-                                selection=selection)
+                                selection=selection, payload=payload)
     if plan['target_state'] != 'directory':
         raise UpdateError(f'{project} is not a plain directory')
     wanted = {entry['path'] for entry in plan['entries']}
-    tree = head_tree(project)
     object_format = git(project, 'rev-parse', '--show-object-format').stdout.strip() or 'sha1'
     changes = []
-    for entry in installer.build_payload(home, selection=selection):
+    by_path = {entry.path: entry for entry in payload}
+    retained_overlay = binding.read('.grok/codex-hooks.json')
+    if observations is not None:
+        observations['.grok/codex-hooks.json'] = retained_overlay
+    incoming_overlay = by_path.get('.grok/codex-hooks.json')
+    codex_hooks = None
+    retained_config = None
+    if 'codex' in selected:
+        canonical = by_path.get('.grok/hooks.json')
+        if canonical is None or '.codex/config.toml' not in by_path or '.codex/hooks.json' not in by_path:
+            raise UpdateError('incoming Codex activation unit is incomplete')
+        overlay = retained_overlay.content if retained_overlay else incoming_overlay.content if incoming_overlay else None
+        codex_hooks = render_codex_hooks(canonical.content, overlay)
+        existing_config = binding.read('.codex/config.toml')
+        if observations is not None:
+            observations['.codex/config.toml'] = existing_config
+        if existing_config is not None and existing_config.content != by_path['.codex/config.toml'].content:
+            config = tomllib.loads(existing_config.content.decode('utf-8'))
+            if type(config.get('features')) is not dict or config['features'].get('codex_hooks') is not True:
+                raise UpdateError('custom Codex configuration must retain features.codex_hooks = true')
+            retained_config = existing_config
+    for entry in payload:
         if entry.path not in wanted:
-            continue
-        content = entry.content
-        if entry.path == 'AGENTS.md':
-            existing = git(project, 'cat-file', 'blob', 'HEAD:AGENTS.md', data=b'').stdout \
-                if 'AGENTS.md' in tree else None
-            content = merge_agents(installer, existing, content)
-        mode = '100755' if entry.mode & 0o111 else '100644'
-        if tree.get(entry.path) == (mode, blob_id(content, object_format)):
-            continue
-        if entry.path in PROJECT_CONFIGS and entry.path in tree:
-            if kept_configs is not None:
-                kept_configs.append(entry.path)
             continue
         parts = entry.path.split('/')
         for depth in range(1, len(parts) + 1):
@@ -266,7 +305,34 @@ def planned_changes(installer, home: Path, project: Path,
             committed = tree.get(prefix)
             if committed and (committed[0] == '120000' or depth < len(parts)):
                 raise UpdateError(f'refusing to write through a committed link or file: {prefix}')
-        changes.append((entry.path, content, mode))
+        current = binding.read(entry.path)
+        if observations is not None:
+            observations[entry.path] = current
+        content = entry.content
+        if entry.path == '.grok/codex-hooks.json' and retained_overlay is not None:
+            continue  # shared consumer input is never replaced by the source default
+        if entry.path == '.codex/config.toml' and retained_config is not None:
+            continue
+        if entry.path == '.codex/hooks.json' and codex_hooks is not None:
+            content = codex_hooks
+        initial_agents_block = False
+        if entry.path == 'AGENTS.md':
+            existing = current.content if current else None
+            initial_agents_block = existing is not None and installer.MANAGED_START.encode() not in existing and installer.MANAGED_END.encode() not in existing
+            content = merge_agents(installer, existing, content)
+        mode = '100755' if entry.mode & 0o111 else '100644'
+        if entry.path in PROJECT_CONFIGS and entry.path in tree:
+            if kept_configs is not None and (current is None or current.content != content):
+                kept_configs.append(entry.path)
+            continue
+        if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
+                and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):
+            raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
+        record_owned(manifest, entry.path, content, entry.mode)
+        if tree.get(entry.path) != (mode, blob_id(content, object_format)):
+            changes.append((entry.path, content, mode))
+    if manifest != state.manifest:
+        changes.append((MANIFEST, encode_manifest(manifest), '100644'))
     return changes
 
 
@@ -277,15 +343,15 @@ def version_of(home: Path) -> str:
         return 'latest'
 
 
-def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], message: str) -> str:
+def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], message: str, *, expected_head: str) -> str:
     """Build the commit in a private index; the work tree and the project's index stay untouched.
 
     A change with content None removes that path.
     """
-    zero = '0' * len(_git_out(project, 'rev-parse', 'HEAD'))
+    zero = '0' * len(expected_head)
     with tempfile.TemporaryDirectory(prefix='getzilla-update-') as scratch:
         env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
-        _git_out(project, 'read-tree', 'HEAD', env=env)
+        _git_out(project, 'read-tree', expected_head, env=env)
         lines = []
         for path, content, mode in changes:
             if content is None:
@@ -295,24 +361,73 @@ def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], 
             lines.append(f'{mode} {oid}\t{path}')
         _git_out(project, 'update-index', '--index-info', data=('\n'.join(lines) + '\n').encode('utf-8'), env=env)
         tree = _git_out(project, 'write-tree', env=env)
-    return _git_out(project, 'commit-tree', tree, '-p', 'HEAD', '-m', message)
+    return _git_out(project, 'commit-tree', tree, '-p', expected_head, '-m', message)
+
+
+def _require_clean_project(project: Path) -> None:
+    top = git(project, 'rev-parse', '--show-toplevel')
+    if top.returncode != 0 or os.path.normcase(fsx.system_canonical(top.stdout.strip())) != os.path.normcase(str(project)):
+        raise UpdateError(f'{project} is not the root of a Git repository')
+    status = _git_out(project, 'status', '--porcelain', '--untracked-files=all',
+                      env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
+    # The persistent administrative guard is not product content. Every other
+    # tracked or untracked change still blocks the update.
+    if any(line != '?? .getzilla/runtime/.components.guard.lock' for line in status.splitlines()):
+        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
+
+
+def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction, head: str,
+                        tree: dict[str, tuple[str, str]]):
+    state = read_state(project, binding=binding)
+    state.require_selection()
+    snapshot = binding.read(MANIFEST)
+    committed = git(project, 'cat-file', 'blob', f'{head}:{MANIFEST}', data=b'')
+    if (tree.get(MANIFEST, ('', ''))[0] != '100644' or committed.returncode != 0
+            or snapshot is None or snapshot.content != committed.stdout):
+        raise UpdateError('the selected component manifest must be a committed regular file; review and commit it before updating')
+    return state, snapshot
 
 
 def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False) -> str:
-    """Commit the managed files on a new branch and check it out; returns the result and its notes."""
-    project = project.resolve()
-    top = git(project, 'rev-parse', '--show-toplevel')
-    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != project:
-        raise UpdateError(f'{project} is not the root of a Git repository')
-    if _git_out(project, 'status', '--porcelain', '--untracked-files=all'):
-        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
+    """Publish target selection and managed bytes in the same private-index commit."""
+    project = Path(fsx.system_canonical(project))
+    try:
+        with BoundRoot(project) as binding:
+            _require_clean_project(project)
+            head = _git_out(project, 'rev-parse', 'HEAD')
+            _committed_manifest(project, binding, head, head_tree(project, head))
+        with component_transaction(project) as transaction:
+            return _sync_project_locked(home, project, transaction, accept=accept, retire=retire)
+    except (ComponentStateError, OSError, ValueError) as exc:
+        raise UpdateError(str(exc)) from exc
+
+
+def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransaction, *, accept: bool, retire: bool) -> str:
+    _require_clean_project(project)
+    expected_head = _git_out(project, 'rev-parse', 'HEAD')
+    expected_branch = git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
+    tree = head_tree(project, expected_head)
+    state, original_manifest = _committed_manifest(project, transaction, expected_head, tree)
+    observations = {MANIFEST: original_manifest}
+
+    def check_current() -> None:
+        transaction.check()
+        if (_git_out(project, 'rev-parse', 'HEAD') != expected_head
+                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != expected_branch):
+            raise UpdateError('project HEAD or branch changed during the update; retry from its current state')
+        _require_clean_project(project)
+        for path, snapshot in observations.items():
+            if transaction.read(path) != snapshot:
+                raise UpdateError(f'project file changed during the update: {path}')
+
+    check_current()
     installer = load_installer(home)
     kept_configs: list[str] = []
     try:
-        digests, record, accepted = accept_local(installer, project) if accept else ({}, None, [])
-        changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs)
-        tree = head_tree(project)
-        fresh_record = sync_record(installer, project, tree) if record is None else None
+        digests, record, accepted = accept_local(installer, project, expected_head) if accept else ({}, None, [])
+        changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs,
+                                  expected_head=expected_head, binding=transaction, tree=tree, observations=observations)
+        fresh_record = sync_record(installer, project, tree, expected_head) if record is None else None
         # A fresh empty record alone is not an update: it rides along with the next real change (#215).
         if fresh_record is not None and (changes or fresh_record != installer.FRESH_SYNC_RECORD):
             changes.append((installer.STACK_SYNC_RECORD, fresh_record, '100644'))
@@ -322,11 +437,11 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
         # The sync history log moves with the record, so the old stack folder can go.
         old_log = installer.LEGACY_STACK_DIR + '/AGBP_SYNC.log.jsonl'
         if old_log in tree and installer.legacy_to_current_path(old_log) not in tree:
-            log = git(project, 'cat-file', 'blob', f'HEAD:{old_log}', data=b'')
+            log = git(project, 'cat-file', 'blob', f'{expected_head}:{old_log}', data=b'')
             if log.returncode != 0:
                 raise UpdateError(f'cannot read {old_log} from HEAD')
             changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
-        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes})
+        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes}, expected_head)
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
@@ -359,15 +474,32 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
     elif legacy:
         notes.append(f'{len(legacy)} pre-rename file(s) remain, for example {legacy[0]}; '
                      'run `getzilla update --retire-legacy` to remove them')
+    pending_manifest = next((decode_manifest(content) for path, content, _mode in changes if path == MANIFEST),
+                            copy.deepcopy(state.manifest))
+    changes = [(path, content, mode) for path, content, mode in changes if path != MANIFEST]
+    for path, content, mode in changes:
+        if path not in observations:
+            observations[path] = transaction.read(path)
+        if content is None:
+            for component in pending_manifest['components'].values():
+                component.get('owned', {}).pop(path, None)
+                if path in component['files']:
+                    component['files'].remove(path)
+        else:
+            record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
+    if pending_manifest != state.manifest:
+        changes.append((MANIFEST, encode_manifest(pending_manifest), '100644'))
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:
         notes.append(f'{len(arriving)} new executable file(s) arrive (hooks and scripts); '
                      'approve or exclude them in your own checks')
     if not changes:
+        check_current()
         return '\n'.join([f'{project.name} is up to date', *notes])
     version = version_of(home)
     branch = BRANCH_PREFIX + version
+    _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
         raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
     # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
@@ -375,12 +507,43 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
                        *(path for path, _, _ in changes))
     if ignored:
         raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
-    commit = commit_changes(project, changes, f'chore: update Getzilla to {version}')
-    _git_out(project, 'branch', branch, commit)
+    check_current()
+    commit = commit_changes(project, changes, f'chore: update Getzilla to {version}', expected_head=expected_head)
+    check_current()
+    # Verify the pinned parent and create an absent branch in one Git ref
+    # transaction. A concurrent writer cannot replace an existing update branch.
+    commands = f'start\nverify HEAD {expected_head}\ncreate refs/heads/{branch} {commit}\nprepare\ncommit\n'
+    _git_out(project, 'update-ref', '--stdin', data=commands.encode('utf-8'))
+    try:
+        check_current()
+    except (UpdateError, ValueError, OSError) as exc:
+        raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}') from exc
     switched = git(project, 'switch', '--quiet', branch)
     if switched.returncode != 0:
         raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
                           f'{switched.stderr.strip()}; run `git switch {branch}`')
+    try:
+        transaction.check()
+        if (_git_out(project, 'rev-parse', 'HEAD') != commit
+                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
+            raise UpdateError('HEAD or branch changed after checkout')
+        _require_clean_project(project)
+        expected_files = {path: (snapshot.content, snapshot.mode) if snapshot is not None else (None, 0)
+                          for path, snapshot in observations.items()}
+        expected_files.update({path: (content, 0o755 if mode == '100755' else 0o644)
+                               for path, content, mode in changes})
+        for path, (content, mode) in expected_files.items():
+            snapshot = transaction.read(path)
+            if ((content is None and snapshot is not None)
+                    or (content is not None and (snapshot is None or snapshot.content != content
+                                                or not mode_matches(snapshot.mode, mode)))):
+                raise UpdateError(f'project file differs after checkout: {path}')
+        transaction.check()
+        if (_git_out(project, 'rev-parse', 'HEAD') != commit
+                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
+            raise UpdateError('HEAD or branch changed while checking the checkout')
+    except (UpdateError, ValueError, OSError) as exc:
+        raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}') from exc
     kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
     return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
                       'review it and open a pull request', *notes])

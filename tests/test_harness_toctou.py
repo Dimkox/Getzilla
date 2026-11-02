@@ -1,4 +1,8 @@
-"""#71.1: a generated parent renamed out of the repository between open and write is never written."""
+"""The shared harness writer detects moved parents and cleans its private temp.
+
+These controls cover observed movement before publication, not OS isolation
+from every hostile same-user final-syscall race.
+"""
 from __future__ import annotations
 
 import os
@@ -11,51 +15,48 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla import fsx, harnesses  # noqa: E402
+from getzilla import fsx  # noqa: E402
+from getzilla.component_state import component_transaction  # noqa: E402
 
 
 class HarnessWriteRaceTests(unittest.TestCase):
+    def publish(self, root: Path) -> None:
+        with component_transaction(root) as transaction:
+            transaction.write('.cursor/rules/getzilla.mdc', b'rule\n', 0o644,
+                              expected=transaction.read('.cursor/rules/getzilla.mdc'))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX permits renaming an open directory')
     def _run(self, when: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, outside = Path(tmp) / 'repo', Path(tmp) / 'outside'
             (root / '.cursor' / 'rules').mkdir(parents=True)
             outside.mkdir()
-            real_open, real_replace = fsx.open_at, fsx.replace_at
+            real_open, real_chmod = fsx.open_at, fsx.fchmod
             moved = []
+            temporary_descriptors = set()
 
             def move() -> None:
                 if not moved:
                     os.rename(root / '.cursor', outside / 'moved')
                     moved.append(True)
 
-            def open_at(*args, **kwargs):
-                if when == 'open':
+            def open_at(parent, name, flags, mode=0o777):
+                temporary_file = name.startswith('.getzilla-component-')
+                if temporary_file and when == 'open':
                     move()
-                return real_open(*args, **kwargs)
+                descriptor = real_open(parent, name, flags, mode)
+                if temporary_file:
+                    temporary_descriptors.add(descriptor)
+                return descriptor
 
-            def replace_at(*args, **kwargs):
-                if when == 'replace':
+            def chmod(descriptor, mode):
+                if descriptor in temporary_descriptors and when == 'after_write':
                     move()
-                return real_replace(*args, **kwargs)
+                return real_chmod(descriptor, mode)
 
-            with mock.patch.object(harnesses.fsx, 'open_at', open_at), \
-                    mock.patch.object(harnesses.fsx, 'replace_at', replace_at):
-                if when == 'replace':
-                    # The race lands after the last check, inside replace itself: patch the check to move first.
-                    real_check = harnesses._still_inside
-                    calls = []
-
-                    def check(*args):
-                        calls.append(True)
-                        if len(calls) == 2:
-                            move()
-                        return real_check(*args)
-
-                    with mock.patch.object(harnesses, '_still_inside', check), self.assertRaises(ValueError):
-                        harnesses._write_file(root, '.cursor/rules/getzilla.mdc', b'rule\n')
-                else:
-                    with self.assertRaises(ValueError):
-                        harnesses._write_file(root, '.cursor/rules/getzilla.mdc', b'rule\n')
+            with mock.patch.object(fsx, 'open_at', open_at), mock.patch.object(fsx, 'fchmod', chmod):
+                with self.assertRaises(ValueError):
+                    self.publish(root)
             self.assertTrue(moved)
             self.assertEqual(sorted(p.name for p in (outside / 'moved' / 'rules').iterdir()), [],
                              'nothing, not even the temporary file, may remain in the moved directory')
@@ -65,12 +66,12 @@ class HarnessWriteRaceTests(unittest.TestCase):
         self._run('open')
 
     def test_parent_moved_after_the_content_is_written(self) -> None:
-        self._run('replace')
+        self._run('after_write')
 
     def test_an_unmoved_parent_is_written_normally(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            harnesses._write_file(root, '.cursor/rules/getzilla.mdc', b'rule\n')
+            self.publish(root)
             self.assertEqual((root / '.cursor' / 'rules' / 'getzilla.mdc').read_bytes(), b'rule\n')
 
 

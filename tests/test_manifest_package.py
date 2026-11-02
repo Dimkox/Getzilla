@@ -1373,16 +1373,26 @@ module.main()
             with zipfile.ZipFile(archive_path) as archive:
                 archive.extractall(extracted)
             source = extracted / "getzilla"
-            install_spec = importlib.util.spec_from_file_location(
-                "packaged_install_into", source / "scripts/install_into.py"
-            )
-            installer = importlib.util.module_from_spec(install_spec)
-            assert install_spec and install_spec.loader
-            sys.modules[install_spec.name] = installer
-            install_spec.loader.exec_module(installer)
+            component_manifest = '.getzilla/managed-components.json'
+            source_state = json.loads((source / component_manifest).read_bytes())
+            self.assertGreater(len(source_state['agents']), 1)
+            source_state['components']['core'] = {'files': [], 'owned': {}, 'source_version': 'source-only-fixture'}
+            (source / component_manifest).write_text(json.dumps(source_state), encoding='utf-8')
             target = Path(tmp) / "installed"
-            plan = installer.materialize_new(source, target)
+            result = subprocess.run(
+                [sys.executable, '-I', str(source / 'scripts/install_into.py'),
+                 '--materialize-new', str(target), '--agents', '', '--no-deps'],
+                capture_output=True, text=True, timeout=60, env={**os.environ, 'GETZILLA_AGENT': 'codex'},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            plan = json.loads(result.stdout)
             self.assertEqual(plan["target_state"], "absent")
+            target_state = json.loads((target / component_manifest).read_bytes())
+            self.assertEqual(target_state['agents'], [])
+            self.assertNotIn('source-only-fixture', json.dumps(target_state))
+            self.assertNotIn('agent:codex', target_state['components'])
+            self.assertFalse((target / '.codex').exists())
+            self.assertFalse((target / '.qwen').exists())
             self.assertTrue((target / "scripts/getzilla_verify.py").is_file())
             self.assertFalse((target / "architecture/system.yaml").exists())
             self.assertFalse((target / "architecture/rules.yaml").exists())

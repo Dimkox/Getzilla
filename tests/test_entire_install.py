@@ -46,7 +46,8 @@ class EntireInstallTests(unittest.TestCase):
     def test_repeated_extra_install_preserves_hooks_checkpoints_and_local_edits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'repository'
-            root.mkdir()
+            installer._materialize_new(ROOT, root, include_dependencies=False, include_optional=False,
+                                       selection=installer.PayloadSelection((), engine_archive=True))
             subprocess.run(['git', 'init', '-q', str(root)], check=True)
             hook = root / '.git/hooks/pre-push'
             hook.write_text('# existing hook manager\n', encoding='utf-8')

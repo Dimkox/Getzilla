@@ -1,0 +1,1268 @@
+{
+  "agents": [
+    "claude",
+    "codex",
+    "qwen",
+    "gemini",
+    "grok",
+    "copilot",
+    "cursor"
+  ],
+  "components": {
+    "agent:claude": {
+      "files": [
+        ".claude/CLAUDE.md",
+        ".claude/agents/ai_architect.md",
+        ".claude/agents/ai_implementer.md",
+        ".claude/agents/architect.md",
+        ".claude/agents/code_reviewer.md",
+        ".claude/agents/data_architect.md",
+        ".claude/agents/data_implementer.md",
+        ".claude/agents/data_reviewer.md",
+        ".claude/agents/docs_researcher.md",
+        ".claude/agents/frontend_implementer.md",
+        ".claude/agents/general_implementer.md",
+        ".claude/agents/integration_architect.md",
+        ".claude/agents/integration_implementer.md",
+        ".claude/agents/php_implementer.md",
+        ".claude/agents/release_reviewer.md",
+        ".claude/agents/repo_explorer.md",
+        ".claude/agents/security_reviewer.md",
+        ".claude/agents/task_analyst.md",
+        ".claude/agents/test_reviewer.md",
+        ".claude/settings.json",
+        ".claude/skills/ai-rag-change/SKILL.md",
+        ".claude/skills/api-event-change/SKILL.md",
+        ".claude/skills/bugfix-workflow/SKILL.md",
+        ".claude/skills/data-change/SKILL.md",
+        ".claude/skills/enterprise-integration/SKILL.md",
+        ".claude/skills/feature-workflow/SKILL.md",
+        ".claude/skills/frontend-change/SKILL.md",
+        ".claude/skills/getzilla-delivery/SKILL.md",
+        ".claude/skills/incident-response/SKILL.md",
+        ".claude/skills/legacy-modernization/SKILL.md",
+        ".claude/skills/release-readiness/SKILL.md",
+        ".claude/skills/security-sensitive-change/SKILL.md",
+        ".claude/skills/task-triage/SKILL.md",
+        ".claude/skills/verification-evidence/SKILL.md"
+      ],
+      "owned": {
+        ".claude/CLAUDE.md": {
+          "mode": 420,
+          "sha256": "7b50d15feae7b63b94d845b2fa6e19e3220527c5b0cac69303b7fc19bd7484a8"
+        },
+        ".claude/agents/ai_architect.md": {
+          "mode": 420,
+          "sha256": "3b4a7dd7329c6b35f8801b6f7a081cce26135c115ac890b7a297c1373c15ee18"
+        },
+        ".claude/agents/ai_implementer.md": {
+          "mode": 420,
+          "sha256": "67c340761645cf6944a825b971233f2e20e4bfca3b42cbe14d893741c287880b"
+        },
+        ".claude/agents/architect.md": {
+          "mode": 420,
+          "sha256": "35a2bfcb8ab766cfbf91c18918f577254f7e71f158ac2a722f703f0ad9434905"
+        },
+        ".claude/agents/code_reviewer.md": {
+          "mode": 420,
+          "sha256": "24e7dba7e6fa5716d4e564ee93b3f15670a71e6a3043bf38608438e28333b946"
+        },
+        ".claude/agents/data_architect.md": {
+          "mode": 420,
+          "sha256": "15c45b5c8ade5b51aba2d89e72dfc15af1d187e45e1270b84f642e5d5696df78"
+        },
+        ".claude/agents/data_implementer.md": {
+          "mode": 420,
+          "sha256": "c590a217ecbde39ee117793953b80338552833642ac7c02ac91956b515c02957"
+        },
+        ".claude/agents/data_reviewer.md": {
+          "mode": 420,
+          "sha256": "81ffb872bc5c592e67bf6bd82e17733f26c5bdd8605f241b16ac349498a366b8"
+        },
+        ".claude/agents/docs_researcher.md": {
+          "mode": 420,
+          "sha256": "418d178e3bb32380ab9029ffae10852ef2963378a897663b4084d7e574e3291a"
+        },
+        ".claude/agents/frontend_implementer.md": {
+          "mode": 420,
+          "sha256": "75fc1437d625255baa9dfd9e90dba9ba27d4bcd5513cb24c354a76e4035afaae"
+        },
+        ".claude/agents/general_implementer.md": {
+          "mode": 420,
+          "sha256": "5636a03d56462b20d467d040418e7df3aa0b7c4ee8641fb8108da6912e3a2c35"
+        },
+        ".claude/agents/integration_architect.md": {
+          "mode": 420,
+          "sha256": "4afbd40513357e35b0ef3f8a0e9f559663a0c4abb119e85674597933c19cc24a"
+        },
+        ".claude/agents/integration_implementer.md": {
+          "mode": 420,
+          "sha256": "8160101eabbc471eb1e8f1c9c04d2fe0a712e532212dc930d6efe1ba44826418"
+        },
+        ".claude/agents/php_implementer.md": {
+          "mode": 420,
+          "sha256": "5d121ce36d7e8ca264bf338fa19cd2531b4778ab02940d7ed527a03d30f81a57"
+        },
+        ".claude/agents/release_reviewer.md": {
+          "mode": 420,
+          "sha256": "c9d5c92e25dd19e75756b96fe54e7bf0c5090e4561966eb84fea2d1ae1238881"
+        },
+        ".claude/agents/repo_explorer.md": {
+          "mode": 420,
+          "sha256": "7bc2c4cdb00b67ed3926768474e62d9f32491eaa23131046e15db4b946af70e2"
+        },
+        ".claude/agents/security_reviewer.md": {
+          "mode": 420,
+          "sha256": "3f67f9af30cc9fa0ddfe80e526d5c1bcfa098470b4335a5448785e85e7d1a4ed"
+        },
+        ".claude/agents/task_analyst.md": {
+          "mode": 420,
+          "sha256": "3438f08060c858414a30bea11c09dfa1381d18f85e561faf250b5af4146eb9c9"
+        },
+        ".claude/agents/test_reviewer.md": {
+          "mode": 420,
+          "sha256": "6af766aa750f97d63bb0b3eb8f295dc731d2ae09837e9b169ed5992be91765ca"
+        },
+        ".claude/settings.json": {
+          "mode": 420,
+          "sha256": "7d75e63ec8205a05d6d2df5b6ee2919ff9ac4d2fb1c1b847a730ac4806bb6840"
+        },
+        ".claude/skills/ai-rag-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c44c05e651288cee0700adeb66fc094c13756e3c7e8161648d2951153d57262"
+        },
+        ".claude/skills/api-event-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "62af0c303af99b7b9118bdb02abc15202cb04297ff9e167bb468d1ad59d91536"
+        },
+        ".claude/skills/bugfix-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "d517c2af62f78b8525ecccbee8c57968978823751861169403b02d2e83bde5ac"
+        },
+        ".claude/skills/data-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "fd33372b5b5ccda3f4f4606eeec077d108ed2bc7c2fe9e91b43e9a54f6a36b9d"
+        },
+        ".claude/skills/enterprise-integration/SKILL.md": {
+          "mode": 420,
+          "sha256": "a3afdab9f7bc43981fb67cce4d93e745afee4c9ada1f38d3b9db1f1bec07dc47"
+        },
+        ".claude/skills/feature-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "01d4e01bfccc1f8aa586973e940bb2bb9bed182606ebb9c581682743ff39a47a"
+        },
+        ".claude/skills/frontend-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "0b841164bc11c41ba4aaecee5c26001816221ed93d035edcc845a02ce7cd06af"
+        },
+        ".claude/skills/getzilla-delivery/SKILL.md": {
+          "mode": 420,
+          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+        },
+        ".claude/skills/incident-response/SKILL.md": {
+          "mode": 420,
+          "sha256": "dbef543f204d9bb370080108f5f48c28e51a9d740d2a5d0c2817ab7c2c916c98"
+        },
+        ".claude/skills/legacy-modernization/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c3716263564532f124aa80557adafce159350b52981214a491a96b5885df676"
+        },
+        ".claude/skills/release-readiness/SKILL.md": {
+          "mode": 420,
+          "sha256": "69f0722c3a41c58df55acf557fd7063447f5d339d9c7a8a81d9b15327d839679"
+        },
+        ".claude/skills/security-sensitive-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "b883b561d553a7af8095370fba5629bdb0e99f7a71ef8ffb355ec516b545b13c"
+        },
+        ".claude/skills/task-triage/SKILL.md": {
+          "mode": 420,
+          "sha256": "f5ea41e813f3fff0be6f6e251698bd9e76ac072f0a8089efda22c56473db23a8"
+        },
+        ".claude/skills/verification-evidence/SKILL.md": {
+          "mode": 420,
+          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+        }
+      }
+    },
+    "agent:codex": {
+      "files": [
+        ".codex/agents/ai_architect.toml",
+        ".codex/agents/ai_implementer.toml",
+        ".codex/agents/architect.toml",
+        ".codex/agents/code_reviewer.toml",
+        ".codex/agents/data_architect.toml",
+        ".codex/agents/data_implementer.toml",
+        ".codex/agents/data_reviewer.toml",
+        ".codex/agents/docs_researcher.toml",
+        ".codex/agents/frontend_implementer.toml",
+        ".codex/agents/general_implementer.toml",
+        ".codex/agents/integration_architect.toml",
+        ".codex/agents/integration_implementer.toml",
+        ".codex/agents/php_implementer.toml",
+        ".codex/agents/release_reviewer.toml",
+        ".codex/agents/repo_explorer.toml",
+        ".codex/agents/security_reviewer.toml",
+        ".codex/agents/task_analyst.toml",
+        ".codex/agents/test_reviewer.toml",
+        ".codex/config.toml",
+        ".codex/hooks.json"
+      ],
+      "owned": {
+        ".codex/agents/ai_architect.toml": {
+          "mode": 420,
+          "sha256": "f40952d9af8fe2382206cb99fdef4e60317dd93f5a1de60a4acbaab1d332ca68"
+        },
+        ".codex/agents/ai_implementer.toml": {
+          "mode": 420,
+          "sha256": "61eca8c82670d0c54add3b1cda5a40fc8a2a2a4f715643fbded23b750f81e621"
+        },
+        ".codex/agents/architect.toml": {
+          "mode": 420,
+          "sha256": "dd8977ac976c53c1a972c7e6c66bc4d0b090727d2473e8ad797b7d00424731d1"
+        },
+        ".codex/agents/code_reviewer.toml": {
+          "mode": 420,
+          "sha256": "124792dbdeab9de612a150ea11e44485b74ebb2e834974cfdc78891b6043f7fe"
+        },
+        ".codex/agents/data_architect.toml": {
+          "mode": 420,
+          "sha256": "2d28c74e113b5e1e007da8c15759513e92ced2eee4c9108cbae306c83591d513"
+        },
+        ".codex/agents/data_implementer.toml": {
+          "mode": 420,
+          "sha256": "728f8b5d1e39090f17b5672f7ed2b40637641fbcd2524d511995798c97ce7c12"
+        },
+        ".codex/agents/data_reviewer.toml": {
+          "mode": 420,
+          "sha256": "89fca22061b118d54228a2738a962627576f86ef271fcaa80b060cecac102c91"
+        },
+        ".codex/agents/docs_researcher.toml": {
+          "mode": 420,
+          "sha256": "1745282b11d4c7d9c72463a95ef5e9c1c0b15bfebf121b8febb4c1d7cc20fdaf"
+        },
+        ".codex/agents/frontend_implementer.toml": {
+          "mode": 420,
+          "sha256": "10b0a71825cfabe50a2e2a1e46225e753cd20ad2d3e83f29bc34651086e32239"
+        },
+        ".codex/agents/general_implementer.toml": {
+          "mode": 420,
+          "sha256": "bbd40824bed30124a54e0ca95eaaf1f0d86249ee75de9d2a4943d110533a066d"
+        },
+        ".codex/agents/integration_architect.toml": {
+          "mode": 420,
+          "sha256": "011d6f3d6116fbd3b34f3ef9346a1171d758b9eeb4ed5fcd1f93412bb826070d"
+        },
+        ".codex/agents/integration_implementer.toml": {
+          "mode": 420,
+          "sha256": "8dc85c3e297602a7ecbcd062b0ad6c63985348ee540974cefc081666d6e7ac38"
+        },
+        ".codex/agents/php_implementer.toml": {
+          "mode": 420,
+          "sha256": "58e4ee9b5522dc0e103020a5ddc127713edf3d009a3c134f27e5a9054d6cf942"
+        },
+        ".codex/agents/release_reviewer.toml": {
+          "mode": 420,
+          "sha256": "4de03f6629ea5c383722eb833d08323c0791019b86d110699272f1a58f1a874c"
+        },
+        ".codex/agents/repo_explorer.toml": {
+          "mode": 420,
+          "sha256": "e4b3f62ad852523ac940dd0bc5caa55c571dea070ae9a61aa5d51659189d13b2"
+        },
+        ".codex/agents/security_reviewer.toml": {
+          "mode": 420,
+          "sha256": "5abca3d75908840baa99f2c913fb42d26b6ff507c097abb24f3939ba7f02bbff"
+        },
+        ".codex/agents/task_analyst.toml": {
+          "mode": 420,
+          "sha256": "8efad7c1563fc13d04a132136d2f963828fd1430aca50e1bd743c6687323e4ac"
+        },
+        ".codex/agents/test_reviewer.toml": {
+          "mode": 420,
+          "sha256": "5bffb99e398b3ece6eabd70d4ae8d1ec135de70996c0e874e7c6268488689496"
+        },
+        ".codex/config.toml": {
+          "mode": 420,
+          "sha256": "f93ae0ec6b5ecf00cf33700704bd609a4bfafd5b75be463978163f44af6c72e6"
+        },
+        ".codex/hooks.json": {
+          "mode": 420,
+          "sha256": "a89284c06ecd511560cb4b9ab34169da97730ff36d7f2204ac10e4bf63e6f337"
+        }
+      }
+    },
+    "agent:copilot": {
+      "files": [
+        ".github/agents/ai_architect.agent.md",
+        ".github/agents/ai_implementer.agent.md",
+        ".github/agents/architect.agent.md",
+        ".github/agents/code_reviewer.agent.md",
+        ".github/agents/data_architect.agent.md",
+        ".github/agents/data_implementer.agent.md",
+        ".github/agents/data_reviewer.agent.md",
+        ".github/agents/docs_researcher.agent.md",
+        ".github/agents/frontend_implementer.agent.md",
+        ".github/agents/general_implementer.agent.md",
+        ".github/agents/integration_architect.agent.md",
+        ".github/agents/integration_implementer.agent.md",
+        ".github/agents/php_implementer.agent.md",
+        ".github/agents/release_reviewer.agent.md",
+        ".github/agents/repo_explorer.agent.md",
+        ".github/agents/security_reviewer.agent.md",
+        ".github/agents/task_analyst.agent.md",
+        ".github/agents/test_reviewer.agent.md",
+        ".github/hooks/getzilla.json"
+      ],
+      "owned": {
+        ".github/agents/ai_architect.agent.md": {
+          "mode": 420,
+          "sha256": "811def366803666760b27c3858c46a9c81b77618d83c9d7692b622150c4799d1"
+        },
+        ".github/agents/ai_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "67c340761645cf6944a825b971233f2e20e4bfca3b42cbe14d893741c287880b"
+        },
+        ".github/agents/architect.agent.md": {
+          "mode": 420,
+          "sha256": "302247fda470caf887fafaf2ff5aa4ef3d91071d2f3d7265cb2dfba1580871df"
+        },
+        ".github/agents/code_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "bc5065ce9c8a8224e6c8449140a386dcbb7d0207a40ff81839497a0f3f4b058d"
+        },
+        ".github/agents/data_architect.agent.md": {
+          "mode": 420,
+          "sha256": "ce752ae2bdd42362c701831425b14140b45db4fa12e1dcd97a8a6fff74b1c6a4"
+        },
+        ".github/agents/data_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "c590a217ecbde39ee117793953b80338552833642ac7c02ac91956b515c02957"
+        },
+        ".github/agents/data_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "2ff5a3e916c6608a4f4a71c482e9f99a314832101c2a7b78560238bb54e1c9f0"
+        },
+        ".github/agents/docs_researcher.agent.md": {
+          "mode": 420,
+          "sha256": "0c937651dcc6f36511277bc5d62a79319dd00aafdc5b5fb35b57df77c0efee2b"
+        },
+        ".github/agents/frontend_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "75fc1437d625255baa9dfd9e90dba9ba27d4bcd5513cb24c354a76e4035afaae"
+        },
+        ".github/agents/general_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "5636a03d56462b20d467d040418e7df3aa0b7c4ee8641fb8108da6912e3a2c35"
+        },
+        ".github/agents/integration_architect.agent.md": {
+          "mode": 420,
+          "sha256": "e670d1bcb173e207c1546e7c51dda6bf83689d5fc9ffb741ed943b75b4396ca5"
+        },
+        ".github/agents/integration_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "8160101eabbc471eb1e8f1c9c04d2fe0a712e532212dc930d6efe1ba44826418"
+        },
+        ".github/agents/php_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "5d121ce36d7e8ca264bf338fa19cd2531b4778ab02940d7ed527a03d30f81a57"
+        },
+        ".github/agents/release_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "4d1d0bb17e4eb0d671c13796c7aad530e204dfa180299c1c6e5ccff210dcc07c"
+        },
+        ".github/agents/repo_explorer.agent.md": {
+          "mode": 420,
+          "sha256": "53c29a18d3b739de3dfe7bc48731d8e47128998745b70aee91799894891c4e5a"
+        },
+        ".github/agents/security_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "b3f9d662f854bbfe66a80622cd68bc86a21fcca8c094b64f483ab6e6869307e2"
+        },
+        ".github/agents/task_analyst.agent.md": {
+          "mode": 420,
+          "sha256": "041b0a016c4096a59e6651193e609a9411195ab8f0e28677f3bb5be7e25e9ec8"
+        },
+        ".github/agents/test_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "ca11265f05c760f806469f97f8269bd6cc9d4df7971287c478cf1e4d345ecd23"
+        },
+        ".github/hooks/getzilla.json": {
+          "mode": 420,
+          "sha256": "fea025e06e3e8b83185c83403334a815834d22686af4f9892b8285c226cf69bc"
+        }
+      }
+    },
+    "agent:cursor": {
+      "files": [
+        ".cursor/rules/getzilla/00-core.mdc",
+        ".cursor/rules/getzilla/10-security.mdc",
+        ".cursor/rules/getzilla/20-python.mdc",
+        ".cursor/rules/getzilla/30-contracts-data.mdc",
+        ".cursor/rules/getzilla/40-tests.mdc",
+        ".cursor/rules/getzilla/50-agent-runtime.mdc",
+        ".cursor/rules/getzilla/60-frontend.mdc",
+        ".cursor/rules/getzilla/70-delivery.mdc"
+      ],
+      "owned": {
+        ".cursor/rules/getzilla/00-core.mdc": {
+          "mode": 420,
+          "sha256": "0cfe52e708d966873f5474c8658b13364de4ba794d2aca46e71aef8bc8312769"
+        },
+        ".cursor/rules/getzilla/10-security.mdc": {
+          "mode": 420,
+          "sha256": "c7bdaa0b3a2eceb8ea3ff41a358956cb3d5d3e0f3b581fe7d8027f6f1feb263f"
+        },
+        ".cursor/rules/getzilla/20-python.mdc": {
+          "mode": 420,
+          "sha256": "9a511a365654265de6dfef4e90648050f3e6d2baa8c721382cb052712d5f7069"
+        },
+        ".cursor/rules/getzilla/30-contracts-data.mdc": {
+          "mode": 420,
+          "sha256": "3eeb0ba6c72df166d69bf1b7608914daced63c9bab7893847b9b5fe5bb799c6f"
+        },
+        ".cursor/rules/getzilla/40-tests.mdc": {
+          "mode": 420,
+          "sha256": "aab55089c26c110863e8ce417750d9c298ddcc8a2deca24c1cbad148b4d294da"
+        },
+        ".cursor/rules/getzilla/50-agent-runtime.mdc": {
+          "mode": 420,
+          "sha256": "1786da123bb55f0d1ef6bad452dd70abe71f50ea81292f714f31ba55e8558042"
+        },
+        ".cursor/rules/getzilla/60-frontend.mdc": {
+          "mode": 420,
+          "sha256": "3157c6d97eb032b77a8f1c1023b7b2b149ffa018d298bb7e64f2b2eca8322553"
+        },
+        ".cursor/rules/getzilla/70-delivery.mdc": {
+          "mode": 420,
+          "sha256": "870c0e501efc64820ebe49f08f5b1a291ee94f25f63d39d3de83429be83e3330"
+        }
+      }
+    },
+    "agent:gemini": {
+      "files": [
+        ".gemini/agents/ai_architect.md",
+        ".gemini/agents/ai_implementer.md",
+        ".gemini/agents/architect.md",
+        ".gemini/agents/code_reviewer.md",
+        ".gemini/agents/data_architect.md",
+        ".gemini/agents/data_implementer.md",
+        ".gemini/agents/data_reviewer.md",
+        ".gemini/agents/docs_researcher.md",
+        ".gemini/agents/frontend_implementer.md",
+        ".gemini/agents/general_implementer.md",
+        ".gemini/agents/integration_architect.md",
+        ".gemini/agents/integration_implementer.md",
+        ".gemini/agents/php_implementer.md",
+        ".gemini/agents/release_reviewer.md",
+        ".gemini/agents/repo_explorer.md",
+        ".gemini/agents/security_reviewer.md",
+        ".gemini/agents/task_analyst.md",
+        ".gemini/agents/test_reviewer.md",
+        ".gemini/settings.json",
+        ".gemini/skills/ai-rag-change/SKILL.md",
+        ".gemini/skills/api-event-change/SKILL.md",
+        ".gemini/skills/bugfix-workflow/SKILL.md",
+        ".gemini/skills/data-change/SKILL.md",
+        ".gemini/skills/enterprise-integration/SKILL.md",
+        ".gemini/skills/feature-workflow/SKILL.md",
+        ".gemini/skills/frontend-change/SKILL.md",
+        ".gemini/skills/getzilla-delivery/SKILL.md",
+        ".gemini/skills/incident-response/SKILL.md",
+        ".gemini/skills/legacy-modernization/SKILL.md",
+        ".gemini/skills/release-readiness/SKILL.md",
+        ".gemini/skills/security-sensitive-change/SKILL.md",
+        ".gemini/skills/task-triage/SKILL.md",
+        ".gemini/skills/verification-evidence/SKILL.md"
+      ],
+      "owned": {
+        ".gemini/agents/ai_architect.md": {
+          "mode": 420,
+          "sha256": "653aca79cd4b0f1bfd0073209bdcc24fdc6ba02743dfaec4376421c2db150c71"
+        },
+        ".gemini/agents/ai_implementer.md": {
+          "mode": 420,
+          "sha256": "67c340761645cf6944a825b971233f2e20e4bfca3b42cbe14d893741c287880b"
+        },
+        ".gemini/agents/architect.md": {
+          "mode": 420,
+          "sha256": "5da0f353adfc79689c1d4970dae3c41f81916ad939a59a875dfe54ca316cd75b"
+        },
+        ".gemini/agents/code_reviewer.md": {
+          "mode": 420,
+          "sha256": "1d8e6fca02b69b9a21e2e891dc9394584e5c8d0add1bf7eaea6090fd31d02327"
+        },
+        ".gemini/agents/data_architect.md": {
+          "mode": 420,
+          "sha256": "c2a48430fe0d2a30eccac1bc9551d18755826b0a83e314e6001469abbfc6493a"
+        },
+        ".gemini/agents/data_implementer.md": {
+          "mode": 420,
+          "sha256": "c590a217ecbde39ee117793953b80338552833642ac7c02ac91956b515c02957"
+        },
+        ".gemini/agents/data_reviewer.md": {
+          "mode": 420,
+          "sha256": "8236a3b1a534f9a8ac34692205b8dd826f43180c19f259e682a02208afaae738"
+        },
+        ".gemini/agents/docs_researcher.md": {
+          "mode": 420,
+          "sha256": "2949c3f343afef90f748e3418bf9e13c1e1ac545ef6700d797150e21a9f9cab3"
+        },
+        ".gemini/agents/frontend_implementer.md": {
+          "mode": 420,
+          "sha256": "75fc1437d625255baa9dfd9e90dba9ba27d4bcd5513cb24c354a76e4035afaae"
+        },
+        ".gemini/agents/general_implementer.md": {
+          "mode": 420,
+          "sha256": "5636a03d56462b20d467d040418e7df3aa0b7c4ee8641fb8108da6912e3a2c35"
+        },
+        ".gemini/agents/integration_architect.md": {
+          "mode": 420,
+          "sha256": "b4eda59bfb24b02bcd2f3cf5f7099e77981d273c368d842cfe04e0bc0e2f5a19"
+        },
+        ".gemini/agents/integration_implementer.md": {
+          "mode": 420,
+          "sha256": "8160101eabbc471eb1e8f1c9c04d2fe0a712e532212dc930d6efe1ba44826418"
+        },
+        ".gemini/agents/php_implementer.md": {
+          "mode": 420,
+          "sha256": "5d121ce36d7e8ca264bf338fa19cd2531b4778ab02940d7ed527a03d30f81a57"
+        },
+        ".gemini/agents/release_reviewer.md": {
+          "mode": 420,
+          "sha256": "6cf1afe607e3cf7858e505937b93d90360ececb238ca66cd56624586fb24aba5"
+        },
+        ".gemini/agents/repo_explorer.md": {
+          "mode": 420,
+          "sha256": "b26d9f1055d4249ad8fa69694c575f085eff4d487b0bc94f11aae77ed6f0626f"
+        },
+        ".gemini/agents/security_reviewer.md": {
+          "mode": 420,
+          "sha256": "8a5158b2658dcaba459b8d3792b835a5aa55578cc89a03a5522e93fa8987ebf0"
+        },
+        ".gemini/agents/task_analyst.md": {
+          "mode": 420,
+          "sha256": "5d577631dc9ad9e720ef04463006bbf9fedcb3f9f8b2bc5091e6ae2f3087abac"
+        },
+        ".gemini/agents/test_reviewer.md": {
+          "mode": 420,
+          "sha256": "0f51d0865a34078f742a314a1e18c1aeb005bec79fcb15bdf4a19fa47c585166"
+        },
+        ".gemini/settings.json": {
+          "mode": 420,
+          "sha256": "b0114e0d71345df73cd9c011ac8726e4a72702c20aa9baff8d7f6557117a5cf8"
+        },
+        ".gemini/skills/ai-rag-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c44c05e651288cee0700adeb66fc094c13756e3c7e8161648d2951153d57262"
+        },
+        ".gemini/skills/api-event-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "62af0c303af99b7b9118bdb02abc15202cb04297ff9e167bb468d1ad59d91536"
+        },
+        ".gemini/skills/bugfix-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "d517c2af62f78b8525ecccbee8c57968978823751861169403b02d2e83bde5ac"
+        },
+        ".gemini/skills/data-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "fd33372b5b5ccda3f4f4606eeec077d108ed2bc7c2fe9e91b43e9a54f6a36b9d"
+        },
+        ".gemini/skills/enterprise-integration/SKILL.md": {
+          "mode": 420,
+          "sha256": "a3afdab9f7bc43981fb67cce4d93e745afee4c9ada1f38d3b9db1f1bec07dc47"
+        },
+        ".gemini/skills/feature-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "01d4e01bfccc1f8aa586973e940bb2bb9bed182606ebb9c581682743ff39a47a"
+        },
+        ".gemini/skills/frontend-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "0b841164bc11c41ba4aaecee5c26001816221ed93d035edcc845a02ce7cd06af"
+        },
+        ".gemini/skills/getzilla-delivery/SKILL.md": {
+          "mode": 420,
+          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+        },
+        ".gemini/skills/incident-response/SKILL.md": {
+          "mode": 420,
+          "sha256": "dbef543f204d9bb370080108f5f48c28e51a9d740d2a5d0c2817ab7c2c916c98"
+        },
+        ".gemini/skills/legacy-modernization/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c3716263564532f124aa80557adafce159350b52981214a491a96b5885df676"
+        },
+        ".gemini/skills/release-readiness/SKILL.md": {
+          "mode": 420,
+          "sha256": "69f0722c3a41c58df55acf557fd7063447f5d339d9c7a8a81d9b15327d839679"
+        },
+        ".gemini/skills/security-sensitive-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "b883b561d553a7af8095370fba5629bdb0e99f7a71ef8ffb355ec516b545b13c"
+        },
+        ".gemini/skills/task-triage/SKILL.md": {
+          "mode": 420,
+          "sha256": "f5ea41e813f3fff0be6f6e251698bd9e76ac072f0a8089efda22c56473db23a8"
+        },
+        ".gemini/skills/verification-evidence/SKILL.md": {
+          "mode": 420,
+          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+        }
+      }
+    },
+    "agent:grok": {
+      "files": [
+        ".grok/skills/ai-rag-change/SKILL.md",
+        ".grok/skills/api-event-change/SKILL.md",
+        ".grok/skills/bugfix-workflow/SKILL.md",
+        ".grok/skills/data-change/SKILL.md",
+        ".grok/skills/enterprise-integration/SKILL.md",
+        ".grok/skills/feature-workflow/SKILL.md",
+        ".grok/skills/frontend-change/SKILL.md",
+        ".grok/skills/getzilla-delivery/SKILL.md",
+        ".grok/skills/incident-response/SKILL.md",
+        ".grok/skills/legacy-modernization/SKILL.md",
+        ".grok/skills/release-readiness/SKILL.md",
+        ".grok/skills/security-sensitive-change/SKILL.md",
+        ".grok/skills/task-triage/SKILL.md",
+        ".grok/skills/verification-evidence/SKILL.md"
+      ],
+      "owned": {
+        ".grok/skills/ai-rag-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c44c05e651288cee0700adeb66fc094c13756e3c7e8161648d2951153d57262"
+        },
+        ".grok/skills/api-event-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "62af0c303af99b7b9118bdb02abc15202cb04297ff9e167bb468d1ad59d91536"
+        },
+        ".grok/skills/bugfix-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "d517c2af62f78b8525ecccbee8c57968978823751861169403b02d2e83bde5ac"
+        },
+        ".grok/skills/data-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "fd33372b5b5ccda3f4f4606eeec077d108ed2bc7c2fe9e91b43e9a54f6a36b9d"
+        },
+        ".grok/skills/enterprise-integration/SKILL.md": {
+          "mode": 420,
+          "sha256": "a3afdab9f7bc43981fb67cce4d93e745afee4c9ada1f38d3b9db1f1bec07dc47"
+        },
+        ".grok/skills/feature-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "01d4e01bfccc1f8aa586973e940bb2bb9bed182606ebb9c581682743ff39a47a"
+        },
+        ".grok/skills/frontend-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "0b841164bc11c41ba4aaecee5c26001816221ed93d035edcc845a02ce7cd06af"
+        },
+        ".grok/skills/getzilla-delivery/SKILL.md": {
+          "mode": 420,
+          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+        },
+        ".grok/skills/incident-response/SKILL.md": {
+          "mode": 420,
+          "sha256": "dbef543f204d9bb370080108f5f48c28e51a9d740d2a5d0c2817ab7c2c916c98"
+        },
+        ".grok/skills/legacy-modernization/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c3716263564532f124aa80557adafce159350b52981214a491a96b5885df676"
+        },
+        ".grok/skills/release-readiness/SKILL.md": {
+          "mode": 420,
+          "sha256": "69f0722c3a41c58df55acf557fd7063447f5d339d9c7a8a81d9b15327d839679"
+        },
+        ".grok/skills/security-sensitive-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "b883b561d553a7af8095370fba5629bdb0e99f7a71ef8ffb355ec516b545b13c"
+        },
+        ".grok/skills/task-triage/SKILL.md": {
+          "mode": 420,
+          "sha256": "f5ea41e813f3fff0be6f6e251698bd9e76ac072f0a8089efda22c56473db23a8"
+        },
+        ".grok/skills/verification-evidence/SKILL.md": {
+          "mode": 420,
+          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+        }
+      }
+    },
+    "agent:qwen": {
+      "files": [
+        ".qwen/agents/ai_architect.md",
+        ".qwen/agents/ai_implementer.md",
+        ".qwen/agents/architect.md",
+        ".qwen/agents/code_reviewer.md",
+        ".qwen/agents/data_architect.md",
+        ".qwen/agents/data_implementer.md",
+        ".qwen/agents/data_reviewer.md",
+        ".qwen/agents/docs_researcher.md",
+        ".qwen/agents/frontend_implementer.md",
+        ".qwen/agents/general_implementer.md",
+        ".qwen/agents/integration_architect.md",
+        ".qwen/agents/integration_implementer.md",
+        ".qwen/agents/php_implementer.md",
+        ".qwen/agents/release_reviewer.md",
+        ".qwen/agents/repo_explorer.md",
+        ".qwen/agents/security_reviewer.md",
+        ".qwen/agents/task_analyst.md",
+        ".qwen/agents/test_reviewer.md",
+        ".qwen/settings.json",
+        ".qwen/skills/ai-rag-change/SKILL.md",
+        ".qwen/skills/api-event-change/SKILL.md",
+        ".qwen/skills/bugfix-workflow/SKILL.md",
+        ".qwen/skills/data-change/SKILL.md",
+        ".qwen/skills/enterprise-integration/SKILL.md",
+        ".qwen/skills/feature-workflow/SKILL.md",
+        ".qwen/skills/frontend-change/SKILL.md",
+        ".qwen/skills/getzilla-delivery/SKILL.md",
+        ".qwen/skills/incident-response/SKILL.md",
+        ".qwen/skills/legacy-modernization/SKILL.md",
+        ".qwen/skills/release-readiness/SKILL.md",
+        ".qwen/skills/security-sensitive-change/SKILL.md",
+        ".qwen/skills/task-triage/SKILL.md",
+        ".qwen/skills/verification-evidence/SKILL.md"
+      ],
+      "owned": {
+        ".qwen/agents/ai_architect.md": {
+          "mode": 420,
+          "sha256": "3d070fd93f64c55fc5920134cae40ba16f3bae66ff4305a085fad1f2ddb2e013"
+        },
+        ".qwen/agents/ai_implementer.md": {
+          "mode": 420,
+          "sha256": "67c340761645cf6944a825b971233f2e20e4bfca3b42cbe14d893741c287880b"
+        },
+        ".qwen/agents/architect.md": {
+          "mode": 420,
+          "sha256": "e1687ef81720064d8553f7d1416943c27ad34464c1c5a8bc0c884253f4203872"
+        },
+        ".qwen/agents/code_reviewer.md": {
+          "mode": 420,
+          "sha256": "b4a8f3b0ac20ef3bc31c450e1ed90a64e9ba3aea68d8faf3b1802f221151cce6"
+        },
+        ".qwen/agents/data_architect.md": {
+          "mode": 420,
+          "sha256": "e2e9948aa0f2872e688ab04fd3ea6e027ec8f8ac005790892db3dec1c2876335"
+        },
+        ".qwen/agents/data_implementer.md": {
+          "mode": 420,
+          "sha256": "c590a217ecbde39ee117793953b80338552833642ac7c02ac91956b515c02957"
+        },
+        ".qwen/agents/data_reviewer.md": {
+          "mode": 420,
+          "sha256": "fac9f95e703093b19025b2b50f24a89dc5e8e50c20a5247a6b77c8c9133a8574"
+        },
+        ".qwen/agents/docs_researcher.md": {
+          "mode": 420,
+          "sha256": "0b9017717385e25e7b574884199ca34fefcc834717c98eb17fd022a450dbb507"
+        },
+        ".qwen/agents/frontend_implementer.md": {
+          "mode": 420,
+          "sha256": "75fc1437d625255baa9dfd9e90dba9ba27d4bcd5513cb24c354a76e4035afaae"
+        },
+        ".qwen/agents/general_implementer.md": {
+          "mode": 420,
+          "sha256": "5636a03d56462b20d467d040418e7df3aa0b7c4ee8641fb8108da6912e3a2c35"
+        },
+        ".qwen/agents/integration_architect.md": {
+          "mode": 420,
+          "sha256": "b37471637cc1525367060633e6b5f7dd15061785c2f68b9e2bf7d2b6d0070674"
+        },
+        ".qwen/agents/integration_implementer.md": {
+          "mode": 420,
+          "sha256": "8160101eabbc471eb1e8f1c9c04d2fe0a712e532212dc930d6efe1ba44826418"
+        },
+        ".qwen/agents/php_implementer.md": {
+          "mode": 420,
+          "sha256": "5d121ce36d7e8ca264bf338fa19cd2531b4778ab02940d7ed527a03d30f81a57"
+        },
+        ".qwen/agents/release_reviewer.md": {
+          "mode": 420,
+          "sha256": "542224c85df3797c29c2da0dc73466097c484f14b960fbec5ff017a1e147c8d7"
+        },
+        ".qwen/agents/repo_explorer.md": {
+          "mode": 420,
+          "sha256": "7f44f20f50ced6d1bdf4fdaa54fa4bfbd2180bef5f66668ca4dec637bce5064d"
+        },
+        ".qwen/agents/security_reviewer.md": {
+          "mode": 420,
+          "sha256": "05bfb9760218e78348001e6ee3f8dde04f9bce7ea5df08312e63f30eea118851"
+        },
+        ".qwen/agents/task_analyst.md": {
+          "mode": 420,
+          "sha256": "a90b939d77b81a6bc29a61714269ac89d291a11562549389165278bab9b48769"
+        },
+        ".qwen/agents/test_reviewer.md": {
+          "mode": 420,
+          "sha256": "460818f17cf2aa1e5ed4937929478800d40d01b62189aebc8da15e65d60667dc"
+        },
+        ".qwen/settings.json": {
+          "mode": 420,
+          "sha256": "23e65af7609afd38fb310fb1b331727bc653fe9cc3035326992ea9ee9272f58b"
+        },
+        ".qwen/skills/ai-rag-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c44c05e651288cee0700adeb66fc094c13756e3c7e8161648d2951153d57262"
+        },
+        ".qwen/skills/api-event-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "62af0c303af99b7b9118bdb02abc15202cb04297ff9e167bb468d1ad59d91536"
+        },
+        ".qwen/skills/bugfix-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "d517c2af62f78b8525ecccbee8c57968978823751861169403b02d2e83bde5ac"
+        },
+        ".qwen/skills/data-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "fd33372b5b5ccda3f4f4606eeec077d108ed2bc7c2fe9e91b43e9a54f6a36b9d"
+        },
+        ".qwen/skills/enterprise-integration/SKILL.md": {
+          "mode": 420,
+          "sha256": "a3afdab9f7bc43981fb67cce4d93e745afee4c9ada1f38d3b9db1f1bec07dc47"
+        },
+        ".qwen/skills/feature-workflow/SKILL.md": {
+          "mode": 420,
+          "sha256": "01d4e01bfccc1f8aa586973e940bb2bb9bed182606ebb9c581682743ff39a47a"
+        },
+        ".qwen/skills/frontend-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "0b841164bc11c41ba4aaecee5c26001816221ed93d035edcc845a02ce7cd06af"
+        },
+        ".qwen/skills/getzilla-delivery/SKILL.md": {
+          "mode": 420,
+          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+        },
+        ".qwen/skills/incident-response/SKILL.md": {
+          "mode": 420,
+          "sha256": "dbef543f204d9bb370080108f5f48c28e51a9d740d2a5d0c2817ab7c2c916c98"
+        },
+        ".qwen/skills/legacy-modernization/SKILL.md": {
+          "mode": 420,
+          "sha256": "1c3716263564532f124aa80557adafce159350b52981214a491a96b5885df676"
+        },
+        ".qwen/skills/release-readiness/SKILL.md": {
+          "mode": 420,
+          "sha256": "69f0722c3a41c58df55acf557fd7063447f5d339d9c7a8a81d9b15327d839679"
+        },
+        ".qwen/skills/security-sensitive-change/SKILL.md": {
+          "mode": 420,
+          "sha256": "b883b561d553a7af8095370fba5629bdb0e99f7a71ef8ffb355ec516b545b13c"
+        },
+        ".qwen/skills/task-triage/SKILL.md": {
+          "mode": 420,
+          "sha256": "f5ea41e813f3fff0be6f6e251698bd9e76ac072f0a8089efda22c56473db23a8"
+        },
+        ".qwen/skills/verification-evidence/SKILL.md": {
+          "mode": 420,
+          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+        }
+      }
+    },
+    "extra:bitrix": {
+      "files": [
+        ".claude/agents/bitrix_architect.md",
+        ".claude/agents/bitrix_implementer.md",
+        ".claude/agents/bitrix_reviewer.md",
+        ".claude/skills/bitrix-development/SKILL.md",
+        ".claude/skills/bitrix-development/references/architecture.md",
+        ".claude/skills/bitrix-development/references/events-agents-cache.md",
+        ".claude/skills/bitrix-development/references/modules.md",
+        ".claude/skills/bitrix-development/references/testing-review.md",
+        ".codex/agents/bitrix_architect.toml",
+        ".codex/agents/bitrix_implementer.toml",
+        ".codex/agents/bitrix_reviewer.toml",
+        ".gemini/agents/bitrix_architect.md",
+        ".gemini/agents/bitrix_implementer.md",
+        ".gemini/agents/bitrix_reviewer.md",
+        ".gemini/skills/bitrix-development/SKILL.md",
+        ".gemini/skills/bitrix-development/references/architecture.md",
+        ".gemini/skills/bitrix-development/references/events-agents-cache.md",
+        ".gemini/skills/bitrix-development/references/modules.md",
+        ".gemini/skills/bitrix-development/references/testing-review.md",
+        ".github/agents/bitrix_architect.agent.md",
+        ".github/agents/bitrix_implementer.agent.md",
+        ".github/agents/bitrix_reviewer.agent.md",
+        ".grok/skills/bitrix-development/SKILL.md",
+        ".grok/skills/bitrix-development/references/architecture.md",
+        ".grok/skills/bitrix-development/references/events-agents-cache.md",
+        ".grok/skills/bitrix-development/references/modules.md",
+        ".grok/skills/bitrix-development/references/testing-review.md",
+        ".qwen/agents/bitrix_architect.md",
+        ".qwen/agents/bitrix_implementer.md",
+        ".qwen/agents/bitrix_reviewer.md",
+        ".qwen/skills/bitrix-development/SKILL.md",
+        ".qwen/skills/bitrix-development/references/architecture.md",
+        ".qwen/skills/bitrix-development/references/events-agents-cache.md",
+        ".qwen/skills/bitrix-development/references/modules.md",
+        ".qwen/skills/bitrix-development/references/testing-review.md"
+      ],
+      "owned": {
+        ".claude/agents/bitrix_architect.md": {
+          "mode": 420,
+          "sha256": "d92a9d53dd99525b2dfbaf47df42efb67978b936aa718728063eeba53e24a2b4"
+        },
+        ".claude/agents/bitrix_implementer.md": {
+          "mode": 420,
+          "sha256": "74a7aa6f9ad8326540e0c2dde9e0892e5dc1ad07852881b19b1cc43433251f6b"
+        },
+        ".claude/agents/bitrix_reviewer.md": {
+          "mode": 420,
+          "sha256": "f01c446a460544e802095d0b9b9f84d9a2ed43f5f56daa8a1b4948cd06d407f1"
+        },
+        ".claude/skills/bitrix-development/SKILL.md": {
+          "mode": 420,
+          "sha256": "fc5fcfc017a645a1adb86ea6b09f6ded8eaa6cd2a9cc69ce3e948d7833c53c31"
+        },
+        ".claude/skills/bitrix-development/references/architecture.md": {
+          "mode": 420,
+          "sha256": "54f04e33ddb60819c7b81247931d584d04230cd8673e951b9dc902e15ed26ddd"
+        },
+        ".claude/skills/bitrix-development/references/events-agents-cache.md": {
+          "mode": 420,
+          "sha256": "a4ea013439e8ecdb60dfed423fe2324cb314c3aba38c582026f2364dc685a32b"
+        },
+        ".claude/skills/bitrix-development/references/modules.md": {
+          "mode": 420,
+          "sha256": "5148d15855c025d497733f871c963838c2645eae5467dd1309b020f95eee658d"
+        },
+        ".claude/skills/bitrix-development/references/testing-review.md": {
+          "mode": 420,
+          "sha256": "e75c84f42cd15005c5022985e6ffd651177e7e15e3450640b490f9089296eab2"
+        },
+        ".codex/agents/bitrix_architect.toml": {
+          "mode": 420,
+          "sha256": "28dd78a883547139f5cb5a9152f5fc8b457beef593708e51f0eb3e687f5715d0"
+        },
+        ".codex/agents/bitrix_implementer.toml": {
+          "mode": 420,
+          "sha256": "2444b9612bd5768ac7e047efbb03c1b7cb45660d3ae7ea3379c8ab404a78e3ac"
+        },
+        ".codex/agents/bitrix_reviewer.toml": {
+          "mode": 420,
+          "sha256": "8a785159f5284d6f6a396b2438af0f130cfdf002e6f4d9bb2bb92abbeab8a54e"
+        },
+        ".gemini/agents/bitrix_architect.md": {
+          "mode": 420,
+          "sha256": "9635211c9aed8d9263ee138c40f0caa31d3be421656b87827e7f467448d0e4dd"
+        },
+        ".gemini/agents/bitrix_implementer.md": {
+          "mode": 420,
+          "sha256": "74a7aa6f9ad8326540e0c2dde9e0892e5dc1ad07852881b19b1cc43433251f6b"
+        },
+        ".gemini/agents/bitrix_reviewer.md": {
+          "mode": 420,
+          "sha256": "ae1c0a0ba903394db546dacf627bab792360334edc9f8b5b584e2b3372394150"
+        },
+        ".gemini/skills/bitrix-development/SKILL.md": {
+          "mode": 420,
+          "sha256": "fc5fcfc017a645a1adb86ea6b09f6ded8eaa6cd2a9cc69ce3e948d7833c53c31"
+        },
+        ".gemini/skills/bitrix-development/references/architecture.md": {
+          "mode": 420,
+          "sha256": "54f04e33ddb60819c7b81247931d584d04230cd8673e951b9dc902e15ed26ddd"
+        },
+        ".gemini/skills/bitrix-development/references/events-agents-cache.md": {
+          "mode": 420,
+          "sha256": "a4ea013439e8ecdb60dfed423fe2324cb314c3aba38c582026f2364dc685a32b"
+        },
+        ".gemini/skills/bitrix-development/references/modules.md": {
+          "mode": 420,
+          "sha256": "5148d15855c025d497733f871c963838c2645eae5467dd1309b020f95eee658d"
+        },
+        ".gemini/skills/bitrix-development/references/testing-review.md": {
+          "mode": 420,
+          "sha256": "e75c84f42cd15005c5022985e6ffd651177e7e15e3450640b490f9089296eab2"
+        },
+        ".github/agents/bitrix_architect.agent.md": {
+          "mode": 420,
+          "sha256": "5d3e84b300810b42cdc029f322ff06ae3e582b2b27a0b98e93d528ddeec64a4e"
+        },
+        ".github/agents/bitrix_implementer.agent.md": {
+          "mode": 420,
+          "sha256": "74a7aa6f9ad8326540e0c2dde9e0892e5dc1ad07852881b19b1cc43433251f6b"
+        },
+        ".github/agents/bitrix_reviewer.agent.md": {
+          "mode": 420,
+          "sha256": "2a8e265e9a8cd1bb8dcca4fe6521df9719b4997f3a9e53a93eae8111eced5cf7"
+        },
+        ".grok/skills/bitrix-development/SKILL.md": {
+          "mode": 420,
+          "sha256": "fc5fcfc017a645a1adb86ea6b09f6ded8eaa6cd2a9cc69ce3e948d7833c53c31"
+        },
+        ".grok/skills/bitrix-development/references/architecture.md": {
+          "mode": 420,
+          "sha256": "54f04e33ddb60819c7b81247931d584d04230cd8673e951b9dc902e15ed26ddd"
+        },
+        ".grok/skills/bitrix-development/references/events-agents-cache.md": {
+          "mode": 420,
+          "sha256": "a4ea013439e8ecdb60dfed423fe2324cb314c3aba38c582026f2364dc685a32b"
+        },
+        ".grok/skills/bitrix-development/references/modules.md": {
+          "mode": 420,
+          "sha256": "5148d15855c025d497733f871c963838c2645eae5467dd1309b020f95eee658d"
+        },
+        ".grok/skills/bitrix-development/references/testing-review.md": {
+          "mode": 420,
+          "sha256": "e75c84f42cd15005c5022985e6ffd651177e7e15e3450640b490f9089296eab2"
+        },
+        ".qwen/agents/bitrix_architect.md": {
+          "mode": 420,
+          "sha256": "238d041419767a1dd64be11d04542402f62129908550bdb95a2b6f1ac02563f7"
+        },
+        ".qwen/agents/bitrix_implementer.md": {
+          "mode": 420,
+          "sha256": "74a7aa6f9ad8326540e0c2dde9e0892e5dc1ad07852881b19b1cc43433251f6b"
+        },
+        ".qwen/agents/bitrix_reviewer.md": {
+          "mode": 420,
+          "sha256": "3a096fe63f5ee6d9973b744563d7dccb781cc5fd611f93b99f3091e8fcf22db7"
+        },
+        ".qwen/skills/bitrix-development/SKILL.md": {
+          "mode": 420,
+          "sha256": "fc5fcfc017a645a1adb86ea6b09f6ded8eaa6cd2a9cc69ce3e948d7833c53c31"
+        },
+        ".qwen/skills/bitrix-development/references/architecture.md": {
+          "mode": 420,
+          "sha256": "54f04e33ddb60819c7b81247931d584d04230cd8673e951b9dc902e15ed26ddd"
+        },
+        ".qwen/skills/bitrix-development/references/events-agents-cache.md": {
+          "mode": 420,
+          "sha256": "a4ea013439e8ecdb60dfed423fe2324cb314c3aba38c582026f2364dc685a32b"
+        },
+        ".qwen/skills/bitrix-development/references/modules.md": {
+          "mode": 420,
+          "sha256": "5148d15855c025d497733f871c963838c2645eae5467dd1309b020f95eee658d"
+        },
+        ".qwen/skills/bitrix-development/references/testing-review.md": {
+          "mode": 420,
+          "sha256": "e75c84f42cd15005c5022985e6ffd651177e7e15e3450640b490f9089296eab2"
+        }
+      }
+    },
+    "extra:seo-landing": {
+      "files": [
+        ".claude/skills/seo-landing/LICENSE",
+        ".claude/skills/seo-landing/README.md",
+        ".claude/skills/seo-landing/README.ru.md",
+        ".claude/skills/seo-landing/SECURITY.md",
+        ".claude/skills/seo-landing/SKILL.md",
+        ".claude/skills/seo-landing/UPSTREAM.md",
+        ".claude/skills/seo-landing/agents/openai.yaml",
+        ".claude/skills/seo-landing/references/map-facade.md",
+        ".claude/skills/seo-landing/references/server-config.md",
+        ".claude/skills/seo-landing/references/tech-spec.md",
+        ".claude/skills/seo-landing/references/video-facade.md",
+        ".gemini/skills/seo-landing/LICENSE",
+        ".gemini/skills/seo-landing/README.md",
+        ".gemini/skills/seo-landing/README.ru.md",
+        ".gemini/skills/seo-landing/SECURITY.md",
+        ".gemini/skills/seo-landing/SKILL.md",
+        ".gemini/skills/seo-landing/UPSTREAM.md",
+        ".gemini/skills/seo-landing/agents/openai.yaml",
+        ".gemini/skills/seo-landing/references/map-facade.md",
+        ".gemini/skills/seo-landing/references/server-config.md",
+        ".gemini/skills/seo-landing/references/tech-spec.md",
+        ".gemini/skills/seo-landing/references/video-facade.md",
+        ".grok/skills/seo-landing/LICENSE",
+        ".grok/skills/seo-landing/README.md",
+        ".grok/skills/seo-landing/README.ru.md",
+        ".grok/skills/seo-landing/SECURITY.md",
+        ".grok/skills/seo-landing/SKILL.md",
+        ".grok/skills/seo-landing/UPSTREAM.md",
+        ".grok/skills/seo-landing/agents/openai.yaml",
+        ".grok/skills/seo-landing/references/map-facade.md",
+        ".grok/skills/seo-landing/references/server-config.md",
+        ".grok/skills/seo-landing/references/tech-spec.md",
+        ".grok/skills/seo-landing/references/video-facade.md",
+        ".qwen/skills/seo-landing/LICENSE",
+        ".qwen/skills/seo-landing/README.md",
+        ".qwen/skills/seo-landing/README.ru.md",
+        ".qwen/skills/seo-landing/SECURITY.md",
+        ".qwen/skills/seo-landing/SKILL.md",
+        ".qwen/skills/seo-landing/UPSTREAM.md",
+        ".qwen/skills/seo-landing/agents/openai.yaml",
+        ".qwen/skills/seo-landing/references/map-facade.md",
+        ".qwen/skills/seo-landing/references/server-config.md",
+        ".qwen/skills/seo-landing/references/tech-spec.md",
+        ".qwen/skills/seo-landing/references/video-facade.md"
+      ],
+      "owned": {
+        ".claude/skills/seo-landing/LICENSE": {
+          "mode": 420,
+          "sha256": "e87068320852f5a808f5ed8c61764a1a8f95b492756caa7952555042b0541053"
+        },
+        ".claude/skills/seo-landing/README.md": {
+          "mode": 420,
+          "sha256": "ff01ae29a73d121cdfe1185bf3b4334296c919381c663eda1f1a22a3487c7c16"
+        },
+        ".claude/skills/seo-landing/README.ru.md": {
+          "mode": 420,
+          "sha256": "9774a4b5d453365286d676dc0d663dc7f82625b5aa580e2969b85de97970a2a9"
+        },
+        ".claude/skills/seo-landing/SECURITY.md": {
+          "mode": 420,
+          "sha256": "7236445b998bb91d693f4fbf5b01e0250f4b1be4d0afaceadd9daddc45675176"
+        },
+        ".claude/skills/seo-landing/SKILL.md": {
+          "mode": 420,
+          "sha256": "fe9e669a231bb0dadccd8de287e342dfdf5727327f02cc71d8e7d0ae2b817d3e"
+        },
+        ".claude/skills/seo-landing/UPSTREAM.md": {
+          "mode": 420,
+          "sha256": "b2ff18a6d946ba08635175a3f4694f5e63f7513e372f26426bb07f83aa045f24"
+        },
+        ".claude/skills/seo-landing/agents/openai.yaml": {
+          "mode": 420,
+          "sha256": "a985598488c906f2dfddea5ca089c3f2cf49e341b710c51753d42071cf470a7b"
+        },
+        ".claude/skills/seo-landing/references/map-facade.md": {
+          "mode": 420,
+          "sha256": "2ee85125f7748786dd258a53bb35e0f79d8e8153ae9182ccd881baace294a8d4"
+        },
+        ".claude/skills/seo-landing/references/server-config.md": {
+          "mode": 420,
+          "sha256": "d5b7b4a9c05296fb1e4772e7f71292bb1ea68618fcb5e532d979eafa039ad9ee"
+        },
+        ".claude/skills/seo-landing/references/tech-spec.md": {
+          "mode": 420,
+          "sha256": "3d667355e588fb591330e8e481303e0efe7aa631988939f2ac75f4e71502c108"
+        },
+        ".claude/skills/seo-landing/references/video-facade.md": {
+          "mode": 420,
+          "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
+        },
+        ".gemini/skills/seo-landing/LICENSE": {
+          "mode": 420,
+          "sha256": "e87068320852f5a808f5ed8c61764a1a8f95b492756caa7952555042b0541053"
+        },
+        ".gemini/skills/seo-landing/README.md": {
+          "mode": 420,
+          "sha256": "ff01ae29a73d121cdfe1185bf3b4334296c919381c663eda1f1a22a3487c7c16"
+        },
+        ".gemini/skills/seo-landing/README.ru.md": {
+          "mode": 420,
+          "sha256": "9774a4b5d453365286d676dc0d663dc7f82625b5aa580e2969b85de97970a2a9"
+        },
+        ".gemini/skills/seo-landing/SECURITY.md": {
+          "mode": 420,
+          "sha256": "7236445b998bb91d693f4fbf5b01e0250f4b1be4d0afaceadd9daddc45675176"
+        },
+        ".gemini/skills/seo-landing/SKILL.md": {
+          "mode": 420,
+          "sha256": "fe9e669a231bb0dadccd8de287e342dfdf5727327f02cc71d8e7d0ae2b817d3e"
+        },
+        ".gemini/skills/seo-landing/UPSTREAM.md": {
+          "mode": 420,
+          "sha256": "b2ff18a6d946ba08635175a3f4694f5e63f7513e372f26426bb07f83aa045f24"
+        },
+        ".gemini/skills/seo-landing/agents/openai.yaml": {
+          "mode": 420,
+          "sha256": "a985598488c906f2dfddea5ca089c3f2cf49e341b710c51753d42071cf470a7b"
+        },
+        ".gemini/skills/seo-landing/references/map-facade.md": {
+          "mode": 420,
+          "sha256": "2ee85125f7748786dd258a53bb35e0f79d8e8153ae9182ccd881baace294a8d4"
+        },
+        ".gemini/skills/seo-landing/references/server-config.md": {
+          "mode": 420,
+          "sha256": "d5b7b4a9c05296fb1e4772e7f71292bb1ea68618fcb5e532d979eafa039ad9ee"
+        },
+        ".gemini/skills/seo-landing/references/tech-spec.md": {
+          "mode": 420,
+          "sha256": "3d667355e588fb591330e8e481303e0efe7aa631988939f2ac75f4e71502c108"
+        },
+        ".gemini/skills/seo-landing/references/video-facade.md": {
+          "mode": 420,
+          "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
+        },
+        ".grok/skills/seo-landing/LICENSE": {
+          "mode": 420,
+          "sha256": "e87068320852f5a808f5ed8c61764a1a8f95b492756caa7952555042b0541053"
+        },
+        ".grok/skills/seo-landing/README.md": {
+          "mode": 420,
+          "sha256": "ff01ae29a73d121cdfe1185bf3b4334296c919381c663eda1f1a22a3487c7c16"
+        },
+        ".grok/skills/seo-landing/README.ru.md": {
+          "mode": 420,
+          "sha256": "9774a4b5d453365286d676dc0d663dc7f82625b5aa580e2969b85de97970a2a9"
+        },
+        ".grok/skills/seo-landing/SECURITY.md": {
+          "mode": 420,
+          "sha256": "7236445b998bb91d693f4fbf5b01e0250f4b1be4d0afaceadd9daddc45675176"
+        },
+        ".grok/skills/seo-landing/SKILL.md": {
+          "mode": 420,
+          "sha256": "fe9e669a231bb0dadccd8de287e342dfdf5727327f02cc71d8e7d0ae2b817d3e"
+        },
+        ".grok/skills/seo-landing/UPSTREAM.md": {
+          "mode": 420,
+          "sha256": "b2ff18a6d946ba08635175a3f4694f5e63f7513e372f26426bb07f83aa045f24"
+        },
+        ".grok/skills/seo-landing/agents/openai.yaml": {
+          "mode": 420,
+          "sha256": "a985598488c906f2dfddea5ca089c3f2cf49e341b710c51753d42071cf470a7b"
+        },
+        ".grok/skills/seo-landing/references/map-facade.md": {
+          "mode": 420,
+          "sha256": "2ee85125f7748786dd258a53bb35e0f79d8e8153ae9182ccd881baace294a8d4"
+        },
+        ".grok/skills/seo-landing/references/server-config.md": {
+          "mode": 420,
+          "sha256": "d5b7b4a9c05296fb1e4772e7f71292bb1ea68618fcb5e532d979eafa039ad9ee"
+        },
+        ".grok/skills/seo-landing/references/tech-spec.md": {
+          "mode": 420,
+          "sha256": "3d667355e588fb591330e8e481303e0efe7aa631988939f2ac75f4e71502c108"
+        },
+        ".grok/skills/seo-landing/references/video-facade.md": {
+          "mode": 420,
+          "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
+        },
+        ".qwen/skills/seo-landing/LICENSE": {
+          "mode": 420,
+          "sha256": "e87068320852f5a808f5ed8c61764a1a8f95b492756caa7952555042b0541053"
+        },
+        ".qwen/skills/seo-landing/README.md": {
+          "mode": 420,
+          "sha256": "ff01ae29a73d121cdfe1185bf3b4334296c919381c663eda1f1a22a3487c7c16"
+        },
+        ".qwen/skills/seo-landing/README.ru.md": {
+          "mode": 420,
+          "sha256": "9774a4b5d453365286d676dc0d663dc7f82625b5aa580e2969b85de97970a2a9"
+        },
+        ".qwen/skills/seo-landing/SECURITY.md": {
+          "mode": 420,
+          "sha256": "7236445b998bb91d693f4fbf5b01e0250f4b1be4d0afaceadd9daddc45675176"
+        },
+        ".qwen/skills/seo-landing/SKILL.md": {
+          "mode": 420,
+          "sha256": "fe9e669a231bb0dadccd8de287e342dfdf5727327f02cc71d8e7d0ae2b817d3e"
+        },
+        ".qwen/skills/seo-landing/UPSTREAM.md": {
+          "mode": 420,
+          "sha256": "b2ff18a6d946ba08635175a3f4694f5e63f7513e372f26426bb07f83aa045f24"
+        },
+        ".qwen/skills/seo-landing/agents/openai.yaml": {
+          "mode": 420,
+          "sha256": "a985598488c906f2dfddea5ca089c3f2cf49e341b710c51753d42071cf470a7b"
+        },
+        ".qwen/skills/seo-landing/references/map-facade.md": {
+          "mode": 420,
+          "sha256": "2ee85125f7748786dd258a53bb35e0f79d8e8153ae9182ccd881baace294a8d4"
+        },
+        ".qwen/skills/seo-landing/references/server-config.md": {
+          "mode": 420,
+          "sha256": "d5b7b4a9c05296fb1e4772e7f71292bb1ea68618fcb5e532d979eafa039ad9ee"
+        },
+        ".qwen/skills/seo-landing/references/tech-spec.md": {
+          "mode": 420,
+          "sha256": "3d667355e588fb591330e8e481303e0efe7aa631988939f2ac75f4e71502c108"
+        },
+        ".qwen/skills/seo-landing/references/video-facade.md": {
+          "mode": 420,
+          "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
+        }
+      }
+    }
+  },
+  "schema_version": "getzilla-managed-components-v2"
+}

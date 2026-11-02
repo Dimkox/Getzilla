@@ -2209,7 +2209,9 @@
         ".codex",
         ".gemini",
         ".getzilla/getzilla",
+        ".getzilla/getzilla/component_state.py",
         ".getzilla/getzilla/model_data_admission.py",
+        ".getzilla/managed-components.json",
         ".getzilla/templates",
         ".grok",
         ".qwen"

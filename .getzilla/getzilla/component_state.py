@@ -1,0 +1,624 @@
+"""One explicit adapter selection and a conservative file ownership ledger.
+
+Reading never adopts a legacy installation. Directory descriptors and identity
+checks detect replaced parents; they do not isolate against a hostile process
+running as the same OS user. Windows uses fsx's checked path handles.
+"""
+from __future__ import annotations
+
+import hashlib
+import errno
+import json
+import math
+import os
+import re
+import stat
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Iterator
+
+from . import fsx
+
+MANIFEST = '.getzilla/managed-components.json'
+V1 = 'getzilla-managed-components-v1'
+V2 = 'getzilla-managed-components-v2'
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_FILES = 20_000
+AGENT_COMPONENT_PATHS = {
+    'claude': ('.claude/',), 'codex': ('.codex/',), 'qwen': ('.qwen/',),
+    'gemini': ('.gemini/',), 'grok': ('.grok/skills/',),
+    'copilot': ('.github/hooks/', '.github/agents/'),
+    'cursor': ('.cursor/', '.grok/cursor-rules/'),
+}
+KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
+EXTRA_COMPONENT_PATHS = {
+    'entire': ('/integrations/getzilla_entire/',),
+    'bitrix': ('/skills/bitrix-development/', '/agents/bitrix_'),
+    'seo-landing': ('/skills/seo-landing/',),
+}
+KNOWN_EXTRAS = tuple(EXTRA_COMPONENT_PATHS)
+COMPLIANCE_COMPONENT_PATHS = {
+    'eu-ai-act': ('.getzilla/compliance/eu-ai-act/', '.getzilla/templates/eu-ai-act/',
+                  'scripts/getzilla_audit_bundle.py', 'scripts/getzilla_compliance.py'),
+}
+KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
+COMPONENTS = frozenset({'core', 'factory', *(f'agent:{name}' for name in KNOWN_AGENTS),
+                        *(f'extra:{name}' for name in KNOWN_EXTRAS),
+                        *(f'compliance:{name}' for name in KNOWN_COMPLIANCE)})
+
+
+class ComponentStateError(ValueError):
+    """Unsafe, ambiguous or unsupported component state; no implicit reset."""
+
+
+def agent_of(path: str) -> str | None:
+    if path.startswith('.grok/agents/') and path.endswith('.md'):
+        return 'grok'
+    return next((name for name, prefixes in AGENT_COMPONENT_PATHS.items() if path.startswith(prefixes)), None)
+
+
+def component_of(path: str) -> str:
+    if path.startswith('factory/'):
+        return 'factory'
+    for name, markers in EXTRA_COMPONENT_PATHS.items():
+        if any(marker in '/' + path for marker in markers):
+            return f'extra:{name}'
+    for name, prefixes in COMPLIANCE_COMPONENT_PATHS.items():
+        if path.startswith(prefixes):
+            return f'compliance:{name}'
+    agent = agent_of(path)
+    return f'agent:{agent}' if agent else 'core'
+
+
+def validate_agents(agents: object) -> tuple[str, ...]:
+    if type(agents) not in (list, tuple) or any(type(name) is not str or name not in KNOWN_AGENTS for name in agents):
+        raise ComponentStateError('agents must be a list of known adapter names')
+    if len(agents) != len(set(agents)):
+        raise ComponentStateError('duplicate adapter names are not allowed')
+    return tuple(agents)
+
+
+def parse_agents(value: str) -> tuple[str, ...]:
+    """CLI spelling: an empty string means an explicit empty selection."""
+    return validate_agents([] if value == '' else [part.strip() for part in value.split(',')])
+
+
+def path_parts(relative: str) -> tuple[str, ...]:
+    if type(relative) is not str or not relative or len(relative) > 4096:
+        raise ComponentStateError('invalid component path')
+    parts = tuple(relative.split('/'))
+    if len(parts) > 64 or any(not part or part in {'.', '..'} or part.endswith((' ', '.'))
+                             or any(ord(char) < 32 or char in '\\:' for char in part) for part in parts):
+        raise ComponentStateError(f'invalid component path: {relative!r}')
+    devices = {'con', 'prn', 'aux', 'nul', *(f'com{number}' for number in range(1, 10)),
+               *(f'lpt{number}' for number in range(1, 10))}
+    if any(part.split('.')[0].casefold() in devices for part in parts):
+        raise ComponentStateError(f'reserved device path: {relative!r}')
+    return parts
+
+
+def _ledger_path(path: str) -> None:
+    parts = path_parts(path)
+    folded = path.casefold()
+    if (parts[0].casefold() == '.git' or folded == MANIFEST
+            or folded.startswith('.getzilla/runtime/')
+            and path not in {'.getzilla/runtime/.gitignore', '.getzilla/runtime/.gitkeep'}):
+        raise ComponentStateError(f'component ledger cannot own {path!r}')
+
+
+def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ComponentStateError(f'duplicate manifest key: {key!r}')
+        result[key] = value
+    return result
+
+
+def decode_manifest(content: bytes) -> dict[str, Any]:
+    if len(content) > MAX_MANIFEST_BYTES:
+        raise ComponentStateError('component manifest exceeds the size limit')
+    try:
+        data = json.loads(content.decode('utf-8'), object_pairs_hook=_unique)
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise ComponentStateError(f'invalid component manifest: {exc}') from exc
+    if type(data) is not dict or data.get('schema_version') not in (V1, V2):
+        raise ComponentStateError('unsupported component manifest schema')
+    selected = data['schema_version'] == V2
+    if set(data) != {'schema_version', 'components'} | ({'agents'} if selected else set()):
+        raise ComponentStateError('unexpected or missing component manifest fields')
+    if selected:
+        if type(data['agents']) is not list:
+            raise ComponentStateError('manifest agents must be an array')
+        validate_agents(data['agents'])
+    records = data['components']
+    if type(records) is not dict or not set(records) <= COMPONENTS:
+        raise ComponentStateError('invalid component records')
+    seen: set[str] = set()
+    for name, record in records.items():
+        fields = {'files', 'added_at', 'source_version'} | ({'owned'} if selected else set())
+        if type(record) is not dict or 'files' not in record or not set(record) <= fields:
+            raise ComponentStateError(f'invalid record for {name}')
+        files = record['files']
+        if type(files) is not list or len(files) > MAX_FILES:
+            raise ComponentStateError(f'invalid file list for {name}')
+        for path in files:
+            _ledger_path(path)
+            if path.casefold() in seen:
+                raise ComponentStateError(f'duplicate component file: {path}')
+            seen.add(path.casefold())
+        if len(seen) > MAX_FILES:
+            raise ComponentStateError('too many component files')
+        for field in ('added_at', 'source_version'):
+            if field in record and not (field == 'source_version' and record[field] is None):
+                if type(record[field]) is not str or len(record[field]) > 256:
+                    raise ComponentStateError(f'invalid {field} for {name}')
+        owned = record.get('owned', {})
+        if type(owned) is not dict or not set(owned) <= set(files):
+            raise ComponentStateError(f'invalid ownership ledger for {name}')
+        for path, proof in owned.items():
+            if component_of(path) != name or type(proof) is not dict or set(proof) != {'sha256', 'mode'}:
+                raise ComponentStateError(f'invalid ownership record: {path}')
+            if type(proof['sha256']) is not str or not re.fullmatch('[0-9a-f]{64}', proof['sha256']):
+                raise ComponentStateError(f'invalid ownership digest: {path}')
+            if type(proof['mode']) is not int or not 0 <= proof['mode'] <= 0o777:
+                raise ComponentStateError(f'invalid ownership mode: {path}')
+    return data
+
+
+def encode_manifest(manifest: dict[str, Any]) -> bytes:
+    data = (json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + '\n').encode('utf-8')
+    decode_manifest(data)
+    return data
+
+
+@dataclass(frozen=True)
+class ManifestState:
+    kind: str
+    manifest: dict[str, Any]
+
+    @property
+    def agents(self) -> tuple[str, ...] | None:
+        return tuple(self.manifest['agents']) if self.kind == 'selected' else None
+
+    def require_selection(self) -> tuple[str, ...]:
+        if self.agents is None:
+            raise ComponentStateError('adapter selection is unresolved; run getzilla components adopt --agents <complete-list> '
+                                      '(use --agents \'\' for none), then commit the manifest before updating')
+        return self.agents
+
+
+def mode_matches(actual: int, expected: int) -> bool:
+    return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR) if fsx.WINDOWS else stat.S_IMODE(actual) == expected
+
+
+def _identity(info: os.stat_result) -> tuple[int, int, int]:
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, ...]:
+    mode = (info.st_mode & stat.S_IWRITE) if fsx.WINDOWS else stat.S_IMODE(info.st_mode)
+    return (*_identity(info), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink, mode)
+
+
+def _guard_identity(info: os.stat_result) -> tuple[int, ...]:
+    # A newly created guard can receive its final mode while another writer
+    # opens it. Its stable inode, empty content and permissions matter, not ctime.
+    mode = (info.st_mode & stat.S_IWRITE) if fsx.WINDOWS else stat.S_IMODE(info.st_mode)
+    return (*_identity(info), info.st_size, info.st_nlink, mode, info.st_uid)
+
+
+@dataclass(frozen=True)
+class FileSnapshot:
+    content: bytes
+    mode: int
+    identity: tuple[int, ...]
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+
+class BoundRoot:
+    """Hold ancestry from the filesystem anchor; all child access is relative."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = Path(fsx.system_canonical(root))
+        self._handles: list[fsx.DirHandle] = []
+        self._chain: list[tuple[fsx.DirHandle, str, fsx.DirHandle, tuple[int, int, int]]] = []
+        try:
+            if fsx.WINDOWS:
+                info = os.lstat(self.path.anchor)
+                if not stat.S_ISDIR(info.st_mode):
+                    raise ComponentStateError('filesystem anchor is not a directory')
+                anchor: fsx.DirHandle = fsx.WindowsDirectory(self.path.anchor, info)
+            else:
+                anchor = fsx.open_dir(self.path.anchor, flags=fsx.O_CLOEXEC)
+            self._handles.append(anchor)
+            self._anchor_identity = _identity(os.lstat(self.path.anchor))
+            current = anchor
+            for part in self.path.parts[1:]:
+                child, identity = self._child(current, part)
+                self._handles.append(child)
+                self._chain.append((current, part, child, identity))
+                current = child
+            self.handle = current
+            self.check()
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def _child(parent: fsx.DirHandle, name: str) -> tuple[fsx.DirHandle, tuple[int, int, int]]:
+        before = fsx.lstat_at(parent, name)
+        if fsx.is_link(before) or not stat.S_ISDIR(before.st_mode):
+            raise ComponentStateError(f'unsafe directory: {name}')
+        child = fsx.open_dir_at(parent, name, flags=fsx.O_CLOEXEC)
+        try:
+            if _identity(before) != _identity(fsx.fstat_dir(child)):
+                raise ComponentStateError(f'directory changed: {name}')
+        except BaseException:
+            fsx.close_dir(child)
+            raise
+        return child, _identity(before)
+
+    @staticmethod
+    def _check_chain(chain: list[tuple[fsx.DirHandle, str, fsx.DirHandle, tuple[int, int, int]]]) -> None:
+        for parent, name, child, expected in chain:
+            try:
+                named = fsx.lstat_at(parent, name)
+                if fsx.is_link(named) or _identity(named) != expected or _identity(fsx.fstat_dir(child)) != expected:
+                    raise ComponentStateError(f'directory binding changed: {name}')
+            except OSError as exc:
+                raise ComponentStateError(f'directory binding changed: {name}: {exc}') from exc
+
+    def check(self) -> None:
+        if _identity(os.lstat(self.path.anchor)) != self._anchor_identity:
+            raise ComponentStateError('filesystem anchor changed')
+        self._check_chain(self._chain)
+
+    @contextmanager
+    def parent(self, relative: str, *, create: bool = False,
+               before_write: Callable[[], None] | None = None) -> Iterator[tuple[fsx.DirHandle, str, Any]]:
+        parts = path_parts(relative)
+        handles: list[fsx.DirHandle] = []
+        chain: list[tuple[fsx.DirHandle, str, fsx.DirHandle, tuple[int, int, int]]] = []
+        current = self.handle
+        def check() -> None:
+            self.check()
+            self._check_chain(chain)
+        try:
+            for index, name in enumerate(parts[:-1]):
+                check()
+                try:
+                    child, identity = self._child(current, name)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    if before_write is not None:
+                        before_write()
+                    try:
+                        mode = 0o700 if parts[:index + 1] == ('.getzilla', 'runtime') else 0o755
+                        fsx.mkdir_at(current, name, mode)
+                    except FileExistsError:
+                        pass
+                    child, identity = self._child(current, name)
+                handles.append(child)
+                chain.append((current, name, child, identity))
+                current = child
+            check()
+            yield current, parts[-1], check
+        finally:
+            for handle in reversed(handles):
+                fsx.close_dir(handle)
+
+    def read(self, relative: str, *, limit: int = MAX_FILE_BYTES) -> FileSnapshot | None:
+        found = False
+        try:
+            with self.parent(relative) as (parent, name, check):
+                before = fsx.lstat_at(parent, name)
+                found = True
+                if fsx.is_link(before) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                    raise ComponentStateError(f'expected a regular single-link file: {relative}')
+                if before.st_size > limit:
+                    raise ComponentStateError(f'file exceeds size limit: {relative}')
+                descriptor = fsx.open_at(parent, name, os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC)
+                try:
+                    opened = os.fstat(descriptor)
+                    if _file_identity(before) != _file_identity(opened):
+                        raise ComponentStateError(f'file changed while opening: {relative}')
+                    chunks: list[bytes] = []
+                    remaining = limit + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(remaining, 65536))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    content = b''.join(chunks)
+                    if len(content) > limit or _file_identity(os.fstat(descriptor)) != _file_identity(opened):
+                        raise ComponentStateError(f'file changed or exceeded size limit: {relative}')
+                    check()
+                    if _file_identity(fsx.lstat_at(parent, name)) != _file_identity(opened):
+                        raise ComponentStateError(f'file changed while reading: {relative}')
+                    return FileSnapshot(content, stat.S_IMODE(opened.st_mode), _file_identity(opened))
+                finally:
+                    os.close(descriptor)
+        except FileNotFoundError as exc:
+            if found:
+                raise ComponentStateError(f'file disappeared while reading: {relative}') from exc
+            return None
+        except OSError as exc:
+            raise ComponentStateError(f'cannot safely read {relative}: {exc}') from exc
+
+    def files(self, relative: str, *, recursive: bool = False) -> list[str]:
+        """Bounded inventory with no linked directories or special files."""
+        path_parts(relative)
+        result: list[str] = []
+        pending = [relative]
+        entries = 0
+        while pending:
+            directory = pending.pop()
+            opened = False
+            try:
+                with self.parent(directory + '/.inventory') as (parent, _name, check):
+                    opened = True
+                    with fsx.scandir(parent) as listing:
+                        names = []
+                        for entry in listing:
+                            entries += 1
+                            if entries > MAX_FILES:
+                                raise ComponentStateError('component source inventory exceeds the entry limit')
+                            names.append(entry.name)
+                    names.sort()
+                    check()
+                    for name in names:
+                        path = directory + '/' + name
+                        path_parts(path)
+                        info = fsx.lstat_at(parent, name)
+                        if fsx.is_link(info):
+                            raise ComponentStateError(f'linked component source: {path}')
+                        if stat.S_ISDIR(info.st_mode):
+                            if recursive:
+                                pending.append(path)
+                        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                            result.append(path)
+                        else:
+                            raise ComponentStateError(f'unsafe component source: {path}')
+                    check()
+            except FileNotFoundError:
+                if opened or directory != relative:
+                    raise ComponentStateError(f'component source disappeared: {directory}') from None
+                return []
+            except OSError as exc:
+                raise ComponentStateError(f'cannot inspect component sources: {exc}') from exc
+        return sorted(result)
+
+    def write(self, relative: str, content: bytes, mode: int, *, expected: FileSnapshot | None,
+              before_publish: Callable[[], None]) -> None:
+        """Publish a staged file. An absent target is never overwritten."""
+        path_parts(relative)
+        if type(content) is not bytes or len(content) > MAX_FILE_BYTES or type(mode) is not int or not 0 <= mode <= 0o777:
+            raise ComponentStateError('invalid file publication')
+        before_publish()
+        with self.parent(relative, create=True, before_write=before_publish) as (parent, name, check):
+            temporary = f'.getzilla-component-{uuid.uuid4().hex}.tmp'
+            descriptor: int | None = None
+            temporary_identity: tuple[int, int, int] | None = None
+            try:
+                if self.read(relative) != expected:
+                    raise ComponentStateError(f'file changed before publication: {relative}')
+                descriptor = fsx.open_at(parent, temporary,
+                                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+                temporary_identity = _identity(os.fstat(descriptor))
+                data = memoryview(content)
+                while data:
+                    written = os.write(descriptor, data)
+                    if written <= 0:
+                        raise ComponentStateError(f'incomplete temporary write: {relative}')
+                    data = data[written:]
+                fsx.fchmod(descriptor, mode)
+                os.fsync(descriptor)
+                os.close(descriptor)
+                descriptor = None
+                check()
+                before_publish()
+                if self.read(relative) != expected:
+                    raise ComponentStateError(f'file changed before publication: {relative}')
+                check()
+                before_publish()
+                if expected is None:
+                    # link is atomic no-replace on POSIX and NTFS; the private
+                    # temporary name is removed before success is reported.
+                    fsx.link_at(parent, temporary, parent, name)
+                    fsx.unlink_at(parent, temporary)
+                else:
+                    fsx.replace_at(parent, temporary, parent, name)
+                temporary_identity = None
+                fsx.fsync_dir(parent)
+                check()
+                before_publish()
+            except OSError as exc:
+                raise ComponentStateError(f'cannot publish {relative}: {exc}') from exc
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+                if temporary_identity is not None:
+                    try:
+                        info = fsx.lstat_at(parent, temporary)
+                        if _identity(info) == temporary_identity and not fsx.is_link(info):
+                            fsx.unlink_at(parent, temporary)
+                    except FileNotFoundError:
+                        pass
+
+    def remove(self, relative: str, *, expected: FileSnapshot, before_publish: Callable[[], None]) -> None:
+        before_publish()
+        with self.parent(relative) as (parent, name, check):
+            if self.read(relative) != expected:
+                raise ComponentStateError(f'file changed before retirement: {relative}')
+            check()
+            before_publish()
+            fsx.unlink_at(parent, name)
+            fsx.fsync_dir(parent)
+            check()
+            before_publish()
+
+    def close(self) -> None:
+        for handle in reversed(self._handles):
+            fsx.close_dir(handle)
+        self._handles.clear()
+
+    def __enter__(self) -> BoundRoot:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
+def read_state(root: Path, *, binding: BoundRoot | ComponentTransaction | None = None) -> ManifestState:
+    if binding is None:
+        try:
+            with BoundRoot(root) as bound:
+                return read_state(root, binding=bound)
+        except OSError as exc:
+            raise ComponentStateError(f'cannot bind project root: {exc}') from exc
+    snapshot = binding.read(MANIFEST, limit=MAX_MANIFEST_BYTES)
+    if snapshot is None:
+        return ManifestState('absent', {'schema_version': V1, 'components': {}})
+    manifest = decode_manifest(snapshot.content)
+    return ManifestState('selected' if manifest['schema_version'] == V2 else 'legacy', manifest)
+
+
+class ComponentTransaction:
+    """Cooperative writer boundary; all operations recheck the retained guard."""
+
+    def __init__(self, binding: BoundRoot, guard_check: Callable[[], None]) -> None:
+        self.binding = binding
+        self.path = binding.path
+        self.check = guard_check
+
+    def read(self, relative: str, *, limit: int = MAX_FILE_BYTES) -> FileSnapshot | None:
+        self.check()
+        result = self.binding.read(relative, limit=limit)
+        self.check()
+        return result
+
+    def write(self, relative: str, content: bytes, mode: int, *, expected: FileSnapshot | None) -> None:
+        self.binding.write(relative, content, mode, expected=expected, before_publish=self.check)
+
+    def remove(self, relative: str, *, expected: FileSnapshot) -> None:
+        self.binding.remove(relative, expected=expected, before_publish=self.check)
+
+    def files(self, relative: str, *, recursive: bool = False) -> list[str]:
+        self.check()
+        result = self.binding.files(relative, recursive=recursive)
+        self.check()
+        return result
+
+
+@contextmanager
+def component_transaction(root: Path, *, timeout: float = 5.0) -> Iterator[ComponentTransaction]:
+    """Serialize component writers; the empty lock file remains after release.
+
+    Validation precedes guard creation. Later refusal can leave administrative
+    directories/guard. This is advisory locking, not a multi-file transaction
+    or OS isolation against arbitrary Git commands or hostile same-user writes.
+    """
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 <= timeout <= 60:
+        raise ComponentStateError('component lock timeout must be between 0 and 60 seconds')
+    try:
+        with BoundRoot(root) as binding:
+            read_state(root, binding=binding)
+            with binding.parent('.getzilla/runtime/.components.guard.lock', create=True) as (parent, name, parent_check):
+                descriptor: int | None = None
+                locked = False
+                try:
+                    try:
+                        descriptor = fsx.open_at(parent, name, os.O_RDWR | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+                        fsx.fchmod(descriptor, 0o600)
+                    except FileExistsError:
+                        before = fsx.lstat_at(parent, name)
+                        if fsx.is_link(before) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                            raise ComponentStateError('unsafe component writer guard')
+                        descriptor = fsx.open_at(parent, name, os.O_RDWR | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC)
+                        if _guard_identity(before) != _guard_identity(os.fstat(descriptor)):
+                            raise ComponentStateError('component writer guard changed during open')
+                    opened = os.fstat(descriptor)
+                    uid = fsx.effective_uid()
+                    if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or opened.st_size != 0
+                            or not mode_matches(opened.st_mode, 0o600)
+                            or uid is not None and opened.st_uid != uid):
+                        raise ComponentStateError('unsafe component writer guard')
+                    identity = _guard_identity(opened)
+                    def check() -> None:
+                        parent_check()
+                        try:
+                            named = fsx.lstat_at(parent, name)
+                            if fsx.is_link(named) or _guard_identity(named) != identity or _guard_identity(os.fstat(descriptor)) != identity:
+                                raise ComponentStateError('component writer guard changed')
+                        except OSError as exc:
+                            raise ComponentStateError(f'component writer guard changed: {exc}') from exc
+                    deadline = time.monotonic() + timeout
+                    busy = {errno.EAGAIN, errno.EWOULDBLOCK} | ({errno.EACCES} if fsx.WINDOWS else set())
+                    contended = False
+                    while True:
+                        check()
+                        if contended and time.monotonic() >= deadline:
+                            raise ComponentStateError('component writer is busy; retry when it finishes')
+                        try:
+                            fsx.lock_file(descriptor, blocking=False)
+                            locked = True
+                            break
+                        except OSError as exc:
+                            if exc.errno not in busy:
+                                raise ComponentStateError(f'component lock failed: {exc}') from exc
+                            contended = True
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise ComponentStateError('component writer is busy; retry when it finishes') from exc
+                            time.sleep(min(0.02, remaining))
+                    transaction = ComponentTransaction(binding, check)
+                    check()
+                    read_state(root, binding=transaction)
+                    yield transaction
+                    check()
+                finally:
+                    if descriptor is not None:
+                        try:
+                            if locked:
+                                fsx.unlock_file(descriptor)
+                        finally:
+                            os.close(descriptor)
+    except OSError as exc:
+        raise ComponentStateError(f'cannot bind component transaction: {exc}') from exc
+
+
+def record_owned(manifest: dict[str, Any], path: str, content: bytes, mode: int) -> None:
+    """Record only bytes actually published or positively matched to a baseline."""
+    _ledger_path(path)
+    name = component_of(path)
+    record = manifest['components'].setdefault(name, {'files': [], 'owned': {}})
+    record['files'] = sorted(set(record['files']) | {path})
+    record.setdefault('owned', {})[path] = {'sha256': hashlib.sha256(content).hexdigest(), 'mode': mode}
+
+
+def owned_proof(manifest: dict[str, Any], path: str) -> dict[str, Any] | None:
+    return manifest['components'].get(component_of(path), {}).get('owned', {}).get(path)
+
+
+def matches_owned(snapshot: FileSnapshot | None, proof: dict[str, Any] | None) -> bool:
+    return (snapshot is not None and proof is not None and snapshot.sha256 == proof['sha256']
+            and mode_matches(snapshot.mode, proof['mode']))
+
+
+def fresh_manifest(agents: tuple[str, ...], entries: Any) -> dict[str, Any]:
+    manifest: dict[str, Any] = {'schema_version': V2, 'agents': list(validate_agents(agents)), 'components': {}}
+    for entry in entries:
+        if entry.path != MANIFEST:
+            record_owned(manifest, entry.path, entry.content, entry.mode)
+    encode_manifest(manifest)
+    return manifest

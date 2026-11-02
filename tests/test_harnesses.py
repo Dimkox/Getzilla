@@ -1,7 +1,7 @@
 """The Qwen Code, Claude Code and Codex harnesses are generated, never hand-edited.
 
 `.grok/hooks.json`, `.grok/agents/*.toml` and `.agents/skills/` stay canonical;
-`scripts/getzilla_harness.py --write` renders `.qwen/`, `.claude/` and `.codex/`
+`scripts/getzilla_harness.py --repository-all --write` renders `.qwen/`, `.claude/` and `.codex/`
 from them. These tests fail when the committed copies drift.
 """
 
@@ -27,11 +27,88 @@ from getzilla import harnesses
 from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
 
 
+def _select(root: Path) -> None:
+    from getzilla.component_state import MANIFEST, V2, KNOWN_AGENTS, encode_manifest
+    (root / '.getzilla').mkdir(exist_ok=True)
+    (root / MANIFEST).write_bytes(encode_manifest({'schema_version': V2, 'agents': list(KNOWN_AGENTS), 'components': {}}))
+
+
+class SelectedHarnessTests(unittest.TestCase):
+    def fixture(self, agents: tuple[str, ...]) -> Path:
+        from getzilla.component_state import V2, encode_manifest
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / '.getzilla').mkdir()
+        (root / '.getzilla/managed-components.json').write_bytes(encode_manifest({
+            'schema_version': V2, 'agents': list(agents), 'components': {},
+        }))
+        return root
+
+    def test_empty_selection_does_not_read_unused_sources_or_initialize_outputs(self) -> None:
+        root = self.fixture(())
+        before = (root / '.getzilla/managed-components.json').read_bytes()
+        self.assertEqual(render(root), {})
+        self.assertEqual(drift(root), [])
+        self.assertEqual(write(root), [])
+        self.assertEqual((root / '.getzilla/managed-components.json').read_bytes(), before)
+        self.assertFalse((root / '.codex').exists())
+
+    def qwen(self) -> Path:
+        root = self.fixture(('qwen',))
+        (root / '.grok/cursor-rules').mkdir(parents=True)
+        (root / '.grok/cursor-rules/unused.toml').write_text('not valid TOML')
+        (root / '.grok/hooks.json').write_text('{"hooks": {}}')
+        (root / '.agents/skills/example').mkdir(parents=True)
+        (root / '.agents/skills/example/SKILL.md').write_text('first canonical version\n')
+        return root
+
+    def test_only_selected_outputs_are_generated_and_unknown_files_survive(self) -> None:
+        root = self.qwen()
+        (root / '.qwen/user-empty').mkdir(parents=True)
+        (root / '.qwen/custom.txt').write_text('user')
+        (root / '.codex').mkdir()
+        (root / '.codex/config.toml').write_text('user codex configuration')
+        self.assertTrue(all(path.startswith('.qwen/') for path in render(root)))
+        write(root)
+        self.assertEqual((root / '.qwen/custom.txt').read_text(), 'user')
+        self.assertTrue((root / '.qwen/user-empty').is_dir())
+        self.assertEqual((root / '.codex/config.toml').read_text(), 'user codex configuration')
+        self.assertEqual(drift(root), [])
+
+    def test_changed_owned_output_refuses_and_canonical_change_can_update(self) -> None:
+        root = self.qwen()
+        write(root)
+        source = root / '.agents/skills/example/SKILL.md'
+        source.write_text('second canonical version\n')
+        write(root)
+        output = root / '.qwen/skills/example/SKILL.md'
+        self.assertEqual(output.read_text(), 'second canonical version\n')
+        output.write_text('my custom version\n')
+        source.write_text('third canonical version\n')
+        with self.assertRaisesRegex(ValueError, 'conflict'):
+            write(root)
+        self.assertEqual(output.read_text(), 'my custom version\n')
+
+    def test_retirement_requires_unchanged_recorded_ownership(self) -> None:
+        root = self.qwen()
+        write(root)
+        owned = root / '.qwen/skills/example/SKILL.md'
+        unknown = root / '.qwen/skills/example/unknown.md'
+        unknown.write_text('user')
+        (root / '.agents/skills/example/SKILL.md').unlink()
+        write(root)
+        self.assertFalse(owned.exists())
+        self.assertEqual(unknown.read_text(), 'user')
+        self.assertTrue(owned.parent.is_dir())
+
+
 class HarnessTests(unittest.TestCase):
     def test_codex_overlay_survives_regeneration_without_replacing_guards(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             shutil.copytree(ROOT / '.grok', root / '.grok')
+            _select(root)
             overlay = {'hooks': {
                 'Stop': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex stop', 'timeout': 30}]}],
                 'SessionEnd': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex session-end', 'timeout': 3}]}],
@@ -77,7 +154,7 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(outputs.get('.grok/skills/' + relative), source.read_bytes(), relative)
 
     def test_committed_harnesses_match_the_canonical_sources(self) -> None:
-        self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --write')
+        self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
 
     def test_every_harness_runs_every_canonical_hook_script(self) -> None:
         grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
@@ -185,6 +262,7 @@ class CursorRuleTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / 'repo'
         (root / '.grok/cursor-rules').mkdir(parents=True)
+        _select(root)
         (root / '.grok/hooks.json').write_text('{"hooks": {}}', encoding='utf-8')
         for index, rule in enumerate(rules or (CORE, SCOPED)):
             (root / f'.grok/cursor-rules/{index}0-rule.toml').write_text(_toml(rule), encoding='utf-8')
@@ -297,8 +375,11 @@ class CursorRuleTests(unittest.TestCase):
         self.assertIn(b'globs: **/*.py,ruff.toml\n', (root / CURSOR_OUTPUT / '10-rule.mdc').read_bytes())
         self.assertEqual(drift(root), [])
         self.assertEqual(write(root), [])
+        source = root / '.grok/cursor-rules/90-retired.toml'
+        source.write_text(_toml(SCOPED), encoding='utf-8')
+        write(root)
         stale = root / CURSOR_OUTPUT / '90-retired.mdc'
-        stale.write_text(f'---\n---\n\n{CURSOR_MARKER}90-retired.toml -->\nold\n', encoding='utf-8')
+        source.unlink()
         self.assertEqual(drift(root), [f'unexpected {CURSOR_OUTPUT}/90-retired.mdc'])
         self.assertTrue(stale.exists())
         self.assertEqual(write(root), [f'removed {CURSOR_OUTPUT}/90-retired.mdc'])
@@ -314,8 +395,6 @@ class CursorRuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             write(root)
         self.assertFalse((root / '.qwen').exists())
-        with mock.patch.object(harnesses, '_conflict', return_value=False), self.assertRaises(OSError):
-            write(root)  # a link swapped in after the preflight is still not followed
         self.assertEqual(list(outside.iterdir()), [])
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
@@ -349,9 +428,13 @@ class CursorRuleTests(unittest.TestCase):
         settings.symlink_to(outside)  # same bytes behind a link are still stale
         extra = root / '.qwen/extra.json'
         extra.symlink_to(root.parent / 'absent.json')
-        self.assertEqual(drift(root), ['stale .qwen/settings.json', 'unexpected .qwen/extra.json'])
-        self.assertEqual(write(root), ['removed .qwen/extra.json', 'wrote .qwen/settings.json'])
-        self.assertFalse(settings.is_symlink() or extra.is_symlink())
+        self.assertEqual(drift(root), ['conflict .qwen/settings.json'])
+        with self.assertRaisesRegex(ValueError, 'conflict'):
+            write(root)
+        self.assertTrue(settings.is_symlink() and extra.is_symlink())
+        settings.unlink()
+        self.assertEqual(write(root), ['wrote .qwen/settings.json'])
+        self.assertTrue(extra.is_symlink())
         self.assertEqual(outside.read_bytes(), settings.read_bytes())
         self.assertFalse((root.parent / 'absent.json').exists())
 
@@ -367,33 +450,39 @@ class CursorRuleTests(unittest.TestCase):
         hooks = (root / '.grok/hooks.json').read_bytes()
         write(root)
         mirror = root / '.grok/skills/example/SKILL.md'
-        mirror.write_text('stale')
+        canonical.write_text('updated canonical skill')
         retired = root / '.grok/skills/retired.md'
-        retired.write_text('retired')
+        retired.write_text('user file')
         self.assertIn('stale .grok/skills/example/SKILL.md', drift(root))
         write(root)
         self.assertEqual(mirror.read_bytes(), canonical.read_bytes())
-        self.assertFalse(retired.exists())
+        self.assertEqual(retired.read_text(), 'user file')
+        canonical.unlink()
+        write(root)
+        self.assertFalse(mirror.exists())
+        self.assertEqual(retired.read_text(), 'user file')
         self.assertEqual((root / '.grok/hooks.json').read_bytes(), hooks)
         self.assertEqual(agent.read_bytes(), agent_bytes)
 
-    def test_write_removes_empty_directories_left_in_a_generated_root(self) -> None:
+    def test_write_preserves_unowned_empty_directories(self) -> None:
         root = self.fixture()
         write(root)
         (root / '.qwen/agents/retired').mkdir(parents=True)
         self.assertEqual(write(root), [])
-        self.assertFalse((root / '.qwen/agents').exists())
+        self.assertTrue((root / '.qwen/agents/retired').is_dir())
 
-    def test_edited_rule_is_stale_until_write_repairs_it(self) -> None:
+    def test_edited_rule_is_a_conflict_and_is_preserved(self) -> None:
         root = self.fixture()
         write(root)
         core = root / CURSOR_OUTPUT / '00-rule.mdc'
         expected = core.read_bytes()
         core.write_bytes(expected + b'- Hand edit.\n')
-        self.assertEqual(drift(root), [f'stale {CURSOR_OUTPUT}/00-rule.mdc'])
+        self.assertEqual(drift(root), [f'conflict {CURSOR_OUTPUT}/00-rule.mdc'])
         self.assertEqual(core.read_bytes(), expected + b'- Hand edit.\n')
-        self.assertEqual(write(root), [f'wrote {CURSOR_OUTPUT}/00-rule.mdc'])
-        self.assertEqual(core.read_bytes(), expected)
+        with self.assertRaisesRegex(ValueError, 'conflict'):
+            write(root)
+        self.assertEqual(core.read_bytes(), expected + b'- Hand edit.\n')
+        core.write_bytes(expected)
         self.assertEqual(drift(root), [])
 
     def test_rule_with_a_long_frontmatter_stays_owned(self) -> None:
@@ -414,7 +503,7 @@ class CursorRuleTests(unittest.TestCase):
         settings = root / '.claude/settings.json'
         settings.write_bytes(b'{}\n')
         self.assertIn(f'conflict {CURSOR_OUTPUT}/00-rule.mdc', drift(root))
-        with self.assertRaisesRegex(ValueError, 'nothing written'):
+        with self.assertRaisesRegex(ValueError, 'no generated files written'):
             write(root)
         self.assertEqual(settings.read_bytes(), b'{}\n')
         self.assertEqual((root / '.cursor').read_bytes(), b'not a directory\n')
@@ -433,18 +522,21 @@ class CursorRuleTests(unittest.TestCase):
                 write(root)
         finally:
             os.umask(old)
-        self.assertTrue(calls)
-        for name, flags, mode in calls:
-            self.assertRegex(name, r'^\..+\.[0-9a-f]{12}\.tmp$')
+        temporaries = [call for call in calls if call[0].endswith('.tmp')]
+        self.assertTrue(temporaries)
+        for name, flags, mode in temporaries:
+            self.assertRegex(name, r'^\.getzilla-component-[0-9a-f]{32}\.tmp$')
             self.assertEqual(flags & (os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW), os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW)
-            self.assertEqual(mode, 0o644)
+            self.assertEqual(mode, 0o600)  # promoted to the final 0644 after the content is complete
         for rel in ('.cursor', '.cursor/rules', CURSOR_OUTPUT, '.qwen'):
             self.assertEqual(stat.S_IMODE((root / rel).stat().st_mode), 0o755, rel)
 
     def test_failed_replace_leaves_no_temp_file(self) -> None:
         root = self.fixture()
+        write(root)
+        (root / '.grok/cursor-rules/00-rule.toml').write_text(_toml({**CORE, 'instructions': '- Changed.'}))
         with mock.patch.object(harnesses.fsx, 'replace_at', side_effect=OSError('disk full')), \
-                self.assertRaises(OSError):
+                self.assertRaisesRegex(ValueError, 'incomplete'):
             write(root)
         leftovers = [path for path in root.rglob('*.tmp')]
         self.assertEqual(leftovers, [])
@@ -484,7 +576,7 @@ class CursorRuleTests(unittest.TestCase):
     def test_cli_checks_read_only_repairs_on_write_and_reports_source_errors(self) -> None:
         root = self.fixture()
         for rel in ('scripts/getzilla_harness.py', '.getzilla/getzilla/__init__.py',
-                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py'):
+                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py', '.getzilla/getzilla/component_state.py'):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / rel, root / rel)
         def run(*args: str) -> subprocess.CompletedProcess:
