@@ -657,6 +657,42 @@ class ComponentPreflightTests(unittest.TestCase):
         self.assertIn(path, record['files'])
         self.assertNotIn(path, record.get('owned', {}))
 
+    def test_identical_compliance_config_preserves_custom_mode_without_ownership(self) -> None:
+        from getzilla.component_state import encode_manifest, record_owned, V2
+        relative = '.getzilla/config/compliance.json'
+        config = self.target / relative
+        content = (json.dumps({'schema_version': 'getzilla-compliance-v1', 'enabled': ['eu-ai-act']},
+                              indent=2, sort_keys=True) + '\n').encode()
+        for previously_owned in (False, True):
+            with self.subTest(previously_owned=previously_owned):
+                config.chmod(0o644)
+                config.write_bytes(content)
+                config.chmod(0o400 if os.name == 'nt' else 0o600)
+                before_mode = stat.S_IMODE(config.stat().st_mode)
+                manifest = {'schema_version': V2, 'agents': [], 'components': {}}
+                if previously_owned:
+                    record_owned(manifest, relative, content, 0o644)
+                (self.target / MANIFEST).write_bytes(encode_manifest(manifest))
+                added = ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+                self.assertEqual(config.read_bytes(), content)
+                self.assertEqual(stat.S_IMODE(config.stat().st_mode), before_mode)
+                records = load_manifest(self.target)['components'].values()
+                self.assertFalse(any(relative in record.get('owned', {}) for record in records))
+                self.assertIn(relative, added[0].kept)
+
+    def test_identical_compliance_config_claims_only_matching_byte_and_mode_baseline(self) -> None:
+        from getzilla.component_state import BoundRoot, matches_owned, owned_proof
+        relative = '.getzilla/config/compliance.json'
+        config = self.target / relative
+        content = (json.dumps({'schema_version': 'getzilla-compliance-v1', 'enabled': ['eu-ai-act']},
+                              indent=2, sort_keys=True) + '\n').encode()
+        config.write_bytes(content)
+        config.chmod(0o644)
+        added = ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+        with BoundRoot(self.target) as binding:
+            self.assertTrue(matches_owned(binding.read(relative), owned_proof(load_manifest(self.target), relative)))
+        self.assertNotIn(relative, added[0].kept)
+
     def test_kept_codex_pair_refuses_if_either_member_is_missing(self) -> None:
         config, hooks = '.codex/config.toml', '.codex/hooks.json'
         for index, (kept, missing) in enumerate(((config, config), (hooks, hooks),

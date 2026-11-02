@@ -257,7 +257,13 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
             if previous is None or previous.content != content:
                 operations.append((entry, previous))
                 changed_components.add('core')
-            remember(entry)
+                remember(entry)
+            elif mode_matches(previous.mode, entry.mode):
+                remember(entry)
+            else:
+                next(item for item in results if item.component.startswith('compliance:')).kept.append(config_path)
+                for record in manifest['components'].values():
+                    record.get('owned', {}).pop(config_path, None)
     for name in changed_components:
         record = manifest['components'][name]
         record['added_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
