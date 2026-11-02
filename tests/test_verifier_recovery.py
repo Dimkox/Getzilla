@@ -102,6 +102,30 @@ def output_close_faults(failing_labels, *, signal_on_close=None):
         yield closed
 
 
+@contextlib.contextmanager
+def output_directory_faults(failing_labels, *, signal_on_cleanup=None):
+    """Remove real capture directories, then inject lifecycle errors."""
+    original_init = tempfile.TemporaryDirectory.__init__
+    original_cleanup = tempfile.TemporaryDirectory.cleanup
+    directories = []
+
+    def initialize(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        directories.append(Path(self.name))
+
+    def cleanup(self):
+        original_cleanup(self)
+        label = ('stdout', 'stderr')[directories.index(Path(self.name))]
+        if label == signal_on_cleanup:
+            os.kill(os.getpid(), signal.SIGTERM)
+        if label in failing_labels:
+            raise OSError(f'{label} capture directory cleanup fault')
+
+    with patch.object(tempfile.TemporaryDirectory, '__init__', initialize), \
+         patch.object(tempfile.TemporaryDirectory, 'cleanup', cleanup):
+        yield directories
+
+
 class VerifierRecoveryTests(unittest.TestCase):
     def test_cli_publication_failure_does_not_rebind_observed_context(self):
         from getzilla.continuity import submit
@@ -315,6 +339,104 @@ class VerifierRecoveryTests(unittest.TestCase):
 
 
 class OwnedRunnerRecoveryTests(unittest.TestCase):
+    def test_capture_directory_cleanup_keeps_completed_results_and_prior_errors(self):
+        for code in (0, 7):
+            with self.subTest(code=code), output_directory_faults(('stdout', 'stderr')) as directories, \
+                 output_close_faults(('stdout', 'stderr')):
+                result = runner.execute([sys.executable, '-c',
+                    f'import sys; print("original stdout"); print("original stderr", file=sys.stderr); sys.exit({code})'],
+                    ROOT, os.environ.copy())
+            self.assertEqual((result.returncode, result.stdout, result.stderr),
+                             (code, 'original stdout\n', 'original stderr\n'))
+            for label in ('stdout', 'stderr'):
+                self.assertIn(f'{label} output close fault', result.cleanup_error)
+                self.assertIn(f'{label} capture directory cleanup fault', result.cleanup_error)
+            self.assertTrue(directories)
+            self.assertTrue(all(not directory.exists() for directory in directories))
+
+    def test_capture_directory_cleanup_keeps_missing_command_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with output_directory_faults(('stdout', 'stderr')) as captures:
+                result = runner.execute([str(Path(directory) / 'missing-owned-command')],
+                                        Path(directory), os.environ.copy())
+        self.assertEqual(result.returncode, 127)
+        self.assertIn('missing-owned-command', result.stderr)
+        for label in ('stdout', 'stderr'):
+            self.assertIn(f'{label} capture directory cleanup fault', result.cleanup_error)
+        self.assertTrue(captures)
+        self.assertTrue(all(not capture.exists() for capture in captures))
+
+    def test_capture_directory_cleanup_keeps_pre_result_primary_exception(self):
+        with output_directory_faults(('stdout', 'stderr')) as captures, \
+             patch.object(runner.subprocess, 'Popen', side_effect=ValueError('specific launch failure')):
+            with self.assertRaisesRegex(ValueError, 'specific launch failure') as caught:
+                runner.execute([sys.executable, '-c', 'pass'], ROOT, os.environ.copy())
+        for label in ('stdout', 'stderr'):
+            self.assertTrue(any(f'{label} capture directory cleanup fault' in note
+                                for note in getattr(caught.exception, '__notes__', ())))
+        self.assertTrue(captures)
+        self.assertTrue(all(not capture.exists() for capture in captures))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation')
+    def test_capture_directory_cleanup_keeps_cancellation_and_completed_result(self):
+        original_stop = runner._stop
+
+        def cancel_after_result(process):
+            original_stop(process)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        with output_directory_faults(('stdout', 'stderr')) as captures, \
+             patch.object(runner, '_stop', side_effect=cancel_after_result):
+            with self.assertRaises(runner.RunCancelled) as caught:
+                runner.execute([sys.executable, '-c', 'print("cancelled output"); raise SystemExit(7)'],
+                               ROOT, os.environ.copy())
+        self.assertEqual((caught.exception.code, caught.exception.result.returncode), (143, 7))
+        self.assertEqual(caught.exception.result.stdout, 'cancelled output\n')
+        for label in ('stdout', 'stderr'):
+            self.assertIn(f'{label} capture directory cleanup fault', caught.exception.result.cleanup_error)
+            self.assertTrue(any(f'{label} capture directory cleanup fault' in note
+                                for note in caught.exception.__notes__))
+        self.assertTrue(captures)
+        self.assertTrue(all(not capture.exists() for capture in captures))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation')
+    def test_signal_during_capture_directory_cleanup_keeps_completed_result(self):
+        for label in ('stdout', 'stderr'):
+            with self.subTest(label=label), \
+                 output_directory_faults((label,), signal_on_cleanup=label) as captures:
+                with self.assertRaises(runner.RunCancelled) as caught:
+                    runner.execute([sys.executable, '-c', 'print("completed output"); raise SystemExit(7)'],
+                                   ROOT, os.environ.copy())
+                self.assertEqual((caught.exception.code, caught.exception.result.returncode), (143, 7))
+                self.assertEqual(caught.exception.result.stdout, 'completed output\n')
+                self.assertIn(f'{label} capture directory cleanup fault', caught.exception.result.cleanup_error)
+                self.assertTrue(captures)
+                self.assertTrue(all(not capture.exists() for capture in captures))
+
+    def test_capture_partial_setup_failure_removes_storage_without_launching(self):
+        original_file = tempfile.TemporaryFile
+        for failed_open in (0, 1):
+            opened = []
+
+            def open_file(*args, **kwargs):
+                if len(opened) == failed_open:
+                    raise OSError('specific capture setup failure')
+                handle = original_file(*args, **kwargs)
+                opened.append(handle)
+                return handle
+
+            with self.subTest(failed_open=failed_open), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with output_directory_faults(()) as captures, \
+                     patch.object(tempfile, 'TemporaryFile', open_file):
+                    with self.assertRaisesRegex(OSError, 'specific capture setup failure'):
+                        runner.execute([sys.executable, '-c', 'open("launched", "x").close()'],
+                                       root, os.environ.copy())
+                self.assertFalse((root / 'launched').exists())
+                self.assertTrue(all(handle.closed for handle in opened))
+                self.assertTrue(captures)
+                self.assertTrue(all(not capture.exists() for capture in captures))
+
     def test_output_close_keeps_completed_pass_and_failure(self):
         for labels in (('stdout',), ('stderr',), ('stdout', 'stderr')):
             for code in (0, 7):

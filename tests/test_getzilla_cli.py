@@ -1,6 +1,7 @@
 """The single `getzilla` command: dispatch, project-local resolution and the bin shims."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -59,12 +60,22 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual((environment or {}).get('PYTHONUTF8'), utf8, name)
 
     def test_arguments_pass_through_to_the_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / '.getzilla').mkdir()
+            (project / 'scripts').mkdir()
+            (project / 'scripts/getzilla_route.py').write_text(
+                'import json, sys\nprint(json.dumps(sys.argv[1:]))\nraise SystemExit(23)\n', encoding='utf-8')
+            arguments = ('--session', 'owner with spaces', '--continue', 'task:abc', '--', 'value; other', '')
+            proc = run('route', *arguments, cwd=project)
+            self.assertEqual(proc.returncode, 23, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout), list(arguments))
+
+    def test_route_help_exposes_task_and_session_options(self) -> None:
         proc = run('route', '--help')
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn('adaptive task route', proc.stdout)
-        proc = run('compliance', '--help')
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn('scaffold', proc.stdout)
+        for option in ('--session', '--continue', '--new-task'):
+            self.assertIn(option, proc.stdout)
 
     def test_every_command_answers_help_with_usage(self) -> None:
         for name in cli.COMMANDS:

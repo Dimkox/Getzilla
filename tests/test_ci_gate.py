@@ -10,6 +10,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,6 +25,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import ci_gate  # noqa: E402
 from getzilla.ci_gate import CommandResult, HttpResponse  # noqa: E402
+from tests._support import project_copy, run_hook  # noqa: E402
 
 TEMPLATE = ROOT / ci_gate.TEMPLATE_PATH
 REMOTE = 'https://github.com/example-owner/example-repo.git'
@@ -319,6 +321,55 @@ class WorkflowTemplateTests(unittest.TestCase):
         self.assertIn('python scripts/getzilla_verify.py --mode pr', [step.get('run') for step in steps])
         self.assertEqual(steps[-1]['with']['retention-days'], 30)
         self.assertNotIn('.getzilla/runtime', steps[-1]['with']['path'])
+
+
+class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_smoke_environment_preserves_hook_owner_for_cli_package_start(self) -> None:
+        import yaml
+
+        workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
+        for job_name in ('windows', 'macos'):
+            job = workflow['jobs'][job_name]
+            step = next(item for item in job['steps'] if item['name'].startswith('Hooks and CLI smoke'))
+            with self.subTest(job=job_name), project_copy(git=True) as root:
+                scripts = root / 'scripts'
+                scripts.mkdir()
+                for name in ('getzilla_cli.py', 'getzilla_change.py'):
+                    shutil.copy2(ROOT / 'scripts' / name, scripts / name)
+                shutil.copytree(ROOT / 'schemas', root / 'schemas')
+                code, _, stderr = run_hook(root, 'user_prompt_submit.py', {
+                    'cwd': str(root), 'session_id': 'ci', 'hook_event_name': 'UserPromptSubmit',
+                    'prompt': 'Add a health endpoint to the API',
+                })
+                self.assertEqual(code, 0, stderr)
+                route_path = root / '.getzilla/runtime/active-route.json'
+                before = json.loads(route_path.read_text(encoding='utf-8'))
+                environment = {key: value for key, value in os.environ.items()
+                               if key not in {'GETZILLA_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'}}
+                environment.update(workflow.get('env', {}))
+                environment.update(job.get('env', {}))
+                environment.update(step.get('env', {}))
+                command = [sys.executable, str(scripts / 'getzilla_cli.py'),
+                           'change', 'start', '--title', 'Health endpoint']
+                for owner in (None, 'foreign-session'):
+                    rejected_env = dict(environment)
+                    rejected_env.pop('GETZILLA_SESSION_ID', None)
+                    rejected_env.pop('CLAUDE_CODE_SESSION_ID', None)
+                    if owner is not None:
+                        rejected_env['GETZILLA_SESSION_ID'] = owner
+                    refused = subprocess.run(command, cwd=root, env=rejected_env, capture_output=True,
+                                             text=True, timeout=30)
+                    self.assertNotEqual(refused.returncode, 0, refused.stdout)
+                    self.assertFalse((root / '.getzilla/runtime/active-change.json').exists())
+                    self.assertFalse(list((root / '.getzilla/runtime/changes').glob('*/state.json')))
+                started = subprocess.run(command, cwd=root, env=environment, capture_output=True,
+                                         text=True, timeout=30)
+                self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+                self.assertEqual(json.loads(started.stdout)['route_id'], before['route_id'])
+                after = json.loads(route_path.read_text(encoding='utf-8'))
+                for field in ('route_id', 'logical_task_id', 'session_id', 'authority_epoch'):
+                    self.assertEqual(after[field], before[field], field)
 
 
 class CliTests(unittest.TestCase):

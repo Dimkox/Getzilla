@@ -144,6 +144,8 @@ jobs:
       - name: Windows-ported tests
         run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source
       - name: Hooks and CLI smoke
+        env:
+          GETZILLA_SESSION_ID: ci
         run: |
           set -euo pipefail
           exec > >(tee "$RUNNER_TEMP/smoke.log") 2>&1
@@ -230,6 +232,8 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/getzilla-home" rev-parse HEAD)" = "$(git rev-parse HEAD)"
           "$HOME/.local/bin/getzilla" help > /dev/null
       - name: Hooks and CLI smoke in the installed project
+        env:
+          GETZILLA_SESSION_ID: ci
         run: |
           set -euo pipefail
           exec > >(tee "$RUNNER_TEMP/smoke.log") 2>&1

@@ -242,9 +242,8 @@ def _cancellation():
 
 
 @contextmanager
-def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
-    """Close each output file without replacing a result or primary exception."""
-    manager = tempfile.TemporaryFile()
+def _output_resource(manager, retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+    """Close capture resources without replacing a result or primary exception."""
     handle = manager.__enter__()
     primary: BaseException | None = None
     try:
@@ -269,6 +268,17 @@ def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: C
                 primary.add_note(diagnostic)
         if primary is None and retained.get('result') is not None:
             cancellation.check(retained['result'])
+
+
+@contextmanager
+def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+    # Anonymous files still emit parent-directory events on Linux. Keep their
+    # continuous writes below a stable sibling of child fixture trees, so a
+    # fixture's bounded ancestor guard does not consume runner output noise.
+    with _output_resource(tempfile.TemporaryDirectory(prefix='grok-capture-'), retained,
+                          f'{label} directory', cancellation) as directory:
+        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation) as handle:
+            yield handle
 
 
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
@@ -335,10 +345,10 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         return result
 
 
-def _environment(root: Path, data_file: Path) -> dict[str, str]:
+def _environment(root: Path, data_file: Path, *, temporary_root: Path | None = None) -> dict[str, str]:
     # Test children write temporary files inside this run's folder, so the run's own cleanup also
     # removes what a killed or timed-out child left behind (#168).
-    scratch = data_file.parent / 'tmp'
+    scratch = temporary_root if temporary_root is not None else data_file.parent / 'tmp'
     scratch.mkdir(mode=0o700, exist_ok=True)
     environment = {
         key: value for key, value in os.environ.items()
@@ -555,10 +565,11 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
             directory.cleanup()
         except Exception as cleanup:
             result = retained.get('tests')
+            if result is None and isinstance(primary, RunCancelled):
+                result = primary.result
             if result is not None:
-                result.cleanup_error = f'{type(cleanup).__name__}: {cleanup}'[:512]
-            elif isinstance(primary, RunCancelled) and primary.result is not None:
-                primary.result.cleanup_error = f'{type(cleanup).__name__}: {cleanup}'[:512]
+                diagnostic = f'{type(cleanup).__name__}: {cleanup}'[:512]
+                result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
             elif primary is None:
                 raise
             if primary is not None:
@@ -581,9 +592,13 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         raise RunnerError('required .coveragerc is missing')
     retained: dict[str, ProcessResult] = {}
     with _run_directory('grok-core-coverage-', retained) as directory:
-        data_file = Path(directory) / '.coverage'
-        report_file = Path(directory) / 'coverage.json'
-        environment = _environment(root, data_file)
+        # Worker coverage/SQLite writes must stay below a sibling of fixture
+        # storage, outside the fixture guards' nonrecursive ancestor watches.
+        coverage_root = Path(directory) / 'coverage'
+        coverage_root.mkdir(mode=0o700)
+        data_file = coverage_root / '.coverage'
+        report_file = coverage_root / 'coverage.json'
+        environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
         if workers and engine == 'pytest-xdist':
             command = _pytest_command(workers, 'worksteal')
             if measured:

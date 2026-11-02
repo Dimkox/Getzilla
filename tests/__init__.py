@@ -9,6 +9,7 @@ encoding under the same test.
 """
 import os
 import pathlib
+import re
 import sys
 import warnings
 import tempfile
@@ -16,6 +17,16 @@ import tempfile
 # macOS hands out TMPDIR through /var -> /private/var. Product code works on canonical paths, so
 # fixtures start from the canonical temporary folder too (a plain Linux /tmp is unchanged).
 tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+
+# Unittest fixtures use tempfile, not pytest's per-worker tmp_path directories.
+# Separate their parents so sibling workers cannot keep a bounded Git guard's
+# ancestor-event drain busy. Child CLI fixtures inherit the same private tree.
+# The native runner owns the enclosing run directory and its final cleanup.
+_worker = os.environ.get('PYTEST_XDIST_WORKER', '')
+if re.fullmatch(r'gw[0-9]+', _worker):
+    tempfile.tempdir = tempfile.mkdtemp(prefix=f'getzilla-{_worker}-', dir=tempfile.tempdir)
+    for _key in ('TMPDIR', 'TEMP', 'TMP'):
+        os.environ[_key] = tempfile.tempdir
 
 if os.name == 'nt':
     if not sys.flags.utf8_mode:
