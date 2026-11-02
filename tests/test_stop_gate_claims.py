@@ -57,7 +57,10 @@ class ClaimDetectionTests(unittest.TestCase):
 
 class StopGateClaimTests(unittest.TestCase):
     def prepare(self, root: Path, claim: str = 'Готово, все тесты прошли') -> dict:
-        activate_owned_route(root, build_route(root, 'Добавить функцию', 's1').to_dict())
+        route = build_route(root, 'Добавить функцию', 's1').to_dict()
+        # Isolate verification-claim policy from the independent delivery continuation guard.
+        route['delivery_expected'] = False
+        activate_owned_route(root, route)
         (root / 'feature.txt').write_text('changed', encoding='utf-8')
         return {'transcript_path': str(transcript(root / '.getzilla' / 'runtime' / 't.jsonl', claim))}
 

@@ -1013,20 +1013,40 @@ def stop_attempts_path(root: Path) -> Path:
     return runtime_dir(root) / 'stop-attempts.json'
 
 
-def increment_stop_attempt(root: Path, route_id: str) -> int:
+def _stop_attempts(root: Path) -> dict[str, Any]:
+    path = stop_attempts_path(root)
+    if not path.exists() and not path.is_symlink():
+        return {}
+    return _route_document(root, path, limit=262144)
+
+
+def increment_stop_attempt(root: Path, route_id: str, *, observation: str | None = None) -> int:
     with runtime_lock(root, 'stop'):
-        data = load_json(stop_attempts_path(root), {})
-        if not isinstance(data, dict):
-            data = {}
-        value = int(data.get(route_id, 0)) + 1
-        data[route_id] = value
-        dump_json(stop_attempts_path(root), data)
+        data = _stop_attempts(root)
+        previous = data.get(route_id, 0)
+        if isinstance(previous, dict):
+            if (set(previous) != {'observation', 'attempts'} or not isinstance(previous['observation'], str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', previous['observation'])):
+                raise ValueError('invalid stop retry state')
+            count = previous['attempts']
+        else:
+            count = previous
+        if type(count) is not int or not 0 <= count <= 1_000_000:
+            raise ValueError('invalid stop retry count')
+        if observation is not None:
+            if not isinstance(observation, str) or not re.fullmatch(r'[0-9a-f]{64}', observation):
+                raise ValueError('invalid stop observation')
+            if isinstance(previous, dict) and previous['observation'] != observation:
+                count = 0
+        value = min(count + 1, 1_000_000)
+        data[route_id] = {'observation': observation, 'attempts': value} if observation is not None else value
+        durable_json(root, stop_attempts_path(root), data)
         return value
 
 
 def reset_stop_attempt(root: Path, route_id: str) -> None:
     with runtime_lock(root, 'stop'):
-        data = load_json(stop_attempts_path(root), {})
-        if isinstance(data, dict):
-            data.pop(route_id, None)
-            dump_json(stop_attempts_path(root), data)
+        data = _stop_attempts(root)
+        if route_id in data:
+            data.pop(route_id)
+            durable_json(root, stop_attempts_path(root), data)
