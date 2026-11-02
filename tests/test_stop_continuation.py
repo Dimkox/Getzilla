@@ -88,6 +88,10 @@ class StopContinuationTests(unittest.TestCase):
             ('- [x] Complete\n<!-- Historical example\n- [ ] Example\n-->\n', 0),
             ('Examples:\n\n    - [ ] Indented code\n', 0),
             ('- ```md\n    - [ ] Fenced example\n  ```\n', 0),
+            ('- [x] Render the literal `<!--` marker.\n- [ ] Deploy the app.\n', 1),
+            ('- [x] Render ``text ` <!--`` literally.\n- [ ] Deploy the app.\n', 1),
+            ('- [x] Render \\<!-- literally.\n- [ ] Deploy the app.\n', 1),
+            ('- [x] Example `<!--` <!-- real comment\n- [ ] hidden\n-->\n- [ ] Deploy.\n', 1),
         )
         for tasks, expected in cases:
             with self.subTest(tasks=tasks), project_copy(git=True) as root:

@@ -188,20 +188,38 @@ def _pending_task_lines(text: str):
             if closing and closing[1][0] == fence[0] and len(closing[1]) >= fence[1]:
                 fence = None
             continue
+        # Recognize matched inline code before comments. A literal `<!--` must
+        # never hide later obligations. Index equal-length backtick runs once.
+        code_ends: dict[int, int] = {}
+        next_run: dict[int, int] = {}
+        for run in reversed(list(re.finditer(r'`+', line))):
+            width = run.end() - run.start()
+            if width in next_run:
+                code_ends[run.start()] = next_run[width]
+            next_run[width] = run.end()
         # Comments can span lines; their examples do not enter the list context.
         visible: list[str] = []
         position = 0
         while position < len(line):
-            marker = '-->' if comment else '<!--'
-            boundary = line.find(marker, position)
-            if boundary < 0:
-                if not comment:
-                    visible.append(line[position:])
-                break
-            if not comment:
-                visible.append(line[position:boundary])
-            position = boundary + len(marker)
-            comment = not comment
+            if comment:
+                boundary = line.find('-->', position)
+                if boundary < 0:
+                    break
+                position = boundary + 3
+                comment = False
+            elif line[position] == '\\':
+                visible.append(line[position:position + 2])
+                position += 2
+            elif position in code_ends:
+                end = code_ends[position]
+                visible.append(line[position:end])
+                position = end
+            elif line.startswith('<!--', position):
+                comment = True
+                position += 4
+            else:
+                visible.append(line[position])
+                position += 1
         line = ''.join(visible)
         if not line.strip():
             continue
