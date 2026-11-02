@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.dev/schemas/deploy-preflight-manifest-v1.schema.json",
+  "title": "Deployment preflight declarations (not authorization or provenance)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "operation", "operator", "artifacts", "artifact_revision", "target", "credential_selector", "recovery"],
+  "properties": {
+    "schema_version": {"const": "getzilla-deploy-preflight-v1"},
+    "project_id": {"$ref": "#/$defs/identifier"},
+    "operation": {"const": "dev-delivery"},
+    "operator": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "mode", "revision"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "mode": {"$ref": "#/$defs/mode"},
+        "revision": {"$ref": "#/$defs/revision"}
+      }
+    },
+    "artifacts": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/file"}},
+    "artifact_revision": {"$ref": "#/$defs/revision"},
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "destination_id", "transport"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identifier"},
+        "destination_id": {"$ref": "#/$defs/identifier"},
+        "transport": {"enum": ["ssh-sftp", "local-fixture"]}
+      }
+    },
+    "credential_selector": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\u0000-\u001f\u007f-\u009f\ud800-\udfff]+$"},
+    "recovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol_id", "version", "descriptor_sha256"],
+      "properties": {
+        "protocol_id": {"$ref": "#/$defs/identifier"},
+        "version": {"$ref": "#/$defs/identifier"},
+        "descriptor_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
+    "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+    "path": {
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[ .](?:/|$))[^\\\\:\u0000-\u001f\u007f-\u009f\ud800-\udfff*?\"<>|]+$",
+      "description": "Portable relative spelling. Runtime additionally checks component count, reserved devices, sensitive classes, casefold collisions, control overlap and lexical credential aliases before opening files."
+    },
+    "file": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256", "mode"],
+      "properties": {"path": {"$ref": "#/$defs/path"}, "sha256": {"$ref": "#/$defs/sha256"}, "mode": {"$ref": "#/$defs/mode"}}
+    },
+    "revision": {
+      "type": "object", "additionalProperties": false, "required": ["label", "git"],
+      "properties": {
+        "label": {"$ref": "#/$defs/identifier"},
+        "git": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["object_format", "commit_oid", "tree_oid"],
+              "properties": {"object_format": {"const": "sha1"}, "commit_oid": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"}, "tree_oid": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"}}
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["object_format", "commit_oid", "tree_oid"],
+              "properties": {"object_format": {"const": "sha256"}, "commit_oid": {"$ref": "#/$defs/sha256"}, "tree_oid": {"$ref": "#/$defs/sha256"}}
+            }
+          ]
+        }
+      }
+    }
+  }
+}
