@@ -604,6 +604,39 @@ or just describe a development task — Grok should pick up skills from `.grok/s
 
 The independent `trust-ci/` service is deployed once as infrastructure; it is not copied into every consumer unless that repository will use the same external check protocol.
 
+### Managed adapter selection
+
+The unpublished source candidate uses one state file, `.getzilla/managed-components.json`, for adapter membership and managed-file ownership. Schema `getzilla-managed-components-v2` requires an `agents` array with unique exact names from `claude`, `codex`, `qwen`, `gemini`, `grok`, `copilot`, and `cursor`. An empty array is a complete, intentional selection. Invalid state fails with an error; it is never reset or treated as all adapters.
+
+| State shown by `getzilla components status` | Meaning |
+| --- | --- |
+| `absent` | No complete adapter choice has been recorded for this existing project. |
+| `legacy` | A v1 additions ledger exists, but it cannot establish the complete old selection. |
+| `selected` | A valid v2 manifest supplies the complete choice, including `[]`. |
+
+A fresh install accepts `--agents 'qwen,codex'` or `--agents ''`; without that option it uses `GETZILLA_AGENT`, then `qwen`. `--full-layout` and `--agents` cannot be combined. After selection exists, adapter directories and environment variables do not change it. The source checkout's component manifest is excluded from the consumer payload. Each fresh target gets a new v2 ledger derived from the files actually delivered, including its chosen engine packaging.
+
+For an existing project in the absent or legacy state, declare the complete intended list explicitly:
+
+```bash
+getzilla components status
+getzilla components adopt --agents 'qwen,codex'
+git add -- .getzilla/managed-components.json
+git diff --cached -- .getzilla/managed-components.json
+```
+
+Use `--agents ''` instead of the second command when selecting no adapters. Adoption writes the selection without installing or deleting adapter files. It does not declare arbitrary old files owned. Repeating the exact established list is a no-op; a different list cannot replace a valid v2 selection through adoption. This command is separate from `getzilla adopt`, which handles folders without Git. Review and commit the manifest before running the project phase of `getzilla update`, for example `getzilla update --no-self --no-tools`.
+
+`getzilla components add agent:codex` adds to the existing choice and preserves other selected adapters. Adapter-dependent extras also require a complete selection; non-adapter additions may preserve a legacy ledger without inventing membership. `getzilla setup-agent --agent codex`, run from the installed project or a subdirectory, completes project validation and addition before changing user-level configuration. A later global-configuration failure reports that the project phase already completed. `--forget-key` remains global-only.
+
+Use `getzilla harness` to check selected outputs and `getzilla harness --write` to generate them from the installed canonical inputs. The installed `scripts/getzilla_harness.py` works from a project subdirectory, including with the engine in a ZIP. To regenerate this full source checkout, run `python3 scripts/getzilla_harness.py --repository-all --write`. Repository mode requires the full source markers and cannot override an established subset selection.
+
+Each owned file has a SHA-256 and mode under `components[...].owned`. A writer records ownership only after publishing the file or positively matching its bytes and mode to the desired baseline. Custom files remain custom. Generation may remove a stale selected generated file only when its recorded ownership still matches; unselected outputs, unknown files and unknown directories remain. Codex hooks, configuration and the canonical overlay are validated together; incompatible custom state stops the operation. Existing overlay order and Entire entries are preserved. Selection does not activate [Entire recording or transport](git-platforms.md#install-entire-support-explicitly).
+
+The project update requires a committed valid v2 manifest and a clean Git checkout. It builds the selected files and target ledger in one private-index commit, checks the original HEAD and observations before creating a new branch, then checks the branch and actual file contents after checkout. Existing kept-local settings retain their separate `.getzilla/AGBP_SYNC.json` contract. An ownership conflict still needs reviewed resolution; `--accept-local` only acknowledges changed declared kept-local digests.
+
+Component writers share a persistent advisory guard. It coordinates cooperating writers, not operating-system isolation from other processes. Preflight conflicts stop before product writes. A later I/O failure can leave partial files with the old manifest or uncertain final publication; inspect the reported residue and retry explicitly. Update failures after branch creation retain that branch and report an incomplete checkout; no automatic rollback discards concurrent work. Adapter removal, shared-namespace relocation and native-hook deactivation are outside this selection change. In particular, `agents: []` does not remove `.grok/hooks.json` or `.grok/hooks/adaptive.json` or prove that native hooks are disabled.
+
 ## Scripts
 
 Local loop: measured route → change package when required → bounded committed-HEAD observations → independent selected reviews → persist reports outside Git → one final local gate selected by the delivery lane, parallel with the required exact-head external gate (public Actions or private Trust CI) after exact delegated UNVERIFIED branch transport → current receipts/protected PR eligibility. `scripts/getzilla_deploy.py` is prepare-only and must not bypass protected-branch or exact-SHA requirements.
@@ -617,13 +650,13 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | Command | Script | Role |
 |--------|------|------|
 | `doctor` | `scripts/getzilla_doctor.py` | Local health check; `--offer-install` offers missing tools |
-| `setup-agent` | `scripts/getzilla_setup_agent.py` | Coding agent and model provider setup; `--forget-key` removes the stored key |
+| `setup-agent` | `scripts/getzilla_setup_agent.py` | Add the adapter in the current installed project before user-level agent/provider setup; `--forget-key` only removes the stored user key |
 | `install-into` | `scripts/install_into.py` | Plan an existing repository read-only, or atomically materialize an absent new target |
 | `adopt` | `scripts/adopt_existing.py` | Adopt a folder without Git into a new local workspace (`plan`, `apply`, `status`, `resume`, `abort`) |
-| `components` | `scripts/getzilla_components.py` | Show and add optional components (`agent:<name>`, `extra:bitrix`, `extra:seo-landing`, `compliance:eu-ai-act`, `factory`) |
+| `components` | `scripts/getzilla_components.py` | Show selection, add components (`agent:<name>`, extras, compliance, factory), or declare a legacy complete choice with `adopt --agents <complete-list>` |
 | `baseline` | `scripts/getzilla_baseline.py` | Inspect with `status --project <repo>`; connect installed workflow tools with `apply --project <repo>` |
-| `harness` | `scripts/getzilla_harness.py` | Check, or with `--write` regenerate, the generated agent harness copies |
-| `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, write the new files into the project on a `getzilla-update-<version>` branch, then update third-party tools (`--no-self`, `--no-tools`, `--accept-local`, `--retire-legacy`); the project's own lint and coverage configuration stays |
+| `harness` | `scripts/getzilla_harness.py` | Check or regenerate selected adapters (`--write`); full-source generation requires `--repository-all` |
+| `update` | `scripts/getzilla_upgrade.py` | Update Getzilla, commit selected project files and their ledger on a `getzilla-update-<version>` branch, then update third-party tools; requires a committed v2 selection and preserves the project's own lint and coverage configuration |
 | — | `scripts/getzilla_update.py` | Third-party tools only (agent CLIs, Superpowers, BMAD, Spec Kit, vibevm, CVE database, OpenGrep); `--status` shows the last results |
 | `cpu` | `scripts/getzilla_startup_cpu.py` | Startup step zero: measure and record usable CPUs (`--reserve`, `--attach`) |
 | `par` | `scripts/getzilla_par.py` | Run independent commands in parallel on the measured CPUs (`-j`, `--each`) |
@@ -750,6 +783,8 @@ Lifecycle adapters live in `.grok/hooks/` and are registered in both:
 
 - `.grok/hooks.json` — doctor/structure contract (`command` + `commandWindows`)
 - `.grok/hooks/adaptive.json` — Grok project-hook discovery
+
+An empty managed adapter selection does not remove these shared registrations or disable native Grok hooks. See [managed adapter selection](#managed-adapter-selection) for generation, ownership and explicit legacy adoption.
 
 Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts and enforce local policy (secrets, Bitrix core, destructive commands, control-plane mutations, and exact delegated side-effect grants). Hook failure remains fail-open to avoid locking an interactive agent; this is why hooks are not merge authority. External gates retain their own enforcement: public GitHub Actions or the private App-owned Trust CI required Check Run.
 

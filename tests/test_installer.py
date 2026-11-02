@@ -108,7 +108,7 @@ class InstallerTests(unittest.TestCase):
     def test_installed_grok_skills_equal_canonical_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / 'consumer'
-            MODULE.materialize_new(ROOT, target)
+            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             for source in (target / '.agents/skills').rglob('*'):
                 if source.is_file():
                     relative = source.relative_to(target / '.agents/skills')
@@ -132,7 +132,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertTrue(names <= entries.keys())
                 root = Path(tmp) / 'consumer'
                 with patch.object(MODULE, 'build_payload', return_value=payload):
-                    MODULE.materialize_new(ROOT, root)
+                    MODULE.materialize_new(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
                 for name in sorted(names):
                     with self.subTest(name=name):
                         self.assertEqual(entries[name].content, expected_bytes)
@@ -189,7 +189,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn(relative, {entry.path for entry in payload})
                 target = Path(tmp) / "consumer"
                 with patch.object(MODULE, "build_payload", return_value=payload):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertEqual((target / relative).read_bytes(), (ROOT / relative).read_bytes())
                 for directory, module in ((target, "factory.tests.postgres_fixture_reset"),
                                           (target / "factory/tests", "postgres_fixture_reset")):
@@ -238,7 +238,7 @@ class InstallerTests(unittest.TestCase):
                 # its real writer with each explicitly constructed profile payload.
                 payload = MODULE.build_payload(ROOT, profile_kind=profile)
                 with patch.object(MODULE, "build_payload", return_value=payload):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 readme = target / "factory/README.md"
                 self.assertEqual(_broken_local_links(readme, target), [])
                 self.assertIn("Upstream-only", readme.read_text())
@@ -287,7 +287,7 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "consumer"
             payload = MODULE.build_payload(ROOT)
-            MODULE.materialize_new(ROOT, target)
+            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             templates = target / ".getzilla/templates"
             template_paths = {path.name for path in templates.glob("consumer-*")}
             self.assertEqual(template_paths, {
@@ -320,18 +320,18 @@ class InstallerTests(unittest.TestCase):
             readme.parent.mkdir()
             readme.write_bytes((ROOT / "factory/README.md").read_bytes())
             before = _snapshot(target)
-            plan = MODULE.plan_install(ROOT, target)
+            plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertIn("factory/README.md", {entry["path"] for entry in plan["entries"]})
             self.assertEqual(_snapshot(target), before)
             with self.assertRaises(MODULE.UnsafeInstallTarget):
-                MODULE.materialize_new(ROOT, target)
+                MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(_snapshot(target), before)
             (target / ".getzilla/AGBP_SYNC.json").write_text(
                 json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]})
             )
             before_conflict = _snapshot(target)
             with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "factory/README.md"):
-                MODULE.plan_install(ROOT, target)
+                MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(_snapshot(target), before_conflict)
             self.assertEqual(agents.read_bytes(), original)
 
@@ -359,7 +359,7 @@ class InstallerTests(unittest.TestCase):
             (target / "scripts/grok_verify.py").write_text("# old\n", encoding="utf-8")
             (target / "scripts/custom_tool.py").write_text("# theirs\n", encoding="utf-8")
             before = _snapshot(target)
-            plan = MODULE.plan_install(ROOT, target)
+            plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(_snapshot(target), before)
             self.assertEqual(
                 {item["path"]: item["state"] for item in plan["kept"]},
@@ -386,7 +386,7 @@ class InstallerTests(unittest.TestCase):
             (legacy / "AGBP_SYNC.json").write_text(
                 json.dumps({"schema_version": 1, "kept_local": ["factory/README.md"]}), encoding="utf-8"
             )
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual([item["path"] for item in plan["kept"]], [".coveragerc"])
             self.assertEqual(MODULE.legacy_to_current_path("scripts/grok_status.py"), "scripts/getzilla_status.py")
             self.assertEqual(MODULE.legacy_to_current_path("README.md"), "README.md")
@@ -406,7 +406,7 @@ class InstallerTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("# previous release\n", encoding="utf-8")
             before = _snapshot(target)
-            plan = MODULE.plan_install(ROOT, target)
+            plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(_snapshot(target), before)
             delivered = {entry["path"] for entry in plan["entries"]}
             retired = plan["legacy_migration"]
@@ -416,13 +416,13 @@ class InstallerTests(unittest.TestCase):
 
     def test_fresh_target_plan_has_empty_legacy_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plan = MODULE.plan_install(ROOT, Path(tmp) / "absent")
+            plan = MODULE.plan_install(ROOT, Path(tmp) / "absent", selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(plan["legacy_migration"], [])
 
     def test_keep_list_absent_file_is_reported_and_never_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = self._consumer_with_record(Path(tmp) / "t", [".coveragerc"])
-            plan = MODULE.plan_install(ROOT, target)
+            plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(
                 plan["kept"],
                 [{"action": "KEEP", "path": ".coveragerc", "reason": "declared by target",
@@ -436,7 +436,7 @@ class InstallerTests(unittest.TestCase):
             root = Path(tmp) / "t"
             self._consumer_with_record(root, [".coveragerc"])
             (root / ".coveragerc").write_bytes((ROOT / ".coveragerc").read_bytes())
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(plan["kept"][0]["state"], "identical")
             self.assertEqual(plan["target_state"], "directory")
             self.assertNotIn(".coveragerc", {entry["path"] for entry in plan["entries"]})
@@ -448,7 +448,7 @@ class InstallerTests(unittest.TestCase):
             (root / "bandit.yaml").write_text("# consumer-specific skips\n", encoding="utf-8")
             before = _snapshot(root)
             with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertIn("bandit.yaml", str(raised.exception))
             self.assertEqual(_snapshot(root), before)
 
@@ -459,7 +459,7 @@ class InstallerTests(unittest.TestCase):
                                               ".getzilla/config/routing.json"])
             for path in (".coveragerc", "bandit.yaml"):
                 (root / path).write_bytes((ROOT / path).read_bytes())
-            actions = {item["path"]: item["state"] for item in MODULE.plan_install(ROOT, root)["kept"]}
+            actions = {item["path"]: item["state"] for item in MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())["kept"]}
             self.assertEqual(actions[".coveragerc"], "identical")
             self.assertEqual(actions["bandit.yaml"], "identical")
             self.assertEqual(actions[".getzilla/config/routing.json"], "absent")
@@ -473,11 +473,11 @@ class InstallerTests(unittest.TestCase):
                 "kept_local_sha256": {".coveragerc": hashlib.sha256(b"local\n").hexdigest()},
             })
             (root / ".coveragerc").write_bytes(b"local\n")
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(plan["kept"][0]["state"], "divergent")
             (root / ".coveragerc").write_bytes(b"tampered\n")
             with self.assertRaisesRegex(MODULE.UnsafeInstallTarget, "digest"):
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_keep_record_validation_fails_closed(self) -> None:
         cases = (
@@ -494,7 +494,7 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
                 root = self._consumer_with_record(Path(tmp) / "t", payload)
                 with self.assertRaises(MODULE.UnsafeInstallTarget):
-                    MODULE.plan_install(ROOT, root)
+                    MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_symlinked_keep_record_or_path_is_not_silently_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -505,13 +505,13 @@ class InstallerTests(unittest.TestCase):
             outside.write_text('{"schema_version": 1, "kept_local": [".coveragerc"]}', encoding="utf-8")
             (stack_dir / "AGBP_SYNC.json").symlink_to(outside)
             with self.assertRaises(MODULE.UnsafeInstallTarget):
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_keep_states_target_owned_and_unmanaged_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = self._consumer_with_record(Path(tmp) / "t",
                                               ["architecture/adoption.json", "never-managed.yaml"])
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             states = {item["path"]: (item["action"], item["state"]) for item in plan["kept"]}
             self.assertEqual(states["architecture/adoption.json"], ("KEEP", "target-owned"))
             self.assertEqual(states["never-managed.yaml"], ("KEEP", "unmanaged"))
@@ -522,18 +522,18 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._consumer_with_record(Path(tmp) / "t", [routing])
             (root / "plan").mkdir()
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual({item["path"]: item["state"] for item in plan["kept"]}, {routing: "absent"})
             source = (ROOT / routing).read_bytes()
             nested_dir = root / ".getzilla" / "config"
             nested_dir.mkdir(parents=True)
             (nested_dir / "routing.json").write_bytes(source)
-            plan = MODULE.plan_install(ROOT, root)
+            plan = MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(plan["kept"][0]["state"], "identical")
             self.assertNotIn(routing, {entry["path"] for entry in plan["entries"]})
             (nested_dir / "routing.json").write_text('{"max_parallel_analysis_units": 3}\n', encoding="utf-8")
             with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
             self.assertIn(routing, str(raised.exception))
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "host lacks mkfifo")
@@ -542,7 +542,7 @@ class InstallerTests(unittest.TestCase):
             root = self._consumer_with_record(Path(tmp) / "t", [".coveragerc"])
             os.mkfifo(root / ".coveragerc")
             with self.assertRaises(MODULE.UnsafeInstallTarget):
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_oversized_sync_record_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -552,7 +552,7 @@ class InstallerTests(unittest.TestCase):
             (stack / "AGBP_SYNC.json").write_text(
                 json.dumps({"schema_version": 1, "kept_local": ["x" * 40000, "y" * 40000]}), encoding="utf-8")
             with self.assertRaises(MODULE.UnsafeInstallTarget):
-                MODULE.plan_install(ROOT, root)
+                MODULE.plan_install(ROOT, root, selection=MODULE.PayloadSelection.full_layout())
 
     def test_target_without_record_delivers_every_source_managed_path_intact(self) -> None:
         # No-record parity is an in-tree property, not a snapshot: the checkout feeding
@@ -560,16 +560,18 @@ class InstallerTests(unittest.TestCase):
         # verifies every delivered entry against its source file or synthesized
         # hook template - dropping any payload path breaks it anywhere.
         with tempfile.TemporaryDirectory() as tmp:
-            plan = MODULE.plan_install(ROOT, Path(tmp) / "t")
+            plan = MODULE.plan_install(ROOT, Path(tmp) / "t", selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual(plan["kept"], [])
             self.assertEqual(plan["target_state"], "absent")
-            expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)}
+            expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)} - {MODULE.COMPONENT_MANIFEST}
             delivered = {entry["path"] for entry in plan["entries"]}
-            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD}, expected)
+            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD, MODULE.COMPONENT_MANIFEST}, expected)
             for entry in plan["entries"]:
                 if entry["path"] == MODULE.STACK_SYNC_RECORD:  # synthesized: a fresh install keeps nothing local
                     self.assertEqual(entry["sha256"], hashlib.sha256(MODULE.FRESH_SYNC_RECORD).hexdigest())
                     continue
+                if entry['path'] == MODULE.COMPONENT_MANIFEST:
+                    continue  # target-owned selection/ownership is verified against actual files in its regressions
                 if entry["path"] in {"AGENTS.md", "factory/README.md"}:
                     continue
                 source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
@@ -601,14 +603,16 @@ class InstallerTests(unittest.TestCase):
                     force=False,
                     dry_run=False,
                     runner=lambda command: runner_calls.append(command),
+                    selection=MODULE.PayloadSelection.full_layout(),
                 ),
-                lambda: MODULE.plan_install(ROOT, target),
+                lambda: MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout()),
                 lambda: MODULE.install(
                     ROOT,
                     target,
                     force=False,
                     dry_run=True,
                     runner=lambda command: runner_calls.append(command),
+                    selection=MODULE.PayloadSelection.full_layout(),
                 ),
             )
             plans = []
@@ -650,7 +654,7 @@ class InstallerTests(unittest.TestCase):
             authority.write_bytes(b"target authority\n")
             before = _snapshot(target)
             with self.assertRaises(SystemExit) as raised:
-                MODULE.install(ROOT, target, force=True, dry_run=False)
+                MODULE.install(ROOT, target, force=True, dry_run=False, selection=MODULE.PayloadSelection.full_layout())
             self.assertIn("--force", str(raised.exception))
             self.assertIn("no longer supported", str(raised.exception).lower())
             self.assertEqual(_snapshot(target), before)
@@ -751,11 +755,11 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             target = parent / "target"
-            plan = MODULE.plan_install(ROOT, target)
+            plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             old_umask = os.umask(0o077)
             try:
                 with patch("subprocess.Popen", side_effect=AssertionError("dependency runner")):
-                    result = MODULE.materialize_new(ROOT, target)
+                    result = MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             finally:
                 os.umask(old_umask)
 
@@ -827,7 +831,7 @@ class InstallerTests(unittest.TestCase):
                     os.mkfifo(target)
                 before = _snapshot(target)
                 with self.assertRaises(MODULE.UnsafeInstallTarget):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertEqual(_snapshot(target), before)
                 self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
                 self.assertEqual(_stage_names(parent), [])
@@ -863,7 +867,7 @@ class InstallerTests(unittest.TestCase):
 
             with patch.object(MODULE, "_rename_noreplace", side_effect=create_target):
                 with self.assertRaises(MODULE.UnsafeInstallTarget):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual((target / "winner.txt").read_bytes(), b"winner\n")
             self.assertEqual(_stage_names(parent), [])
 
@@ -881,7 +885,7 @@ class InstallerTests(unittest.TestCase):
                 sentinel.write_bytes(b"outside unchanged\n")
                 with patch.object(MODULE, attribute, side_effect=failure):
                     with self.assertRaises((OSError, MODULE.UnsafeInstallTarget)):
-                        MODULE.materialize_new(ROOT, target)
+                        MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertFalse(os.path.lexists(target))
                 self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
                 self.assertEqual(_stage_names(parent), [])
@@ -892,7 +896,7 @@ class InstallerTests(unittest.TestCase):
             target = parent / "target"
             with patch.object(MODULE.os, "fsync", side_effect=OSError("fsync failed")):
                 with self.assertRaises(OSError):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertFalse(os.path.lexists(target))
             self.assertEqual(_stage_names(parent), [])
 
@@ -914,7 +918,7 @@ class InstallerTests(unittest.TestCase):
 
             with patch.object(MODULE, "_rename_noreplace", side_effect=relocate_parent):
                 with self.assertRaises(MODULE.UnsafeInstallTarget):
-                    MODULE.materialize_new(ROOT, target)
+                    MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
             self.assertEqual((relocated / "outside.txt").read_bytes(), b"outside unchanged\n")
             self.assertEqual(_stage_names(relocated), [])
             self.assertEqual(_stage_names(parent), [])
@@ -964,7 +968,7 @@ class InstallerTests(unittest.TestCase):
 
                 with patch.object(MODULE.os, "open", side_effect=swap_before_open):
                     with self.assertRaises(MODULE.UnsafeInstallTarget):
-                        MODULE.materialize_new(ROOT, target)
+                        MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertTrue(swapped)
                 self.assertEqual(outside_sentinel.read_bytes(), b"outside unchanged\n")
                 self.assertFalse((outside_parent / "target").exists())
@@ -991,7 +995,7 @@ class InstallerTests(unittest.TestCase):
                     (anchor / "parent").symlink_to(outside, target_is_directory=True)
                     target = anchor / "parent/target"
                 before = _snapshot(outside)
-                plan = MODULE.plan_install(ROOT, target)
+                plan = MODULE.plan_install(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertEqual(plan["target_state"], "unsafe")
                 self.assertEqual(_snapshot(outside), before)
                 self.assertEqual(_stage_names(anchor), [])
@@ -1036,6 +1040,7 @@ class InstallerTests(unittest.TestCase):
                     MODULE._materialize_new(
                         source, positive, include_dependencies=False,
                         include_optional=False,
+                        selection=MODULE.PayloadSelection.full_layout(),
                     )
                     self.assertEqual((positive / ".grok/required.md").read_text(), "required\n")
                     self.assertEqual((positive / "AGENTS.md").read_text(),
@@ -1051,6 +1056,7 @@ class InstallerTests(unittest.TestCase):
                                 target,
                                 include_dependencies=False,
                                 include_optional=False,
+                                selection=MODULE.PayloadSelection.full_layout(),
                             )
                 self.assertTrue(swapped)
                 self.assertFalse(os.path.lexists(target))
@@ -1145,7 +1151,7 @@ class InstallerTests(unittest.TestCase):
                 if family == "toolchain":
 
                     def invocation() -> object:
-                        return MODULE.plan_install(source, root / "target")
+                        return MODULE.plan_install(source, root / "target", selection=MODULE.PayloadSelection.full_layout())
 
                 elif family == "agents helper":
 
@@ -1218,7 +1224,7 @@ class InstallerTests(unittest.TestCase):
 
                 with patch.object(MODULE.os, "fstat", side_effect=fail_fstat):
                     with self.assertRaises((OSError, MODULE.UnsafeInstallTarget)):
-                        MODULE.materialize_new(ROOT, target)
+                        MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertTrue(injected)
                 self.assertFalse(os.path.lexists(target))
                 self.assertEqual(sentinel.read_bytes(), b"outside unchanged\n")
@@ -1324,7 +1330,7 @@ class InstallerTests(unittest.TestCase):
                     patch.object(MODULE.os, "fstat", side_effect=race_fstat),
                 ):
                     with self.assertRaises(MODULE.UnsafeInstallTarget) as raised:
-                        MODULE.materialize_new(ROOT, target)
+                        MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
                 self.assertIsNotNone(replacement)
                 self.assertIsNotNone(replacement_identity)
                 assert replacement is not None
@@ -1423,6 +1429,7 @@ class InstallerTests(unittest.TestCase):
                     force=False,
                     dry_run=False,
                     with_ci=True,
+                    selection=MODULE.PayloadSelection.full_layout(),
                 )
             self.assertIn("scripts/getzilla_ci.py --write", str(raised.exception))
             self.assertEqual(_snapshot(target), before)

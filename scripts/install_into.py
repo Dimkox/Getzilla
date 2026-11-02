@@ -19,6 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.component_state import (
+    AGENT_COMPONENT_PATHS as AGENT_COMPONENT_PATHS, KNOWN_AGENTS,
+    EXTRA_COMPONENT_PATHS as EXTRA_COMPONENT_PATHS, KNOWN_EXTRAS,
+    COMPLIANCE_COMPONENT_PATHS as COMPLIANCE_COMPONENT_PATHS, KNOWN_COMPLIANCE, ComponentStateError,
+    MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest,
+    agent_of as _agent_of, component_of, parse_agents, validate_agents,
+)
 
 MANAGED_DIRS = (
     ".grok",
@@ -57,6 +64,7 @@ MANAGED_FILES = (
     "scripts/getzilla_architecture.py",
     "scripts/getzilla_governance.py",
     "scripts/getzilla_history.py",
+    "scripts/getzilla_harness.py",
     "scripts/getzilla_route.py",
     "scripts/getzilla_change.py",
     "scripts/getzilla_spec.py",
@@ -188,17 +196,6 @@ _UNSUPPORTED_RENAME_ERRNOS = frozenset(
 )
 
 
-AGENT_COMPONENT_PATHS = {
-    # Generated per-agent harness output; the canonical sources (.grok hooks/agents/rules, .agents/skills) are core.
-    "claude": (".claude/",),
-    "codex": (".codex/",),
-    "qwen": (".qwen/",),
-    "gemini": (".gemini/",),
-    "grok": (".grok/skills/",),
-    "copilot": (".github/hooks/", ".github/agents/"),
-    "cursor": (".cursor/", ".grok/cursor-rules/"),
-}
-KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
 # Grok Build reads these briefs; the router, doctor and generated harnesses read the .toml beside them.
 GROK_AGENT_BRIEFS = ".grok/agents/"
 # A fresh install ships the engine as one archive (sources plus bytecode for the installing Python);
@@ -209,49 +206,13 @@ ENGINE_ARCHIVE = ".getzilla/getzilla.zip"
 # Domain skills a project gets only when it has that domain (or asks): a plain Python repository
 # never receives Bitrix or SEO-landing material. Matched anywhere in a skills path, so every
 # agent's copy belongs to the extra as well as to that agent.
-EXTRA_COMPONENT_PATHS = {
-    "entire": ("/integrations/getzilla_entire/",),
-    "bitrix": ("/skills/bitrix-development/", "/agents/bitrix_"),
-    "seo-landing": ("/skills/seo-landing/",),
-}
-KNOWN_EXTRAS = tuple(EXTRA_COMPONENT_PATHS)
 # Target paths that mark a domain; detect_extras turns them into extras.
 EXTRA_MARKERS = {
     "bitrix": ("bitrix", "local/modules", "local/components"),
     "seo-landing": ("side-projects/seo-landings",),
 }
 # Opt-in compliance layers; never installed unless asked for (the installer asks only on EU hints).
-COMPLIANCE_COMPONENT_PATHS = {
-    "eu-ai-act": (".getzilla/compliance/eu-ai-act/", ".getzilla/templates/eu-ai-act/",
-                  "scripts/getzilla_audit_bundle.py", "scripts/getzilla_compliance.py"),
-}
-KNOWN_COMPLIANCE = tuple(COMPLIANCE_COMPONENT_PATHS)
 COMPLIANCE_CONFIG = ".getzilla/config/compliance.json"
-
-
-def _agent_of(path: str) -> str | None:
-    if path.startswith(GROK_AGENT_BRIEFS) and path.endswith(".md"):
-        return "grok"
-    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
-        if path.startswith(prefixes):
-            return agent
-    return None
-
-
-def component_of(path: str) -> str:
-    """core, factory, agent:<name>, compliance:<name> or extra:<name> for one payload path."""
-    if path.startswith("factory/"):
-        return "factory"
-    for name, markers in EXTRA_COMPONENT_PATHS.items():
-        if any(marker in "/" + path for marker in markers):
-            return f"extra:{name}"
-    for name, prefixes in COMPLIANCE_COMPONENT_PATHS.items():
-        if path.startswith(prefixes):
-            return f"compliance:{name}"
-    agent = _agent_of(path)
-    if agent is not None:
-        return f"agent:{agent}"
-    return "core"
 
 
 class PayloadSelection:
@@ -260,9 +221,10 @@ class PayloadSelection:
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
                  compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
                  root_shims: bool = False, engine_archive: bool = False) -> None:
-        unknown = sorted(set(agents) - set(KNOWN_AGENTS))
-        if unknown:
-            raise UnsafeInstallTarget(f"unknown agent(s): {', '.join(unknown)}")
+        try:
+            agents = validate_agents(agents)
+        except ComponentStateError as exc:
+            raise UnsafeInstallTarget(str(exc)) from exc
         unknown = sorted(set(compliance) - set(KNOWN_COMPLIANCE))
         if unknown:
             raise UnsafeInstallTarget(f"unknown compliance layer(s): {', '.join(unknown)}")
@@ -359,21 +321,22 @@ def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
 
 
 def detect_agents(target: Path) -> tuple[str, ...]:
-    """Agents to install for: GETZILLA_AGENT, else agents whose folders the target already has, else qwen."""
+    """Read selected membership; only a fresh target uses the optional default."""
+    if target.exists() or target.is_symlink():
+        try:
+            with BoundRoot(target) as binding:
+                state = read_state(target, binding=binding)
+                installed = any(binding.read(path) is not None for path in (
+                    STACK_SYNC_RECORD, ENGINE_INIT, LEGACY_STACK_SYNC_RECORD,
+                ))
+                if state.kind != 'absent' or installed:
+                    return state.require_selection()
+        except (ComponentStateError, OSError) as exc:
+            raise UnsafeInstallTarget(str(exc)) from exc
     chosen = os.environ.get("GETZILLA_AGENT", "").strip().lower()
     if chosen in KNOWN_AGENTS:
         return (chosen,)
-    found = []
-    for agent, prefixes in AGENT_COMPONENT_PATHS.items():
-        if agent == "grok":
-            marker = target / ".grok" / "skills"
-        else:
-            marker = target / prefixes[0].rstrip("/")
-        if agent in {"cursor"}:
-            marker = target / ".cursor" / "rules" / "getzilla"
-        if marker.exists():
-            found.append(agent)
-    return tuple(found) or ("qwen",)
+    return ('qwen',)
 
 
 def footprint(payload: "tuple[InstallEntry, ...]", selection: "PayloadSelection | None" = None) -> dict[str, dict[str, object]]:
@@ -889,11 +852,13 @@ def _source_entry(
     return InstallEntry(relative, content, mode)
 
 
-def with_fresh_sync_record(payload: tuple[InstallEntry, ...]) -> tuple[InstallEntry, ...]:
+def with_fresh_sync_record(payload: tuple[InstallEntry, ...], selection: PayloadSelection) -> tuple[InstallEntry, ...]:
     """A fresh install also writes its sync record: it marks an installed project (the mandatory
     workflow baseline is checked there) and carries kept_local for later syncs; nothing is kept yet."""
     entry = InstallEntry(STACK_SYNC_RECORD, FRESH_SYNC_RECORD, 0o644)
-    return tuple(sorted((*payload, entry), key=lambda item: item.path))
+    actual = (*payload, entry)
+    manifest = InstallEntry(COMPONENT_MANIFEST, encode_manifest(fresh_manifest(selection.agents, actual)), 0o644)
+    return tuple(sorted((*actual, manifest), key=lambda item: item.path))
 
 
 def build_payload(
@@ -905,7 +870,7 @@ def build_payload(
     # A projects sync record is that projects state, never payload (an installed project stays
     # a complete source for the same payload).
     payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
-                    if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD})
+                    if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, COMPONENT_MANIFEST})
     if selection is None or selection.full:
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
@@ -1264,11 +1229,13 @@ def _make_plan(
     payload: tuple[InstallEntry, ...] | None = None,
     selection: PayloadSelection | None = None,
 ) -> dict[str, object]:
+    if selection is None:
+        selection = PayloadSelection(detect_agents(target))
     full_payload = build_payload(source)
     selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
     if state == "absent" and payload is None:
-        selected_payload = with_fresh_sync_record(selected_payload)
+        selected_payload = with_fresh_sync_record(selected_payload, selection)
     kept = _kept_local(target) if state == "directory" else frozenset()
     kept_digests = _kept_local_digests(target) if state == "directory" else {}
     payload_by_path = {entry.path: entry for entry in selected_payload}
@@ -1329,12 +1296,13 @@ def _make_plan(
     }
 
 
-def plan_install(source: Path, target: Path) -> dict[str, object]:
+def plan_install(source: Path, target: Path, *, selection: PayloadSelection | None = None) -> dict[str, object]:
     return _make_plan(
         source,
         target,
         include_dependencies=True,
         include_optional=False,
+        selection=selection,
     )
 
 
@@ -1770,13 +1738,16 @@ def _materialize_new(
     include_optional: bool,
     selection: PayloadSelection | None = None,
 ) -> dict[str, object]:
-    payload = with_fresh_sync_record(build_payload(source, selection=selection))
+    if selection is None:
+        selection = PayloadSelection(detect_agents(target))
+    payload = with_fresh_sync_record(build_payload(source, selection=selection), selection)
     plan = _make_plan(
         source,
         target,
         include_dependencies=include_dependencies,
         include_optional=include_optional,
         payload=payload,
+        selection=selection,
     )
     if plan["target_state"] != "absent":
         raise UnsafeInstallTarget("materialization requires an absent target")
@@ -1846,12 +1817,13 @@ def _materialize_new(
         parent.close()
 
 
-def materialize_new(source: Path, target: Path) -> dict[str, object]:
+def materialize_new(source: Path, target: Path, *, selection: PayloadSelection | None = None) -> dict[str, object]:
     return _materialize_new(
         source,
         target,
         include_dependencies=True,
         include_optional=False,
+        selection=selection,
     )
 
 
@@ -1864,6 +1836,7 @@ def install(
     with_ci: bool = False,
     install_deps: bool = True,
     all_deps: bool = False,
+    selection: PayloadSelection | None = None,
     runner: Any = None,
 ) -> dict[str, object]:
     del dry_run, runner
@@ -1884,6 +1857,7 @@ def install(
         target,
         include_dependencies=install_deps,
         include_optional=all_deps,
+        selection=selection,
     )
     print(LEGACY_PLAN_NOTICE)
     print(json.dumps(plan, sort_keys=True, indent=2))
@@ -1913,8 +1887,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Alias for planning.")
     parser.add_argument(
         "--agents",
-        help="Comma-separated agents to install for (default: GETZILLA_AGENT, the agent folders the target "
-             "already has, else qwen). Other agents and factory/ are added when needed.",
+        help="Comma-separated adapters; an empty string selects none. Existing installations use their "
+             "manifest; a fresh target defaults to GETZILLA_AGENT or qwen.",
     )
     parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
     parser.add_argument(
@@ -1950,19 +1924,21 @@ def main() -> None:
         )
     if args.materialize_new and args.dry_run:
         parser.error("--dry-run is planning and cannot be combined with --materialize-new")
+    if args.full_layout and args.agents is not None:
+        parser.error('--full-layout cannot be combined with --agents')
     target = Path(args.target)
     if args.full_layout:
         selection = PayloadSelection.full_layout()
     else:
-        agents = tuple(item.strip().lower() for item in (args.agents or "").split(",") if item.strip())
         compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
         try:
+            agents = parse_agents(args.agents) if args.agents is not None else detect_agents(target)
             extras = tuple(item.strip().lower() for item in (args.extras or "").split(",") if item.strip())
-            selection = PayloadSelection(agents or detect_agents(target), compliance=compliance,
+            selection = PayloadSelection(agents, compliance=compliance,
                                          extras=extras or detect_extras(target),
                                          root_shims=has_root_shims(target),
                                          engine_archive=wants_engine_archive(target))
-        except UnsafeInstallTarget as exc:
+        except (UnsafeInstallTarget, ComponentStateError) as exc:
             parser.error(str(exc))
     if args.materialize_new:
         result = _materialize_new(

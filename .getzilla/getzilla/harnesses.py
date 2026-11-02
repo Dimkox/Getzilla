@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
+import copy
 import re
-import secrets
 import tomllib
-from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
-from typing import Iterator
 
-from . import fsx
+from . import fsx as fsx
+from .component_state import (
+    MANIFEST, V2, KNOWN_AGENTS, BoundRoot, ComponentTransaction, FileSnapshot,
+    ManifestState, agent_of, component_transaction, encode_manifest,
+    matches_owned, mode_matches, owned_proof, read_state, record_owned,
+)
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
@@ -51,8 +53,19 @@ LOCAL_FILES = frozenset({'settings.local.json', 'CLAUDE.local.md', '.env'})
 _SCRIPT = re.compile(r'\.grok/hooks/([A-Za-z0-9_]+\.py)')
 
 
-def _hook_events(root: Path) -> list[tuple[str, str, int]]:
-    data = json.loads((root / HOOK_SOURCE).read_text(encoding='utf-8'))
+def _source(binding: BoundRoot | ComponentTransaction, path: str) -> bytes:
+    snapshot = binding.read(path)
+    if snapshot is None:
+        raise ValueError(f'missing canonical source: {path}')
+    return snapshot.content
+
+
+def _hook_events(binding: BoundRoot | ComponentTransaction) -> list[tuple[str, str, int]]:
+    return _events_from_bytes(_source(binding, HOOK_SOURCE))
+
+
+def _events_from_bytes(content: bytes) -> list[tuple[str, str, int]]:
+    data = json.loads(content)
     events: list[tuple[str, str, int]] = []
     for event, groups in data['hooks'].items():
         for group in groups:
@@ -62,6 +75,36 @@ def _hook_events(root: Path) -> list[tuple[str, str, int]]:
                     raise ValueError(f'{HOOK_SOURCE}: {event} names no .grok/hooks script')
                 events.append((event, match.group(1), int(hook.get('timeout', 60))))
     return events
+
+
+def _codex_hooks(events: list[tuple[str, str, int]], overlay: bytes | None) -> bytes:
+    hooks = _hooks_block(events, harness='codex', milliseconds=False, only=CODEX_HOOK_EVENTS)
+    if overlay is not None:
+        data = json.loads(overlay)
+        if type(data) is not dict or set(data) != {'hooks'} or type(data['hooks']) is not dict:
+            raise ValueError('invalid canonical Codex overlay')
+        for event, groups in data['hooks'].items():
+            if type(groups) is not list:
+                raise ValueError('invalid canonical Codex hook groups')
+            entire_commands: set[str] = set()
+            for group in groups:
+                if type(group) is not dict or type(group.get('hooks')) is not list:
+                    raise ValueError('invalid canonical Codex hook group')
+                for hook in group['hooks']:
+                    if type(hook) is not dict or type(hook.get('command')) is not str:
+                        raise ValueError('invalid canonical Codex hook')
+                    command = hook['command']
+                    if 'entire hooks codex ' in command:
+                        if command in entire_commands:
+                            raise ValueError(f'duplicate Entire Codex hook: {event}')
+                        entire_commands.add(command)
+            hooks.setdefault(event, []).extend(groups)
+    return _json({'hooks': hooks})
+
+
+def render_codex_hooks(canonical_hooks: bytes, overlay: bytes | None) -> bytes:
+    """Render immutable incoming guards with a retained consumer overlay."""
+    return _codex_hooks(_events_from_bytes(canonical_hooks), overlay)
 
 
 def _command(script: str, harness: str) -> str:
@@ -139,11 +182,13 @@ def _yaml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _agents(root: Path) -> list[tuple[str, dict]]:
+def _agents(binding: BoundRoot | ComponentTransaction) -> list[tuple[str, dict, bytes]]:
     agents = []
-    for path in sorted((root / AGENT_SOURCE).glob('*.toml')):
-        data = tomllib.loads(path.read_text(encoding='utf-8'))
-        agents.append((path.stem, data))
+    for path in binding.files(AGENT_SOURCE):
+        if path.endswith('.toml'):
+            content = _source(binding, path)
+            data = tomllib.loads(content.decode('utf-8'))
+            agents.append((PurePosixPath(path).stem, data, content))
     return agents
 
 
@@ -153,22 +198,22 @@ def _agent_markdown(name: str, data: dict, *, extra: list[str]) -> bytes:
     return ('\n'.join(lines) + body + '\n').encode('utf-8')
 
 
-def _skills(root: Path) -> dict[str, bytes]:
+def _skills(binding: BoundRoot | ComponentTransaction) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
-    base = root / SKILL_SOURCE
-    for path in sorted(base.rglob('*')):
-        if path.is_file():
-            files[path.relative_to(base).as_posix()] = path.read_bytes()
+    for path in binding.files(SKILL_SOURCE, recursive=True):
+        files[path.removeprefix(SKILL_SOURCE + '/')] = _source(binding, path)
     return files
 
 
-def _cursor_rules(root: Path) -> dict[str, bytes]:
+def _cursor_rules(binding: BoundRoot | ComponentTransaction) -> dict[str, bytes]:
     """Prompt-only Cursor project rules; Cursor has no hooks, so it is not in HARNESSES."""
     out: dict[str, bytes] = {}
     always = 0
-    for path in sorted((root / CURSOR_SOURCE).glob('*.toml')):
-        source = f'{CURSOR_SOURCE}/{path.name}'
-        rule = tomllib.loads(path.read_text(encoding='utf-8'))
+    for source in binding.files(CURSOR_SOURCE):
+        path = PurePosixPath(source)
+        if path.suffix != '.toml':
+            continue
+        rule = tomllib.loads(_source(binding, source).decode('utf-8'))
         globs, scoped = rule.get('globs', []), rule.get('always_apply') is False
         if (set(rule) - CURSOR_KEYS or type(rule.get('always_apply')) is not bool
                 or not isinstance(rule.get('description'), str) or not rule['description'].strip()
@@ -191,10 +236,34 @@ def _cursor_rules(root: Path) -> dict[str, bytes]:
     return out
 
 
-def render(root: Path) -> dict[str, bytes]:
-    events = _hook_events(root)
-    agents = _agents(root)
-    skills = _skills(root)
+def _selection(root: Path, state: ManifestState, binding: BoundRoot | ComponentTransaction,
+               repository_all: bool) -> tuple[str, ...]:
+    if not repository_all:
+        return state.require_selection()
+    if not all(binding.read(path) is not None for path in ('scripts/install_into.py', 'factory/pyproject.toml')):
+        raise ValueError('--repository-all requires the full Getzilla source checkout')
+    if state.kind == 'absent':
+        return KNOWN_AGENTS
+    selected = state.require_selection()
+    if set(selected) != set(KNOWN_AGENTS):
+        raise ValueError('--repository-all cannot override an established adapter selection')
+    return selected
+
+
+def render(root: Path, *, repository_all: bool = False) -> dict[str, bytes]:
+    with BoundRoot(root) as binding:
+        state = read_state(root, binding=binding)
+        selected = _selection(root, state, binding, repository_all)
+        return _render(binding, selected)
+
+
+def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]) -> dict[str, bytes]:
+    if not selected:
+        return {}
+    execution = bool(set(selected) & {'qwen', 'claude', 'codex', 'gemini', 'copilot'})
+    events = _hook_events(binding) if execution else []
+    agents = _agents(binding) if execution else []
+    skills = _skills(binding) if set(selected) & {'qwen', 'claude', 'gemini', 'grok'} else {}
     out: dict[str, bytes] = {}
 
     out['.qwen/settings.json'] = _json({
@@ -205,12 +274,8 @@ def render(root: Path) -> dict[str, bytes]:
         'hooks': _hooks_block(events, harness='claude', milliseconds=False),
     })
     out['.claude/CLAUDE.md'] = b'@../AGENTS.md\n'
-    codex_hooks = _hooks_block(events, harness='codex', milliseconds=False, only=CODEX_HOOK_EVENTS)
-    overlay = root / CODEX_HOOK_SOURCE
-    if overlay.is_file():
-        for event, groups in json.loads(overlay.read_text(encoding='utf-8'))['hooks'].items():
-            codex_hooks.setdefault(event, []).extend(groups)
-    out['.codex/hooks.json'] = _json({'hooks': codex_hooks})
+    overlay = binding.read(CODEX_HOOK_SOURCE) if 'codex' in selected else None
+    out['.codex/hooks.json'] = _codex_hooks(events, overlay.content if overlay else None)
     out['.codex/config.toml'] = b'[features]\ncodex_hooks = true\n'
     out['.gemini/settings.json'] = _json({
         'context': {'fileName': ['AGENTS.md']},
@@ -218,13 +283,13 @@ def render(root: Path) -> dict[str, bytes]:
     })
     out[COPILOT_HOOKS] = _json(_copilot_hooks(events))
 
-    for name, data in agents:
+    for name, data, original in agents:
         read_only = data.get('sandbox_mode') == 'read-only'
         qwen_extra = ['disallowedTools:', *[f'  - {tool}' for tool in QWEN_READ_ONLY_BLOCK]] if read_only else []
         claude_extra = [f'tools: {", ".join(CLAUDE_READ_ONLY_TOOLS)}'] if read_only else []
         out[f'.qwen/agents/{name}.md'] = _agent_markdown(name, data, extra=qwen_extra)
         out[f'.claude/agents/{name}.md'] = _agent_markdown(name, data, extra=claude_extra)
-        out[f'.codex/agents/{name}.toml'] = (root / AGENT_SOURCE / f'{name}.toml').read_bytes()
+        out[f'.codex/agents/{name}.toml'] = original
         out[f'.gemini/agents/{name}.md'] = _agent_markdown(name, data, extra=[])
         copilot_extra = [f'tools: {json.dumps(list(COPILOT_READ_ONLY_TOOLS))}'] if read_only else []
         out[f'.github/agents/{name}.agent.md'] = _agent_markdown(name, data, extra=copilot_extra)
@@ -234,146 +299,104 @@ def render(root: Path) -> dict[str, bytes]:
         out[f'.qwen/skills/{rel}'] = content
         out[f'.claude/skills/{rel}'] = content
         out[f'.gemini/skills/{rel}'] = content
-    out.update(_cursor_rules(root))
-    return out
+    if 'cursor' in selected:
+        out.update(_cursor_rules(binding))
+    return {path: content for path, content in out.items() if agent_of(path) in selected}
 
 
-def _generated(root: Path) -> Iterator[Path]:
-    for base in GENERATED_ROOTS:
-        if (root / base).is_dir():
-            yield from sorted((root / base).rglob('*'), reverse=True)
+_GENERATED_PATH = re.compile(
+    r'(?:\.(?:qwen|claude|gemini)/settings\.json|\.claude/CLAUDE\.md|'
+    r'\.(?:qwen|claude|gemini)/agents/[^/]+\.md|\.codex/agents/[^/]+\.toml|'
+    r'\.codex/(?:hooks\.json|config\.toml)|\.github/hooks/getzilla\.json|'
+    r'\.github/agents/[^/]+\.agent\.md|\.(?:qwen|claude|gemini|grok)/skills/.+|'
+    r'\.cursor/rules/getzilla/[^/]+\.mdc)'
+)
 
 
-def _owned(path: Path, rel: str) -> bool:
-    """Cursor rules share .cursor/rules with the user's own: only marked regular files there are Getzilla's.
-
-    A link is never Getzilla's output and is not read through. The marker is searched in the
-    largest rule `render` accepts, so a rule with a long frontmatter stays owned.
-    """
-    if not rel.startswith(CURSOR_OUTPUT + '/'):
-        return True
-    if path.is_symlink():
-        return False
-    if not path.is_file():
-        return True
-    with path.open('rb') as stream:
-        return CURSOR_MARKER.encode('utf-8') in stream.read(max(CURSOR_BUDGET.values()))
-
-
-def _unexpected(path: Path, rel: str, expected: dict[str, bytes]) -> bool:
-    return ((path.is_file() or path.is_symlink()) and rel not in expected and path.name not in LOCAL_FILES
-            and _owned(path, rel))
-
-
-def _conflict(root: Path, rel: str) -> bool:
-    """A linked or non-directory parent, a directory or an unowned file where an output goes blocks every write."""
-    path = root / rel
-    parents = [root / parent for parent in PurePosixPath(rel).parents]
-    return (any(parent.is_symlink() or (parent.exists() and not parent.is_dir()) for parent in parents)
-            or (path.is_dir() and not path.is_symlink()) or not _owned(path, rel))
-
-
-def drift(root: Path) -> list[str]:
-    expected = render(root)
-    problems = []
-    for rel, content in sorted(expected.items()):
-        path = root / rel
-        if _conflict(root, rel):
-            problems.append(f'conflict {rel}')
-        elif not path.is_file():
-            problems.append(f'missing {rel}')
-        elif path.is_symlink() or path.read_bytes() != content:
-            problems.append(f'stale {rel}')
-    for path in reversed(list(_generated(root))):
-        rel = path.relative_to(root).as_posix()
-        if _unexpected(path, rel, expected):
-            problems.append(f'unexpected {rel}')
-    return problems
-
-
-@contextmanager
-def _chain(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[list[fsx.DirHandle], list[str], str]]:
-    """Walk to rel's directory by descriptor, never following a link (no check-then-use race)."""
-    *directories, name = rel.split('/')
-    handles = [fsx.open_dir(root)]
-    try:
-        for part in directories:
-            if create:
-                with suppress(FileExistsError):
-                    fsx.mkdir_at(handles[-1], part, 0o755)
-            handles.append(fsx.open_dir_at(handles[-1], part))
-        yield handles, directories, name
-    finally:
-        for handle in reversed(handles):
-            fsx.close_dir(handle)
-
-
-@contextmanager
-def _parent(root: Path, rel: str, *, create: bool = False) -> Iterator[tuple[fsx.DirHandle, str]]:
-    with _chain(root, rel, create=create) as (handles, _directories, name):
-        yield handles[-1], name
-
-
-def _identity(info: os.stat_result) -> tuple[int, int]:
-    return info.st_dev, info.st_ino
-
-
-def _still_inside(root: Path, handles: list[fsx.DirHandle], directories: list[str]) -> None:
-    """Fail closed unless every opened directory is still the one a fresh lookup from root finds (#71).
-
-    A descriptor keeps pointing at a directory that another process renamed out of the
-    repository, so the write would land outside it and still report success.
-    """
-    current = root
-    for index, handle in enumerate(handles):
-        if index:
-            current = current / directories[index - 1]
+def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestState,
+                     selected: tuple[str, ...]) -> tuple[list[str], list[tuple], list[tuple], dict]:
+    expected = _render(binding, selected)
+    manifest = copy.deepcopy(state.manifest) if state.kind == 'selected' else {
+        'schema_version': V2, 'agents': list(selected), 'components': {},
+    }
+    problems: list[str] = []
+    changes: list[tuple[str, bytes, FileSnapshot | None]] = []
+    retirements: list[tuple[str, FileSnapshot]] = []
+    for relative, content in sorted(expected.items()):
         try:
-            fresh = os.lstat(current)
-        except OSError as exc:
-            raise ValueError(f'nothing written; {current} moved while the harness was being written') from exc
-        if fsx.is_link(fresh) or _identity(fresh) != _identity(fsx.fstat_dir(handle)):
-            raise ValueError(f'nothing written; {current} moved while the harness was being written')
-
-
-def _write_file(root: Path, rel: str, content: bytes) -> None:
-    with _chain(root, rel, create=True) as (handles, directories, name):
-        parent = handles[-1]
-        _still_inside(root, handles, directories)
-        temporary = f'.{name}.{secrets.token_hex(6)}.tmp'
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC
-        descriptor = fsx.open_at(parent, temporary, flags, 0o644)
-        try:
-            with os.fdopen(descriptor, 'wb') as stream:
-                fsx.fchmod(stream.fileno(), 0o644)
-                stream.write(content)
-            _still_inside(root, handles, directories)
-            fsx.replace_at(parent, temporary, parent, name)
-        except BaseException:
-            with suppress(FileNotFoundError):
-                fsx.unlink_at(parent, temporary)
-            raise
-
-
-def write(root: Path) -> list[str]:
-    expected = render(root)
-    conflicts = [rel for rel in sorted(expected) if _conflict(root, rel)]
-    if conflicts:
-        raise ValueError(f'nothing written; resolve conflict {", ".join(conflicts)}')
-    changed = []
-    for path in _generated(root):
-        rel = path.relative_to(root).as_posix()
-        if _unexpected(path, rel, expected):
-            with _parent(root, rel) as (parent, name):
-                fsx.unlink_at(parent, name)
-            changed.append(f'removed {rel}')
-        elif path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
-            with _parent(root, rel) as (parent, name):
-                fsx.rmdir_at(parent, name)
-    for rel, content in sorted(expected.items()):
-        path = root / rel
-        if path.is_file() and not path.is_symlink() and path.read_bytes() == content:
+            current = binding.read(relative)
+        except (OSError, ValueError):
+            problems.append(f'conflict {relative}')
             continue
-        _write_file(root, rel, content)
-        changed.append(f'wrote {rel}')
-    return changed
+        if current is None:
+            problems.append(f'missing {relative}')
+            changes.append((relative, content, None))
+        elif current.content != content or not mode_matches(current.mode, 0o644):
+            if relative == '.codex/config.toml' or not matches_owned(current, owned_proof(manifest, relative)):
+                problems.append(f'conflict {relative}')
+                continue
+            problems.append(f'stale {relative}')
+            changes.append((relative, content, current))
+        record_owned(manifest, relative, content, 0o644)
+    for record in manifest['components'].values():
+        for relative, proof in list(record.get('owned', {}).items()):
+            if relative in expected or agent_of(relative) not in selected or not _GENERATED_PATH.fullmatch(relative):
+                continue
+            try:
+                current = binding.read(relative)
+            except (OSError, ValueError):
+                problems.append(f'conflict {relative}')
+                continue
+            if current is not None:
+                if not matches_owned(current, proof):
+                    problems.append(f'conflict {relative}')
+                    continue
+                problems.append(f'unexpected {relative}')
+                retirements.append((relative, current))
+            del record['owned'][relative]
+            record['files'].remove(relative)
+    return problems, changes, retirements, manifest
+
+
+def drift(root: Path, *, repository_all: bool = False) -> list[str]:
+    with BoundRoot(root) as binding:
+        state = read_state(root, binding=binding)
+        selected = _selection(root, state, binding, repository_all)
+        problems, _changes, _retirements, _manifest = _generation_plan(binding, state, selected)
+        return problems
+
+
+def write(root: Path, *, repository_all: bool = False) -> list[str]:
+    def plan(binding: BoundRoot | ComponentTransaction) -> tuple[ManifestState, tuple]:
+        state = read_state(root, binding=binding)
+        selected = _selection(root, state, binding, repository_all)
+        source_checkout = all(binding.read(path) is not None for path in ('scripts/install_into.py', 'factory/pyproject.toml'))
+        if source_checkout and not repository_all:
+            raise ValueError('source checkout generation requires --repository-all')
+        result = _generation_plan(binding, state, selected)
+        conflicts = [problem for problem in result[0] if problem.startswith('conflict ')]
+        if conflicts:
+            raise ValueError(f'no generated files written; resolve {", ".join(conflicts)}')
+        return state, result
+
+    with BoundRoot(root) as binding:
+        plan(binding)
+    with component_transaction(root) as transaction:
+        state, (_problems, changes, retirements, manifest) = plan(transaction)
+        original = transaction.read(MANIFEST)
+        encoded = encode_manifest(manifest) if manifest != state.manifest else None
+        changed: list[str] = []
+        try:
+            for relative, content, current in changes:
+                transaction.write(relative, content, 0o644, expected=current)
+                changed.append(f'wrote {relative}')
+            for relative, current in retirements:
+                transaction.remove(relative, expected=current)
+                changed.append(f'removed {relative}')
+            if encoded is not None:
+                transaction.write(MANIFEST, encoded, 0o644, expected=original)
+                if not changed:
+                    changed.append('updated component ownership')
+        except (ValueError, OSError) as exc:
+            raise ValueError(f'generation incomplete after {changed}; inspect outputs and component manifest: {exc}') from exc
+        return changed

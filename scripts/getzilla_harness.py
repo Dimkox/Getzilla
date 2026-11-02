@@ -11,20 +11,22 @@ from getzilla.harnesses import drift, write
 
 parser = argparse.ArgumentParser(
     description=(
-        'Render the Qwen Code, Claude Code, Codex, Gemini CLI, Copilot CLI and Cursor files '
+        'Render the selected Qwen Code, Claude Code, Codex, Gemini CLI, Copilot CLI and Cursor files '
         'from the canonical .grok/hooks.json, .grok/agents/*.toml, .grok/cursor-rules/*.toml and .agents/skills/. '
-        'Without --write it lists drift and exits 1 when the committed files are out of date.'
+        'Without --write it lists drift and exits 1 when the files are out of date. '
+        'Full-source regeneration requires --repository-all --write.'
     ),
 )
 parser.add_argument('--write', action='store_true', help='Rewrite the generated harness files.')
+parser.add_argument('--repository-all', action='store_true', help='Explicit full-source generation with the shared ownership ledger.')
 args = parser.parse_args()
 
 try:
     if args.write:
-        for line in write(ROOT):
+        for line in write(ROOT, repository_all=args.repository_all):
             print(line)
         raise SystemExit(0)
-    problems = drift(ROOT)
+    problems = drift(ROOT, repository_all=args.repository_all)
 except (ValueError, OSError) as exc:
     parser.exit(2, f'harness generation: {exc}\n')
 for line in problems:

@@ -270,5 +270,66 @@ class AgentSetupTests(unittest.TestCase):
                 configure('codex', 'openrouter', self.home, key=KEY)
 
 
+class ProjectSetupOrderingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.project = self.base / 'project'
+        self.fake_home = self.base / 'fake-home'
+        self.fake_home.mkdir()
+        (self.project / '.getzilla').mkdir(parents=True)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text('{"schema_version":1}')
+        self.subdirectory = self.project / 'src/deep'
+        self.subdirectory.mkdir(parents=True)
+
+    def run_setup(self, directory: Path) -> subprocess.CompletedProcess:
+        environment = {**os.environ, 'HOME': str(self.fake_home), 'USERPROFILE': str(self.fake_home)}
+        return subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/getzilla_setup_agent.py'), '--agent', 'qwen', '--key-stdin'],
+            cwd=directory, env=environment, input=KEY + '\n', capture_output=True, text=True, timeout=60,
+        )
+
+    def test_unresolved_or_invalid_project_refuses_before_global_configuration(self) -> None:
+        manifest = self.project / '.getzilla/managed-components.json'
+        for content in (None, b'{"schema_version":"getzilla-managed-components-v1","components":{}}', b'{'):
+            for directory in (self.project, self.subdirectory):
+                with self.subTest(content=content, directory=directory.name):
+                    if content is None:
+                        manifest.unlink(missing_ok=True)
+                    else:
+                        manifest.write_bytes(content)
+                    result = self.run_setup(directory)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(list(self.fake_home.iterdir()), [])
+                    self.assertFalse((self.project / '.qwen').exists())
+
+    def select_empty(self) -> None:
+        from getzilla.component_state import V2, encode_manifest
+        (self.project / '.getzilla/managed-components.json').write_bytes(encode_manifest({
+            'schema_version': V2, 'agents': [], 'components': {},
+        }))
+
+    def test_setup_from_subdirectory_completes_project_before_global_phase(self) -> None:
+        self.select_empty()
+        result = self.run_setup(self.subdirectory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.project / '.qwen/settings.json').is_file())
+        self.assertTrue((self.fake_home / '.qwen/settings.json').is_file())
+        self.assertNotIn(KEY, result.stdout + result.stderr)
+        manifest = json.loads((self.project / '.getzilla/managed-components.json').read_text())
+        self.assertEqual(manifest['agents'], ['qwen'])
+
+    def test_global_failure_reports_completed_project_phase(self) -> None:
+        self.select_empty()
+        (self.fake_home / '.qwen').mkdir()
+        (self.fake_home / '.qwen/settings.json').write_text('[]')
+        result = self.run_setup(self.subdirectory)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('project phase completed', result.stderr)
+        self.assertTrue((self.project / '.qwen/settings.json').is_file())
+        self.assertEqual((self.fake_home / '.qwen/settings.json').read_text(), '[]')
+
+
 if __name__ == '__main__':
     unittest.main()
