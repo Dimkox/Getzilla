@@ -40,6 +40,9 @@ HISTORICAL_FILES = frozenset(
 # Files that must name the legacy layout to migrate or test it.
 LEGACY_AWARE_FILES = frozenset(
     {
+        # Shared keep migration reads old paths; harness tests exercise that contract.
+        ".getzilla/getzilla/component_state.py",
+        "tests/test_harnesses.py",
         "scripts/install_into.py",
         "scripts/getzilla_upgrade.py",
         "tests/test_getzilla_upgrade.py",
