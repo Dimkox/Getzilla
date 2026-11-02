@@ -50,7 +50,11 @@ class MigrationPlanTests(unittest.TestCase):
                 (target / rel).parent.mkdir(parents=True, exist_ok=True)
                 (target / rel).write_text(content, encoding='utf-8')
             before = digest_tree(target)
-            plan = install_into._make_plan(ROOT, target, include_dependencies=False, include_optional=False)
+            with self.assertRaisesRegex(install_into.UnsafeInstallTarget, 'adopt'):
+                install_into._make_plan(ROOT, target, include_dependencies=False, include_optional=False)
+            self.assertEqual(digest_tree(target), before, 'unresolved selection refuses without effects')
+            plan = install_into._make_plan(ROOT, target, include_dependencies=False, include_optional=False,
+                                           selection=install_into.PayloadSelection.full_layout())
             self.assertEqual(digest_tree(target), before, 'planning is read-only, even on a dirty tree')
             report = {item['path']: item for item in plan['existing_untracked']}
             self.assertFalse(plan['existing_untracked_truncated'])

@@ -560,6 +560,160 @@ class ComponentPreflightTests(unittest.TestCase):
             ensure_components(self.target, needs, source=self.source)
         self.assertEqual(self.snapshot(), before)
 
+    def keep(self, path: str, content: bytes | None) -> None:
+        record = {'schema_version': 1, 'kept_local': [path], 'kept_local_sha256': {}}
+        if content is not None:
+            record['kept_local_sha256'][path] = hashlib.sha256(content).hexdigest()
+        (self.target / '.getzilla/AGBP_SYNC.json').write_text(json.dumps(record))
+
+    def test_declared_keep_loses_owned_proof_and_cannot_reclaim_it(self) -> None:
+        ensure_components(self.target, ['factory'], source=self.source)
+        path = 'factory/pyproject.toml'
+        for content in ((self.target / path).read_bytes(), b'My custom project metadata\n'):
+            with self.subTest(content=content):
+                (self.target / path).write_bytes(content)
+                self.keep(path, content)
+                for _ in range(2):
+                    added = ensure_components(self.target, ['factory'], source=self.source)
+                    self.assertIn(path, added[0].kept)
+                    self.assertEqual((self.target / path).read_bytes(), content)
+                    record = load_manifest(self.target)['components']['factory']
+                    self.assertIn(path, record['files'])
+                    self.assertNotIn(path, record.get('owned', {}))
+
+    def test_absent_declared_keep_refuses_entire_addition_before_writes(self) -> None:
+        self.keep('factory/pyproject.toml', None)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept'):
+            ensure_components(self.target, ['compliance:eu-ai-act', 'factory'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_manifest_refuses_add_before_files_or_selection_change(self) -> None:
+        self.keep(MANIFEST, (self.target / MANIFEST).read_bytes())
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+            ensure_components(self.target, ['factory', 'agent:codex'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_manifest_allows_same_component_noop(self) -> None:
+        ensure_components(self.target, ['factory'], source=self.source)
+        self.keep(MANIFEST, (self.target / MANIFEST).read_bytes())
+        before = self.snapshot()
+        added = ensure_components(self.target, ['factory'], source=self.source)
+        self.assertEqual(added[0].files, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_manifest_refuses_adoption_but_allows_same_selection(self) -> None:
+        from getzilla.component_state import V1, V2
+        from getzilla.on_demand import adopt_selection
+        legacy = json.dumps({'schema_version': V1, 'components': {}}).encode()
+        (self.target / MANIFEST).write_bytes(legacy)
+        self.keep(MANIFEST, legacy)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+            adopt_selection(self.target, ())
+        self.assertEqual(self.snapshot(), before)
+        selected = json.dumps({'schema_version': V2, 'agents': [], 'components': {}}).encode()
+        (self.target / MANIFEST).write_bytes(selected)
+        self.keep(MANIFEST, selected)
+        before = self.snapshot()
+        adopt_selection(self.target, ())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_stale_keep_digest_refuses_even_identical_addition_before_writes(self) -> None:
+        path = 'factory/pyproject.toml'
+        (self.target / path).write_bytes((self.source / path).read_bytes())
+        self.keep(path, b'Previously accepted different bytes\n')
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'digest'):
+            ensure_components(self.target, ['compliance:eu-ai-act', 'factory'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_keep_without_digest_refuses_divergent_addition(self) -> None:
+        self.keep('factory/README.md', None)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept'):
+            ensure_components(self.target, ['factory'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_compliance_config_cannot_be_silently_enabled(self) -> None:
+        path = '.getzilla/config/compliance.json'
+        self.keep(path, (self.target / path).read_bytes())
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept'):
+            ensure_components(self.target, ['factory', 'compliance:eu-ai-act'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_enabled_kept_compliance_config_retains_bytes_without_ownership(self) -> None:
+        ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+        path = '.getzilla/config/compliance.json'
+        content = b'{"enabled":["eu-ai-act"],"schema_version":"getzilla-compliance-v1"}\n'
+        (self.target / path).write_bytes(content)
+        self.keep(path, content)
+        added = ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+        self.assertEqual((self.target / path).read_bytes(), content)
+        self.assertIn(path, added[0].kept)
+        record = load_manifest(self.target)['components']['core']
+        self.assertIn(path, record['files'])
+        self.assertNotIn(path, record.get('owned', {}))
+
+    def test_identical_compliance_config_preserves_custom_mode_without_ownership(self) -> None:
+        from getzilla.component_state import encode_manifest, record_owned, V2
+        relative = '.getzilla/config/compliance.json'
+        config = self.target / relative
+        content = (json.dumps({'schema_version': 'getzilla-compliance-v1', 'enabled': ['eu-ai-act']},
+                              indent=2, sort_keys=True) + '\n').encode()
+        for previously_owned in (False, True):
+            with self.subTest(previously_owned=previously_owned):
+                config.chmod(0o644)
+                config.write_bytes(content)
+                config.chmod(0o400 if os.name == 'nt' else 0o600)
+                before_mode = stat.S_IMODE(config.stat().st_mode)
+                manifest = {'schema_version': V2, 'agents': [], 'components': {}}
+                if previously_owned:
+                    record_owned(manifest, relative, content, 0o644)
+                (self.target / MANIFEST).write_bytes(encode_manifest(manifest))
+                added = ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+                self.assertEqual(config.read_bytes(), content)
+                self.assertEqual(stat.S_IMODE(config.stat().st_mode), before_mode)
+                records = load_manifest(self.target)['components'].values()
+                self.assertFalse(any(relative in record.get('owned', {}) for record in records))
+                self.assertIn(relative, added[0].kept)
+
+    def test_identical_compliance_config_claims_only_matching_byte_and_mode_baseline(self) -> None:
+        from getzilla.component_state import BoundRoot, matches_owned, owned_proof
+        relative = '.getzilla/config/compliance.json'
+        config = self.target / relative
+        content = (json.dumps({'schema_version': 'getzilla-compliance-v1', 'enabled': ['eu-ai-act']},
+                              indent=2, sort_keys=True) + '\n').encode()
+        config.write_bytes(content)
+        config.chmod(0o644)
+        added = ensure_components(self.target, ['compliance:eu-ai-act'], source=self.source)
+        with BoundRoot(self.target) as binding:
+            self.assertTrue(matches_owned(binding.read(relative), owned_proof(load_manifest(self.target), relative)))
+        self.assertNotIn(relative, added[0].kept)
+
+    def test_kept_codex_pair_refuses_if_either_member_is_missing(self) -> None:
+        config, hooks = '.codex/config.toml', '.codex/hooks.json'
+        for index, (kept, missing) in enumerate(((config, config), (hooks, hooks),
+                                                (config, hooks), (hooks, config))):
+            with self.subTest(kept=kept, missing=missing):
+                target = self.target / f'pair-{index}'
+                (target / '.getzilla').mkdir(parents=True)
+                (target / '.codex').mkdir()
+                (target / MANIFEST).write_bytes((self.target / MANIFEST).read_bytes())
+                (target / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                    'schema_version': 1, 'kept_local': [kept],
+                    'kept_local_sha256': {kept: hashlib.sha256((self.source / kept).read_bytes()).hexdigest()},
+                }))
+                for path in (config, hooks):
+                    if path != missing:
+                        (target / path).write_bytes((self.source / path).read_bytes())
+                before = self.snapshot()
+                with self.assertRaisesRegex(ValueError, 'Codex'):
+                    ensure_components(target, ['factory', 'agent:codex'], source=self.source)
+                self.assertEqual(self.snapshot(), before)
+
     def test_unknown_component_after_valid_names_does_not_change_target(self) -> None:
         self.assert_rejected_without_mutation(['factory', 'agent:codex', 'compliance:eu-ai-act', 'agent:notepad'])
 

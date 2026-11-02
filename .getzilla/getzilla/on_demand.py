@@ -22,6 +22,7 @@ from .component_state import (
     MANIFEST, V2, BoundRoot, ComponentStateError, ComponentTransaction,
     FileSnapshot, agent_of, component_transaction, component_of, encode_manifest,
     mode_matches, read_state, record_owned, validate_agents,
+    read_keep_contract, match_kept_local, kept_file_state, validate_manifest_publication,
 )
 
 # A synced project has the sync record; a fresh install has the core package and no record.
@@ -144,12 +145,16 @@ class _AdditionPlan:
     manifest_bytes: bytes | None
 
 
-def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[str, Any]) -> None:
+def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[str, Any],
+                     kept: frozenset[str]) -> None:
+    kept_pair = bool(kept & {'.codex/hooks.json', '.codex/config.toml'})
     for path in ('.codex/hooks.json', '.codex/config.toml'):
         entry = payload.get(path)
         if entry is None:
             raise ComponentStateError(f'Codex source activation unit is incomplete: {path}')
         current = binding.read(path)
+        if current is None and kept_pair:
+            raise ComponentStateError(f'kept-local Codex activation requires the complete existing pair: {path}')
         if current is not None and (current.content != entry.content or not mode_matches(current.mode, entry.mode)):
             raise ComponentStateError(f'custom Codex activation must be reconciled before adding files: {path}')
     source_overlay = payload.get('.grok/codex-hooks.json')
@@ -172,8 +177,10 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
     if state.kind == 'selected':
         manifest['agents'] = list(agents)
     by_path = {entry.path: entry for entry in payload}
+    kept, kept_digests = read_keep_contract(binding)
+    kept, kept_digests = match_kept_local(kept, kept_digests, {*by_path, '.getzilla/config/compliance.json'})
     if 'codex' in requested_agents:
-        _codex_preflight(binding, by_path)
+        _codex_preflight(binding, by_path, kept)
     results: list[Added] = []
     operations: list[tuple[Any, FileSnapshot | None]] = []
     planned: set[str] = set()
@@ -186,6 +193,13 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
         else:
             record = manifest['components'].setdefault(component_of(entry.path), {'files': []})
             record['files'] = sorted(set(record['files']) | {entry.path})
+
+    def preserve(path: str, current: FileSnapshot | None, desired: bytes) -> None:
+        status = kept_file_state(path, current.content if current else None, desired, kept_digests.get(path))
+        if status == 'absent':
+            raise ComponentStateError(f'kept-local path is absent; reconcile it before adding the component: {path}')
+        for record in manifest['components'].values():
+            record.get('owned', {}).pop(path, None)
 
     for need in needs:
         added = Added(need)
@@ -202,6 +216,10 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
             if entry.path in planned:
                 continue
             current = binding.read(entry.path)
+            if entry.path in kept:
+                preserve(entry.path, current, entry.content)
+                added.kept.append(entry.path)
+                continue
             if current is not None:
                 if current.content != entry.content or not mode_matches(current.mode, entry.mode):
                     added.kept.append(entry.path)
@@ -230,15 +248,28 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
                                'enabled': sorted(set(current['enabled']) | set(layers))}, indent=2, sort_keys=True) + '\n').encode()
         # Use the same immutable entry type without importing the source installer again.
         entry = type(payload[0])(config_path, content, 0o644)
-        if previous is None or previous.content != content:
-            operations.append((entry, previous))
-            changed_components.add('core')
-        remember(entry)
+        if config_path in kept:
+            preserve(config_path, previous, previous.content if previous else content)
+            if not set(layers) <= set(current['enabled']):
+                raise ComponentStateError('kept-local compliance configuration does not enable the requested layers')
+            next(item for item in results if item.component.startswith('compliance:')).kept.append(config_path)
+        else:
+            if previous is None or previous.content != content:
+                operations.append((entry, previous))
+                changed_components.add('core')
+                remember(entry)
+            elif mode_matches(previous.mode, entry.mode):
+                remember(entry)
+            else:
+                next(item for item in results if item.component.startswith('compliance:')).kept.append(config_path)
+                for record in manifest['components'].values():
+                    record.get('owned', {}).pop(config_path, None)
     for name in changed_components:
         record = manifest['components'][name]
         record['added_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         record['source_version'] = source_version
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
+    validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
     return _AdditionPlan(results, operations, original_manifest, encoded)
 
 
@@ -247,18 +278,27 @@ def adopt_selection(root: Path, agents: tuple[str, ...]) -> dict[str, Any]:
     agents = validate_agents(agents)
     if not is_installed_project(root):
         raise ComponentStateError(f'{root} is not an installed Getzilla project')
-    state = read_state(root)
-    if state.kind == 'selected':
-        if state.require_selection() != agents:
-            raise ComponentStateError('selection is already established; adoption cannot replace or remove adapters')
-        return state.manifest
-    with component_transaction(root) as transaction:
-        state = read_state(root, binding=transaction)
+
+    def plan(binding: BoundRoot | ComponentTransaction) -> tuple[dict, FileSnapshot | None, bytes | None]:
+        state = read_state(root, binding=binding)
+        original = binding.read(MANIFEST)
         if state.kind == 'selected':
             if state.require_selection() != agents:
-                raise ComponentStateError('selection was established by another writer; adoption cannot replace it')
-            return state.manifest
-        original = transaction.read(MANIFEST)
-        manifest = {**state.manifest, 'schema_version': V2, 'agents': list(agents)}
-        transaction.write(MANIFEST, encode_manifest(manifest), 0o644, expected=original)
+                raise ComponentStateError('selection is already established; adoption cannot replace or remove adapters')
+            manifest, encoded = state.manifest, None
+        else:
+            manifest = {**state.manifest, 'schema_version': V2, 'agents': list(agents)}
+            encoded = encode_manifest(manifest)
+        kept, digests = read_keep_contract(binding)
+        validate_manifest_publication(original, encoded, kept, digests)
+        return manifest, original, encoded
+
+    with BoundRoot(root) as binding:
+        manifest, _original, encoded = plan(binding)
+        if encoded is None:
+            return manifest
+    with component_transaction(root) as transaction:
+        manifest, original, encoded = plan(transaction)
+        if encoded is not None:
+            transaction.write(MANIFEST, encoded, 0o644, expected=original)
         return manifest

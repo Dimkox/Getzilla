@@ -39,7 +39,8 @@ from getzilla import fsx
 from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
-    owned_proof, read_state, record_owned,
+    owned_proof, read_state, record_owned, read_keep_contract, match_kept_local, kept_file_state,
+    validate_manifest_publication,
 )
 from getzilla.harnesses import render_codex_hooks
 
@@ -253,9 +254,6 @@ def planned_changes(installer, home: Path, project: Path,
     manifest = copy.deepcopy(state.manifest)
     expected_head = expected_head or _git_out(project, 'rev-parse', 'HEAD')
     tree = tree if tree is not None else head_tree(project, expected_head)
-    if digests is not None:
-        # This installer module was loaded for this run only, so the override stays local to it.
-        installer._kept_local_digests = lambda _target: digests
     selection = installer.PayloadSelection(
         selected,
         factory='factory' in manifest['components'],
@@ -269,13 +267,31 @@ def planned_changes(installer, home: Path, project: Path,
     if any(entry.path == MANIFEST for entry in payload):
         raise UpdateError('source component state must never enter a consumer payload')
     plan = installer._make_plan(home, project, include_dependencies=False, include_optional=False,
-                                selection=selection, payload=payload)
+                                selection=selection, payload=payload, accepted_kept_digests=digests)
     if plan['target_state'] != 'directory':
         raise UpdateError(f'{project} is not a plain directory')
     wanted = {entry['path'] for entry in plan['entries']}
     object_format = git(project, 'rev-parse', '--show-object-format').stdout.strip() or 'sha1'
     changes = []
     by_path = {entry.path: entry for entry in payload}
+    known = set(by_path) | {path for record in manifest['components'].values() for path in record['files']}
+    kept, kept_digests = read_keep_contract(binding)
+    kept, kept_digests = match_kept_local(kept, digests if digests is not None else kept_digests, known)
+    if observations is not None:
+        record = binding.read(installer.STACK_SYNC_RECORD)
+        observations[installer.STACK_SYNC_RECORD] = record
+        if record is None:
+            observations[installer.LEGACY_STACK_SYNC_RECORD] = binding.read(installer.LEGACY_STACK_SYNC_RECORD)
+    for path in sorted(kept & known):
+        current = binding.read(path)
+        if observations is not None:
+            observations[path] = current
+        try:
+            kept_file_state(path, current.content if current else None, None, kept_digests.get(path))
+        except ComponentStateError as exc:
+            raise installer.UnsafeInstallTarget(str(exc)) from exc
+        for record in manifest['components'].values():
+            record.get('owned', {}).pop(path, None)
     retained_overlay = binding.read('.grok/codex-hooks.json')
     if observations is not None:
         observations['.grok/codex-hooks.json'] = retained_overlay
@@ -296,6 +312,15 @@ def planned_changes(installer, home: Path, project: Path,
             if type(config.get('features')) is not dict or config['features'].get('codex_hooks') is not True:
                 raise UpdateError('custom Codex configuration must retain features.codex_hooks = true')
             retained_config = existing_config
+        if kept & {'.codex/hooks.json', '.codex/config.toml'}:
+            pair = {'.codex/hooks.json': codex_hooks,
+                    '.codex/config.toml': retained_config.content if retained_config else by_path['.codex/config.toml'].content}
+            for path, content in pair.items():
+                current = binding.read(path)
+                if observations is not None:
+                    observations[path] = current
+                if current is None or current.content != content or not mode_matches(current.mode, by_path[path].mode):
+                    raise UpdateError(f'kept-local Codex activation requires the complete current pair: {path}')
     for entry in payload:
         if entry.path not in wanted:
             continue
@@ -331,8 +356,13 @@ def planned_changes(installer, home: Path, project: Path,
         record_owned(manifest, entry.path, content, entry.mode)
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
             changes.append((entry.path, content, mode))
-    if manifest != state.manifest:
-        changes.append((MANIFEST, encode_manifest(manifest), '100644'))
+    encoded = encode_manifest(manifest) if manifest != state.manifest else None
+    try:
+        validate_manifest_publication(binding.read(MANIFEST), encoded, kept, kept_digests)
+    except ComponentStateError as exc:
+        raise installer.UnsafeInstallTarget(str(exc)) from exc
+    if encoded is not None:
+        changes.append((MANIFEST, encoded, '100644'))
     return changes
 
 
@@ -477,9 +507,25 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     pending_manifest = next((decode_manifest(content) for path, content, _mode in changes if path == MANIFEST),
                             copy.deepcopy(state.manifest))
     changes = [(path, content, mode) for path, content, mode in changes if path != MANIFEST]
+    kept, kept_digests = read_keep_contract(transaction)
+    known = {path for path, _content, _mode in changes} | {
+        path for component in pending_manifest['components'].values() for path in component['files']}
+    kept, kept_digests = match_kept_local(kept, digests if accepted else kept_digests, known)
+    for component in pending_manifest['components'].values():
+        for path in kept:
+            component.get('owned', {}).pop(path, None)
+    permitted = []
     for path, content, mode in changes:
         if path not in observations:
             observations[path] = transaction.read(path)
+        if path in kept:
+            current = observations[path]
+            kept_file_state(path, current.content if current else None, content, kept_digests.get(path))
+            if (current is None or content is None or current.content != content
+                    or not mode_matches(current.mode, 0o755 if mode == '100755' else 0o644)):
+                raise UpdateError(f'kept-local path conflicts with the update: {path}')
+            continue
+        permitted.append((path, content, mode))
         if content is None:
             for component in pending_manifest['components'].values():
                 component.get('owned', {}).pop(path, None)
@@ -487,8 +533,11 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                     component['files'].remove(path)
         else:
             record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
-    if pending_manifest != state.manifest:
-        changes.append((MANIFEST, encode_manifest(pending_manifest), '100644'))
+    changes = permitted
+    encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None
+    validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
+    if encoded is not None:
+        changes.append((MANIFEST, encoded, '100644'))
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:

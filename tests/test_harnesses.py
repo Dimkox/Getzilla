@@ -7,6 +7,7 @@ from them. These tests fail when the committed copies drift.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -90,6 +91,54 @@ class SelectedHarnessTests(unittest.TestCase):
             write(root)
         self.assertEqual(output.read_text(), 'my custom version\n')
 
+    def test_kept_manifest_refuses_before_any_generated_effect(self) -> None:
+        from getzilla.component_state import MANIFEST
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                root = self.qwen()
+                original = (root / MANIFEST).read_bytes()
+                relative = '.grok-stack/managed-components.json' if legacy else MANIFEST
+                record = root / ('.grok-stack/AGBP_SYNC.json' if legacy else '.getzilla/AGBP_SYNC.json')
+                record.parent.mkdir(exist_ok=True)
+                record.write_text(json.dumps({'schema_version': 1, 'kept_local': [relative],
+                                              'kept_local_sha256': {relative: hashlib.sha256(original).hexdigest()}}))
+                with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+                    write(root)
+                self.assertEqual((root / MANIFEST).read_bytes(), original)
+                self.assertFalse((root / '.qwen').exists())
+                self.assertFalse((root / '.getzilla/runtime/.components.guard.lock').exists())
+
+    def test_kept_manifest_noop_still_validates_its_declared_digest(self) -> None:
+        from getzilla.component_state import MANIFEST
+        root = self.qwen()
+        write(root)
+        original = (root / MANIFEST).read_bytes()
+        (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [MANIFEST],
+            'kept_local_sha256': {MANIFEST: hashlib.sha256(original).hexdigest()},
+        }))
+        self.assertEqual(write(root), [])
+        self.assertEqual(drift(root), [])
+        self.assertEqual((root / MANIFEST).read_bytes(), original)
+        (root / MANIFEST).write_bytes(original + b'\n')
+        with self.assertRaisesRegex(ValueError, 'digest'):
+            write(root)
+        self.assertEqual((root / MANIFEST).read_bytes(), original + b'\n')
+
+    def test_windows_legacy_keep_alias_maps_before_managed_matching(self) -> None:
+        from getzilla.component_state import MANIFEST, decode_keep_contract, match_kept_local
+        path = '.GROK-STACK/MANAGED-COMPONENTS.JSON'
+        digest = hashlib.sha256(b'manifest').hexdigest()
+        raw = json.dumps({'kept_local': [path], 'kept_local_sha256': {path: digest}}).encode()
+        with mock.patch.object(harnesses.fsx, 'WINDOWS', True):
+            kept, digests = decode_keep_contract(raw, legacy=True)
+            kept, digests = match_kept_local(kept, digests, (MANIFEST,))
+        self.assertEqual(kept, {MANIFEST})
+        self.assertEqual(digests, {MANIFEST: digest})
+        with mock.patch.object(harnesses.fsx, 'WINDOWS', False):
+            kept, _digests = decode_keep_contract(raw, legacy=True)
+        self.assertEqual(kept, {path})
+
     def test_retirement_requires_unchanged_recorded_ownership(self) -> None:
         root = self.qwen()
         write(root)
@@ -101,6 +150,180 @@ class SelectedHarnessTests(unittest.TestCase):
         self.assertFalse(owned.exists())
         self.assertEqual(unknown.read_text(), 'user')
         self.assertTrue(owned.parent.is_dir())
+
+    def test_declared_kept_paths_survive_changes_removal_and_absence(self) -> None:
+        for scenario in ('changed', 'removed', 'absent'):
+            with self.subTest(scenario=scenario):
+                root = self.qwen()
+                write(root)
+                relative = '.qwen/skills/example/SKILL.md'
+                output = root / relative
+                original = output.read_bytes()
+                (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                    'schema_version': 1, 'kept_local': [relative],
+                    'kept_local_sha256': {relative: hashlib.sha256(original).hexdigest()},
+                }))
+                source = root / '.agents/skills/example/SKILL.md'
+                if scenario == 'removed':
+                    source.unlink()
+                elif scenario == 'absent':
+                    output.unlink()
+                else:
+                    source.write_text('new canonical content\n')
+                (root / '.agents/skills/another').mkdir()
+                (root / '.agents/skills/another/SKILL.md').write_text('another canonical skill\n')
+                before = output.read_bytes() if output.exists() else None
+                self.assertFalse(any(relative in problem for problem in drift(root)))
+                write(root)
+                self.assertEqual(output.read_bytes() if output.exists() else None, before)
+                self.assertEqual((root / '.qwen/skills/another/SKILL.md').read_text(), 'another canonical skill\n')
+                manifest = json.loads((root / '.getzilla/managed-components.json').read_bytes())
+                self.assertNotIn(relative, manifest['components']['agent:qwen']['owned'])
+
+    def test_changed_keep_digest_refuses_even_if_current_equals_new_generated_bytes(self) -> None:
+        root = self.qwen()
+        write(root)
+        relative = '.qwen/skills/example/SKILL.md'
+        output = root / relative
+        (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [relative],
+            'kept_local_sha256': {relative: hashlib.sha256(output.read_bytes()).hexdigest()},
+        }))
+        output.write_text('unacknowledged new content\n')
+        (root / '.agents/skills/example/SKILL.md').write_bytes(output.read_bytes())
+        (root / '.agents/skills/another').mkdir()
+        (root / '.agents/skills/another/SKILL.md').write_text('must not be published\n')
+        manifest_before = (root / '.getzilla/managed-components.json').read_bytes()
+        with self.assertRaisesRegex(ValueError, 'kept'):
+            write(root)
+        self.assertEqual(output.read_text(), 'unacknowledged new content\n')
+        self.assertFalse((root / '.qwen/skills/another/SKILL.md').exists())
+        self.assertEqual((root / '.getzilla/managed-components.json').read_bytes(), manifest_before)
+
+    def test_kept_custom_content_does_not_gain_owned_proof(self) -> None:
+        root = self.qwen()
+        relative = '.qwen/skills/example/SKILL.md'
+        output = root / relative
+        output.parent.mkdir(parents=True)
+        output.write_text('custom retained skill\n')
+        (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [relative],
+            'kept_local_sha256': {relative: hashlib.sha256(output.read_bytes()).hexdigest()},
+        }))
+        write(root)
+        self.assertEqual(output.read_text(), 'custom retained skill\n')
+        manifest = json.loads((root / '.getzilla/managed-components.json').read_bytes())
+        self.assertNotIn(relative, manifest['components']['agent:qwen']['owned'])
+
+    def test_invalid_keep_records_refuse_before_any_generated_effect(self) -> None:
+        invalid = (
+            b'{', b'[]', b'{"schema_version":true}',
+            b'{"schema_version":1,"kept_local":[],"kept_local":[".qwen/settings.json"]}',
+            b'{"kept_local":["../outside"]}',
+            b'{"kept_local":[".qwen/settings.json",".QWEN/settings.json"]}',
+            b'{"kept_local":[],"kept_local_sha256":{".qwen/settings.json":"bad"}}',
+            b'{"kept_local":[],"unknown":true}',
+            b' ' * 65536 + b'{}',
+        )
+        for content in invalid:
+            with self.subTest(content=content):
+                root = self.qwen()
+                (root / '.getzilla/AGBP_SYNC.json').write_bytes(content)
+                manifest_before = (root / '.getzilla/managed-components.json').read_bytes()
+                with self.assertRaises(ValueError):
+                    write(root)
+                self.assertFalse((root / '.qwen').exists())
+                self.assertFalse((root / '.getzilla/runtime/.components.guard.lock').exists())
+                self.assertEqual((root / '.getzilla/managed-components.json').read_bytes(), manifest_before)
+
+    def test_current_keep_record_takes_precedence_over_legacy(self) -> None:
+        root = self.qwen()
+        (root / '.getzilla/AGBP_SYNC.json').write_text('{"schema_version":1,"kept_local":[]}')
+        (root / '.grok-stack').mkdir()
+        (root / '.grok-stack/AGBP_SYNC.json').write_text('invalid legacy record must stay unused')
+        write(root)
+        self.assertTrue((root / '.qwen/skills/example/SKILL.md').is_file())
+        self.assertEqual((root / '.grok-stack/AGBP_SYNC.json').read_text(), 'invalid legacy record must stay unused')
+
+    def test_windows_keep_alias_matches_exact_managed_path_and_digest(self) -> None:
+        from getzilla.component_state import decode_keep_contract, match_kept_local
+        path, canonical = '.CODEX/CONFIG.TOML', '.codex/config.toml'
+        digest = hashlib.sha256(b'kept config').hexdigest()
+        kept, digests = decode_keep_contract(json.dumps({
+            'kept_local': [path], 'kept_local_sha256': {path: digest},
+        }).encode())
+        with mock.patch.object(harnesses.fsx, 'WINDOWS', True):
+            matched, matched_digests = match_kept_local(kept, digests, (canonical, '.codex/hooks.json'))
+        self.assertEqual(matched, {canonical})
+        self.assertEqual(matched_digests, {canonical: digest})
+
+    def test_legacy_keep_record_maps_old_generated_skill_names(self) -> None:
+        root = self.fixture(('grok',))
+        source = root / '.agents/skills/getzilla-delivery/SKILL.md'
+        source.parent.mkdir(parents=True)
+        source.write_text('retained canonical version\n')
+        write(root)
+        relative = '.grok/skills/getzilla-delivery/SKILL.md'
+        legacy = '.grok/skills/adaptive-delivery/SKILL.md'
+        output = root / relative
+        original = output.read_bytes()
+        (root / '.grok-stack').mkdir()
+        (root / '.grok-stack/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [legacy],
+            'kept_local_sha256': {legacy: hashlib.sha256(original).hexdigest()},
+        }))
+        source.write_text('new canonical version\n')
+        write(root)
+        self.assertEqual(output.read_bytes(), original)
+
+    def test_codex_keep_cannot_bypass_pair_preflight(self) -> None:
+        config_path, hooks_path = '.codex/config.toml', '.codex/hooks.json'
+        for scenario in ('missing-config', 'missing-hooks', 'malformed-config', 'disabled-config', 'stale-hooks'):
+            with self.subTest(scenario=scenario):
+                root = self.fixture(('codex',))
+                (root / '.grok/agents').mkdir(parents=True)
+                (root / '.grok/hooks.json').write_text('{"hooks":{}}')
+                write(root)
+                kept = hooks_path if scenario in ('missing-hooks', 'stale-hooks') else config_path
+                original = (root / kept).read_bytes()
+                if scenario.startswith('missing-'):
+                    (root / kept).unlink()
+                elif scenario == 'malformed-config':
+                    (root / kept).write_text('not valid TOML')
+                elif scenario == 'disabled-config':
+                    (root / kept).write_text('[features]\ncodex_hooks = false\n')
+                else:
+                    (root / '.grok/hooks.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{
+                        'command': 'python3 .grok/hooks/stop_gate.py', 'timeout': 10,
+                    }]}]}}))
+                preserved = (root / kept).read_bytes() if (root / kept).exists() else None
+                (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                    'schema_version': 1, 'kept_local': [kept],
+                    'kept_local_sha256': {kept: hashlib.sha256(preserved if preserved is not None else original).hexdigest()},
+                }))
+                (root / '.grok/agents/new.toml').write_text('description="new"\ndeveloper_instructions="new"\n')
+                manifest_before = (root / '.getzilla/managed-components.json').read_bytes()
+                with self.assertRaisesRegex(ValueError, 'conflict'):
+                    write(root)
+                self.assertEqual((root / kept).read_bytes() if (root / kept).exists() else None, preserved)
+                self.assertFalse((root / '.codex/agents/new.toml').exists())
+                self.assertEqual((root / '.getzilla/managed-components.json').read_bytes(), manifest_before)
+
+    def test_coherent_kept_codex_pair_stays_unchanged_without_owned_proofs(self) -> None:
+        root = self.fixture(('codex',))
+        (root / '.grok').mkdir()
+        (root / '.grok/hooks.json').write_text('{"hooks":{}}')
+        write(root)
+        paths = ('.codex/config.toml', '.codex/hooks.json')
+        before = {path: (root / path).read_bytes() for path in paths}
+        (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': list(paths),
+            'kept_local_sha256': {path: hashlib.sha256(content).hexdigest() for path, content in before.items()},
+        }))
+        write(root)
+        self.assertEqual({path: (root / path).read_bytes() for path in paths}, before)
+        owned = json.loads((root / '.getzilla/managed-components.json').read_bytes())['components']['agent:codex']['owned']
+        self.assertFalse(set(paths) & set(owned))
 
 
 class HarnessTests(unittest.TestCase):
