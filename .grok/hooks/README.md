@@ -5,7 +5,7 @@ Project hooks need `/hooks-trust` in the Grok TUI.
 ## Soft mode (default since v2.0.4)
 
 - **PreToolUse**: real policy when import works; on any error → **allow**
-- **Stop**: evidence gaps are warnings; configured unsupported-completion-claim checks retain their existing refusal behavior
+- **Stop**: an owned unfinished root task requests bounded continuation on Claude/Codex, even without a completion claim; unsupported adapters report remaining work, and verification-claim checks remain a separate policy
 
 Hard lockouts (exit 2 / infinite stop loops) are intentional bugs — fixed in 2.0.4.
 Canonical source hooks live in `.grok/hooks/`. For older `adaptive.json` files that call `python3 pre_tool_use.py` from a consumer project root, the installer generates nine compatibility aliases from `.getzilla/templates/hook_root_shim.py`; these aliases dispatch to canonical hooks or preserve the fail-open JSON fallback. Generated consumer aliases are not tracked source-root files.
@@ -23,7 +23,7 @@ Then restart `grok`.
 
 ## Task continuation
 
-`UserPromptSubmit` and the route CLI share the same canonical intake operation. Ordinary prompts preserve the unfinished original task and append substantive amendments; explicit `--new-task` and exact `--continue` govern new identity and handoff. `SessionStart` and prompt context show the original, unresolved amendments/rejection, typed scope and evidence gaps as task data, with a 16384 UTF-8 byte display bound and recovery path. Overflow remains visibly NOT admitted until exact synchronization. `Stop` reports unresolved scope and evidence and never auto-completes a ready/open task. Existing claim-blocking policy remains separate from advisory warnings.
+`UserPromptSubmit` and the route CLI share the same canonical intake operation. Ordinary prompts preserve the unfinished original task and append substantive amendments; explicit `--new-task` and exact `--continue` govern new identity and handoff. `SessionStart` and prompt context show the original, unresolved amendments/rejection, typed scope and evidence gaps as task data, with a 16384 UTF-8 byte display bound and recovery path. Overflow remains visibly NOT admitted until exact synchronization. `Stop` observes unresolved scope, the selected native `tasks.md` checklist and current evidence. Claude/Codex request continuation for the matching root owner independently of the final answer's wording. A current canonical blocked reason allows an explicit pause. Children, interrupts, foreign/unbound sessions and terminal tasks cannot be restarted by this control. Native `stop_hook_active` and at most two requests for the same remaining-work observation bound retries; exhaustion leaves the task visibly unfinished and open. Generated reasons use a passive system envelope so their re-entry cannot add scope. Stop never auto-completes a ready/open task or proves remote deployment. See `docs/hook-health.md` for the complete contract.
 
 ## Local child lifecycle
 

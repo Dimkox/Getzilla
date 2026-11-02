@@ -21,6 +21,7 @@ MAX_FILE_BYTES = 262_144
 MAX_TOTAL_BYTES = 1_048_576
 MAX_FILES = 64
 MAX_FINDINGS = 100
+MAX_PENDING_TASKS = 20
 MAX_DIRTY_PATHS = 256
 MAX_GIT_BYTES = 262_144
 MAX_FILESYSTEM_NAME_BYTES = 4096
@@ -173,6 +174,79 @@ def _current_lines(text: str):
         yield number, ''.join(plain)
 
 
+def _pending_task_lines(text: str):
+    """Read visible Markdown task lists, including children, without treating code as work."""
+    content_indents: list[int] = []
+    fence: tuple[str, int] | None = None
+    comment = False
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.expandtabs(4)
+        if line.lstrip().startswith('>'):
+            continue
+        if fence:
+            closing = re.fullmatch(r'(`{3,}|~{3,})\s*', line.strip())
+            if closing and closing[1][0] == fence[0] and len(closing[1]) >= fence[1]:
+                fence = None
+            continue
+        # Recognize matched inline code before comments. A literal `<!--` must
+        # never hide later obligations. Index equal-length backtick runs once.
+        code_ends: dict[int, int] = {}
+        next_run: dict[int, int] = {}
+        for run in reversed(list(re.finditer(r'`+', line))):
+            width = run.end() - run.start()
+            if width in next_run:
+                code_ends[run.start()] = next_run[width]
+            next_run[width] = run.end()
+        # Comments can span lines; their examples do not enter the list context.
+        visible: list[str] = []
+        position = 0
+        while position < len(line):
+            if comment:
+                boundary = line.find('-->', position)
+                if boundary < 0:
+                    break
+                position = boundary + 3
+                comment = False
+            elif line[position] == '\\':
+                visible.append(line[position:position + 2])
+                position += 2
+            elif position in code_ends:
+                end = code_ends[position]
+                visible.append(line[position:end])
+                position = end
+            elif line.startswith('<!--', position):
+                comment = True
+                position += 4
+            else:
+                visible.append(line[position])
+                position += 1
+        line = ''.join(visible)
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        while content_indents and indent < content_indents[-1]:
+            content_indents.pop()
+        base = content_indents[-1] if content_indents else 0
+        if indent >= base + 4:
+            continue  # Indented code is relative to its current list container.
+        body = line.strip()
+        item = re.fullmatch(r'([-+*]|[0-9]{1,9}[.)])( +)(.*)', body)
+        if item:
+            spacing = len(item[2])
+            content_indents.append(indent + len(item[1]) + (spacing if spacing <= 4 else 1))
+            if spacing > 4:
+                continue  # A list item whose first content is indented code.
+            body = item[3]
+        opening = re.match(r'(`{3,}|~{3,})', body)
+        if opening:
+            fence = (opening[1][0], len(opening[1]))
+            continue
+        if item:
+            task = re.fullmatch(r'\[ \]\s+(\S.*)', body)
+            if task:
+                yield number, task[1]
+
+
 def _timestamp(value: Any) -> bool:
     if not isinstance(value, str) or len(value) > 64:
         return False
@@ -188,6 +262,7 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
         'observed_at': now_utc(),
         'status': 'unknown', 'stage': None, 'change_id': None, 'path': None,
         'required_stage': False, 'findings': [], 'obligations': [], 'initial_checkpoint': None,
+        'pending_tasks': [], 'pending_tasks_count': 0, 'blocked_reason': None,
     }
     findings = result['findings']
 
@@ -265,6 +340,13 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
                     add('package_identity_mismatch', f'{relative}/state.json',
                         f"package is bound to route {state.get('route_id')!r}, the active route is {route.get('route_id')!r}; "
                         'record the review from that route, or finish the package with getzilla_change.py transition')
+            elif route and route.get('status') == state['status'] == 'blocked' and history:
+                last = history[-1]
+                reason = last.get('reason')
+                if (last.get('to') == 'blocked' and last.get('from') in {'implementing', 'verifying', 'reviewing'}
+                        and _timestamp(last.get('at')) and isinstance(reason, str)
+                        and reason.strip() and len(reason.encode('utf-8')) <= 4096):
+                    result['blocked_reason'] = reason.strip()
         except SpecError:
             add('state_invalid', f'{relative}/state.json', 'package state is malformed or has an invalid stage')
     severity = 'error' if result['required_stage'] else 'expected' if result['stage'] == 'draft' else 'warning'
@@ -394,6 +476,11 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
             add('invalid_encoding', f'{relative}/{name}', 'selected text is not valid UTF-8')
             continue
         if name.endswith('.md'):
+            if name == 'tasks.md':
+                for number, task in _pending_task_lines(text):
+                    result['pending_tasks_count'] += 1
+                    if len(result['pending_tasks']) < MAX_PENDING_TASKS:
+                        result['pending_tasks'].append({'line': number, 'text': task[:240]})
             for number, line in _current_lines(text):
                 if line in {'<!--RUNTABLE-->', '- [ ] Given ..., when ..., then ...'} or _TEMPLATE.search(line):
                     add('template_unexpanded', f'{relative}/{name}', 'current template slot is unexpanded', severity, line=number)
