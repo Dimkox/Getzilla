@@ -2209,6 +2209,7 @@
         ".codex",
         ".gemini",
         ".getzilla/getzilla",
+        ".getzilla/getzilla/model_data_admission.py",
         ".getzilla/templates",
         ".grok",
         ".qwen"
