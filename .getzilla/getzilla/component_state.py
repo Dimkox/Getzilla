@@ -189,7 +189,8 @@ def encode_manifest(manifest: dict[str, Any]) -> bytes:
 def legacy_to_current_path(path: str) -> str:
     """Map an existing pre-rename keep declaration to its current managed path."""
     for pattern, replacement in LEGACY_PATH_RULES:
-        mapped, count = pattern.subn(replacement, path)
+        matcher = re.compile(pattern.pattern, pattern.flags | re.IGNORECASE) if fsx.WINDOWS else pattern
+        mapped, count = matcher.subn(replacement, path)
         if count:
             return mapped
     return path
@@ -265,6 +266,17 @@ def kept_file_state(path: str, current: bytes | None, desired: bytes | None, dig
     if digest is not None:
         return 'divergent'
     raise ComponentStateError(f'kept path conflicts with the stack update, which would change it: {path}')
+
+
+def validate_manifest_publication(current: FileSnapshot | None, planned: bytes | None,
+                                  kept: frozenset[str], digests: dict[str, str]) -> None:
+    """Include target-state publication in keep preflight before any product effect."""
+    kept, digests = match_kept_local(kept, digests, (MANIFEST,))
+    if MANIFEST not in kept:
+        return
+    kept_file_state(MANIFEST, current.content if current else None, None, digests.get(MANIFEST))
+    if planned is not None and (current is None or current.content != planned or not mode_matches(current.mode, 0o644)):
+        raise ComponentStateError('kept component manifest would change; reconcile the keep declaration before updating selection or ownership')
 
 
 @dataclass(frozen=True)

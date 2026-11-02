@@ -11,7 +11,7 @@ from .component_state import (
     MANIFEST, V2, KNOWN_AGENTS, BoundRoot, ComponentTransaction, FileSnapshot,
     ManifestState, agent_of, component_transaction, encode_manifest,
     matches_owned, mode_matches, owned_proof, read_state, record_owned,
-    read_keep_contract, kept_file_state, match_kept_local,
+    read_keep_contract, kept_file_state, match_kept_local, validate_manifest_publication,
 )
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
@@ -384,6 +384,12 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
                 retirements.append((relative, current))
             del record['owned'][relative]
             record['files'].remove(relative)
+    try:
+        validate_manifest_publication(binding.read(MANIFEST),
+                                      encode_manifest(manifest) if manifest != state.manifest else None,
+                                      kept, kept_digests)
+    except (OSError, ValueError) as exc:
+        problems.append(f'conflict kept component manifest: {exc}')
     return problems, changes, retirements, manifest
 
 

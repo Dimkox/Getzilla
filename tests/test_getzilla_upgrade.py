@@ -211,6 +211,59 @@ class ProjectSyncTests(unittest.TestCase):
         upgrade.sync_project(ROOT, self.project)
         self.assertEqual((self.project / 'ruff.toml').read_bytes(), local)
 
+    def test_kept_manifest_refuses_update_before_files_or_new_branch(self) -> None:
+        from getzilla.component_state import MANIFEST
+        original = (self.project / MANIFEST).read_bytes()
+        relative = '.GETZILLA/MANAGED-COMPONENTS.JSON' if os.name == 'nt' else MANIFEST
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [relative],
+            'kept_local_sha256': {relative: hashlib.sha256(original).hexdigest()},
+        }))
+        self.commit('keep target component state')
+        head = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'kept.*manifest'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertEqual((self.project / MANIFEST).read_bytes(), original)
+        self.assertFalse((self.project / 'scripts').exists())
+
+    def test_kept_manifest_allows_an_already_current_update(self) -> None:
+        from getzilla.component_state import MANIFEST
+        upgrade.sync_project(ROOT, self.project)
+        manifest = (self.project / MANIFEST).read_bytes()
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [MANIFEST],
+            'kept_local_sha256': {MANIFEST: hashlib.sha256(manifest).hexdigest()},
+        }))
+        self.commit('keep current target component state')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual((self.project / MANIFEST).read_bytes(), manifest)
+
+    def test_kept_manifest_also_fences_final_migration_ownership_changes(self) -> None:
+        from getzilla.component_state import MANIFEST
+        upgrade.sync_project(ROOT, self.project)
+        git(self.project, 'branch', '-m', 'installed')
+        manifest = (self.project / MANIFEST).read_bytes()
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [MANIFEST],
+            'kept_local_sha256': {MANIFEST: hashlib.sha256(manifest).hexdigest()},
+        }))
+        (self.project / '.grok-stack').mkdir()
+        (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_bytes(b'{"old": "history"}\n')
+        self.commit('retain state before legacy log migration')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        self.assertEqual(upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project), [])
+        with self.assertRaisesRegex(upgrade.UpdateError, 'kept.*manifest'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.project, 'branch', '--show-current'), 'installed')
+        self.assertEqual(git(self.project, 'branch', '--list', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)), '')
+        self.assertEqual((self.project / MANIFEST).read_bytes(), manifest)
+        self.assertFalse((self.project / '.getzilla/AGBP_SYNC.log.jsonl').exists())
+
     def test_kept_paths_drop_owned_proofs_and_retain_history_on_repeated_update(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
         manifest = self.select(())

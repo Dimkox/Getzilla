@@ -91,6 +91,54 @@ class SelectedHarnessTests(unittest.TestCase):
             write(root)
         self.assertEqual(output.read_text(), 'my custom version\n')
 
+    def test_kept_manifest_refuses_before_any_generated_effect(self) -> None:
+        from getzilla.component_state import MANIFEST
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                root = self.qwen()
+                original = (root / MANIFEST).read_bytes()
+                relative = '.grok-stack/managed-components.json' if legacy else MANIFEST
+                record = root / ('.grok-stack/AGBP_SYNC.json' if legacy else '.getzilla/AGBP_SYNC.json')
+                record.parent.mkdir(exist_ok=True)
+                record.write_text(json.dumps({'schema_version': 1, 'kept_local': [relative],
+                                              'kept_local_sha256': {relative: hashlib.sha256(original).hexdigest()}}))
+                with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+                    write(root)
+                self.assertEqual((root / MANIFEST).read_bytes(), original)
+                self.assertFalse((root / '.qwen').exists())
+                self.assertFalse((root / '.getzilla/runtime/.components.guard.lock').exists())
+
+    def test_kept_manifest_noop_still_validates_its_declared_digest(self) -> None:
+        from getzilla.component_state import MANIFEST
+        root = self.qwen()
+        write(root)
+        original = (root / MANIFEST).read_bytes()
+        (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': [MANIFEST],
+            'kept_local_sha256': {MANIFEST: hashlib.sha256(original).hexdigest()},
+        }))
+        self.assertEqual(write(root), [])
+        self.assertEqual(drift(root), [])
+        self.assertEqual((root / MANIFEST).read_bytes(), original)
+        (root / MANIFEST).write_bytes(original + b'\n')
+        with self.assertRaisesRegex(ValueError, 'digest'):
+            write(root)
+        self.assertEqual((root / MANIFEST).read_bytes(), original + b'\n')
+
+    def test_windows_legacy_keep_alias_maps_before_managed_matching(self) -> None:
+        from getzilla.component_state import MANIFEST, decode_keep_contract, match_kept_local
+        path = '.GROK-STACK/MANAGED-COMPONENTS.JSON'
+        digest = hashlib.sha256(b'manifest').hexdigest()
+        raw = json.dumps({'kept_local': [path], 'kept_local_sha256': {path: digest}}).encode()
+        with mock.patch.object(harnesses.fsx, 'WINDOWS', True):
+            kept, digests = decode_keep_contract(raw, legacy=True)
+            kept, digests = match_kept_local(kept, digests, (MANIFEST,))
+        self.assertEqual(kept, {MANIFEST})
+        self.assertEqual(digests, {MANIFEST: digest})
+        with mock.patch.object(harnesses.fsx, 'WINDOWS', False):
+            kept, _digests = decode_keep_contract(raw, legacy=True)
+        self.assertEqual(kept, {path})
+
     def test_retirement_requires_unchanged_recorded_ownership(self) -> None:
         root = self.qwen()
         write(root)

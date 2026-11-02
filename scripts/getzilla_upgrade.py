@@ -40,6 +40,7 @@ from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
     owned_proof, read_state, record_owned, read_keep_contract, match_kept_local, kept_file_state,
+    validate_manifest_publication,
 )
 from getzilla.harnesses import render_codex_hooks
 
@@ -355,8 +356,13 @@ def planned_changes(installer, home: Path, project: Path,
         record_owned(manifest, entry.path, content, entry.mode)
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
             changes.append((entry.path, content, mode))
-    if manifest != state.manifest:
-        changes.append((MANIFEST, encode_manifest(manifest), '100644'))
+    encoded = encode_manifest(manifest) if manifest != state.manifest else None
+    try:
+        validate_manifest_publication(binding.read(MANIFEST), encoded, kept, kept_digests)
+    except ComponentStateError as exc:
+        raise installer.UnsafeInstallTarget(str(exc)) from exc
+    if encoded is not None:
+        changes.append((MANIFEST, encoded, '100644'))
     return changes
 
 
@@ -528,8 +534,10 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
         else:
             record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
     changes = permitted
-    if pending_manifest != state.manifest:
-        changes.append((MANIFEST, encode_manifest(pending_manifest), '100644'))
+    encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None
+    validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
+    if encoded is not None:
+        changes.append((MANIFEST, encoded, '100644'))
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:

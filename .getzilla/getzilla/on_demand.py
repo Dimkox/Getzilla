@@ -22,7 +22,7 @@ from .component_state import (
     MANIFEST, V2, BoundRoot, ComponentStateError, ComponentTransaction,
     FileSnapshot, agent_of, component_transaction, component_of, encode_manifest,
     mode_matches, read_state, record_owned, validate_agents,
-    read_keep_contract, match_kept_local, kept_file_state,
+    read_keep_contract, match_kept_local, kept_file_state, validate_manifest_publication,
 )
 
 # A synced project has the sync record; a fresh install has the core package and no record.
@@ -263,6 +263,7 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
         record['added_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         record['source_version'] = source_version
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
+    validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
     return _AdditionPlan(results, operations, original_manifest, encoded)
 
 
@@ -271,18 +272,27 @@ def adopt_selection(root: Path, agents: tuple[str, ...]) -> dict[str, Any]:
     agents = validate_agents(agents)
     if not is_installed_project(root):
         raise ComponentStateError(f'{root} is not an installed Getzilla project')
-    state = read_state(root)
-    if state.kind == 'selected':
-        if state.require_selection() != agents:
-            raise ComponentStateError('selection is already established; adoption cannot replace or remove adapters')
-        return state.manifest
-    with component_transaction(root) as transaction:
-        state = read_state(root, binding=transaction)
+
+    def plan(binding: BoundRoot | ComponentTransaction) -> tuple[dict, FileSnapshot | None, bytes | None]:
+        state = read_state(root, binding=binding)
+        original = binding.read(MANIFEST)
         if state.kind == 'selected':
             if state.require_selection() != agents:
-                raise ComponentStateError('selection was established by another writer; adoption cannot replace it')
-            return state.manifest
-        original = transaction.read(MANIFEST)
-        manifest = {**state.manifest, 'schema_version': V2, 'agents': list(agents)}
-        transaction.write(MANIFEST, encode_manifest(manifest), 0o644, expected=original)
+                raise ComponentStateError('selection is already established; adoption cannot replace or remove adapters')
+            manifest, encoded = state.manifest, None
+        else:
+            manifest = {**state.manifest, 'schema_version': V2, 'agents': list(agents)}
+            encoded = encode_manifest(manifest)
+        kept, digests = read_keep_contract(binding)
+        validate_manifest_publication(original, encoded, kept, digests)
+        return manifest, original, encoded
+
+    with BoundRoot(root) as binding:
+        manifest, _original, encoded = plan(binding)
+        if encoded is None:
+            return manifest
+    with component_transaction(root) as transaction:
+        manifest, original, encoded = plan(transaction)
+        if encoded is not None:
+            transaction.write(MANIFEST, encoded, 0o644, expected=original)
         return manifest

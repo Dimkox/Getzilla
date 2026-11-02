@@ -588,6 +588,38 @@ class ComponentPreflightTests(unittest.TestCase):
             ensure_components(self.target, ['compliance:eu-ai-act', 'factory'], source=self.source)
         self.assertEqual(self.snapshot(), before)
 
+    def test_kept_manifest_refuses_add_before_files_or_selection_change(self) -> None:
+        self.keep(MANIFEST, (self.target / MANIFEST).read_bytes())
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+            ensure_components(self.target, ['factory', 'agent:codex'], source=self.source)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_manifest_allows_same_component_noop(self) -> None:
+        ensure_components(self.target, ['factory'], source=self.source)
+        self.keep(MANIFEST, (self.target / MANIFEST).read_bytes())
+        before = self.snapshot()
+        added = ensure_components(self.target, ['factory'], source=self.source)
+        self.assertEqual(added[0].files, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_kept_manifest_refuses_adoption_but_allows_same_selection(self) -> None:
+        from getzilla.component_state import V1, V2
+        from getzilla.on_demand import adopt_selection
+        legacy = json.dumps({'schema_version': V1, 'components': {}}).encode()
+        (self.target / MANIFEST).write_bytes(legacy)
+        self.keep(MANIFEST, legacy)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'kept.*manifest'):
+            adopt_selection(self.target, ())
+        self.assertEqual(self.snapshot(), before)
+        selected = json.dumps({'schema_version': V2, 'agents': [], 'components': {}}).encode()
+        (self.target / MANIFEST).write_bytes(selected)
+        self.keep(MANIFEST, selected)
+        before = self.snapshot()
+        adopt_selection(self.target, ())
+        self.assertEqual(self.snapshot(), before)
+
     def test_stale_keep_digest_refuses_even_identical_addition_before_writes(self) -> None:
         path = 'factory/pyproject.toml'
         (self.target / path).write_bytes((self.source / path).read_bytes())
