@@ -46,8 +46,25 @@ class WorktreeSafetyTests(unittest.TestCase):
         wanted = os.path.realpath(path)  # Git records a linked path resolved
         return next(item for item in plan(self.root)['worktrees'] if os.path.realpath(item['path']) == wanted)
 
+    def require_visible_process_scan(self) -> None:
+        # Qualify real OS visibility independently of the product's verdict.
+        # Positive removal tests need to establish that no process uses a tree.
+        if not (Path('/proc') / str(os.getpid()) / 'stat').is_file():
+            self.skipTest('numeric self PID is not observable in this procfs namespace')
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                if entry.stat().st_uid == os.geteuid():
+                    os.readlink(entry / 'cwd')
+            except FileNotFoundError:
+                continue  # A process may exit during enumeration.
+            except PermissionError:
+                self.skipTest('procfs hides a same-user process working directory')
+
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_a_clean_pushed_worktree_is_removed_once_and_its_branch_stays(self) -> None:
+        self.require_visible_process_scan()
         path = self.add('clean', '-b', 'clean')
         self.assertTrue(self.report(path)['removable'])
         self.assertEqual(remove(self.root, str(path))['result'], 'removed')
@@ -77,6 +94,7 @@ class WorktreeSafetyTests(unittest.TestCase):
 
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_pushed_commits_and_a_pushed_detached_head_are_removable(self) -> None:
+        self.require_visible_process_scan()
         local = self.add('pushed', '-b', 'pushed')
         commit(local, 'app.py', 'value = 4\n', 'pushed later')
         self.assertFalse(self.report(local)['removable'])
@@ -89,6 +107,7 @@ class WorktreeSafetyTests(unittest.TestCase):
 
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_ignored_runtime_state_keeps_the_worktree_but_caches_and_runner_logs_do_not(self) -> None:
+        self.require_visible_process_scan()
         path = self.add('ignored', '-b', 'ignored')
         (path / '__pycache__').mkdir()
         (path / '__pycache__' / 'app.cpython-313.pyc').write_bytes(b'\0')
@@ -186,14 +205,17 @@ class WorktreeSafetyTests(unittest.TestCase):
 
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_removal_inspects_again_and_keeps_work_added_after_the_plan(self) -> None:
+        self.require_visible_process_scan()
         path = self.add('late', '-b', 'late')
-        self.assertTrue(self.report(path)['removable'])
+        report = self.report(path)
+        self.assertTrue(report['removable'], report['reasons'])
         (path / 'late.txt').write_text('written after the plan')
         self.assertEqual(remove(self.root, str(path))['result'], 'kept')
         self.assertEqual((path / 'late.txt').read_text(), 'written after the plan')
 
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_a_plan_from_inside_a_task_worktree_uses_the_main_runtime_folder(self) -> None:
+        self.require_visible_process_scan()
         current = self.add('current', '-b', 'current')
         sibling = self.add('sibling', '-b', 'sibling')
         reports = {item['path']: item for item in plan(current)['worktrees']}
@@ -214,6 +236,7 @@ class WorktreeSafetyTests(unittest.TestCase):
 
     @unittest.skipUnless(PROCESS_CHECK, 'removal needs the /proc process check')
     def test_a_sparse_checkout_without_the_file_on_disk_is_removable(self) -> None:
+        self.require_visible_process_scan()
         path = self.add('sparse', '-b', 'sparse')
         git(path, 'update-index', '--skip-worktree', 'app.py')
         (path / 'app.py').unlink()
@@ -362,6 +385,10 @@ class WorktreeSafetyTests(unittest.TestCase):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
         self.addCleanup(child.wait)
         self.addCleanup(child.kill)
+        older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
+        child_started = worktree_safety._started_at(Path('/proc') / str(child.pid))
+        if older is None or child_started is None:
+            self.skipTest('numeric self/child PIDs are not observable in this procfs namespace')
         hidden = {str(child.pid)}
         real_readlink = os.readlink
 
@@ -376,8 +403,6 @@ class WorktreeSafetyTests(unittest.TestCase):
             self.assertIsNone(worktree_safety._in_use(path, None), 'an unknown creation time fails closed')
             hidden.clear()
             hidden.add(str(os.getpid()))  # this test process started before the worktree below
-            older = worktree_safety._started_at(Path('/proc') / str(os.getpid()))
-            self.assertIsNotNone(older)
             # Bound the age checks to the controlled process; the scan above uses a real child.
             controlled = [Path('/proc') / str(os.getpid())]
             with patch.object(Path, 'iterdir', side_effect=lambda _: iter(controlled), autospec=True):

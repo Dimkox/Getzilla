@@ -65,6 +65,10 @@ class ComponentStateError(ValueError):
     """Unsafe, ambiguous or unsupported component state; no implicit reset."""
 
 
+class _FileSnapshotChanged(ComponentStateError):
+    """A bounded regular file was atomically replaced; its bytes were discarded."""
+
+
 def agent_of(path: str) -> str | None:
     if path.startswith('.grok/agents/') and path.endswith('.md'):
         return 'grok'
@@ -423,6 +427,21 @@ class BoundRoot:
         found = False
         try:
             with self.parent(relative) as (parent, name, check):
+                def changed(message: str, original: os.stat_result, observed: os.stat_result,
+                            *, detached: bool = False) -> None:
+                    # Only a safe named replacement can warrant a fresh read.
+                    # In-place writes, unsafe files and ancestry changes refuse.
+                    check()
+                    named = fsx.lstat_at(parent, name)
+                    allowed_links = (0, 1) if detached else (1,)
+                    if (fsx.is_link(named) or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                            or named.st_size > limit or not stat.S_ISREG(observed.st_mode)
+                            or observed.st_nlink not in allowed_links or observed.st_size > limit
+                            or (named.st_dev, named.st_ino) == (original.st_dev, original.st_ino)):
+                        raise ComponentStateError(message)
+                    check()
+                    raise _FileSnapshotChanged(message)
+
                 before = fsx.lstat_at(parent, name)
                 found = True
                 if fsx.is_link(before) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -433,7 +452,7 @@ class BoundRoot:
                 try:
                     opened = os.fstat(descriptor)
                     if _file_identity(before) != _file_identity(opened):
-                        raise ComponentStateError(f'file changed while opening: {relative}')
+                        changed(f'file changed while opening: {relative}', before, opened)
                     chunks: list[bytes] = []
                     remaining = limit + 1
                     while remaining:
@@ -443,11 +462,14 @@ class BoundRoot:
                         chunks.append(chunk)
                         remaining -= len(chunk)
                     content = b''.join(chunks)
-                    if len(content) > limit or _file_identity(os.fstat(descriptor)) != _file_identity(opened):
-                        raise ComponentStateError(f'file changed or exceeded size limit: {relative}')
+                    if len(content) > limit:
+                        raise ComponentStateError(f'file exceeded size limit: {relative}')
+                    after = os.fstat(descriptor)
+                    if _file_identity(after) != _file_identity(opened):
+                        changed(f'file changed while reading: {relative}', opened, after, detached=True)
                     check()
                     if _file_identity(fsx.lstat_at(parent, name)) != _file_identity(opened):
-                        raise ComponentStateError(f'file changed while reading: {relative}')
+                        changed(f'file changed while reading: {relative}', opened, after, detached=True)
                     return FileSnapshot(content, stat.S_IMODE(opened.st_mode), _file_identity(opened))
                 finally:
                     os.close(descriptor)
@@ -635,7 +657,13 @@ def component_transaction(root: Path, *, timeout: float = 5.0) -> Iterator[Compo
         raise ComponentStateError('component lock timeout must be between 0 and 60 seconds')
     try:
         with BoundRoot(root) as binding:
-            read_state(root, binding=binding)
+            for attempt in range(3):
+                try:
+                    read_state(root, binding=binding)
+                    break
+                except _FileSnapshotChanged:
+                    if attempt == 2:
+                        raise
             with binding.parent('.getzilla/runtime/.components.guard.lock', create=True) as (parent, name, parent_check):
                 descriptor: int | None = None
                 locked = False

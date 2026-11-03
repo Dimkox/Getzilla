@@ -199,6 +199,166 @@ class ComponentTransactionTests(unittest.TestCase):
             list(executor.map(add, ('qwen', 'codex')))
         self.assertEqual(set(read_state(self.root).require_selection()), {'qwen', 'codex'})
 
+    def test_cooperating_publication_between_manifest_stat_and_open_preserves_both_additions(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, read_state, V2
+        (self.root / MANIFEST).write_bytes(encode_manifest({'schema_version': V2, 'agents': [], 'components': {}}))
+        def add(name: str) -> None:
+            with component_transaction(self.root) as transaction:
+                state = read_state(self.root, binding=transaction)
+                state.manifest['agents'] = [*state.require_selection(), name]
+                transaction.write(MANIFEST, encode_manifest(state.manifest), 0o644,
+                                  expected=transaction.read(MANIFEST))
+        original = fsx.lstat_at
+        published = False
+        def publish_after_stat(parent, name):
+            nonlocal published
+            before = original(parent, name)
+            if name == Path(MANIFEST).name and not published:
+                published = True
+                add('qwen')
+            return before
+        with mock.patch.object(fsx, 'lstat_at', side_effect=publish_after_stat):
+            add('codex')
+        self.assertEqual(set(read_state(self.root).require_selection()), {'qwen', 'codex'})
+
+    def test_repeated_prelock_manifest_replacement_refuses_before_creating_the_guard(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, V2
+        manifest = self.root / MANIFEST
+        content = encode_manifest({'schema_version': V2, 'agents': [], 'components': {}})
+        manifest.write_bytes(content)
+        original = fsx.lstat_at
+        replacements = 0
+        def replace_after_stat(parent, name):
+            nonlocal replacements
+            before = original(parent, name)
+            if name == manifest.name:
+                replacements += 1
+                replacement = manifest.with_name('next-manifest.json')
+                replacement.write_bytes(content)
+                replacement.replace(manifest)
+            return before
+        with mock.patch.object(fsx, 'lstat_at', side_effect=replace_after_stat):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                with component_transaction(self.root):
+                    self.fail('an unstable pre-lock manifest was admitted')
+        self.assertLessEqual(replacements, 6, 'pre-lock retries must remain bounded')
+        self.assertFalse((self.root / '.getzilla/runtime').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX detached read descriptor semantics')
+    def test_cooperating_publication_during_manifest_read_preserves_both_additions(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, read_state, V2
+        (self.root / MANIFEST).write_bytes(encode_manifest({'schema_version': V2, 'agents': [], 'components': {}}))
+        def add(name: str) -> None:
+            with component_transaction(self.root) as transaction:
+                state = read_state(self.root, binding=transaction)
+                state.manifest['agents'] = [*state.require_selection(), name]
+                transaction.write(MANIFEST, encode_manifest(state.manifest), 0o644,
+                                  expected=transaction.read(MANIFEST))
+        real_open, real_read = fsx.open_at, os.read
+        reader = None
+        published = False
+        def remember_reader(parent, name, flags, *args):
+            nonlocal reader
+            descriptor = real_open(parent, name, flags, *args)
+            if name == Path(MANIFEST).name and reader is None:
+                reader = descriptor
+            return descriptor
+        def publish_after_read(descriptor, size):
+            nonlocal published
+            content = real_read(descriptor, size)
+            if descriptor == reader and not published:
+                published = True
+                add('qwen')
+            return content
+        with mock.patch.object(fsx, 'open_at', side_effect=remember_reader), \
+                mock.patch.object(os, 'read', side_effect=publish_after_read):
+            add('codex')
+        self.assertEqual(set(read_state(self.root).require_selection()), {'qwen', 'codex'})
+
+    def test_invalid_prelock_manifest_is_not_retried_or_used_to_create_the_guard(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, V2
+        manifest = self.root / MANIFEST
+        manifest.write_bytes(b'{')
+        original = fsx.lstat_at
+        reads = 0
+        def valid_on_retry(parent, name):
+            nonlocal reads
+            if name == manifest.name:
+                reads += 1
+                if reads > 2:
+                    manifest.write_bytes(encode_manifest({'schema_version': V2, 'agents': [], 'components': {}}))
+            return original(parent, name)
+        with mock.patch.object(fsx, 'lstat_at', side_effect=valid_on_retry):
+            with self.assertRaises(ValueError):
+                with component_transaction(self.root):
+                    self.fail('invalid state was retried into acceptance')
+        self.assertEqual(manifest.read_bytes(), b'{')
+        self.assertFalse((self.root / '.getzilla/runtime').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX hardlink semantics')
+    def test_prelock_hardlink_replacement_is_not_retried(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, V2
+        content = encode_manifest({'schema_version': V2, 'agents': [], 'components': {}})
+        manifest = self.root / MANIFEST
+        manifest.write_bytes(content)
+        outside = self.root.parent / 'outside.json'
+        outside.write_bytes(content)
+        original = fsx.lstat_at
+        observations = 0
+        def replace_after_stat(parent, name):
+            nonlocal observations
+            before = original(parent, name)
+            if name == manifest.name:
+                observations += 1
+                replacement = manifest.with_name('next-manifest.json')
+                if observations == 1:
+                    os.link(outside, replacement)
+                    replacement.replace(manifest)
+                elif observations > 2:
+                    replacement.write_bytes(content)
+                    replacement.replace(manifest)
+            return before
+        with mock.patch.object(fsx, 'lstat_at', side_effect=replace_after_stat):
+            with self.assertRaises(ValueError):
+                with component_transaction(self.root):
+                    self.fail('an unsafe replacement was retried into acceptance')
+        self.assertEqual(manifest.stat().st_nlink, 2)
+        self.assertEqual(outside.read_bytes(), content)
+        self.assertFalse((self.root / '.getzilla/runtime').exists())
+
+    def test_manifest_replacement_after_lock_acquisition_is_not_retried(self) -> None:
+        from getzilla import fsx
+        from getzilla.component_state import component_transaction, encode_manifest, V2
+        content = encode_manifest({'schema_version': V2, 'agents': [], 'components': {}})
+        manifest = self.root / MANIFEST
+        manifest.write_bytes(content)
+        real_lock, real_stat = fsx.lock_file, fsx.lstat_at
+        locked = False
+        replaced = False
+        def acquire(descriptor, *, blocking):
+            nonlocal locked
+            real_lock(descriptor, blocking=blocking)
+            locked = True
+        def replace_after_stat(parent, name):
+            nonlocal replaced
+            before = real_stat(parent, name)
+            if locked and name == manifest.name and not replaced:
+                replaced = True
+                replacement = manifest.with_name('next-manifest.json')
+                replacement.write_bytes(content)
+                replacement.replace(manifest)
+            return before
+        with mock.patch.object(fsx, 'lock_file', side_effect=acquire), \
+                mock.patch.object(fsx, 'lstat_at', side_effect=replace_after_stat):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                with component_transaction(self.root):
+                    self.fail('a changed under-lock manifest was retried into acceptance')
+
     def test_no_clobber_at_final_publication(self) -> None:
         from getzilla import fsx
         from getzilla.component_state import component_transaction
