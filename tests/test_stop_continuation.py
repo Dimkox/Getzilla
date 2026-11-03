@@ -39,6 +39,73 @@ class StopContinuationTests(unittest.TestCase):
         return stop(root, {'hook_event_name': 'Stop', 'last_assistant_message':
                           'Кнопка эксперта готова. Остальные разделы ещё не выложены.', **payload}, harness)
 
+    def grok_stop(self, root, mode='soft', **payload):
+        # Real native aliases, without injected snake defaults masking owner/recursion.
+        env = {**os.environ, 'GETZILLA_STOP_GATE_MODE': mode,
+               'PYTHONPATH': os.pathsep.join((str(root), str(root / '.getzilla')))}
+        data = {'cwd': str(root), 'sessionId': 's1', 'hookEventName': 'stop',
+                'reason': 'end_turn', 'stopHookActive': False,
+                'lastAssistantMessage': 'The remaining controls still need delivery.', **payload}
+        proc = subprocess.run([sys.executable, str(root / '.grok/hooks/stop_gate.py')], cwd=root,
+                              env=env, input=json.dumps(data).encode('utf-8'),
+                              capture_output=True, timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.decode('utf-8'))
+
+    def test_grok_native_end_turn_continues_without_a_claim(self):
+        with project_copy(git=True) as root:
+            self.package(root)
+            before = state.get_active_route(root)
+            for aliases in ({}, {'hook_event_name': 'Stop'}):
+                with self.subTest(aliases=aliases):
+                    data = self.grok_stop(root, **aliases)
+                    self.assertEqual(data.get('decision'), 'block', data)
+                    self.assertIn('Deliver the remaining', data['reason'])
+            exhausted = self.grok_stop(root)
+            self.assertNotEqual(exhausted.get('decision'), 'block', exhausted)
+            self.assertIn('unchanged', exhausted.get('systemMessage', ''))
+            self.assertEqual(state.get_active_route(root), before)
+
+    def test_grok_native_boundaries_preserve_retry_state(self):
+        with project_copy(git=True) as root:
+            self.package(root)
+            state.increment_stop_attempt(root, state.get_active_route(root)['route_id'], observation='a' * 64)
+            before = state.stop_attempts_path(root).read_bytes()
+            cases = [{'stopHookActive': True}, {'sessionId': 'foreign'}, {'sessionId': None},
+                     {'subagentType': 'reviewer'}, {'hookEventName': None},
+                     {'hook_event_name': 'StopCancelled'},
+                     *({'reason': reason} for reason in ('shutdown', 'channel_closed', None, '', 'unknown')),
+                     *({'hookEventName': event} for event in
+                       ('StopCancelled', 'stop_cancelled', 'StopFailure', 'stop_failure',
+                        'SubagentStop', 'subagent_stop', 'SessionEnd'))]
+            for payload in cases:
+                for mode in ('soft', 'strict'):
+                    with self.subTest(payload=payload, mode=mode):
+                        data = self.grok_stop(root, mode, lastAssistantMessage='All tests pass.', **payload)
+                        self.assertNotEqual(data.get('decision'), 'block', data)
+                        self.assertEqual(state.stop_attempts_path(root).read_bytes(), before)
+
+    def test_grok_strict_claim_uses_native_fields_and_end_turn(self):
+        with project_copy(git=True) as root:
+            self.package(root, '- [x] Finished.\n', ('verification',))
+            state.update_route(root, delivery_expected=False)
+            data = self.grok_stop(root, 'strict', lastAssistantMessage='All tests pass.')
+            self.assertEqual(data.get('decision'), 'block', data)
+            self.assertIn('no passing verification receipt', data['reason'])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX canonical Grok launcher')
+    def test_canonical_grok_stop_launcher(self):
+        with project_copy(git=True) as root:
+            self.package(root)
+            config = json.loads((PROJECT / '.grok/hooks.json').read_text(encoding='utf-8'))
+            command = config['hooks']['Stop'][0]['hooks'][0]['command']
+            proc = subprocess.run(['bash', '-c', command], cwd=root, capture_output=True,
+                                  input=json.dumps({'cwd': str(root), 'sessionId': 's1',
+                                                    'hookEventName': 'stop', 'reason': 'end_turn'}),
+                                  text=True, timeout=20)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout).get('decision'), 'block', proc.stdout)
+
     def test_claim_free_root_continues_unchecked_native_work(self):
         with project_copy(git=True) as root:
             self.package(root)

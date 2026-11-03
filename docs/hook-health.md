@@ -8,21 +8,28 @@ does not waive an unchecked plan item. The hook reads existing canonical scope g
 the selected package's native `tasks.md` checklist and missing/stale required receipts.
 It also reports malformed or unsafe selected package inputs as unresolved work.
 
-Claude Code and Codex receive `decision: block` with a continuation reason. That asks
+Claude Code, Codex and eligible Grok Build stops receive `decision: block` with a continuation reason. That asks
 the coordinator to read the retained original task and amendments, then perform the
 next available, already authorized step. The hook itself runs no delivery command and
-grants no permission. Qwen, Grok and Gemini receive an explicit unfinished-work advisory
+grants no permission. Qwen and Gemini receive an explicit unfinished-work advisory
 under the current adapter capability policy.
 
+Grok requires a native `Stop` (`hook_event_name`) or `stop` (`hookEventName`) event with
+`reason: end_turn`. Its `shutdown` and `channel_closed` stops are observe-only; missing or
+unknown reasons also cannot block or change the retry counter. This follows the official
+[Grok hooks contract](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md).
+The native `sessionId`, `stopHookActive` and `lastAssistantMessage` fields are supported.
+Contract tests run the actual Grok hook command; they do not prove a live client session.
+
 Only a matching session owner at a root Stop is eligible. Explicit `SubagentStop`,
-`Interrupt`, `SessionEnd` and `StopFailure` events, distinct child identities, foreign or
+`Interrupt`, `SessionEnd`, `StopCancelled` and `StopFailure` events, distinct child identities, foreign or
 unbound sessions, and terminal/cancelled tasks cannot be restarted. A root `agent_type`
 profile alone does not make a child. A current matching package transition to `blocked`
 with a concrete reason permits an honest pause; missing/stale scope, unsafe inputs or
 malformed blocker history cannot inherit that waiver. The reason records the owner's
 explanation, not independently verified proof of the external obstacle.
 
-Continuation is bounded in two ways. `stop_hook_active` never triggers another block
+Continuation is bounded in two ways. `stop_hook_active` (Grok: `stopHookActive`) never triggers another block
 in the native continued turn. Across calls, at most two requests are issued for the
 same remaining-work observation, task and authority epoch. Changed recorded scope or
 remaining obligations create a new observation. Exhaustion, or unreadable retry state,
@@ -71,7 +78,7 @@ risk vocabulary, English base plus language packs) and there is no passing verif
 for the current tree, the stop gate:
 
 - in `soft` mode (default) adds `unsupported verification claim: ...` to its note;
-- in `strict` mode blocks the stop with that reason on Claude Code and Codex, so the agent runs
+- in `strict` mode blocks an eligible stop with that reason on Claude Code, Codex and Grok, so the agent runs
   verify and reports its real result. Agents without a blocking Stop hook get the warning and a
   `HOOK_DEGRADED` event (`STRICT_BLOCK_UNSUPPORTED:<agent>`). A stop that was already continued
   once by the hook (`stop_hook_active`) is never blocked again.
