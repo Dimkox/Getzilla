@@ -18,22 +18,26 @@ import tempfile
 import time
 import unittest
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla import baseline, updater
+from getzilla import baseline, security_data as SD, updater
 
 from tests._support import offline_mirror, project_copy, run_hook
 
 
 
 def _zip_bytes(name: str, padding: int = 64) -> bytes:
+    ecosystem = next((item for item in updater.OSV_ECOSYSTEMS if f'/{item}/' in name), 'PyPI')
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
-        archive.writestr('osv-test.json', ('{"id": "%s", "padding": "%s"}' % (name, 'x' * padding)).encode())
+        archive.writestr('osv-test.json', json.dumps({'id': name, 'padding': 'x' * padding, 'affected': [{
+            'package': {'ecosystem': ecosystem, 'name': 'fixture'}, 'versions': ['1.0.0'],
+        }]}).encode())
     return buffer.getvalue()
 
 
@@ -113,6 +117,31 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual((self.root / 'osv/PyPI/all.zip').read_bytes(), good)
         truncated = updater.update_osv(lambda url: b'PK\x03\x04' + b'x' * 32, self.root)
         self.assertTrue(all(item.status == 'fail' for item in truncated))
+
+    def test_failed_refresh_keeps_original_verified_time_and_payload(self) -> None:
+        now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+        updater.update_osv(_zip_bytes, self.root, now=now)
+        pointer = self.root / 'osv/PyPI/snapshot.json'
+        original = pointer.read_bytes()
+        failed = updater.update_osv(lambda url: b'PKpartial', self.root, now=now + timedelta(hours=1))
+        self.assertTrue(all(item.status == 'fail' for item in failed))
+        self.assertEqual(pointer.read_bytes(), original)
+        _, evidence = SD.read_snapshot(self.root / 'osv', 'osv:PyPI', now=now + timedelta(hours=1))
+        self.assertEqual(evidence['age_seconds'], 3600)
+
+    def test_mirror_copy_cannot_refresh_an_old_valid_archive(self) -> None:
+        now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+        source = Path(self._tmp.name) / 'mirror'
+        updater.update_osv(_zip_bytes, source, now=now - timedelta(hours=71))
+        mirror = updater.Mirror(source, {}, {})
+        copied = updater.update_osv(mirror.fetch, self.root, now=now)
+        self.assertTrue(all(item.status == 'ok' for item in copied), copied)
+        _, evidence = SD.read_snapshot(self.root / 'osv', 'osv:PyPI', now=now)
+        self.assertEqual(evidence['age_seconds'], 255600)
+        before = (self.root / 'osv/PyPI/snapshot.json').read_bytes()
+        rejected = updater.update_osv(mirror.fetch, self.root, now=now + timedelta(hours=2))
+        self.assertTrue(all(item.status == 'fail' for item in rejected))
+        self.assertEqual((self.root / 'osv/PyPI/snapshot.json').read_bytes(), before)
 
     def _pinned(self, payload: bytes) -> mock._patch:
         return mock.patch.dict(updater.OPENGREP_ASSETS, {
@@ -305,6 +334,9 @@ class OfflineMirrorTests(unittest.TestCase):
         for name in ('tool:opengrep', 'baseline:superpowers', 'baseline:bmad', 'baseline:spec-kit'):
             self.assertIn(f'pin from {updater.MIRROR_MANIFEST}', results[name].detail, name)
         self.assertNotIn('pin from', results['osv:PyPI'].detail)
+        source_acquisition = json.loads((self.mirror_dir / 'osv/PyPI/snapshot.json').read_text())['acquisition']
+        copied_acquisition = json.loads((self.root / 'osv/PyPI/snapshot.json').read_text())['acquisition']
+        self.assertEqual(copied_acquisition, source_acquisition)
         self.assertEqual((self.root / 'osv/npm/all.zip').read_bytes(),
                          (self.mirror_dir / 'osv/npm/all.zip').read_bytes())
         asset, _ = updater.OPENGREP_ASSETS[updater._platform_key()]
@@ -316,6 +348,14 @@ class OfflineMirrorTests(unittest.TestCase):
         self.assertEqual(self.uv[0][-1], f"git+{source}@{spec_kit['upstream_tag']}")
         again = self._update(self._mirror())
         self.assertIn('already installed, sha256 verified', again['tool:opengrep'].detail)
+
+    def test_run_from_mirror_refuses_legacy_raw_zip(self) -> None:
+        (self.mirror_dir / 'osv/PyPI/snapshot.json').unlink()
+        results = self._update(self._mirror())
+        self.assertEqual(results['osv:PyPI'].status, 'fail')
+        self.assertIn('refresh', results['osv:PyPI'].detail)
+        self.assertFalse((self.root / 'osv/PyPI/snapshot.json').exists())
+        self.assertEqual(results['osv:npm'].status, 'ok')
 
     def test_a_mirror_without_its_own_pins_must_match_the_release_pins(self) -> None:
         (self.mirror_dir / updater.MIRROR_MANIFEST).unlink()

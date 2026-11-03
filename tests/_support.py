@@ -170,14 +170,17 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
         yield root
 
 
-def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
+def run_hook(root: Path, name: str, payload: dict, *, harness: str | None = None) -> tuple[int, dict, str]:
     script = root / '.grok/hooks' / name
     # Use the fixture even when the parent runner exposes the intact source package.
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
     # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
+    command = [sys.executable, str(script)]
+    if harness is not None:
+        command.extend(['--harness', harness])
     proc = subprocess.run(
-        [sys.executable, str(script)],
+        command,
         cwd=root,
         env=env,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
@@ -276,20 +279,30 @@ def prepare_review_source(root: Path) -> dict[str, str]:
 def offline_mirror(base: Path) -> Path:
     """A small stand-in for every download host of getzilla_update.py (``GETZILLA_UPDATE_MIRROR``).
 
-    Each OSV archive is a valid zip with one record, each OpenGrep asset is a short script and each
+    Each OSV snapshot has one ecosystem-specific record and verified acquisition metadata.
+    Each OpenGrep asset is a short script and each
     pinned workflow source is a one-commit repository with its upstream tag. getzilla-mirror.json
     pins these stand-ins, so the updater's zip, SHA-256 and commit checks run as they do for real.
     """
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
-    from getzilla import baseline, updater
+    import io
+    from datetime import datetime, timezone
+    from getzilla import baseline, security_data, updater
 
     mirror = base / 'update-mirror'
+    acquired = datetime.now(timezone.utc)
     for ecosystem in updater.OSV_ECOSYSTEMS:
-        archive = mirror / 'osv' / ecosystem / 'all.zip'
-        archive.parent.mkdir(parents=True)
-        with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as bundle:
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'getzilla-fixture-package'},
+                'versions': ['1.0.0'],
+            }]}))
+        security_data.publish_snapshot(
+            mirror / 'osv', f'osv:{ecosystem}', output.getvalue(),
+            acquisition={'last_verified_sync_utc': acquired.isoformat(), 'retrieval_kind': 'download'},
+            coverage={'scopes': [ecosystem], 'complete': True, 'record_count': 1, 'schema': 'osv-1'}, now=acquired)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

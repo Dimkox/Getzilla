@@ -15,7 +15,6 @@ import argparse
 import contextlib
 import hashlib
 import hmac
-import io
 import json
 import os
 import platform
@@ -26,18 +25,17 @@ import sys
 import tempfile
 import time
 import urllib.request
-import zipfile
-import zlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
+
+from .security_data import OSV_BUCKET, OSV_ECOSYSTEMS, copy_snapshot, osv_coverage, publish_snapshot
 
 STATE_FILE = 'update-state.json'
 LOCK_FILE = 'update.lock'
 LOCK_STALE_SECONDS = 3600
 DEFAULT_INTERVAL_HOURS = 1.0
-OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
-OSV_ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
 SOURCES = {
     'superpowers': 'https://github.com/obra/superpowers.git',
     'bmad': 'https://github.com/bmad-code-org/BMAD-METHOD.git',
@@ -92,7 +90,8 @@ class Result:
 class Mirror:
     """A local directory that replaces every download host (``GETZILLA_UPDATE_MIRROR``).
 
-    Layout: ``osv/<Ecosystem>/all.zip`` (the ``GETZILLA_OSV_DB`` layout of known_vulns),
+    Layout: ``osv/`` contains validated snapshots (manifest plus content objects,
+    the ``GETZILLA_OSV_DB`` layout of known_vulns) and legacy ``all.zip`` exports,
     ``opengrep/v<version>/<asset>`` and ``git/<owner>/<repo>.git``. The pins stay those in this
     module and in toolchain.json, so a mirror of the real files needs nothing else. A mirror of
     small stand-in files (a test fixture) names its own pins in ``getzilla-mirror.json``:
@@ -255,32 +254,30 @@ def _replace_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
         raise
 
 
-def _check_zip(data: bytes) -> None:
-    """Refuse anything but a complete zip whose members pass their CRC checks.
-
-    The OSV bucket publishes no checksum file, so this catches truncated or
-    corrupted downloads and HTML error pages rather than a malicious mirror.
-    """
-    if not data.startswith(b'PK'):
-        raise ValueError('not a zip archive')
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            broken = archive.testzip()
-    except (zipfile.BadZipFile, zlib.error, EOFError, ValueError) as exc:
-        raise ValueError(f'corrupt zip archive: {exc}') from exc
-    if broken is not None:
-        raise ValueError(f'corrupt zip archive: bad CRC in {broken}')
-
-
-def update_osv(fetch: Fetch, root: Path) -> list[Result]:
+def update_osv(fetch: Fetch, root: Path, *, now: datetime | None = None,
+               source_database: Path | None = None) -> list[Result]:
+    """Refresh independent ecosystems; local mirrors retain their original verified sync."""
     database = root / 'osv'
+    bound_mirror = getattr(fetch, '__self__', None)
+    if source_database is None and isinstance(bound_mirror, Mirror):
+        source_database = bound_mirror.root / 'osv'
     results = []
     for ecosystem in OSV_ECOSYSTEMS:
         try:
-            data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip')
-            _check_zip(data)
-            _replace_bytes(database / ecosystem / 'all.zip', data)
-            results.append(Result(f'osv:{ecosystem}', 'ok', f'{len(data) // 1024} KiB'))
+            if source_database is not None:
+                evidence = copy_snapshot(source_database, database, f'osv:{ecosystem}',
+                                         now=now, required_scope={ecosystem})
+            else:
+                data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip')
+                current = now if now is not None else datetime.now(timezone.utc)
+                evidence = publish_snapshot(
+                    database, f'osv:{ecosystem}', data,
+                    acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download'},
+                    coverage=osv_coverage(data, ecosystem), now=current)
+            detail = f"{evidence['payload_size'] // 1024} KiB; verified sync {evidence['acquisition']['last_verified_sync_utc']}"
+            if evidence.get('compatibility_export_warning'):
+                detail += '; snapshot committed, legacy all.zip export unavailable'
+            results.append(Result(f'osv:{ecosystem}', 'ok', detail))
         except Exception as exc:  # noqa: BLE001 - one ecosystem failing must not stop the others
             results.append(Result(f'osv:{ecosystem}', 'fail', str(exc)[:200]))
     return results
@@ -419,7 +416,7 @@ def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable
                     for item in update_sources(run, root, {name: mirror.url(url) for name, url in SOURCES.items()})]
     if 'osv' in wanted:
         results += [Result(item.component, item.status, item.detail + mirror.note(False))
-                    for item in update_osv(mirror.fetch, root)]
+                    for item in update_osv(mirror.fetch, root, source_database=mirror.root / 'osv')]
     if 'opengrep' in wanted:
         assets = {key: (asset, mirror.opengrep.get(asset, digest)) for key, (asset, digest) in OPENGREP_ASSETS.items()}
         pinned = assets.get(_platform_key(), ('',))[0] in mirror.opengrep

@@ -119,6 +119,10 @@ def _shell_mutation(
 def evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
+    from .task_intent import mutation_block_reason
+    intent_reason = mutation_block_reason(root, event, execution_cwd=_execution_directory(root, execution_cwd))
+    if intent_reason:
+        return False, intent_reason
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -13,6 +14,11 @@ import sys
 import time
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import uuid
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla.disposable_resources import image_pins
+POSTGRES = image_pins(ROOT)["postgres"]
 
 SOURCE = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SOURCE))
@@ -62,6 +68,8 @@ from getzilla_factory.workspace import (
     WorkspaceReleaseOutcome,
 )
 
+
+_RESTART_OBSERVATIONS = []
 
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
@@ -136,7 +144,7 @@ def _assert_disposable_target(
     container_id: str,
     nonce: str,
 ) -> None:
-    if (re.fullmatch(r"adaptive-factory-exit-[0-9a-f]{12}", container_name) is not None,
+    if (re.fullmatch(r"(?:adaptive-factory-exit-[0-9a-f]{12}|gz-[a-z0-9-]{1,90})", container_name) is not None,
         _CONTAINER_ID.fullmatch(container_id) is not None, _NONCE.fullmatch(nonce) is not None) != (True, True, True):
         raise RuntimeError("invalid disposable PostgreSQL identity")
     metadata = subprocess.run(
@@ -145,7 +153,7 @@ def _assert_disposable_target(
             "inspect",
             "--format",
             '{{.Id}}\t{{.Name}}\t{{.Config.Image}}\t{{.State.Running}}\t'
-            '{{index .Config.Labels "adaptive-factory.disposable-exit"}}',
+            '{{index .Config.Labels "getzilla.ci.nonce"}}\t{{.Image}}',
             container_id,
         ],
         check=True,
@@ -156,9 +164,10 @@ def _assert_disposable_target(
     if metadata != [
         container_id,
         f"/{container_name}",
-        "postgres:17-alpine",
+        POSTGRES["reference"],
         "true",
         nonce,
+        POSTGRES["image_id"],
     ]:
         raise RuntimeError("disposable PostgreSQL container binding mismatch")
 
@@ -303,10 +312,13 @@ def _restart_database(
     _assert_disposable_target(
         urls[0], container_name, container_id, nonce
     )
+    current_start = _postmaster_started_at(urls[0])
     _require(
-        _postmaster_started_at(urls[0]) > previous_start,
+        current_start > previous_start,
         "docker restart did not replace the PostgreSQL postmaster",
     )
+    _RESTART_OBSERVATIONS.append({"container_id": container_id,
+                                  "before": str(previous_start), "after": str(current_start)})
     return urls
 
 
@@ -1711,6 +1723,13 @@ def main() -> int:
          runtime_store.verify_audit_chain(task_b.task_id)) == (True, True),
         "replacement/late-fence proof broke the task audit hash chain",
     )
+    if os.environ.get("GETZILLA_LIVE_ARTIFACTS"):
+        if len(_RESTART_OBSERVATIONS) != 2:
+            raise RuntimeError("Two actual PostgreSQL restart observations are required")
+        report = Path(os.environ["GETZILLA_LIVE_ARTIFACTS"]) / "factory-restart.json"
+        with report.open("x") as stream:
+            json.dump({"status": "pass", "restarts": _RESTART_OBSERVATIONS,
+                       "workspace_scope": "FakeWorkspaceBroker and modeled ambiguous workspace release; database restart is real"}, stream)
     print(
         "PASS: two PostgreSQL restarts; exact runtime/attestor roles; "
         "cancelled+orphaned recovery; ambiguous cleanup fence2 replay; "

@@ -167,7 +167,7 @@ class CoreTestRun:
     coverage_metadata: dict[str, object]
 
 
-def _stop(process: subprocess.Popen) -> None:
+def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> None:
     """Stop only the session or Job Object created by execute; repeated calls are safe."""
     job = fsx.owned_job(process)
     if os.name == 'posix':
@@ -177,7 +177,7 @@ def _stop(process: subprocess.Popen) -> None:
             pass
         else:
             # Also terminate descendants when their group leader already exited.
-            deadline = time.monotonic() + _TERM_GRACE
+            deadline = time.monotonic() + (_TERM_GRACE if grace_seconds is None else grace_seconds)
             while time.monotonic() < deadline:
                 process.poll()
                 try:
@@ -281,9 +281,17 @@ def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: C
             yield handle
 
 
-def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
+def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT,
+            termination_grace: float | None = None) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
     started = time.monotonic()
+    if termination_grace is not None and not 0 < termination_grace <= 180:
+        raise RunnerError('termination grace must be bounded by 180 seconds')
+    def stop(process):
+        if termination_grace is None:
+            _stop(process)
+        else:
+            _stop(process, grace_seconds=termination_grace)
     retained: dict[str, ProcessResult] = {}
     with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled) as stdout, \
             _output_file(retained, 'stderr', cancelled) as stderr:
@@ -313,13 +321,13 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
                 time.sleep(0.05)
         except BaseException as exc:
             try:
-                _stop(process)
+                stop(process)
             except Exception as cleanup:
                 exc.add_note(f'owned process cleanup failed: {cleanup}')
             raise
         original_returncode = process.returncode
         try:
-            _stop(process)
+            stop(process)
         except Exception as exc:
             cleanup_error = f'{type(exc).__name__}: {exc}'[:512]
         if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > OUTPUT_LIMIT:

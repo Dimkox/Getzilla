@@ -580,7 +580,7 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
         from .continuity import assert_finishable
         assert_finishable(root, route, cancel=updates['status'] == 'cancelled')
     immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
-                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff'}
+                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff', 'intent_state'}
     if has_task_context(route) and any(key in updates and updates[key] != route.get(key) for key in immutable | {'change_id'}):
         raise ValueError('immutable task authority requires an explicit task transition')
     changed = copy.deepcopy(route)
@@ -601,9 +601,11 @@ def get_agent_state(root: Path) -> dict[str, Any]:
 
 
 def record_agent_start(root: Path, agent_id: str, agent_type: str, *,
-                       now: datetime | None = None, generation: str | None = None) -> dict[str, Any]:
+                       now: datetime | None = None, generation: str | None = None,
+                       requirement_ids: tuple[str, ...] | None = None) -> dict[str, Any]:
     from .agent_lifecycle import start_agent
-    return start_agent(root, agent_id, agent_type, now=now, generation=generation)
+    scope = {} if requirement_ids is None else {'requirement_ids': requirement_ids}
+    return start_agent(root, agent_id, agent_type, now=now, generation=generation, **scope)
 
 
 def record_agent_stop(root: Path, agent_id: str, agent_type: str, *, generation: str | None = None,

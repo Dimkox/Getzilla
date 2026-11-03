@@ -856,6 +856,257 @@
         }
       }
     },
+    "core": {
+      "files": [
+        ".getzilla/config/ci-images.json",
+        ".getzilla/config/license-policy.json",
+        ".getzilla/config/managed.json",
+        ".getzilla/getzilla/agent_lifecycle.py",
+        ".getzilla/getzilla/architecture_diff.py",
+        ".getzilla/getzilla/change.py",
+        ".getzilla/getzilla/ci_admission.py",
+        ".getzilla/getzilla/ci_evidence.py",
+        ".getzilla/getzilla/completion.py",
+        ".getzilla/getzilla/component_state.py",
+        ".getzilla/getzilla/continuity.py",
+        ".getzilla/getzilla/criterion_tests.py",
+        ".getzilla/getzilla/disposable_resources.py",
+        ".getzilla/getzilla/expanded_security.py",
+        ".getzilla/getzilla/factory_tests.py",
+        ".getzilla/getzilla/known_vulns.py",
+        ".getzilla/getzilla/live_acceptance.py",
+        ".getzilla/getzilla/live_lifecycle.py",
+        ".getzilla/getzilla/policy.py",
+        ".getzilla/getzilla/python_test_runner.py",
+        ".getzilla/getzilla/quality_gates.py",
+        ".getzilla/getzilla/receipts.py",
+        ".getzilla/getzilla/security_acquisition.py",
+        ".getzilla/getzilla/security_artifacts.py",
+        ".getzilla/getzilla/security_cli.py",
+        ".getzilla/getzilla/security_data.py",
+        ".getzilla/getzilla/security_intelligence.py",
+        ".getzilla/getzilla/security_inventory.py",
+        ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_license_texts.py",
+        ".getzilla/getzilla/security_licenses.py",
+        ".getzilla/getzilla/security_tools.py",
+        ".getzilla/getzilla/spec.py",
+        ".getzilla/getzilla/stack_runners.py",
+        ".getzilla/getzilla/stacks.py",
+        ".getzilla/getzilla/state.py",
+        ".getzilla/getzilla/task_intent.py",
+        ".getzilla/getzilla/updater.py",
+        ".getzilla/getzilla/verification.py",
+        ".getzilla/getzilla/verification_plan.py",
+        "scripts/getzilla_agent.py",
+        "scripts/getzilla_change.py",
+        "scripts/getzilla_ci_admission.py",
+        "scripts/getzilla_ci_evidence.py",
+        "scripts/getzilla_live.py",
+        "scripts/getzilla_live_lifecycle.py",
+        "scripts/getzilla_route.py",
+        "scripts/getzilla_security.py",
+        "scripts/getzilla_vulns.py"
+      ],
+      "owned": {
+        ".getzilla/config/ci-images.json": {
+          "mode": 420,
+          "sha256": "27e95f49ec3d1d0a984d387d861c7c47fe05a979941737294b37bbc44a1be8b9"
+        },
+        ".getzilla/config/license-policy.json": {
+          "mode": 420,
+          "sha256": "de44035e89a5671a8818f8dcf8126ba1d53ee5c94e9a9a660a9576ae987ee50c"
+        },
+        ".getzilla/config/managed.json": {
+          "mode": 420,
+          "sha256": "3cd9d41239708583b345b1dcc323200312e4182802ff7c1d5ffa888883008913"
+        },
+        ".getzilla/getzilla/agent_lifecycle.py": {
+          "mode": 420,
+          "sha256": "27eaa23376fe2fab94f7aca821a0ae184f505e1a3659b71a447f27a53759762c"
+        },
+        ".getzilla/getzilla/architecture_diff.py": {
+          "mode": 420,
+          "sha256": "2be8a8ccc7361411042382e71a1925b083251e77b37a7d044e20a6fafe3bd0e8"
+        },
+        ".getzilla/getzilla/change.py": {
+          "mode": 420,
+          "sha256": "3d74aca08303e2edadf549e42b97ffdc79f92c4a5a20ec1e3f2cc5e9034f8b51"
+        },
+        ".getzilla/getzilla/ci_admission.py": {
+          "mode": 420,
+          "sha256": "e9fd3d8b8bde934142a99123a86e97462bfa841a9e7671c628f8ffd14e254b21"
+        },
+        ".getzilla/getzilla/ci_evidence.py": {
+          "mode": 420,
+          "sha256": "d0eccaf5779b313f55448495cd9de85c7b6c0f7ccc4971c1511bc647bdd645d4"
+        },
+        ".getzilla/getzilla/completion.py": {
+          "mode": 420,
+          "sha256": "c9be2f713010d37e6f7c766e4437e97982d14a9f7fca7eb44daa7f620d249032"
+        },
+        ".getzilla/getzilla/component_state.py": {
+          "mode": 420,
+          "sha256": "e11fd8a260e719d8d66f119f6393776829a2899e0f9c8f6d768dc672d51534a3"
+        },
+        ".getzilla/getzilla/continuity.py": {
+          "mode": 420,
+          "sha256": "ab436030adb8395430550a5456ba712824fd4245bb208dc2af549315e20dbec4"
+        },
+        ".getzilla/getzilla/criterion_tests.py": {
+          "mode": 420,
+          "sha256": "54aa0df8cb7cdfbdf99d42d78ada1ab04ecb110f9461d03434bda6e9b583a1fe"
+        },
+        ".getzilla/getzilla/disposable_resources.py": {
+          "mode": 420,
+          "sha256": "cdced23ee89fd25a8526951ef7f3070f8b56c530c78a19ac2e66710cbb2eb46c"
+        },
+        ".getzilla/getzilla/expanded_security.py": {
+          "mode": 420,
+          "sha256": "a66434e196650e0e8e50d6d56e1092d58a2072440fd8c81cf653bc9a6c783fd1"
+        },
+        ".getzilla/getzilla/factory_tests.py": {
+          "mode": 420,
+          "sha256": "b996f34fae1afbb9ad24c0606552fecb9662ede7ca8a07b4e74bc4aa32e0afa7"
+        },
+        ".getzilla/getzilla/known_vulns.py": {
+          "mode": 420,
+          "sha256": "66ea166bf4d7fdaa75a8467d112c8308f379b86222ba52ef983328ad053d964e"
+        },
+        ".getzilla/getzilla/live_acceptance.py": {
+          "mode": 420,
+          "sha256": "8a162969cd48799e9f5cd925745477f429bd0166176c2f3786bc1b3c2b7d5f62"
+        },
+        ".getzilla/getzilla/live_lifecycle.py": {
+          "mode": 420,
+          "sha256": "4f9474afc66caa26b0d0a5d27a6a7c60b4c880f63afedb311867ecba6d4303e5"
+        },
+        ".getzilla/getzilla/policy.py": {
+          "mode": 420,
+          "sha256": "fc2c197c55999587533697d9cc1be896330d9308f508ba51ba37620997cde40b"
+        },
+        ".getzilla/getzilla/python_test_runner.py": {
+          "mode": 420,
+          "sha256": "97c8d9fac0f1d8d131241adf356885d5427815468381a6e89dd740c3c923389b"
+        },
+        ".getzilla/getzilla/quality_gates.py": {
+          "mode": 420,
+          "sha256": "16286304f6c836a79f120f22afa51059fd7f61ac112cd70ee730697b6541cc20"
+        },
+        ".getzilla/getzilla/receipts.py": {
+          "mode": 420,
+          "sha256": "a7e29ebb13dbee59c1b136a8d89fde280d86fd926a5a4727b8e8aafd9cd34496"
+        },
+        ".getzilla/getzilla/security_acquisition.py": {
+          "mode": 420,
+          "sha256": "7d449a9f801c9237bf91fa54de1becb28c8d0bf24e0980e389fef07d43d887db"
+        },
+        ".getzilla/getzilla/security_artifacts.py": {
+          "mode": 420,
+          "sha256": "15c947149a7c2cae2c86d92919c6a33a33b8eb4afdc4fa6965374164be889712"
+        },
+        ".getzilla/getzilla/security_cli.py": {
+          "mode": 420,
+          "sha256": "3b9ce357fe18f27e8b7c1981cebfa2a036aea1911b207d2485c11b211dc1bf03"
+        },
+        ".getzilla/getzilla/security_data.py": {
+          "mode": 420,
+          "sha256": "388aa517887397b4d72d5bb9c75748c30372e2d3b73da24a9ac61fd2586d626e"
+        },
+        ".getzilla/getzilla/security_intelligence.py": {
+          "mode": 420,
+          "sha256": "10cd85f816f1ca4efb979e664e8925cbb754c4c2ab1adce448c047a7af3e5625"
+        },
+        ".getzilla/getzilla/security_inventory.py": {
+          "mode": 420,
+          "sha256": "b7a89576fda0fb91bd4b96c4a79be8d0fcaf2fdc9e94e5a0ce5f9b0c9af9520d"
+        },
+        ".getzilla/getzilla/security_license_acquisition.py": {
+          "mode": 420,
+          "sha256": "d65eb970392fc42b799f5988c4c551c24f3ecffb677ba947e64fee08886c9ed3"
+        },
+        ".getzilla/getzilla/security_license_texts.py": {
+          "mode": 420,
+          "sha256": "681d62fafb724d940509541027f311fa42c2df405698b429223af4ffd03fc734"
+        },
+        ".getzilla/getzilla/security_licenses.py": {
+          "mode": 420,
+          "sha256": "0bba9282680df554c7eef8c82f3df33ee805dfad48bdcccfe1077a39e98a452d"
+        },
+        ".getzilla/getzilla/security_tools.py": {
+          "mode": 420,
+          "sha256": "78cdd2f1b0403e8dafdef6a2f700a12d77df0e44175e9fd526edbb9607a25fd7"
+        },
+        ".getzilla/getzilla/spec.py": {
+          "mode": 420,
+          "sha256": "40f045a278e62a1cbc1e23e1dc6653768996c11f32609e042dc9dcae78e3da55"
+        },
+        ".getzilla/getzilla/stack_runners.py": {
+          "mode": 420,
+          "sha256": "9673313c55b779268ed24251023d7e5dabd9673b0925da5a1143fb1d487a3224"
+        },
+        ".getzilla/getzilla/stacks.py": {
+          "mode": 420,
+          "sha256": "1ab5d3fad43de6663d748eab0d6ee9c00e6751d0d2c039489f7dd50d64302557"
+        },
+        ".getzilla/getzilla/state.py": {
+          "mode": 420,
+          "sha256": "482353fd535b10299ceb87583a138d1fd47f7e5b537dac17ef0ddcc41ba9696e"
+        },
+        ".getzilla/getzilla/task_intent.py": {
+          "mode": 420,
+          "sha256": "450e36595779b114ba77e70d2c49b43abcbf1a2bf31f5d10897f057e418ffebd"
+        },
+        ".getzilla/getzilla/updater.py": {
+          "mode": 420,
+          "sha256": "f120beba0fe76e54697d8b880c70bf3bc64d1982086538dc4ca326d125981f1b"
+        },
+        ".getzilla/getzilla/verification.py": {
+          "mode": 420,
+          "sha256": "93863f85730ffb3ba953c59ab9c49db2b858433abc035bbbe897f757a2c2dd18"
+        },
+        ".getzilla/getzilla/verification_plan.py": {
+          "mode": 420,
+          "sha256": "5d55ee209e44573a2095d6d93b1493b7e91d732c396bd125d9ea0c2ebbedb572"
+        },
+        "scripts/getzilla_agent.py": {
+          "mode": 420,
+          "sha256": "5d50b5c180035f38d1440bbb218b74beea5eba5a034613dfb6d7a5f668ba147f"
+        },
+        "scripts/getzilla_change.py": {
+          "mode": 420,
+          "sha256": "419e67a881fe1c5ed292b2ae703da6057f6762f695f21483a9f2acaf89fbb449"
+        },
+        "scripts/getzilla_ci_admission.py": {
+          "mode": 420,
+          "sha256": "16ee6f7c584b93638515271dc2565bf547e57ebf544fd35c46325c87db5f9f56"
+        },
+        "scripts/getzilla_ci_evidence.py": {
+          "mode": 420,
+          "sha256": "2c36bd036e9260f649b8cc87cb99c20ea84bf9a8eb58eb48ea407beab37a7a1d"
+        },
+        "scripts/getzilla_live.py": {
+          "mode": 420,
+          "sha256": "46bc1d239d2b9a984efe4c787401deb9ef403f66849ecb66b1b03aad607459c6"
+        },
+        "scripts/getzilla_live_lifecycle.py": {
+          "mode": 420,
+          "sha256": "6b81e3955f6e0249aa190dba4c7aba42c6ac5600ddefef4442e2bc0c74c0693a"
+        },
+        "scripts/getzilla_route.py": {
+          "mode": 420,
+          "sha256": "fe8a8fe1be44806a81151f59b6231785fee1d7dcf367a9d38c8e4d457a60e157"
+        },
+        "scripts/getzilla_security.py": {
+          "mode": 420,
+          "sha256": "18612615be08679dd18625ca0814c8ed6eb7c5411700e21c439c2dac38ddad49"
+        },
+        "scripts/getzilla_vulns.py": {
+          "mode": 420,
+          "sha256": "76a279abdee74c7edfabc770633782f6fc61a84265961fd6f6a3da58865256bb"
+        }
+      }
+    },
     "extra:bitrix": {
       "files": [
         ".claude/agents/bitrix_architect.md",
@@ -1260,6 +1511,477 @@
         ".qwen/skills/seo-landing/references/video-facade.md": {
           "mode": 420,
           "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
+        }
+      }
+    },
+    "factory": {
+      "files": [
+        "delivery/src/getzilla_delivery/landing_filesystem.py",
+        "delivery/src/getzilla_delivery/landing_publication.py",
+        "delivery/src/getzilla_delivery/landing_publication_contracts.py",
+        "engineering/contracts/openapi/factory-result-admission.v2.json",
+        "factory/tests/__init__.py",
+        "factory/tests/decision_contract_cases.py",
+        "factory/tests/decision_fixtures.py",
+        "factory/tests/decision_persistence_cases.py",
+        "factory/tests/fixtures/codex-0.152.1/success.jsonl",
+        "factory/tests/fixtures/grok-1.0.17/success.jsonl",
+        "factory/tests/fixtures/landing-legacy-draft-attempt.json",
+        "factory/tests/fixtures/landing_provider_fixture.py",
+        "factory/tests/json_schema_subset.py",
+        "factory/tests/landing_host_fixture.py",
+        "factory/tests/postgres_fixture_reset.py",
+        "factory/tests/postgres_restart_probe.py",
+        "factory/tests/run_disposable_exit.py",
+        "factory/tests/run_live_suite.py",
+        "factory/tests/test_adapters.py",
+        "factory/tests/test_api.py",
+        "factory/tests/test_autonomy.py",
+        "factory/tests/test_autonomy_schema.py",
+        "factory/tests/test_bb_contracts.py",
+        "factory/tests/test_brokers.py",
+        "factory/tests/test_context_contracts.py",
+        "factory/tests/test_contracts.py",
+        "factory/tests/test_decision_contracts.py",
+        "factory/tests/test_decision_persistence_postgres.py",
+        "factory/tests/test_disposable_exit.py",
+        "factory/tests/test_execution_contracts.py",
+        "factory/tests/test_execution_persistence_postgres.py",
+        "factory/tests/test_execution_service.py",
+        "factory/tests/test_fpf_snapshot.py",
+        "factory/tests/test_landing_api.py",
+        "factory/tests/test_landing_artifact.py",
+        "factory/tests/test_landing_backup.py",
+        "factory/tests/test_landing_contracts.py",
+        "factory/tests/test_landing_coordinator.py",
+        "factory/tests/test_landing_failover.py",
+        "factory/tests/test_landing_failover_backend.py",
+        "factory/tests/test_landing_failover_cli.py",
+        "factory/tests/test_landing_failover_providers.py",
+        "factory/tests/test_landing_failover_recovery.py",
+        "factory/tests/test_landing_failover_transport.py",
+        "factory/tests/test_landing_host.py",
+        "factory/tests/test_landing_intake.py",
+        "factory/tests/test_landing_live.py",
+        "factory/tests/test_landing_live_executors.py",
+        "factory/tests/test_landing_media.py",
+        "factory/tests/test_landing_normalizer.py",
+        "factory/tests/test_landing_pdf_worker.py",
+        "factory/tests/test_landing_provider.py",
+        "factory/tests/test_landing_publication_cli.py",
+        "factory/tests/test_landing_renderer.py",
+        "factory/tests/test_landing_runtime.py",
+        "factory/tests/test_landing_server.py",
+        "factory/tests/test_landing_sqlite_store.py",
+        "factory/tests/test_landing_sse.py",
+        "factory/tests/test_linux_process_adapter.py",
+        "factory/tests/test_migrations.py",
+        "factory/tests/test_model_rotator_registry.py",
+        "factory/tests/test_models.py",
+        "factory/tests/test_offline_release_builder.py",
+        "factory/tests/test_openapi_contract.py",
+        "factory/tests/test_owner_autonomy.py",
+        "factory/tests/test_postgres_fixture_reset.py",
+        "factory/tests/test_postgres_integration.py",
+        "factory/tests/test_prediction_contracts.py",
+        "factory/tests/test_protocol.py",
+        "factory/tests/test_recovery.py",
+        "factory/tests/test_result_admission_api.py",
+        "factory/tests/test_result_broker.py",
+        "factory/tests/test_result_dispatch.py",
+        "factory/tests/test_result_dispatch_server.py",
+        "factory/tests/test_runtime_capability_postgres.py",
+        "factory/tests/test_runtime_installer.py",
+        "factory/tests/test_semantic_adjudication.py",
+        "factory/tests/test_semantic_bridge.py",
+        "factory/tests/test_semantic_contracts.py",
+        "factory/tests/test_semantic_persistence.py",
+        "factory/tests/test_semantic_repair.py",
+        "factory/tests/test_semantic_repair_lifecycle.py",
+        "factory/tests/test_semantic_service_api.py",
+        "factory/tests/test_semantic_store_runtime.py",
+        "factory/tests/test_server.py",
+        "factory/tests/test_service.py",
+        "factory/tests/test_shadow_contracts.py",
+        "factory/tests/test_shadow_evaluation.py",
+        "factory/tests/test_state.py",
+        "factory/tests/test_vibevm_store.py",
+        "factory/tests/test_workspace.py",
+        "scripts/getzilla_landing_publish.py",
+        "scripts/getzilla_m8.py"
+      ],
+      "owned": {
+        "delivery/src/getzilla_delivery/landing_filesystem.py": {
+          "mode": 420,
+          "sha256": "ba8f64de4d47a08c48fcdd2929ec4076be27a56315237c20cee66efde936a9f2"
+        },
+        "delivery/src/getzilla_delivery/landing_publication.py": {
+          "mode": 420,
+          "sha256": "e17cdf766e17ad8da5136a70bc457e0caddadc44746efa8b239b2c5b2396aebb"
+        },
+        "delivery/src/getzilla_delivery/landing_publication_contracts.py": {
+          "mode": 420,
+          "sha256": "9e2b0078e39b56928ca854b69d2563e1d5785d37d7c24736991a0dfaba275a9a"
+        },
+        "engineering/contracts/openapi/factory-result-admission.v2.json": {
+          "mode": 420,
+          "sha256": "01d1af5e120c46a1c0c9f1129cd28125a9a8e8237065c4677db67bf739be78ab"
+        },
+        "factory/tests/__init__.py": {
+          "mode": 420,
+          "sha256": "c683f00236971044a26c2b89938683644163f67050a2cb1e8feebec6dab1440b"
+        },
+        "factory/tests/decision_contract_cases.py": {
+          "mode": 420,
+          "sha256": "e2b456f89ede69fd7f8ab5778edbfe71063c6f298139afc58bc2a1a41576d48a"
+        },
+        "factory/tests/decision_fixtures.py": {
+          "mode": 420,
+          "sha256": "d1c8a0fe305fd1510eff0950337c9672472c5f0c4187f293b85918a65b43f18c"
+        },
+        "factory/tests/decision_persistence_cases.py": {
+          "mode": 420,
+          "sha256": "e25806278df8e87053dcb71bf3149a071331f49878f4393c16473fabdc96c27f"
+        },
+        "factory/tests/fixtures/codex-0.152.1/success.jsonl": {
+          "mode": 420,
+          "sha256": "77ca662b25d600a057e4afed1a236efe99453feff3af9c0698ae804cce321a15"
+        },
+        "factory/tests/fixtures/grok-1.0.17/success.jsonl": {
+          "mode": 420,
+          "sha256": "2f8e3255968a9e48db0a0ebded3b769a290d1e09efe7cf6255e0731509d3f900"
+        },
+        "factory/tests/fixtures/landing-legacy-draft-attempt.json": {
+          "mode": 420,
+          "sha256": "55b684d1a6603b2a4da3e9ef7ecda75656e96d004e9e0f4e1d36837ef3a11d1c"
+        },
+        "factory/tests/fixtures/landing_provider_fixture.py": {
+          "mode": 493,
+          "sha256": "c3e20fdd75daa1a5b356a5172b793a4f38ffba3ec60697d87449c25d496d6977"
+        },
+        "factory/tests/json_schema_subset.py": {
+          "mode": 420,
+          "sha256": "f930bb251c1d48c7f08c05da74544f3ca868e1d1198fd51afa906b765a6835ce"
+        },
+        "factory/tests/landing_host_fixture.py": {
+          "mode": 420,
+          "sha256": "a8e854b943d45b4ad98467977209d2b2916f9d1ef39d0fe6585619fecdad8079"
+        },
+        "factory/tests/postgres_fixture_reset.py": {
+          "mode": 420,
+          "sha256": "9d55e2176bbabcaab1d33e7872dbfa0f89664fdb7e3298a00670dfdd3c0cdb7b"
+        },
+        "factory/tests/postgres_restart_probe.py": {
+          "mode": 420,
+          "sha256": "35e30f9d1b8291d5a5f5c9ff1ed05eb8b703a9976a72002395b746ec7bd37865"
+        },
+        "factory/tests/run_disposable_exit.py": {
+          "mode": 420,
+          "sha256": "21bac600acc9b6494841cc6553f415301748cbf68b1955f819252f9d5243560a"
+        },
+        "factory/tests/run_live_suite.py": {
+          "mode": 420,
+          "sha256": "6fecfd10cc34e2e71e7874a7850b0d47fe8f3beef3f197c9e0c5d9c7f533f386"
+        },
+        "factory/tests/test_adapters.py": {
+          "mode": 420,
+          "sha256": "2f87172ee6c9bc808397de20bea23c54edcee2cfedf56e32aaa9a61bf589f300"
+        },
+        "factory/tests/test_api.py": {
+          "mode": 420,
+          "sha256": "f6d03f0441de53b3cc9ee6868fd4d046eff4c88d1eabdb6b54bb8c3fd14a167c"
+        },
+        "factory/tests/test_autonomy.py": {
+          "mode": 420,
+          "sha256": "4c332735222d679bd8f2255d5292dd43627ce0915c0a260b3e0d5e1aff35cad7"
+        },
+        "factory/tests/test_autonomy_schema.py": {
+          "mode": 420,
+          "sha256": "bdf705c0c00acbc88d3a891ec78930c056c2cf0473c48aa5d8f04afc58003686"
+        },
+        "factory/tests/test_bb_contracts.py": {
+          "mode": 420,
+          "sha256": "1a0ba4ddd4af9772d9b5cd1b711ea0355740913a0cdbeab0685ba63793a468a0"
+        },
+        "factory/tests/test_brokers.py": {
+          "mode": 420,
+          "sha256": "4f03b2229eaae147bdc1bada90858a008f611948549d7c0a320c6ca5cc5ea095"
+        },
+        "factory/tests/test_context_contracts.py": {
+          "mode": 420,
+          "sha256": "e1ad3efacc4112f53db42ea443c58231840a0cb7dbd43c2c909d6f255e339171"
+        },
+        "factory/tests/test_contracts.py": {
+          "mode": 420,
+          "sha256": "5f56c2e03ca26fea2ded22bbde0c6bfc0bfd79102290591bb1a93d1afd1c3d7b"
+        },
+        "factory/tests/test_decision_contracts.py": {
+          "mode": 420,
+          "sha256": "6a7ac0e1cc79c0f5fbcc8159c5f769b9aac2a24df21faf5980368116401a58e1"
+        },
+        "factory/tests/test_decision_persistence_postgres.py": {
+          "mode": 420,
+          "sha256": "e91335bca061442dbf14092bdfca34712303c88ae9d45f28952f170049b7ad37"
+        },
+        "factory/tests/test_disposable_exit.py": {
+          "mode": 420,
+          "sha256": "5e6c24dc3a2ee1d5429f5759fb61825182089a824617ab500203a1896aea1efe"
+        },
+        "factory/tests/test_execution_contracts.py": {
+          "mode": 420,
+          "sha256": "ba9e5e0b79ff5cedf9c72fe528d4d64891354539c6a58b21822430c15a3da9d5"
+        },
+        "factory/tests/test_execution_persistence_postgres.py": {
+          "mode": 420,
+          "sha256": "8d4fe03eaf6895f4a36e7dbdd1dcf9122c0a4d628dd36da4093e10c7cd0361f0"
+        },
+        "factory/tests/test_execution_service.py": {
+          "mode": 420,
+          "sha256": "e00db3562772739993885f7fe61bdc962afdeabf433b92868410e778d1bf87e5"
+        },
+        "factory/tests/test_fpf_snapshot.py": {
+          "mode": 420,
+          "sha256": "ad5b15706b7b568820ede8edc91ac4da075879cea8923cd8dcebb11618ac86b3"
+        },
+        "factory/tests/test_landing_api.py": {
+          "mode": 420,
+          "sha256": "184739f3f27bc9ea72642175a733fa3dfa88a028687c56418301b48c9640a021"
+        },
+        "factory/tests/test_landing_artifact.py": {
+          "mode": 420,
+          "sha256": "f5131da98fba4ac97bec4d3b4d01758ff9e1bfc01a66d2f0317464cd92951da8"
+        },
+        "factory/tests/test_landing_backup.py": {
+          "mode": 420,
+          "sha256": "684990eb7fe86ff329de235c5826d1686d98d561260e63c0087500f9185908bf"
+        },
+        "factory/tests/test_landing_contracts.py": {
+          "mode": 420,
+          "sha256": "5d664851a900f5eaa70164db02a79134576664fe81bc0f20b1fd10d918d0c3fa"
+        },
+        "factory/tests/test_landing_coordinator.py": {
+          "mode": 420,
+          "sha256": "1f2b06fcc53df72ffa1a09ecbd6028f9afa8112a4fc63e5442193c72a8f76eba"
+        },
+        "factory/tests/test_landing_failover.py": {
+          "mode": 420,
+          "sha256": "9bd6847cdeec234eae6db6f591bdf495c49616554910ddf6a14d21a05b204439"
+        },
+        "factory/tests/test_landing_failover_backend.py": {
+          "mode": 420,
+          "sha256": "63fa16d2b36cff3b2595b8f181035577aae3c66e7d1c5e5f0d99d668219d264e"
+        },
+        "factory/tests/test_landing_failover_cli.py": {
+          "mode": 420,
+          "sha256": "b812f1dfbe5eb95cc96352f14f58634ec7ba7fafc8ba350ac1d8af4c90067c32"
+        },
+        "factory/tests/test_landing_failover_providers.py": {
+          "mode": 420,
+          "sha256": "2fcfb8369624e0bbc8d950533a7a410a17f0fa116468661bbb738f5b44417626"
+        },
+        "factory/tests/test_landing_failover_recovery.py": {
+          "mode": 420,
+          "sha256": "38c41c3ca26f47b2e02d3a96b510c00f1b71c1eddf7b3ce75280ec6b94feb6c7"
+        },
+        "factory/tests/test_landing_failover_transport.py": {
+          "mode": 420,
+          "sha256": "d1ff58e60e2d3c307ca008f00afd99136984c13d9cf9bc0d338560f242ea3f82"
+        },
+        "factory/tests/test_landing_host.py": {
+          "mode": 420,
+          "sha256": "209738d2c463a70b734f2062c4f7402e7302bcdabf6490e22c93153fd2142759"
+        },
+        "factory/tests/test_landing_intake.py": {
+          "mode": 420,
+          "sha256": "f0281355ebd1917f19aab0849a4d8718d89088d8c40ac3bb00ac2fe339790642"
+        },
+        "factory/tests/test_landing_live.py": {
+          "mode": 420,
+          "sha256": "3021313e5dc931ad898b33fda061458debc0e6c9281547074c0a183ae27db936"
+        },
+        "factory/tests/test_landing_live_executors.py": {
+          "mode": 420,
+          "sha256": "f543bf8b9869b8653c2e29b5f37b60d0cd7956a08bea0a93afa1a7069906d069"
+        },
+        "factory/tests/test_landing_media.py": {
+          "mode": 420,
+          "sha256": "3c288e943046e52b9bc4c8765e0a970c4148245ea285eb671df3062a6bd32f4c"
+        },
+        "factory/tests/test_landing_normalizer.py": {
+          "mode": 420,
+          "sha256": "1754cf34a08baad45628858825148b58d3b11fd08274703d9ec010aaf4c7b4ba"
+        },
+        "factory/tests/test_landing_pdf_worker.py": {
+          "mode": 420,
+          "sha256": "433ea3f2e81d1e499bf53c480e0f1fd61ed835b86ea928c8ecd3a908cef48055"
+        },
+        "factory/tests/test_landing_provider.py": {
+          "mode": 420,
+          "sha256": "010201e27eb9750032b67c89966db52c75a2e2e20d8500bde1a44e9ad603317f"
+        },
+        "factory/tests/test_landing_publication_cli.py": {
+          "mode": 420,
+          "sha256": "310b3089ee826c89e8412af3581a230ccdd41bb4b2125b2a5cc4149d5fe27ab9"
+        },
+        "factory/tests/test_landing_renderer.py": {
+          "mode": 420,
+          "sha256": "3990183bdd8cb30bcc722924322418b3bdd0a38c4d418b2755ef25e9daf321fe"
+        },
+        "factory/tests/test_landing_runtime.py": {
+          "mode": 420,
+          "sha256": "9ebeb4ff8beb859799b2bc55b29276286c36786597973e6cb1f14264f252d056"
+        },
+        "factory/tests/test_landing_server.py": {
+          "mode": 420,
+          "sha256": "e6e2df76eb48c3f02e084eb2e424f1165e177ee0b66f155f17b87f598bbb1512"
+        },
+        "factory/tests/test_landing_sqlite_store.py": {
+          "mode": 420,
+          "sha256": "e756b37f36540c4dbbc8f6709c6eee0c7a667aca9bdcbf21b3511c71fbb189cd"
+        },
+        "factory/tests/test_landing_sse.py": {
+          "mode": 420,
+          "sha256": "2dbfe25f05e2f3869e7365c8faaf66f2ce718e93f699e83e7939ff7fb4323a10"
+        },
+        "factory/tests/test_linux_process_adapter.py": {
+          "mode": 420,
+          "sha256": "05422f4c706db34486ec5ad4cda8d23cc50a7e965b544dbce85c6edf65eebd4a"
+        },
+        "factory/tests/test_migrations.py": {
+          "mode": 420,
+          "sha256": "a1da35ad52fd42a16811e0c125835b792553a42e71ce59e5dbb897793de41a00"
+        },
+        "factory/tests/test_model_rotator_registry.py": {
+          "mode": 420,
+          "sha256": "12a0bf043b1a8a7f1e8af33d8df5fb8cf38bb1624fab02f51ceabde59f8d131b"
+        },
+        "factory/tests/test_models.py": {
+          "mode": 420,
+          "sha256": "c2287e83a2389dc980a22030b48dc8b6d5f5f1788141a56ee2a2d789f468fd7f"
+        },
+        "factory/tests/test_offline_release_builder.py": {
+          "mode": 420,
+          "sha256": "f9179c42a3c24a2bde1ed82880f7d8f8b28651958f8a2a06ecfcd1dd15df4e03"
+        },
+        "factory/tests/test_openapi_contract.py": {
+          "mode": 420,
+          "sha256": "b7c01887f91c793ab0983427ed1ac5c0613aba3c6cd40848646d2fd35c93bd18"
+        },
+        "factory/tests/test_owner_autonomy.py": {
+          "mode": 420,
+          "sha256": "5ee092a07c1b0f48addf8f6a83462fa13fc5be08d15969a46a78c568a8574086"
+        },
+        "factory/tests/test_postgres_fixture_reset.py": {
+          "mode": 420,
+          "sha256": "cb36b15e769d5994683db4aa809de311808f9187aa22a62bebdb322e1b6a2638"
+        },
+        "factory/tests/test_postgres_integration.py": {
+          "mode": 420,
+          "sha256": "8cb9964c37d809f947150f539158e73e3fab856b8aebab361008b61b7b15f497"
+        },
+        "factory/tests/test_prediction_contracts.py": {
+          "mode": 420,
+          "sha256": "23ad74192a7ff073310ffb6fbe8249f99bc5f26b8c4585c57cdda4f2a8e815a7"
+        },
+        "factory/tests/test_protocol.py": {
+          "mode": 420,
+          "sha256": "3a13e71a0b9d83f906a8c085fe30ddc16734260b6d02930df6dd94286e8b8ee8"
+        },
+        "factory/tests/test_recovery.py": {
+          "mode": 420,
+          "sha256": "d87f0be0ac034a7e941e0f333050b264129f15106a9b17d5368467dbba4859a2"
+        },
+        "factory/tests/test_result_admission_api.py": {
+          "mode": 420,
+          "sha256": "e1c4ac0a600637a94177efac402f9b2c8549d370118f9b86a179fd6cc5878562"
+        },
+        "factory/tests/test_result_broker.py": {
+          "mode": 420,
+          "sha256": "5b40a6cd21cd622d184f0fed7cbb68b1fafb947ea4ed32d22e1b6c0d6ccb010a"
+        },
+        "factory/tests/test_result_dispatch.py": {
+          "mode": 420,
+          "sha256": "e5eb2b7f5705ecf880c77e7bc8f61d78efe87a8b038bd58f41e49986ddfd0a22"
+        },
+        "factory/tests/test_result_dispatch_server.py": {
+          "mode": 420,
+          "sha256": "22a3a7cbcba28fe2817558253fb262500ff922a0aa1c29f0be8d439b0401b256"
+        },
+        "factory/tests/test_runtime_capability_postgres.py": {
+          "mode": 420,
+          "sha256": "ea7d2a9374c8f3932016c697b2f5e7469d06ab57b371fb076705e5fe765b4d30"
+        },
+        "factory/tests/test_runtime_installer.py": {
+          "mode": 420,
+          "sha256": "5a95f8863bc65f5e84d032ec0a98ae3d2fce08c217d1258aadf9dcee5f15d98f"
+        },
+        "factory/tests/test_semantic_adjudication.py": {
+          "mode": 420,
+          "sha256": "5f44300df2fbf5eda86e7f7e44b21fd53c67c52ca8bac5e40a0c5741060024a9"
+        },
+        "factory/tests/test_semantic_bridge.py": {
+          "mode": 420,
+          "sha256": "f9b81249d03c99a3d7fc60f1d772449bd9cca65b7f0e5387390fcf275d46fbd1"
+        },
+        "factory/tests/test_semantic_contracts.py": {
+          "mode": 420,
+          "sha256": "1b97491be903eb79e9805c7130c64b98eb7561ed36be9f209c7a74dc597993aa"
+        },
+        "factory/tests/test_semantic_persistence.py": {
+          "mode": 420,
+          "sha256": "464bc3dcb1f36a7e8b8eb62bfb13719479b8e98591a06df96c8f732a82d5107e"
+        },
+        "factory/tests/test_semantic_repair.py": {
+          "mode": 420,
+          "sha256": "f2cbbeedcc0575720806d4d8a54617ae7155fc2eba5a5d2d5b2575d22fe90337"
+        },
+        "factory/tests/test_semantic_repair_lifecycle.py": {
+          "mode": 420,
+          "sha256": "901e6707245bcf4603fac4b793a1a01456b74e4d6691cbb6937716aebce02501"
+        },
+        "factory/tests/test_semantic_service_api.py": {
+          "mode": 420,
+          "sha256": "3cde063063e08dd5efb9698b5bf4302a49f212e315d7b4883326c06a739e74dc"
+        },
+        "factory/tests/test_semantic_store_runtime.py": {
+          "mode": 420,
+          "sha256": "a70573fd1b0a9a3e870e2e225f115661cc5e1053b09ea032fd228bbd87590dec"
+        },
+        "factory/tests/test_server.py": {
+          "mode": 420,
+          "sha256": "04cf6940b62b450ce7a368714017f7c5b578b132f7824a508620ad7052376e88"
+        },
+        "factory/tests/test_service.py": {
+          "mode": 420,
+          "sha256": "a65d9d55da0e02735c871646c1dc866f51a64d3c1bb25f8d834eb5734fc58818"
+        },
+        "factory/tests/test_shadow_contracts.py": {
+          "mode": 420,
+          "sha256": "bae42380069a816ed39abe9fef83c7f74f785b6d66173a6f018c74bd48115dcc"
+        },
+        "factory/tests/test_shadow_evaluation.py": {
+          "mode": 420,
+          "sha256": "4356c11b0d8537f89485862f528d732f1c1bf5d933b2f525df412a2c019641b7"
+        },
+        "factory/tests/test_state.py": {
+          "mode": 420,
+          "sha256": "85092d634cb16b5660c7d7b330122d3d71316eec246d21aeba5c1aa8393f526b"
+        },
+        "factory/tests/test_vibevm_store.py": {
+          "mode": 420,
+          "sha256": "fe609d9790a8220fe4adb0de8184f8c7f8e8c12e7506de60258b56751a26be56"
+        },
+        "factory/tests/test_workspace.py": {
+          "mode": 420,
+          "sha256": "5f9612a5caf2245c0d4fe94603066ae7b4aa5129b8e2eec884128cda2517785b"
+        },
+        "scripts/getzilla_landing_publish.py": {
+          "mode": 420,
+          "sha256": "323ec43b09f7a6c7b590ab93f81ace01ea69e24314b1a128bb57b61e35219726"
+        },
+        "scripts/getzilla_m8.py": {
+          "mode": 420,
+          "sha256": "fa91c7de255309b772bb0198125ae8b6a758cbc952febe6aa80d081506ad411b"
         }
       }
     }

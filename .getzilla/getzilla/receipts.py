@@ -1065,6 +1065,10 @@ def validate_evidence(
             missing.append(f'{kind}: malformed receipt envelope')
         if receipt.get('status') != 'pass':
             missing.append(f'{kind}: status={receipt.get("status")}')
+        elif kind == 'verification':
+            from .verification_plan import report_gaps
+            missing.extend(f"verification: {item['code']}: {item['path']}: {item['message']}"
+                           for item in report_gaps(root, receipt.get('details')))
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
         plan_digest = (route.get('review_plan') or {}).get('digest')

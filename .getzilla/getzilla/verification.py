@@ -21,7 +21,7 @@ from .architecture import (
 from .architecture_diagrams import artifact_digests, compare_generated, render_diagrams
 from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
 from .architecture_fitness import diff_architecture, evaluate_fitness
-from .quality_gates import evaluate_quality_gate, required_check_refused
+from .quality_gates import required_check_refused
 from .receipts import (
     active_architecture_binding,
     active_governance_binding,
@@ -30,7 +30,7 @@ from .receipts import (
 )
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
-from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
+from .expanded_security import known_vulnerability_check
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 from .stacks import load_registry, stack_checks
@@ -96,6 +96,62 @@ class _RunState:
     context: dict[str, Any] | None = None
     context_route_id: str | None = None
     context_error: str | None = None
+    required_plan: dict[str, Any] | None = None
+
+
+def _capture_required_plan(root: Path, mode: str, profiles: list[str], state: _RunState,
+                           docs_scope: dict | None = None) -> None:
+    from .verification_plan import current_required_plan
+    try:
+        state.required_plan = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+        state.report['required_plan'] = state.required_plan
+    except (OSError, ValueError, RuntimeError, ImportError, KeyError, TypeError) as exc:
+        state.results.append(CheckResult('required-plan', 'fail', _failure_message(exc)))
+        state.report['required_plan_error'] = _failure_message(exc)
+        state.receipt_eligible = False
+
+
+def _expanded_security_checks(root: Path) -> list[CheckResult]:
+    from .expanded_security import run_checks
+    return [CheckResult(**item) for item in run_checks(root)]
+
+
+def _dispatch_required_obligations(root: Path, state: _RunState, dispatch) -> None:
+    plan = state.required_plan
+    if plan is None:
+        return
+    for name in ('python-unittest', 'coverage'):
+        selected = [item for item in plan['obligations'] if item['check_id'] == name]
+        if selected and all(item['applicability'] == 'not_applicable' for item in selected) and not any(
+                check.name == name for check in state.results):
+            def observe_absence(name=name):
+                uses_pytest, has_unittest = python_check_selection(root)
+                return CheckResult(name, 'fail' if uses_pytest or has_unittest else 'skip',
+                    'Python discovery inputs changed after planning' if uses_pytest or has_unittest
+                    else 'no native Python discovery inputs', details=[{
+                        'kind': 'native-python-applicability', 'uses_pytest': uses_pytest,
+                        'has_unittest_files': has_unittest}])
+            dispatch.run(name, observe_absence)
+    names = sorted({item['check_id'] for item in plan['obligations'] if item['check_id'].startswith('security-')})
+    if names:
+        dispatch.batch(names, lambda: _expanded_security_checks(root))
+    refs = sorted({ref for item in plan['obligations'] if item['check_id'] == 'criterion-tests'
+                   for ref in item['expected_tests']})
+    if refs:
+        from .criterion_tests import run_required_tests
+        dispatch.run('criterion-tests', lambda: CheckResult(**run_required_tests(root, refs)))
+
+
+def _required_quality_gate(root: Path, state: _RunState, mode: str, docs_scope=None) -> CheckResult:
+    from .verification_plan import bind_result, report_gaps
+    if state.required_plan is not None:
+        for result in state.results:
+            bind_result(state.required_plan, result)
+    state.report['checks'] = [item.to_dict() for item in state.results]
+    findings = report_gaps(root, state.report)
+    return CheckResult('quality-gate', 'fail' if findings else 'pass',
+                       f'QG-01 required plan blocked admission: {len(findings)} finding(s)' if findings else
+                       'QG-01 current required plan admission checks passed', details=findings)
 
 
 def _task_context_check(root: Path, state: _RunState) -> CheckResult:
@@ -128,14 +184,16 @@ def _task_context_check(root: Path, state: _RunState) -> CheckResult:
 class _CheckDispatch:
     """Retain completed results and disclose remaining scheduled work after refusal."""
 
-    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None):
+    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None, required_plan=None):
         self.results, self.mode, self.scope = results, mode, scope
         self.fail_fast = mode in {'pr', 'release'} and not keep_going
         self.blocked_by = blocked_by
+        self.required_plan = required_plan
 
     def add(self, check):
         self.results.append(check)
-        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope):
+        if self.fail_fast and self.blocked_by is None and required_check_refused(
+                check, mode=self.mode, docs_scope=self.scope, required_plan=self.required_plan):
             self.blocked_by = check.name
         return check
 
@@ -223,7 +281,7 @@ _CHANGE_PACKAGE_PREFIX = re.compile(
     r'^(?:engineering|\.getzilla/runtime)/changes/[A-Za-z0-9][A-Za-z0-9._-]*$'
 )
 _SAFE_FOCUSED_FILE_STATUSES = {'A', 'M', '??'}
-_FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS = 900
+_FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS = 1800
 
 
 def _canonical_digest(value: object) -> str:
@@ -533,7 +591,8 @@ def _workflow_artifacts_check(
         ), {"configured": True, "status": "fail", "error": str(exc)}
 
 
-def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None) -> CheckResult:
+def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None,
+                   termination_grace: float | None = None) -> CheckResult:
     environment = os.environ.copy()
     environment.update(env or {})
     if 'PATH' not in (env or {}):
@@ -541,7 +600,8 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
         # The report keeps the command as written; only the launch resolves it (Windows .cmd shims).
-        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout)
+        options = {'termination_grace': termination_grace} if termination_grace is not None else {}
+        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout, **options)
     except RunCancelled as exc:
         proc = exc.result
         exc.checks = [CheckResult(
@@ -1281,17 +1341,13 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
                 'message': contract_failure,
             }],
         )
-    command = [
-        sys.executable,
-        '-m',
-        'unittest',
-        'discover',
-        '-s',
-        path.parent.relative_to(root).as_posix(),
-        '-p',
-        path.name,
-    ]
-    result = _command_check(root, 'static-seo-landing-contract', command, 300)
+    from .criterion_tests import run_required_tests
+    refs = scope.get('required_test_refs') or [relative]
+    if not isinstance(refs, list) or any(not isinstance(ref, str) or ref.split('::', 1)[0] != relative for ref in refs):
+        return CheckResult('static-seo-landing-contract', 'fail', 'required test references exceed the selected landing contract')
+    observed = run_required_tests(root, refs, timeout=300)
+    observed['name'] = 'static-seo-landing-contract'
+    result = CheckResult(**observed)
     result.summary = f'{result.summary}; test={relative}'
     return result
 
@@ -1674,15 +1730,21 @@ def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDis
         dispatch.run('composer-validate', lambda: _command_check(root, 'composer-validate', ['composer', 'validate', '--no-check-publish'], 120))
     else:
         dispatch.run('composer-validate', lambda: CheckResult('composer-validate', 'skip', 'composer not available'))
-    for name, path, args in [
+    for name, args in composer_check_selection(root):
+        dispatch.run(name, lambda: _command_check(root, name, args, 600))
+    return results
+
+
+def composer_check_selection(root: Path) -> list[tuple[str, list[str]]]:
+    """The existing installed Composer tools; shared by planning and dispatch."""
+    if not (root / 'composer.json').is_file():
+        return []
+    return [(name, args) for name, path, args in (
         ('phpunit', 'vendor/bin/phpunit', ['vendor/bin/phpunit']),
         ('phpstan', 'vendor/bin/phpstan', ['vendor/bin/phpstan', 'analyse', '--no-progress']),
         ('phpcs', 'vendor/bin/phpcs', ['vendor/bin/phpcs']),
         ('deptrac', 'vendor/bin/deptrac', ['vendor/bin/deptrac', 'analyse']),
-    ]:
-        if (root / path).is_file():
-            dispatch.run(name, lambda: _command_check(root, name, args, 600))
-    return results
+    ) if (root / path).is_file()]
 
 
 QUALITY_PY_PATHS = (
@@ -1803,12 +1865,12 @@ def _trivy_config(root: Path) -> CheckResult | None:
 
 
 def _known_vulnerabilities(root: Path) -> CheckResult:
-    try:
-        report = scan_known_vulnerabilities(root)
-    except VulnerabilityError as exc:
-        return CheckResult('known-vulnerabilities', 'fail', str(exc))
-    details = [_vulnerability_detail(item) for item in report['findings'][:200]]
-    return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
+    result = known_vulnerability_check(root)
+    # The full structured evidence is authoritative. Only its text projection
+    # is bounded for display; no finding, exception or source proof is dropped.
+    findings = result['details'][0]['findings']
+    result['details'].extend(_vulnerability_detail(item) for item in findings[:200])
+    return CheckResult(**result)
 
 
 def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
@@ -1856,7 +1918,7 @@ def _opengrep(root: Path) -> CheckResult:
     refusal = _unpinned_opengrep(Path(executable))
     if refusal:
         return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
+    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
                '--disable-version-check', '--timeout', '30']
     for pattern in OPENGREP_EXCLUDES:
         command.extend(('--exclude', pattern))
@@ -1870,8 +1932,12 @@ def _opengrep(root: Path) -> CheckResult:
     if result.returncode not in {0, 1}:
         return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
                            stderr=result.stderr[-4000:])
-    findings = report.get('results') or []
-    errors = [item for item in report.get('errors') or [] if str(item.get('level', 'error')).lower() == 'error']
+    if (not isinstance(report, dict) or not isinstance(report.get('results'), list) or
+            not isinstance(report.get('errors'), list) or
+            not all(isinstance(item, dict) for item in report['results'])):
+        return CheckResult('opengrep', 'fail', 'opengrep returned an incomplete report', command=command)
+    findings = report['results']
+    errors = report['errors']
     details = [
         {
             'rule': str(item.get('check_id', '')),
@@ -1908,8 +1974,8 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
     if not package.is_file():
         return []
     try:
-        scripts = json.loads(package.read_text(encoding='utf-8')).get('scripts', {})
-    except (json.JSONDecodeError, OSError, AttributeError):
+        scripts, manager, lockfile, selected = node_check_selection(root, mode)
+    except (ValueError, OSError, AttributeError):
         dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'invalid package.json'))
         return results
     env = None
@@ -1922,7 +1988,6 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
             return results
         env = toolchain.process_env()
     node_env = {'env': env} if env else {}
-    manager, lockfile = node_lockfile(root)
     if mode in {'pr', 'release'}:
         if lockfile is None:
             dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'fail', 'NODE_LOCK_MISSING', details=[{
@@ -1932,12 +1997,9 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
         else:
             install = _node_install_command(root, manager, lockfile)
             dispatch.run(f'{manager}-install', lambda: _command_check(root, f'{manager}-install', install, 1800, **node_env))
-    names = ['lint', 'typecheck', 'test', 'prettier', 'format']
-    if mode in {'pr', 'release'}:
-        names.append('build')
     prefix = _node_manager_command(manager)
-    for name in names:
-        if name in scripts:
+    for name in ('lint', 'typecheck', 'test', 'prettier', 'format', 'build'):
+        if f'{manager}-{name}' in selected:
             command = [*prefix, 'run', name]
             if name == 'test' and manager == 'npm':
                 command.append('--')
@@ -1953,6 +2015,22 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                 'message': 'tsconfig.json is present and no typecheck script exists, but typescript is not installed',
             }]))
     return results
+
+
+def node_check_selection(root: Path, mode: str) -> tuple[dict, str, str | None, list[str]]:
+    """Select the native Node checks from package scripts, mode, lockfile and tsconfig."""
+    value = json.loads((root / 'package.json').read_text(encoding='utf-8'))
+    scripts = value.get('scripts', {}) if isinstance(value, dict) else None
+    if not isinstance(scripts, dict):
+        raise ValueError('invalid package.json scripts')
+    manager, lockfile = node_lockfile(root)
+    full = mode in {'pr', 'release'}
+    names = [manager + '-install' if lockfile else 'node-lockfile'] if full else []
+    names.extend(manager + '-' + name for name in ('lint', 'typecheck', 'test', 'prettier', 'format', 'build')
+                 if name in scripts and (name != 'build' or full))
+    if 'typecheck' not in scripts and (root / 'tsconfig.json').is_file() and full:
+        names.append('tsc')
+    return scripts, manager, lockfile, names
 
 
 NODE_LOCKFILES = (('package-lock.json', 'npm'), ('npm-shrinkwrap.json', 'npm'), ('pnpm-lock.yaml', 'pnpm'),
@@ -1998,21 +2076,53 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
 
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
-    factory_modules = [
-        f'factory.tests.test_{name}'
-        for name in ('contracts', 'state', 'migrations', 'service')
-        if (factory_tests / f'test_{name}.py').is_file()
-    ]
-    if (root / 'factory' / 'pyproject.toml').is_file() and factory_modules:
+    if (root / 'factory' / 'pyproject.toml').is_file() and factory_tests.is_dir():
         return [
             _command_check(
                 root,
                 'factory-unit',
-                [sys.executable, '-m', 'unittest', *factory_modules],
+                [sys.executable, str(Path(__file__).with_name('factory_tests.py')), '--root', str(root)],
                 300,
             )
         ]
     return []
+
+
+def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
+    from .live_acceptance import CELLS
+    import uuid
+    names = CELLS[cell]
+    output = root / '.getzilla/runtime/live' / (cell + '-' + uuid.uuid4().hex)
+    result = _command_check(root, names[0], [sys.executable, 'scripts/getzilla_live.py', '--cell', cell,
+                            '--output', str(output), '--timeout-seconds', str(budget)],
+                            budget + 300, termination_grace=180)
+    try:
+        record = json.loads((output / 'manifest.json').read_text())
+        checks = record['checks']
+        if (record.get('status') != 'pass' or {item['id'] for item in checks} != set(names)
+                or len(checks) != len(names) or any(item['status'] != 'pass' for item in checks)):
+            raise ValueError('live component evidence did not pass')
+    except (OSError, ValueError, KeyError, TypeError):
+        result.status = 'fail'
+        result.summary += '; live evidence missing or failed'
+    return [CheckResult(name, result.status, result.summary, command=result.command,
+                        stdout=result.stdout, stderr=result.stderr,
+                        details=[{'kind': 'live-acceptance-observation', 'cell': cell,
+                                  'manifest': str(output / 'manifest.json'), 'authority': 'local observation only'}])
+            for name in names]
+
+
+def _dispatch_additional_live(root: Path, mode: str, dispatch: _CheckDispatch) -> None:
+    if mode not in {'pr', 'release'} or not (root / 'scripts/getzilla_live.py').is_file():
+        return
+    installed = (root / '.getzilla/AGBP_SYNC.json').is_file()
+    for cell, names, budget in (('trust-ci', ['trust-ci-postgres', 'trust-ci-postgres-restart'], 1200),
+                                ('lifecycle', ['factory-lifecycle'], 900)):
+        if installed or os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
+            reason = CONSUMER_INFRA_SKIP if installed else 'repository-sandbox has no nested-container/database capability'
+            dispatch.batch(names, lambda names=names, reason=reason: [CheckResult(name, 'skip', reason) for name in names])
+        else:
+            dispatch.batch(names, lambda cell=cell, budget=budget: _live_cell(root, cell, budget))
 
 
 def _focused_python(
@@ -2022,6 +2132,7 @@ def _focused_python(
     replaced_runner: str = 'python-unittest',
     *,
     dispatch: _CheckDispatch | None = None,
+    mode: str = 'fast',
 ) -> list[CheckResult]:
     """Run the admitted lockstep modules instead of full discovery or coverage measurement.
 
@@ -2061,6 +2172,7 @@ def _focused_python(
         'skip',
         'focused documentation/state profile changes no factory runtime path',
     ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
 
 
@@ -2092,9 +2204,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
 
 
 def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
-    if (root / 'factory/pyproject.toml').is_file() and any(
-        (root / f'factory/tests/test_{name}.py').is_file() for name in ('contracts', 'state', 'migrations', 'service')
-    ):
+    if (root / 'factory/pyproject.toml').is_file() and (root / 'factory/tests').is_dir():
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
@@ -2112,9 +2222,7 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
                 [sys.executable, '-m', 'unittest', 'discover', '-s', 'pilot/tests', '-t', '.', '-v'],
                 300,
             ))
-    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
-    tests_dir = root / 'tests'
-    uses_pytest_runner = has_project and command_exists('pytest') and tests_dir.is_dir()
+    uses_pytest_runner, has_unittest_files = python_check_selection(root)
     if focused:
         # Named here rather than assumed: the focused profile replaces whichever full-discovery
         # runner this tree would have used, and the skip it reports must say so.
@@ -2124,8 +2232,8 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
             scope or {},
             'pytest' if uses_pytest_runner else 'python-unittest',
             dispatch=dispatch,
+            mode=mode,
         )
-    has_unittest_files = tests_dir.is_dir() and any(tests_dir.glob('test*.py'))
     names = ['pytest' if uses_pytest_runner else 'python-unittest']
     if mode in {'pr', 'release'}:
         names.append('coverage')
@@ -2137,17 +2245,25 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # An installed project runs source and unit checks only: the factory's container/database exit
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
-    if uses_pytest_runner:
-        return results
     _dispatch_factory_unit(root, dispatch)
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
             if os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox' else
-            _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
-                           _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS)
+            (_live_cell(root, 'factory', 1500)[0] if (root / 'scripts/getzilla_live.py').is_file() else
+             _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
+                            _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS, termination_grace=180))
         ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
+
+
+def python_check_selection(root: Path) -> tuple[bool, bool]:
+    """Select the existing Python discovery routes without running them."""
+    tests_dir = root / 'tests'
+    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
+    uses_pytest = has_project and command_exists('pytest') and tests_dir.is_dir()
+    return uses_pytest, tests_dir.is_dir() and any(tests_dir.glob('test*.py'))
 
 
 def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
@@ -2416,10 +2532,26 @@ def _verify_focused_static_seo_landing(
     if state:
         state.report['verification_scope'] = scope
         state.stage = 'focused-landing'
+        if record:
+            _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, state, scope)
     results.append(_git_diff_check(root, FOCUSED_STATIC_SEO_LANDING_MODE, git_ranges))
     results.append(_focused_scope_check(scope))
     if scope.get('eligible') is True:
-        results.append(_focused_landing_contract(root, scope))
+        required = sorted({ref for item in (state.required_plan or {}).get('obligations', [])
+                           if item['check_id'] == 'static-seo-landing-contract' for ref in item['expected_tests']}) if state else []
+        selected = {**scope, 'required_test_refs': required} if required else scope
+        results.append(_focused_landing_contract(root, selected))
+    if record and state and state.required_plan:
+        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE)
+        for name, callback in [('secret-scan', lambda: _secret_scan(root, files)),
+                               ('known-vulnerabilities', lambda: _known_vulnerabilities(root)),
+                               ('opengrep', lambda: _opengrep(root)), ('bandit', lambda: _bandit(root))]:
+            dispatch.run(name, callback)
+        if _semgrep_config(root) is not None:
+            dispatch.run('semgrep', lambda: _semgrep(root))
+        if _trivy_config_present(root):
+            dispatch.run('trivy-config', lambda: _trivy_config(root))
+        _dispatch_required_obligations(root, state, dispatch)
 
     final_fingerprint = tree_fingerprint(root)
     source_stable = final_fingerprint == checked_fingerprint
@@ -2433,6 +2565,8 @@ def _verify_focused_static_seo_landing(
     )
     if state:
         results.append(_task_context_check(root, state))
+        if record:
+            results.append(_required_quality_gate(root, state, FOCUSED_STATIC_SEO_LANDING_MODE))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
         'status': 'not_run',
@@ -2811,12 +2945,16 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             target for target in FOCUSED_TEST_TARGETS if (root / target).is_file()
         ],
     )
+    state.stage = 'required-plan'
+    _capture_required_plan(root, mode, active_profiles, state, docs_scope)
     state.stage = 'architecture-inputs'
     architecture_inputs = _architecture_preflight_check(root)
     preflight_failed = architecture_inputs.status == 'fail'
     # Retain the primary refusal before any subsequent consumer can cancel.
     state.results.append(architecture_inputs)
-    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going)
+    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going, required_plan=state.required_plan)
+    if state.required_plan is None and mode in {'pr', 'release'} and not keep_going:
+        dispatch.blocked_by = 'required-plan'
     if required_check_refused(architecture_inputs, mode=mode, docs_scope=docs_scope) and not keep_going:
         dispatch.blocked_by = architecture_inputs.name
     dispatch.add(_docs_state_scope_check(docs_scope))
@@ -2952,6 +3090,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             results.append(CheckResult('factory-unit', 'skip', 'architecture input preflight failed; not started'))
     else:
         results.extend(_python(root, mode, docs_scope, keep_going=keep_going, blocked_by=dispatch.blocked_by))
+    state.stage = 'required-obligations'
+    cancellation.check()
+    _dispatch_required_obligations(root, state, dispatch)
     state.stage = 'source-stability'
     try:
         final_fingerprint = tree_fingerprint(root)
@@ -2971,15 +3112,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
     )
     results.append(_task_context_check(root, state))
-    quality_gate = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope)
-    results.append(
-        CheckResult(
-            "quality-gate",
-            quality_gate.status,
-            quality_gate.summary,
-            details=quality_gate.details,
-        )
-    )
+    results.append(_required_quality_gate(root, state, mode, docs_scope))
 
     failures = [result for result in results if result.status in {'fail', 'cancelled'}]
     report.update({
