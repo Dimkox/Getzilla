@@ -2254,9 +2254,9 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                         root, git_directory, common, _ = self._binding_repository(linked)
                         directories = {
                             "root": (root, "worktree root"),
-                            "git": (git_directory, "directory" if linked else "worktree root"),
-                            "common": (common, "common directory" if linked else "worktree root"),
-                            "objects": (common / "objects", "common directory" if linked else "directory"),
+                            "git": (git_directory, "directory"),
+                            "common": (common, "common directory" if linked else "directory"),
+                            "objects": (common / "objects", "object store"),
                         }
                         directory, label = directories[role]
                         binding = architecture_diff._git_binding(root)
@@ -2312,7 +2312,6 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                     binding = architecture_diff._git_binding(root)
                     if remove:
                         path.unlink()
-                        label = "worktree root" if role == "pointer" else "directory"
                     else:
                         before = path.lstat()
                         # In-place writes also work for the hidden .git file on Windows.

@@ -439,7 +439,7 @@ class _GitBinding:
     common_directory: Path | None = None
     objects_directory: Path | None = None
 
-    def verify(self, guard: LinuxGitGuard | None = None) -> None:
+    def verify(self, guard: LinuxGitGuard | None = None, *, strict_directories: bool = False) -> None:
         if guard is not None:
             guard.check()
         for path, identity, label in self.registrations:
@@ -449,14 +449,15 @@ class _GitBinding:
                 raise ArchitectureError(f"Git {label} binding is unavailable", code="git") from exc
             # Objects were formerly checked by their strict parent's metadata.
             # Do not turn legitimate loose-object additions into a new refusal.
-            # A directory's size and times churn on any neighbor entry, so
-            # directory identity is its device, inode and mode only; an actual
-            # replacement still changes the inode.
+            # Standalone identity observations tolerate neighbor churn. Active
+            # Git reads require directory history: without a qualified guard,
+            # retain the full metadata comparison, including restored entries.
             is_directory = stat.S_ISDIR(identity[2])
-            stable = is_directory or path == self.objects_directory
+            stable = (is_directory and not strict_directories) or path == self.objects_directory
             if guard is not None and is_directory:
                 if not guard.covers(path, identity):
                     raise ArchitectureError(f"Git {label} binding guard is incomplete", code="git")
+                stable = True
             changed = current[:3] != identity[:3] if stable else current != identity
             if changed:
                 raise ArchitectureError(f"Git {label} binding changed", code="git")
@@ -605,7 +606,7 @@ class _GitOperation:
             raise ArchitectureError("Git operation binding guard is unavailable", code="git")
         if time.monotonic() >= self._deadline:
             raise ArchitectureError("Git operation binding guard limit exceeded", code="git")
-        self.binding.verify(self.guard)
+        self.binding.verify(self.guard, strict_directories=True)
         return self.binding
 
     def remaining(self) -> float:
@@ -742,10 +743,10 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                                (objects_directory, _git_path_identity(objects_directory), "object store"))
         binding = _GitBinding(repository, git_directory, bound_registrations, absent_registrations,
                               common_directory, objects_directory)
-        binding.verify(_guard)
+        binding.verify(_guard, strict_directories=True)
         if _guard is not None:
             _qualify_git_configuration(binding, _guard)
-            binding.verify(_guard)
+            binding.verify(_guard, strict_directories=True)
             _guard.seal()
         returncode, output, _error = _run_capped(
             _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
@@ -753,7 +754,7 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
             cwd=repository, env=_git_environment(), stdout_limit=16_384,
             stderr_limit=65_536, timeout=_GIT_TIMEOUT_SECONDS,
         )
-        binding.verify(_guard)
+        binding.verify(_guard, strict_directories=True)
         if returncode or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
         return binding
