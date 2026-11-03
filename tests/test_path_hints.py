@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -188,6 +189,31 @@ class HookTests(unittest.TestCase):
     def _payload(self, root: Path, event: str, command: str, **extra) -> dict:
         return {'cwd': str(root), 'session_id': 'path-hints', 'hook_event_name': event, 'tool_name': 'exec_command',
                 'tool_input': {'cmd': command, 'workdir': str(root)}, **extra}
+
+    def test_emitted_discovery_commands_pass_the_same_pre_tool_policy(self) -> None:
+        with project_copy(git=True) as root:
+            _notes(root)
+            payload = self._payload(root, 'PreToolUse', 'cat notes/install_guidee.md')
+            _, denied, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(denied['decision'], 'deny', denied)
+            messages = {
+                'missing-read': denied['reason'],
+                'partial-read': hint(root, 'cat notes/install_guidee.md notes/install_guide.md', root),
+                'task-prompt': prompt_paths(root, 'Update install_guide'),
+                'engineering-contract': (ROOT / 'AGENTS.md').read_text(encoding='utf-8'),
+                'consumer-contract': (ROOT / '.getzilla/templates/consumer-AGENTS.md.tmpl').read_text(encoding='utf-8'),
+                'delivery-skill': (ROOT / '.agents/skills/getzilla-delivery/SKILL.md').read_text(encoding='utf-8'),
+            }
+            for source, message in messages.items():
+                with self.subTest(source=source):
+                    commands = re.findall(r'`(rg --files[^`]*<name>[^`]*)`', message)
+                    self.assertTrue(commands, source)
+                    for example in commands:
+                        command = example.replace('<name>', 'install_guide')
+                        code, decision, error = run_hook(root, 'pre_tool_use.py',
+                                                       self._payload(root, 'PreToolUse', command))
+                        self.assertEqual(code, 0, error)
+                        self.assertEqual(decision['decision'], 'allow', (source, command, decision))
 
     def test_pre_tool_use_refuses_an_impossible_read_and_allows_the_rest(self) -> None:
         with project_copy(git=True) as root:

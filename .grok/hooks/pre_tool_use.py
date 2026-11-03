@@ -130,12 +130,19 @@ _DENIAL_WINDOW_SECONDS = 15 * 60
 _DENIAL_MAX_ENTRIES = 128
 _EXACT_CIRCUIT_BREAKER_GUIDANCE = (
     'Circuit breaker: this exact tool invocation was denied again. Do not retry it, mutate it cosmetically, '
-    'or create a speculative grant. Stop dependent subagents, mark this objective BLOCKED, and report the blocker.'
+    'or create a speculative grant. Mark only this operation objective BLOCKED and stop only subagents and '
+    'checks that require it. Continue independent permitted work under normal policy. '
+    'Report the denied operation, its actual dependencies and the missing condition; '
+    'do not declare the whole task blocked while independent permitted work remains. '
+    'Changing tools, sessions or routes, or clearing the denial ledger, does not authorize a retry.'
 )
 _OBJECTIVE_CIRCUIT_BREAKER_GUIDANCE = (
     'Circuit breaker: the rewritten invocation was denied for the same objective. Do not retry this objective '
-    'again or create a speculative grant. Stop dependent subagents, mark this objective BLOCKED, '
-    'and report the blocker.'
+    'again or create a speculative grant. Mark only this operation objective BLOCKED and stop only subagents '
+    'and checks that require it. Continue independent permitted work under normal policy. '
+    'Report the denied operation, its actual dependencies and the missing condition; '
+    'do not declare the whole task blocked while independent permitted work remains. '
+    'Changing tools, sessions or routes, or clearing the denial ledger, does not authorize a retry.'
 )
 _CONTROL_PLANE_BATCH_GUIDANCE = (
     'Create one exact protected-path grant covering every target, then use Edit/Write/apply_patch. '
@@ -233,7 +240,8 @@ _ROOT_HINTS = (
      ' $(...) and backticks hide the directory. Run the inner command on its own, then use its output as a '
      'literal path.'),
     ('command.control-flow',
-     ' Only && and ; are followed. Split pipes, || and & into separate commands.'),
+     ' Only && and ; are followed. Split pipes, || and & into separate commands. '
+     "For file discovery, use `rg --files --hidden -g '!.git' --iglob '*<name>*'`."),
 )
 
 

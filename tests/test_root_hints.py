@@ -1,6 +1,7 @@
 """An ambiguous-root denial tells the agent what to run instead."""
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -42,6 +43,18 @@ class RootHintTests(unittest.TestCase):
             self.assertNotEqual(data.get('decision'), 'deny', data)
             data = self._decide(root, 'root-hint-run', 'Bash', {'command': 'python3 .getzilla/runtime/scratch/probe.py'})
             self.assertNotEqual(data.get('decision'), 'deny', data)
+
+    def test_pipeline_denial_provides_an_admissible_file_discovery_example(self) -> None:
+        with project_copy(git=True) as root:
+            data = self._decide(root, 'discovery-hint', 'Bash',
+                                {'command': 'rg --files | rg -i README'})
+            self.assertEqual(data['decision'], 'deny', data)
+            examples = re.findall(r'`(rg --files[^`]*<name>[^`]*)`', data['reason'])
+            self.assertTrue(examples, data)
+            for example in examples:
+                decision = self._decide(root, 'discovery-hint', 'Bash',
+                                        {'command': example.replace('<name>', 'README')})
+                self.assertEqual(decision['decision'], 'allow', decision)
 
     def test_agent_instructions_mention_the_scratch_script(self) -> None:
         for rel in ('AGENTS.md', '.getzilla/templates/consumer-AGENTS.md.tmpl'):

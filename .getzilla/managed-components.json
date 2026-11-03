@@ -157,7 +157,7 @@
         },
         ".claude/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
         },
         ".claude/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -426,7 +426,7 @@
         },
         ".cursor/rules/getzilla/50-agent-runtime.mdc": {
           "mode": 420,
-          "sha256": "1786da123bb55f0d1ef6bad452dd70abe71f50ea81292f714f31ba55e8558042"
+          "sha256": "1ef4ce5bdabdb3659cad2cbc0bc67795ade04676f3a1c55b5917178d37ef4ed0"
         },
         ".cursor/rules/getzilla/60-frontend.mdc": {
           "mode": 420,
@@ -581,7 +581,7 @@
         },
         ".gemini/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
         },
         ".gemini/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -657,7 +657,7 @@
         },
         ".grok/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
         },
         ".grok/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -828,7 +828,7 @@
         },
         ".qwen/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a4f2c297d46477271d6f87fa439b3796e70669f82862ba90d228327758ff7773"
+          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
         },
         ".qwen/skills/incident-response/SKILL.md": {
           "mode": 420,

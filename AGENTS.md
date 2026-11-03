@@ -214,7 +214,8 @@ Before qualification, explicitly synchronize original and pending scope into the
 
 - Never repeat an identical denied invocation.
 - One semantic rewrite is allowed: split a compound command, remove unnecessary temporary output, use a structured tool, or follow the exact denial guidance.
-- If the rewritten invocation is denied for the same objective, mark that objective `BLOCKED`, stop dependent subagents, skip its verification and review work, and report the blocker.
+- If the rewritten invocation is denied for the same objective, mark only that operation `BLOCKED`. Stop only subagents and checks that require it. Continue independent permitted work and its checks under normal policy. Report the denied operation, its actual dependencies and the missing condition. Mark the whole task blocked only when the required outcome depends on that operation and no independent permitted work remains.
+- Switching tools, sessions or routes, or clearing the denial ledger, does not authorize another attempt at the blocked operation.
 - Request a protected-path grant only when the hook names at least one exact repository-relative protected target. An opaque denial requires explicit targets, not a speculative grant.
 - Put agent working files (bundles, drafts, intermediate output) in `.getzilla/runtime/scratch/`; it needs no grant. Receipts, routes, grants and other runtime state stay protected.
 - A shell command that runs inline interpreter code (`python3 -c`, `php -r`, `node -e`, a heredoc into `python3`) is denied, because the hook cannot see which paths it touches. Write the program to `.getzilla/runtime/scratch/<name>.py` (no grant needed) and run it as a file.
@@ -223,7 +224,7 @@ Before qualification, explicitly synchronize original and pending scope into the
 ## Development discipline
 
 - Inspect the relevant code, contracts, migrations, tests, configuration, and recent patterns before editing.
-- Locate a file before reading it (`rg --files | rg -i <name>`); never guess paths. Every miss costs a full model call over the whole context. When none of the paths a read names exist, the PreToolUse hook refuses it and lists the closest real paths.
+- Locate a file before reading it (`rg --files --hidden -g '!.git' --iglob '*<name>*'`); replace `<name>` with a literal filename fragment and keep the glob quoted. Narrow to a known directory when available. Never guess paths. When none of the paths a read names exist, the PreToolUse hook refuses it and lists the closest real paths.
 - Prefer the smallest coherent vertical change.
 - Add a failing test or characterization test before behavior changes when practical.
 - Do not introduce a service, database, queue, framework, or dependency without explicit architectural justification.
