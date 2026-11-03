@@ -417,8 +417,18 @@ def _moves_directory(argv: list[str]) -> bool:
     name = argv[0]
     # Also after a case pattern `a)`, a function body `f() {`, `function f {` or `command -p`.
     for index, word in enumerate(argv):
-        if word in _DIRECTORY_WORDS and (index == 0 or argv[index - 1].endswith((')', '{'))
-                                         or argv[index - 1] in {'command', '-p', 'builtin'}):
+        if word not in _DIRECTORY_WORDS:
+            continue
+        if index == 0 or argv[index - 1].endswith((')', '{')) \
+                or argv[index - 1] in {'command', '-p', 'builtin'}:
+            return True
+        # `command`/`builtin` take their own option tokens before the command (command -- cd,
+        # builtin -p cd). The word splitter already strips a leading command/builtin, so a run
+        # of option tokens back to argv[0] is that prefix too (#220).
+        cursor = index - 1
+        while cursor >= 0 and re.fullmatch(r'-{1,2}[A-Za-z]*', argv[cursor]):
+            cursor -= 1
+        if cursor < 0 or argv[cursor] in {'command', 'builtin'}:
             return True
     if name == 'env':
         return any(arg in {'-C', '--chdir'} or arg.startswith(('--chdir=', '-C')) for arg in argv[1:])
@@ -515,9 +525,10 @@ def _shell_mutation_targets(
             if directory is None:
                 pending = (set(bases), True)
             elif posixpath.isabs(directory):
-                pending = ({directory}, False)
+                pending = ({_resolved_directory(root, directory)}, False)
             else:
-                pending = ({posixpath.join(base, directory) if base else directory for base in bases}, unknown_base)
+                pending = ({_resolved_directory(root, posixpath.join(base, directory) if base else directory)
+                            for base in bases}, unknown_base)
             continue
         for piece in _command_chunks(inner):
             if _moves_directory(_shell_argv(piece)):
@@ -617,8 +628,12 @@ def _opaque_control_plane_reference(root: Path, command: str, patterns: list[str
 def _git_code_path(rel: str) -> bool:
     """A Git file that makes a later plain git command run a program (#214)."""
     norm = posixpath.normpath(rel).lower()
+    parts = norm.split('/')
+    # `.git/worktrees/<name>/config` is the linked worktree's own config outside the
+    # worktree root; it carries the same code-running keys (#220).
     return (norm in {'.git/config', '.git/config.worktree', '.git/info/attributes', '.git/hooks'}
-            or norm.startswith('.git/hooks/'))
+            or norm.startswith('.git/hooks/')
+            or parts[:2] == ['.git', 'worktrees'] and parts[-1] in {'config', 'config.worktree'})
 
 
 _PIP_REQUIREMENTS = frozenset({
@@ -744,6 +759,54 @@ def _scratch_pip_targets(root: Path, command: str) -> tuple[list[str], bool] | N
     return [venv.relative_to(root).as_posix()], False
 
 
+def _resolved_directory(root: Path, directory: str) -> str:
+    """A `cd` base as the shell resolves it: symlink components collapse (#220).
+
+    Returns a repo-relative path when the real directory sits under the real root,
+    else the absolute path. Missing tail components resolve lexically.
+    """
+    candidate = Path(directory) if posixpath.isabs(directory) else root / directory
+    resolved = Path(os.path.realpath(candidate))
+    real_root = Path(os.path.realpath(root))
+    if resolved == real_root:
+        return ''
+    try:
+        return resolved.relative_to(real_root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _git_storage_dirs(root: Path) -> list[Path]:
+    """Real directories holding this worktree's git metadata (#220).
+
+    A linked worktree's `.git` is a `gitdir:` pointer file; its own files and the shared
+    `commondir` live outside the worktree root, so an absolute target into either still
+    names repository metadata (`.git/config` of the linked worktree included).
+    """
+    dirs: set[Path] = set()
+    dotgit = root / '.git'
+    try:
+        if dotgit.is_file():
+            pointer = dotgit.read_text(encoding='utf-8', errors='replace').strip()
+            marker = 'gitdir:'
+            if pointer.lower().startswith(marker):
+                gitdir = Path(pointer[len(marker):].strip())
+                if not gitdir.is_absolute():
+                    gitdir = root / gitdir
+                gitdir = Path(os.path.realpath(gitdir))
+                dirs.add(gitdir)
+                commondir = gitdir / 'commondir'
+                if commondir.is_file():
+                    target = Path(commondir.read_text(encoding='utf-8', errors='replace').strip())
+                    dirs.add(Path(os.path.realpath(
+                        target if target.is_absolute() else gitdir / target)))
+        elif dotgit.is_dir():
+            dirs.add(Path(os.path.realpath(dotgit)))
+    except OSError:
+        pass
+    return [directory for directory in dirs if directory.is_dir()]
+
+
 def _control_plane_shell_mutation(
     root: Path,
     command: str,
@@ -765,6 +828,17 @@ def _control_plane_shell_mutation(
             dynamic_protected = dynamic_protected or _dynamic_target_mentions_control_plane(raw, patterns)
             continue
         rel = safe_relative_path(root, raw)
+        if rel is None and raw.startswith('/'):
+            # An absolute target into this worktree's git metadata (a linked worktree's
+            # gitdir or the shared commondir outside the worktree root) is still `.git`.
+            absolute = Path(os.path.realpath(raw))
+            for storage in _git_storage_dirs(root):
+                try:
+                    sub = absolute.relative_to(storage)
+                except ValueError:
+                    continue
+                rel = '.git' if str(sub) == '.' else '.git/' + sub.as_posix()
+                break
         if rel is not None and (_control_plane_target(rel, patterns) or _git_code_path(rel)):
             protected_targets.append(rel)
     if protected_targets:
@@ -797,6 +871,12 @@ _BRANCH_REWRITE = frozenset({'-f', '--force', '-m', '-M', '--move', '-d', '-D', 
 _BRANCH_COPY = frozenset({'-c', '-C', '--copy'})
 _CREATE_RESET = frozenset({'-B', '-C', '--force-create'})
 _GIT_GLOBAL_VALUE = frozenset({'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'})
+# fetch/pull options whose value is the next separate argument; without this the value
+# (`--depth 1`) is read as the remote and the refspecs after it shift one position (#220).
+_GIT_TRANSFER_VALUE = frozenset({
+    '-j', '--jobs', '--depth', '--deepen', '--shallow-since', '--shallow-exclude',
+    '--negotiation-tip', '--server-option', '-o', '--upload-pack', '--ipv4', '--ipv6',
+})
 
 
 def _protected(name: str) -> bool:
@@ -862,6 +942,16 @@ def _ref_move(sub: str, rest: list[str]) -> str | None:
                     return value
         return None
     if sub in {'fetch', 'pull'}:
+        names = []
+        consumes_value = False
+        for option, value in words:
+            if not option and value is not None:
+                if consumes_value:
+                    consumes_value = False
+                    continue
+                names.append(value)
+            else:
+                consumes_value = option in _GIT_TRANSFER_VALUE and value is None
         remote = names[0] if names else ''
         local = remote in {'', '.'} or '/' in remote or remote.startswith('file:')
         for spec in names[1:]:
@@ -878,18 +968,54 @@ def _ref_move(sub: str, rest: list[str]) -> str | None:
     return None
 
 
-def protected_ref_move(command: str) -> str | None:
+# Commands that advance or rewrite the checked-out branch; covered when a worktree has the
+# protected branch checked out, because then they move the protected ref itself (#220).
+_BRANCH_ADVANCE = frozenset({'commit', 'merge', 'am', 'rebase', 'cherry-pick', 'revert', 'pull'})
+_RESET_MOVES = frozenset({'--hard', '--soft', '--keep'})
+
+
+def _checked_out_branch(root: Path) -> str | None:
+    """The branch HEAD names in this worktree (a linked worktree's `.git` is a pointer file)."""
+    try:
+        dotgit = root / '.git'
+        if dotgit.is_file():
+            pointer = dotgit.read_text(encoding='utf-8', errors='replace').strip()
+            marker = 'gitdir:'
+            if not pointer.lower().startswith(marker):
+                return None
+            gitdir = Path(pointer[len(marker):].strip())
+            head = (gitdir if gitdir.is_absolute() else root / gitdir) / 'HEAD'
+        else:
+            head = dotgit / 'HEAD'
+        content = head.read_text(encoding='utf-8', errors='replace').strip()
+    except OSError:
+        return None
+    return content[4:].strip().removeprefix('refs/heads/') if content.startswith('ref:') else None
+
+
+def protected_ref_move(command: str, root: Path | None = None) -> str | None:
     """The protected branch a git command moves, renames or deletes locally (#214), else None.
 
     A moved local main changes the base every diff, review and verification compares against.
-    Commits and merges while main is checked out are not covered here.
+    With `root`, commands that advance the checked-out branch (commit, merge, pull, reset --hard
+    and friends) are also covered while a protected branch is checked out there (#220).
     """
+    checked_out = _checked_out_branch(root) if root is not None else None
+    advance_covered = checked_out is not None and checked_out.lower() in {'main', 'master'}
     for chunk, _ in _chunks_with_operators(command):
         for piece in _command_chunks(_unwrap_shell(chunk)):
-            sub, rest = _git_words(_shell_argv(piece))
-            hit = _ref_move(sub, rest) if sub else None
+            argv = _shell_argv(piece)
+            sub, rest = _git_words(argv)
+            if not sub:
+                continue
+            hit = _ref_move(sub, rest)
             if hit:
                 return hit
+            if advance_covered and (
+                    sub in _BRANCH_ADVANCE
+                    or (sub == 'reset' and _split_options(rest, '')
+                        and any(option in _RESET_MOVES for option, _ in _split_options(rest, '')))):
+                return checked_out
     return None
 
 

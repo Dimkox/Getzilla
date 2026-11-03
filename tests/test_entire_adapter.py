@@ -93,9 +93,10 @@ class ClientTests(unittest.TestCase):
     def test_decorated_clone_url_matches_canonical_native_and_mirror_response(self):
         for url, forge in [(URL, 'et'), (MIRROR, 'gh')]:
             self.runner.repo['repo'] = f'/{forge}/team/repo'
-            repo = self.client.discover(parse_remote(url + '.git'))
-            self.assertEqual(repo.identity.repository, 'team/repo')
-            self.assertIn(url + '.git', self.runner.calls[-1][0])
+            for decorated in (url + '.git', url + '.GIT'):
+                repo = self.client.discover(parse_remote(decorated))
+                self.assertEqual(repo.identity.repository, 'team/repo')
+                self.assertIn(decorated, self.runner.calls[-1][0])
 
     def test_exit_zero_logged_out_revoked_or_error_is_refused(self):
         for auth in ({'logged_in': False}, {'logged_in': True, 'login_revoked': True},

@@ -610,6 +610,59 @@ class ShellTargetPolicyTest(unittest.TestCase):
                 allowed, reason = self.check(root, command)
                 self.assertFalse(allowed, f'{command}: {reason}')
 
+    def test_command_and_builtin_options_before_cd_still_move_the_base(self):
+        # #220: `command --` and `builtin -p` take their own option tokens before the command;
+        # without walking back over them the cd is missed and later targets stay under the root.
+        with project_copy() as root:
+            for command in ('command -- cd .getzilla && cat > injected',
+                            'command -V cd .getzilla && cat > injected',
+                            'builtin -- cd .getzilla && cat > injected'):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+
+    def test_a_cd_through_a_symlink_reaches_the_real_base(self):
+        # #220: a symlinked directory collapses to its real path before the base is joined.
+        with project_copy() as root:
+            (root / 'link').symlink_to('.getzilla', target_is_directory=True)
+            allowed, reason = self.check(root, 'cd link && cat > injected')
+            self.assertFalse(allowed)
+            self.assertIn('.getzilla', reason or '')
+
+    def test_fetch_pull_options_do_not_shift_the_refspec_position(self):
+        # #220: `git fetch --depth 1 <path> main:main` read `1` as the remote and let the
+        # same-name spec pass as not-local.
+        with project_copy() as root:
+            for command in ('git fetch --depth 1 . main:main', 'git pull --jobs 2 . main:main',
+                            'git fetch --depth 1 local/path main:main'):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            allowed, reason = self.check(root, 'git fetch --depth 1 origin main:main')
+            self.assertTrue(allowed, reason)
+
+    def test_branch_advances_on_a_checked_out_protected_branch_are_refused(self):
+        # #220: commit/merge/pull/reset --hard while main is checked out move the protected ref.
+        with project_copy(git=True) as root:
+            for command in ('git commit -m x', 'git merge feature', 'git pull', 'git reset --hard HEAD~1'):
+                allowed, reason = self.check(root, command)
+                self.assertFalse(allowed, f'{command}: {reason}')
+            import subprocess
+            subprocess.run(['git', 'checkout', '-qb', 'task'], cwd=root, check=True)
+            for command in ('git commit -m x', 'git pull'):
+                allowed, reason = self.check(root, command)
+                self.assertTrue(allowed, f'{command}: {reason}')
+
+    def test_an_absolute_git_metadata_target_in_a_linked_worktree_is_refused(self):
+        # #220: a linked worktree's `.git` is a pointer file; the shared commondir (and the
+        # worktree gitdir) live outside the worktree root but still hold `.git` metadata.
+        with project_copy(git=True) as root:
+            import subprocess
+            worktree = root.parent / 'linked'
+            subprocess.run(['git', 'worktree', 'add', '-qb', 'task', str(worktree)], cwd=root, check=True)
+            gitdir = (root / '.git' / 'worktrees' / 'linked')
+            for target in (gitdir / 'config', root / '.git' / 'config'):
+                allowed, reason = self.check(worktree, f'cat > {target}')
+                self.assertFalse(allowed, f'{target}: {reason}')
+
     def test_wrapper_retains_workflow_dispatch_forbidden_invariant(self):
         source = (ROOT / '.getzilla/getzilla/policy.py').read_text(encoding='utf-8')
         self.assertIn('workflow-dispatch', source)

@@ -52,6 +52,12 @@ class RemoteIdentity:
         return 'et' if self.mode == 'native' else 'gh'
 
 
+def _strip_git_suffix(name: str) -> str:
+    # The .git decoration is case-insensitive on the wire (clone URLs with .GIT work too),
+    # so canonicalization must strip it case-insensitively (#220).
+    return name[:-4] if name.lower().endswith('.git') else name
+
+
 def parse_remote(value: str) -> RemoteIdentity | None:
     """Return a credential-free, unambiguous identity; never echo rejected URLs."""
     if not isinstance(value, str) or len(value) > 4096:
@@ -88,7 +94,7 @@ def parse_remote(value: str) -> RemoteIdentity | None:
             return None
         # The supported CLI accepts .git decoration but returns a canonical repo name.
         # Keep the original transport URL separately from that logical identity.
-        parts[-1] = parts[-1].removesuffix('.git')
+        parts[-1] = _strip_git_suffix(parts[-1])
         if not parts[-1] or parts[-1] in {'.', '..'}:
             return None
         mode = 'native' if parts[0] == 'et' else 'mirror'
@@ -97,7 +103,7 @@ def parse_remote(value: str) -> RemoteIdentity | None:
                               'entire' if mode == 'native' else 'github', value, resource)
     if len(parts) < 2:
         return None
-    parts[-1] = parts[-1].removesuffix('.git')
+    parts[-1] = _strip_git_suffix(parts[-1])
     if not parts[-1] or parts[-1] in {'.', '..'}:
         return None
     provider = _HOSTS.get(host, 'generic')

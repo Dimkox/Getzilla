@@ -27,10 +27,13 @@ SNAPSHOTS = RUNTIME + '/snapshots'
 SCHEMA = 'getzilla-review-snapshot-v1'
 
 
-def _base(root: Path) -> Path:
+def _main_worktree(root: Path) -> Path:
+    return Path(os.path.realpath(list_worktrees(root)[0]['path']))
+
+
+def _base(root: Path, main: Path | None = None) -> Path:
     """The snapshots folder of the main worktree; refuses a link anywhere from `.getzilla` down."""
-    main = Path(list_worktrees(root)[0]['path'])
-    current = main
+    current = main if main is not None else _main_worktree(root)
     for part in Path(SNAPSHOTS).parts:
         current = current / part
         if current.is_symlink():
@@ -38,9 +41,38 @@ def _base(root: Path) -> Path:
     return current
 
 
-def create(root: Path, revision: str) -> Path:
+def _explicit_base(root: Path, base: Path) -> Path:
+    """A caller-chosen snapshots folder. Must sit outside the reviewed worktree and use no links."""
+    resolved = Path(os.path.abspath(base))
+    worktree = Path(os.path.abspath(root))
+    if resolved == worktree or worktree in resolved.parents or resolved in worktree.parents:
+        raise WorktreeError('review snapshot base must be outside the reviewed worktree')
+    current = Path(resolved.anchor)
+    for part in resolved.parts[1:]:
+        current = current / part
+        if current.is_symlink():
+            raise WorktreeError(f'{current} is a symlink')
+        if not current.exists():
+            break
+    return resolved
+
+
+def _snapshots_base(root: Path, base: Path | None) -> Path:
+    if base is not None:
+        return _explicit_base(root, base)
+    main = _main_worktree(root)
+    folder = _base(root, main)
+    if Path(os.path.realpath(root)) == main:
+        raise WorktreeError(
+            'a review snapshot inside the main worktree stays inside the reviewed candidate; '
+            'pass --base DIR naming a trusted non-sticky directory outside this worktree, or run '
+            'the command inside a linked worktree so the snapshot lands under the main worktree runtime')
+    return folder
+
+
+def create(root: Path, revision: str, base: Path | None = None) -> Path:
     commit = _git(root, 'rev-parse', '--verify', '--end-of-options', revision + '^{commit}').decode().strip()
-    base = _base(root)
+    base = _snapshots_base(root, base)
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(base, 0o700)
     name = f'{commit[:12]}-{secrets.token_hex(3)}'
@@ -113,9 +145,9 @@ def _marker(base: Path, name: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and data.get('schema_version') == SCHEMA else None
 
 
-def remove(root: Path, path: str) -> dict[str, Any]:
+def remove(root: Path, path: str, base: Path | None = None) -> dict[str, Any]:
     """Remove one snapshot made by `create`. Safe to repeat; anything not ours is kept."""
-    base = _base(root)
+    base = _explicit_base(root, base) if base is not None else _base(root)
     target = Path(os.path.abspath(path))
     if target.parent != Path(os.path.abspath(base)) or target.name.endswith('.json'):
         return {'path': path, 'result': 'kept', 'reason': 'not a direct child of .getzilla/runtime/snapshots'}

@@ -146,6 +146,16 @@ _READ_VERBS = frozenset({'get', 'list', 'search', 'read', 'lookup', 'describe', 
 # (run_query, request_download).
 _LEADING_WRITE_VERBS = frozenset({'run', 'request'})
 _CHAIN_WORDS = frozenset({'and', 'or', 'then'})
+# Nouns that legitimately follow a chain word or a hyphen in a read tool name
+# (list_pull_requests_and_issues, get_pipeline-run): the word names the returned object,
+# not a second action (#220).
+_CHAIN_NOUNS = frozenset({
+    'issues', 'logs', 'failures', 'check', 'checks', 'requests', 'results', 'status',
+    'details', 'data', 'files', 'jobs', 'builds', 'artifacts', 'comments', 'runs',
+})
+# After a hyphen `run` is also a noun (get_x-run); after and/or it stays a possible
+# second action (getAndRun) (#220).
+_SEGMENT_NOUNS = _CHAIN_NOUNS | {'run'}
 _WRITE_VERBS = frozenset({
     'create', 'update', 'delete', 'remove', 'write', 'modify', 'patch', 'put', 'replace', 'insert', 'upsert',
     'append', 'upload', 'send', 'publish', 'merge', 'revoke', 'grant', 'trash', 'archive', 'close', 'reopen',
@@ -217,9 +227,10 @@ def mcp_side_effect(tool: str, root: Path | None = None) -> bool:
     # run/request lead a hyphen segment too (get_x-run); a second action after and/or/then
     # (list_and_kill, getAndRun) is a write unless it is a read verb (#215).
     segments = [_NAME_TOKEN.findall(part) for part in action.split('-')[1:]]
-    if any(words and words[0].lower() in _LEADING_WRITE_VERBS for words in segments):
+    if any(words and words[0].lower() in _LEADING_WRITE_VERBS - _SEGMENT_NOUNS for words in segments):
         return True
-    if any(word in _CHAIN_WORDS and following not in _READ_VERBS for word, following in zip(tokens, tokens[1:])):
+    if any(word in _CHAIN_WORDS and following not in _READ_VERBS | _CHAIN_NOUNS
+           for word, following in zip(tokens, tokens[1:])):
         return True
     words = [token.lower() for token in _NAME_TOKEN.findall(name)] or tokens
     if words[0] in _LEADING_WRITE_VERBS:

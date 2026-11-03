@@ -93,10 +93,11 @@ def _snapshot(args: argparse.Namespace) -> int:
         return 2
     root = find_root()
     try:
+        base = Path(args.base) if args.base else None
         if args.remove:
-            result = review_snapshot.remove(root, args.target)
+            result = review_snapshot.remove(root, args.target, base)
         else:
-            result = {'path': str(review_snapshot.create(root, args.target)), 'result': 'created'}
+            result = {'path': str(review_snapshot.create(root, args.target, base)), 'result': 'created'}
     except WorktreeError as exc:
         print(f'getzilla cleanup: {exc}', file=sys.stderr)
         return 2
@@ -111,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('target', nargs='?', help='snapshot: the commit to copy, or with --remove the snapshot path')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--temp', help='inventory: temp directory to scan (default: the system temp directory)')
+    parser.add_argument('--base', help='snapshot: snapshots folder outside the reviewed worktree '
+                                       '(required when the reviewed candidate is the main worktree)')
     parser.add_argument('--remove', action='store_true',
                         help='worktrees: remove the removable ones; snapshot: remove the given snapshot')
     args = parser.parse_intermixed_args(argv)
