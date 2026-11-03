@@ -26,7 +26,8 @@ from pathlib import Path, PurePosixPath
 MAX_SUGGESTIONS = 5
 MIN_SCORE = 0.45
 MAX_CANDIDATES = 3000
-LOCATE = 'Locate before reading: `rg --files | rg -i <name>`.'
+DISCOVERY_COMMAND = "rg --files --hidden -g '!.git' --iglob '*<name>*'"
+LOCATE = f'Locate before reading: `{DISCOVERY_COMMAND}`.'
 STATS = '.getzilla/runtime/path-hints.json'
 
 _EXPANSION = re.compile(r'[$`]')
@@ -378,7 +379,7 @@ MAX_PROMPT_WORD = 200
 MAX_PROMPT_WORDS = 400
 MAX_PROMPT_NAMES = 12
 MAX_PATHS_PER_NAME = 3
-PROMPT_LOCATE = ('For any other file, locate it before reading (`rg --files | rg -i <name>`); '
+PROMPT_LOCATE = (f'For any other file, locate it before reading (`{DISCOVERY_COMMAND}`); '
                  'never build a path from a naming habit.')
 
 

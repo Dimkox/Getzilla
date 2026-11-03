@@ -6,6 +6,33 @@ from tests._support import project_copy, run_hook
 
 
 class DenialCircuitBreakerTest(unittest.TestCase):
+    def test_breaker_keeps_independent_work_available_without_resetting_denials(self):
+        with project_copy(git=True) as root:
+            (root / 'README.md').write_text('fixture\n', encoding='utf-8')
+            payload = {'cwd': str(root), 'session_id': 'discovery-circuit',
+                       'tool_name': 'Bash', 'tool_input': {'command': 'rg --files | rg -i policy'}}
+            _, first, _ = run_hook(root, 'pre_tool_use.py', payload)
+            _, repeated, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(first['decision'], 'deny', first)
+            self.assertEqual(repeated['decision'], 'deny', repeated)
+            self.assertIn('exact tool invocation was denied again', repeated['reason'])
+            ledger_path = root / '.getzilla/runtime/tool-denials.json'
+            denied_ledger = ledger_path.read_bytes()
+            for command in ('git status --short', 'cat README.md',
+                            "rg --files --hidden -g '!.git' --iglob '*README*'"):
+                with self.subTest(command=command):
+                    payload['tool_input'] = {'command': command}
+                    code, allowed, error = run_hook(root, 'pre_tool_use.py', payload)
+                    self.assertEqual(code, 0, error)
+                    self.assertEqual(allowed['decision'], 'allow', allowed)
+                    self.assertEqual(ledger_path.read_bytes(), denied_ledger)
+            payload['tool_input'] = {'command': 'rg --files | rg -i policy'}
+            _, still_denied, _ = run_hook(root, 'pre_tool_use.py', payload)
+            self.assertEqual(still_denied['decision'], 'deny', still_denied)
+            self.assertIn('exact tool invocation was denied again', still_denied['reason'])
+            self.assertIn('Continue independent permitted work', repeated['reason'])
+            self.assertIn('only this operation', repeated['reason'])
+
     def test_second_identical_denial_stops_retry_loop(self):
         with project_copy() as root:
             payload = {

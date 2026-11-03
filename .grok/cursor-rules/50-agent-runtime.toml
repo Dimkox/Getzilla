@@ -8,6 +8,7 @@ instructions = '''
 - Decompose work into bounded tasks with an acceptance check, allowed scope, dependencies and one write owner. Give child agents a narrow handoff with exact identities, not the complete parent conversation.
 - Keep runtime limits in executable policy: attempts, elapsed time, tokens, cost and cancellation. Do not replace existing counters or fail-closed admission with prose instructions.
 - A retry must have a new hypothesis or evidence, be permitted by the retry policy, and be safe for the operation. Honor the existing denial circuit breaker; cosmetic rewrites do not reset a denied objective.
+- Scope a denial to its operation and actual dependencies. Continue independent permitted work and its checks under normal policy. Report the missing condition; mark the whole task blocked only when the required outcome depends on the denied operation and no independent permitted work remains. Switching tools, sessions or routes, or clearing denial state, does not authorize another attempt.
 - Preserve evidence provenance and distinguish current, historical and stale context. Contradictory or unavailable context must not silently turn into an authoritative fact.
 - Record observable usage and failure/cancellation outcomes without secrets. Do not conceal an overspending call or make a runtime observation look like a completed qualification.
 - Implementers cannot approve their own work or weaken their own gate. Keep owner configuration, independent review and external merge authority distinct.
