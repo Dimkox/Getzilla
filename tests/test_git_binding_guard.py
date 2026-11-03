@@ -4,6 +4,7 @@ import hashlib
 import errno
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,14 @@ class _GuardFixture(unittest.TestCase):
         arguments = ("--detach",) if linked == "detached" else ("-b", name + "-branch")
         self.git(main, "worktree", "add", "-q", *arguments, str(root), head)
         return root, common / "worktrees" / root.name, common, head
+
+    def replace_directory(self, directory: Path) -> None:
+        before = directory.lstat().st_ino
+        replacement = directory.with_name(directory.name + "-replacement")
+        shutil.copytree(directory, replacement, symlinks=True)
+        shutil.rmtree(directory)
+        os.rename(replacement, directory)
+        self.assertNotEqual(directory.lstat().st_ino, before)
 
     def churn(self, directory: Path) -> None:
         before = directory.stat()
@@ -445,11 +454,13 @@ class GitBindingGuardAcquisitionTests(_GuardFixture):
         with mock.patch.object(native.LinuxGitGuard, "_watch", failed_watch):
             self.refused(lambda: diff.run_git_bounded(root, ["rev-parse", "HEAD"]))
 
-    def test_pure_binding_stays_strict_and_closed_scope_cannot_be_reused(self) -> None:
+    def test_pure_binding_tolerates_dir_churn_but_refuses_replacement(self) -> None:
         root, _, _, _ = self.repository()
         binding = diff._git_binding(root)
         self.churn(root)
-        self.refused(binding.verify, "worktree root")
+        binding.verify()
+        self.replace_directory(root / ".git")
+        self.refused(binding.verify, "directory")
         with diff._GitOperation(root) as scope:
             self.assertEqual(scope.mode, "linux-inotify-overlayfs-v1")
         self.refused(lambda: diff._git_object_id_length(root, _scope=scope), "operation")
@@ -676,7 +687,7 @@ class GitOperationCacheCapacityTests(_GuardFixture):
             with diff._GitOperation(repo.root) as scope:
                 state = diff._materialized_state(repo.root, head, _scope=scope)
                 completed.append(len(state.contracts))
-                self.transient(repo.root / ".git")
+                self.replace_directory(repo.root / ".git" / "objects")
 
         self.refused(operation)
         self.assertEqual(completed, [256])
@@ -728,7 +739,9 @@ class GitBindingGuardFallbackTests(_GuardFixture):
                                      (head + "\n").encode())
                 binding = diff._git_binding(root)
                 self.churn(admin)
-                self.refused(binding.verify, "directory")
+                binding.verify()
+            self.replace_directory(admin)
+            self.refused(binding.verify, "directory")
             self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     @unittest.skipUnless(os.name == "posix", "POSIX directory aliases")
@@ -769,6 +782,8 @@ class GitBindingGuardFallbackTests(_GuardFixture):
                 self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"]), (head + "\n").encode())
             binding = diff._git_binding(root)
             self.churn(admin)
+            binding.verify()
+            self.replace_directory(admin)
             self.refused(binding.verify, "directory")
 
     def test_unhandled_configuration_uses_git_parsing_and_strict_fallback(self) -> None:

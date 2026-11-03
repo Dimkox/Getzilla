@@ -216,6 +216,21 @@ def _score(text: str, mapping: dict[str, tuple[str, ...]]) -> dict[str, int]:
     return scores
 
 
+def _has_unnegated_term(text: str, words: tuple[str, ...]) -> bool:
+    """A domain word counts unless every mention sits inside a negated clause part (#220).
+
+    "do not deploy, just fix the bug" must not read as production intent, while
+    "fix the deploy script" still does.
+    """
+    negative = re.compile(
+        r"(?:^|[\s('])(?:do\s+not|don['’]t|never|not\b|no\s+need\s+to|without|без|не|нельзя)")
+    for clause in re.split(r'[;\n!?]|(?<!\d)\.|\.(?!\d)|\b(?:but|however|но|однако|зато)\b', text.lower()):
+        for part in re.split(r',|\b(?:and(?:\s+then)?|then|и(?:\s+затем)?|затем)\b', clause):
+            if any(_has_term(part, word) for word in words) and not negative.search(part):
+                return True
+    return False
+
+
 def _has_operational_intent(text: str) -> bool:
     """Recognize bounded EN/RU requests, never grant operational authority.
 
@@ -428,8 +443,10 @@ def _risk(text: str, intent: str, domains: list[str]) -> tuple[str, list[str]]:
     except (OSError, ValueError) as error:
         # A broken vocabulary must not make every prompt look harmless.
         return 'medium', [f'risk vocabulary unavailable ({str(error)[:120]}); medium-risk floor']
-    high = [word for word in vocabulary.high if _has_term(text, word)]
-    medium = [word for word in vocabulary.medium if _has_term(text, word)]
+    # An explicitly negated mention ("do not deploy", "не деплой") is context, not a risk
+    # signal (#220).
+    high = [word for word in vocabulary.high if _has_unnegated_term(text, (word,))]
+    medium = [word for word in vocabulary.medium if _has_unnegated_term(text, (word,))]
     if high or intent in {'incident', 'release'} or 'security' in domains:
         rationale.append('high-risk signal: ' + ', '.join(high[:5]) if high else f'high-risk intent/domain: {intent}')
         return 'high', rationale
@@ -566,8 +583,8 @@ def build_route(
     # Low-risk micro and standard work takes the light lane: one analysis agent, one reviewer
     # who also reads the tests, no durable change package. High risk, sensitive task domains,
     # paid or production work keep the full controller; verification still escalates on the diff.
-    production = operational_intent or (not pasted and any(
-        _has_term(prompt, word) for word in ('production', 'прод', 'deploy', 'деплой')))
+    production = operational_intent or (not pasted and _has_unnegated_term(
+        prompt, ('production', 'прод', 'deploy', 'деплой')))
     light = (
         risk == 'low' and complexity in {'micro', 'standard'} and write_agent is not None
         and intent not in {'release', 'architecture', 'incident'} and cost_signal is None and not production

@@ -449,11 +449,14 @@ class _GitBinding:
                 raise ArchitectureError(f"Git {label} binding is unavailable", code="git") from exc
             # Objects were formerly checked by their strict parent's metadata.
             # Do not turn legitimate loose-object additions into a new refusal.
-            stable = path == self.objects_directory
-            if guard is not None and stat.S_ISDIR(identity[2]):
+            # A directory's size and times churn on any neighbor entry, so
+            # directory identity is its device, inode and mode only; an actual
+            # replacement still changes the inode.
+            is_directory = stat.S_ISDIR(identity[2])
+            stable = is_directory or path == self.objects_directory
+            if guard is not None and is_directory:
                 if not guard.covers(path, identity):
                     raise ArchitectureError(f"Git {label} binding guard is incomplete", code="git")
-                stable = True
             changed = current[:3] != identity[:3] if stable else current != identity
             if changed:
                 raise ArchitectureError(f"Git {label} binding changed", code="git")

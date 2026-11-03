@@ -160,7 +160,7 @@ def evaluate_pre_tool(
             'so targets are explicit repository-relative paths. Do not create a protected-path grant until '
             'the exact targets are known.' + hint
         )
-    moved = protected_ref_move(command)
+    moved = protected_ref_move(command, root)
     if moved:
         return False, (
             f'Blocked a local move, rename or delete of protected branch {moved}: diffs, reviews and '

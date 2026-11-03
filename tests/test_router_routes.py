@@ -321,6 +321,15 @@ class RouterTests(unittest.TestCase):
             self.assertNotEqual(route.risk, 'high')
             self.assertNotIn('production_action_approval', route.human_gates)
 
+    def test_negated_deploy_mention_keeps_the_light_lane(self) -> None:
+        # #220: an explicit negation ("не деплой", "do not deploy") is not production intent.
+        with project_copy() as root:
+            for prompt in ('fix the typo, do not deploy', 'исправь опечатку, не деплой'):
+                route = build_route(root, prompt, 's-neg-deploy')
+                self.assertEqual(route.delivery_lane, 'light', prompt)
+            route = build_route(root, 'fix the typo in the deploy script', 's-deploy')
+            self.assertNotEqual(route.delivery_lane, 'light')
+
     def test_prod_outage_phrase_is_still_high_risk(self) -> None:
         with project_copy() as root:
             route = build_route(root, 'прод упал почини срочно', 's-prod')

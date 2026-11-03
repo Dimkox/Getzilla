@@ -361,8 +361,8 @@ class PolicyTests(unittest.TestCase):
                   'mcp__slack-post__message', 'mcp__x__', 'mcp__db__run_query', 'mcp__db__runQuery',
                   'mcp__x__request_download', 'mcp__db__query', 'mcp__x__fetchPage', 'mcp__x__get_d\u0435lete',
                   'mcp__Claude_Docs__query',
-                  # #215: a second action after and/or, run/request after a hyphen, a github look-alike.
-                  'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__get_x-run', 'mcp__x__list-request',
+                  # #215: a second action after and/or, request after a hyphen, a github look-alike.
+                  'mcp__x__list_and_kill', 'mcp__x__getAndRun', 'mcp__x__list-request',
                   'mcp__mygithubtool__run_secret_scanning',
                   'mcp__codex_apps__github__create_issue', 'mcp__codex_apps__github__issue_write',
                   'mcp__codex_apps__x__run_query', 'mcp__codex_apps__github__merge_pull_request',
@@ -375,6 +375,9 @@ class PolicyTests(unittest.TestCase):
                  'mcp__claude-code-remote__list_sessions', 'mcp__Gmail__search_threads',
                  'mcp__cloud-run__get_service', 'mcp__x-post__list_items', 'mcp__x__get_check_run',
                  'mcp__x__describe-table', 'mcp__x__records_lookup', 'mcp__x__list_and_get',
+                 # #220: a noun after and/or or a hyphen names the returned object, not a second
+                 # action (list_pull_requests_and_issues, get_x-run, get_pipeline-run).
+                 'mcp__x__list_pull_requests_and_issues', 'mcp__x__get_x-run', 'mcp__x__get_pipeline-run',
                  'mcp__plugin_github_github__run_secret_scanning',
                  # A host namespace before the tool name (Codex apps): the read verb is in the last segment.
                  'mcp__codex_apps__github__search_issues', 'mcp__codex_apps__github__get_me',
