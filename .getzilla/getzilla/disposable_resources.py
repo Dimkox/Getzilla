@@ -6,6 +6,7 @@ the live object, and a successful independent list must confirm its absence.
 from __future__ import annotations
 
 import json
+import ipaddress
 from contextvars import ContextVar
 import os
 from pathlib import Path
@@ -22,12 +23,12 @@ _DEADLINE = ContextVar("disposable_cleanup_deadline", default=None)
 
 
 def _process_identity(pid: int) -> dict:
-    current = Path("/proc/self/stat").read_text()
+    current = Path("/proc/self/stat").read_text(encoding="utf-8")
     if int(current.split(" ", 1)[0]) != os.getpid():
         raise CleanupUnconfirmed("Process and procfs namespaces disagree; resource ownership cannot be established")
-    value = current if pid == os.getpid() else Path(f"/proc/{pid}/stat").read_text()
+    value = current if pid == os.getpid() else Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     fields = value[value.rfind(")") + 2:].split()
-    return {"pid": pid, "start": fields[19], "boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip()}
+    return {"pid": pid, "start": fields[19], "boot": Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()}
 
 
 class CleanupUnconfirmed(RuntimeError):
@@ -35,7 +36,7 @@ class CleanupUnconfirmed(RuntimeError):
 
 
 def image_pins(root: Path) -> dict:
-    data = json.loads((root / ".getzilla/config/ci-images.json").read_text())
+    data = json.loads((root / ".getzilla/config/ci-images.json").read_text(encoding="utf-8"))
     if data.get("schema_version") != 1 or data.get("platform") != "linux/amd64":
         raise ValueError("Unknown CI image configuration")
     for key in ("postgres", "python"):
@@ -66,7 +67,7 @@ def _docker(*args: str, timeout: int = 30) -> str:
             raise CleanupUnconfirmed("Cleanup deadline exhausted; no additional Docker operation authorized")
         timeout = min(timeout, remaining)
     return subprocess.run(["docker", *args], check=True, capture_output=True,
-                          text=True, timeout=timeout).stdout.strip()
+                          text=True, encoding="utf-8", timeout=timeout).stdout.strip()
 
 
 def _inspect(kind: str, key: str) -> dict:
@@ -91,6 +92,87 @@ def _identity(kind: str, value: dict) -> dict:
     return result
 
 
+def _absolute_posix_path(value: str) -> bool:
+    """Validate the raw mount value without normalizing traversal or CSV syntax."""
+    return (isinstance(value, str) and value.startswith("/") and len(value) <= 4096
+            and all(part not in ("", ".", "..") and re.fullmatch(r"[A-Za-z0-9_.-]+", part)
+                    for part in value.split("/")[1:]))
+
+
+def internal_postgres_endpoint(*, container_id: str, container_name: str, image: str,
+                               image_id: str, nonce: str, namespace: str, network_id: str) -> tuple[str, int]:
+    """Read one exact owned endpoint; private address membership alone grants nothing.
+
+    Internal bridge ports need not be published by Docker. The host can reach its
+    bridge directly. Retain container/network identity on both sides of the read;
+    the caller must still verify the PostgreSQL cluster before mutation/restart.
+    """
+    if (not _ID.fullmatch(container_id) or not _ID.fullmatch(network_id)
+            or not _NAME.fullmatch(container_name) or not _NAME.fullmatch(namespace)
+            or not container_name.startswith(namespace + "-")
+            or not re.fullmatch(r"[0-9a-f]{32}", nonce) or not _PIN.fullmatch(image)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)):
+        raise ValueError("Invalid owned PostgreSQL endpoint identity")
+    expected_labels = {"getzilla.ci.namespace": namespace, "getzilla.ci.nonce": nonce}
+
+    def read_binding():
+        container = _inspect("container", container_id)
+        network = _inspect("network", network_id)
+        if (container["Id"] != container_id or container["Name"] != "/" + container_name
+                or container["Config"]["Image"] != image or container["Image"] != image_id
+                or container["State"]["Running"] is not True
+                or any(container["Config"]["Labels"].get(key) != value for key, value in expected_labels.items())
+                or network["Id"] != network_id or network["Driver"] != "bridge"
+                or network["Internal"] is not True or network["Scope"] != "local"
+                or network.get("Ingress", False) is not False
+                or not _NAME.fullmatch(network["Name"]) or not network["Name"].startswith(namespace + "-")
+                or any(network["Labels"].get(key) != value for key, value in expected_labels.items())):
+            raise ValueError("PostgreSQL container or internal network identity changed")
+        host = container["HostConfig"]
+        settings = container["NetworkSettings"]
+        if (host["NetworkMode"] not in (network_id, network["Name"])
+                or host.get("PortBindings") not in ({}, None)
+                or not isinstance(settings.get("Ports"), dict)
+                or any(binding not in (None, []) for binding in settings["Ports"].values())
+                or set(settings["Networks"]) != {network["Name"]}):
+            raise ValueError("PostgreSQL endpoint has additional or published connectivity")
+        endpoint = settings["Networks"][network["Name"]]
+        member = network["Containers"][container_id]
+        address = ipaddress.IPv4Address(endpoint["IPAddress"])
+        prefix = endpoint["IPPrefixLen"]
+        if (not address.is_private or address.is_loopback or address.is_link_local
+                or address.is_multicast or address.is_reserved or address.is_unspecified
+                or str(address) != endpoint["IPAddress"] or type(prefix) is not int
+                or endpoint["NetworkID"] != network_id or not _ID.fullmatch(endpoint["EndpointID"])
+                or member["Name"] != container_name or member["EndpointID"] != endpoint["EndpointID"]
+                or member["IPv4Address"] != f"{address}/{prefix}"):
+            raise ValueError("PostgreSQL endpoint does not match its live network membership")
+        matching_subnet = False
+        for config in network["IPAM"]["Config"]:
+            subnet = ipaddress.ip_network(config["Subnet"], strict=True)
+            if subnet.version != 4:
+                continue
+            if (address in subnet and prefix == subnet.prefixlen
+                    and address not in (subnet.network_address, subnet.broadcast_address)
+                    # Moby omits the endpoint's default gateway for internal
+                    # networks; IPAM still records the host bridge address.
+                    and endpoint.get("Gateway") in (None, "", config.get("Gateway"))
+                    and str(address) != config.get("Gateway")):
+                matching_subnet = True
+        if not matching_subnet:
+            raise ValueError("PostgreSQL endpoint is outside the exact owned network subnet")
+        return (str(address), _identity("container", container), _identity("network", network),
+                endpoint, member, network["IPAM"])
+
+    try:
+        first = read_binding()
+        if read_binding() != first:
+            raise ValueError("PostgreSQL endpoint changed during observation")
+        return first[0], 5432
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValueError("Incomplete owned PostgreSQL endpoint observation") from error
+
+
 class OwnedDocker:
     def __init__(self, manifest: Path, namespace: str):
         if not _NAME.fullmatch(namespace):
@@ -111,7 +193,7 @@ class OwnedDocker:
         path = Path(manifest)
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
             raise ValueError("Unsafe ownership journal")
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("schema") != "getzilla-disposable-owner-v1":
             raise ValueError("Unknown ownership journal")
         if not _NAME.fullmatch(data.get("namespace", "")) or not re.fullmatch(r"[0-9a-f]{32}", data.get("nonce", "")):
@@ -124,7 +206,7 @@ class OwnedDocker:
         owner = instance.owner_process
         if type(owner.get("pid")) is not int or owner["pid"] <= 0:
             raise ValueError("Invalid allocator identity")
-        if owner.get("boot") != Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        if owner.get("boot") != Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip():
             raise CleanupUnconfirmed("Allocator boot identity is unavailable")
         try:
             if _process_identity(owner["pid"]) == owner:
@@ -151,7 +233,7 @@ class OwnedDocker:
                 "owner_process": self.owner_process}
         temporary = self.manifest.with_name(self.manifest.name + "." + uuid.uuid4().hex)
         try:
-            with temporary.open("x", encoding="utf-8") as stream:
+            with temporary.open("x", encoding="utf-8", newline="\n") as stream:
                 os.chmod(temporary, 0o600)
                 json.dump(data, stream, sort_keys=True, indent=2)
                 stream.flush()
@@ -202,7 +284,7 @@ class OwnedDocker:
         item = self._intent("directory", suffix)
         path = self.manifest.parent / item["name"]
         path.mkdir(mode=0o700)
-        (path / ".owner").write_text(self.nonce)
+        (path / ".owner").write_text(self.nonce, encoding="utf-8", newline="\n")
         value = path.lstat()
         item.update(identity={"device": value.st_dev, "inode": value.st_ino}, status="bound")
         self._save()
@@ -216,7 +298,7 @@ class OwnedDocker:
         if not stat.S_ISDIR(value.st_mode) or {"device": value.st_dev, "inode": value.st_ino} != item.get("identity"):
             raise CleanupUnconfirmed("Disposable directory identity changed")
         marker = path / ".owner"
-        if marker.is_symlink() or marker.read_text() != self.nonce:
+        if marker.is_symlink() or marker.read_text(encoding="utf-8") != self.nonce:
             raise CleanupUnconfirmed("Disposable directory ownership changed")
         entries = list(path.iterdir())
         if any(entry.name not in (".owner", "payload") or entry.is_dir() for entry in entries):
@@ -243,12 +325,12 @@ class OwnedDocker:
         if volume:
             if volume not in self.resources or volume["kind"] != "volume":
                 raise ValueError("Volume is not owned by this run")
-            if not re.fullmatch(r"/[A-Za-z0-9/_-]+", volume_target):
+            if not _absolute_posix_path(volume_target):
                 raise ValueError("Unsafe container volume target")
             arguments += ["--mount", f"type=volume,source={volume['name']},target={volume_target}"]
         for source, destination in (bind or {}).items():
             source = Path(source).resolve(strict=True)
-            if "," in str(source) or not re.fullmatch(r"/[A-Za-z0-9/_-]+", destination):
+            if "," in str(source) or not _absolute_posix_path(destination):
                 raise ValueError("Unsafe read-only source mount")
             arguments += ["--mount", f"type=bind,source={source},target={destination},readonly"]
         if network:
@@ -260,7 +342,7 @@ class OwnedDocker:
                 raise ValueError("Invalid internal network alias")
             arguments += ["--network-alias", alias]
         if working_directory:
-            if not re.fullmatch(r"/[A-Za-z0-9/_-]+", working_directory):
+            if not _absolute_posix_path(working_directory):
                 raise ValueError("Unsafe container work directory")
             arguments += ["--workdir", working_directory]
         if publish_postgres:

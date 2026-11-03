@@ -205,7 +205,7 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertTrue({"task_packet_digest", "run_manifest_digest", "workspace_result_digest"}.issubset(schema["required"]))
         self.assertNotIn("semantic_verdict", schema["properties"])
 
-    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed in this test environment")
     def test_workspace_result_schema_validates_records_with_jsonschema_cli(self):
         valid = WorkspaceResultV1.from_facts(valid_workspace_result()).to_dict()
         command = ["jsonschema", str(ROOT / "contracts" / "schemas" / "workspace-result.v1.json")]

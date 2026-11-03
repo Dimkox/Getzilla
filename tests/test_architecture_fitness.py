@@ -4536,9 +4536,11 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
     def test_each_vulnerability_scanner_destination_has_its_own_declared_edge(self) -> None:
         """#73: the OSV query and the OSV mirror are separate destinations; dropping either edge is caught."""
-        known = (ROOT / '.getzilla/getzilla/known_vulns.py').read_text(encoding='utf-8')
-        self.assertIn("OSV_API = 'https://api.osv.dev/v1'", known)
-        self.assertIn("OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'", known)
+        known = importlib.import_module('getzilla.known_vulns')
+        snapshots = importlib.import_module('getzilla.security_data')
+        self.assertEqual(known.OSV_API, 'https://api.osv.dev/v1')
+        self.assertEqual(known.OSV_BUCKET, 'https://osv-vulnerabilities.storage.googleapis.com')
+        self.assertEqual(known.OSV_BUCKET, snapshots.OSV_BUCKET)
         destinations = {'EDGE-SCANNER-OSV-QUERY': 'NODE-OSV-API',
                         'EDGE-SCANNER-OSV-MIRROR-DOWNLOAD': 'NODE-OSV-ADVISORY-BUCKET'}
 

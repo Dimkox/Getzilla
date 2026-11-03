@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shlex
 import sys
 import unittest
 
@@ -364,9 +365,108 @@ class TaskIntentTests(unittest.TestCase):
         with project_copy(git=True) as root:
             self.task(root)
             self.ask(root, paths=['src/a.py'])
-            reason = mutation_block_reason(root, {'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf src'}})
+            event = {'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf src'}}
+            # Evaluate only: no command from this test is executed. An unknown cwd would
+            # refuse the write before checking overlap and conceal the ancestor regression.
+            reason = mutation_block_reason(root, event, execution_cwd=root)
             self.assertIsNotNone(reason)
             self.assertIn('Q-001', reason)
+            allowed, reason = evaluate_pre_tool(root, event, execution_cwd=root)
+            self.assertFalse(allowed)
+            self.assertIn('Q-001', reason)
+
+    def _assert_intent_decision(self, root, event, *, execution_cwd, expected):
+        """Exercise both native consumers with a known cwd; never execute shell text."""
+        from getzilla.task_intent import mutation_block_reason
+        reason = mutation_block_reason(root, event, execution_cwd=execution_cwd)
+        allowed, policy_reason = evaluate_pre_tool(root, event, execution_cwd=execution_cwd)
+        if expected is None:
+            self.assertIsNone(reason, event)
+            self.assertTrue(allowed, (event, policy_reason))
+        else:
+            self.assertIsNotNone(reason, event)
+            self.assertIn(expected, reason)
+            self.assertFalse(allowed, event)
+            self.assertIn(expected, policy_reason)
+
+    def test_affected_path_overlap_preserves_component_boundaries(self):
+        cases = (
+            ('src/a.py', ('src/a.py', 'src', '.', 'src/../src/a.py'),
+             ('src/b.py', 'src/a.py.backup', 'src/ab.py', 'src2/a.py')),
+            ('src/', ('src', 'src/', 'src/a.py', 'src/nested/item.py', '.'),
+             ('src2', 'src2/a.py', 'src-backup/a.py')),
+            ('src/components', ('src/components', 'src/components/item.py', 'src', '.'),
+             ('src/component', 'src/components-extra/item.py', 'src2/components')),
+        )
+        for affected, blocked, independent in cases:
+            with self.subTest(affected=affected), project_copy(git=True) as root:
+                self.task(root)
+                (root / 'src/components').mkdir()
+                self.ask(root, paths=[affected])
+                for expected, paths in (('Q-001', blocked), (None, independent)):
+                    for path in paths:
+                        for target in (path, str(root / path)):
+                            with self.subTest(target=target, expected=expected):
+                                event = {'tool_name': 'Write', 'tool_input': {'file_path': target, 'content': 'changed'}}
+                                self._assert_intent_decision(root, event, execution_cwd=root, expected=expected)
+
+    def test_structural_targets_use_resolved_relative_and_absolute_execution_paths(self):
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root, paths=['src/a.py'])
+            candidates = (
+                (root, 'mv src renamed', 'Q-001'),
+                (root, 'mv ./src/../src renamed', 'Q-001'),
+                (root, 'mv ' + shlex.quote(str(root / 'src')) + ' renamed', 'Q-001'),
+                (root / 'src', 'mv . ../renamed', 'Q-001'),
+                (root / 'src', 'mv a.py ../renamed.py', 'Q-001'),
+                (root, 'mv src/b.py independent.py', None),
+                (root, 'mv src2 renamed', None),
+                (root / 'src', 'mv b.py ../independent.py', None),
+            )
+            for cwd, command, expected in candidates:
+                with self.subTest(cwd=cwd, command=command):
+                    event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
+                    self._assert_intent_decision(root, event, execution_cwd=cwd, expected=expected)
+
+    def test_pending_amendment_regions_keep_ancestor_boundaries_after_question_answer(self):
+        from getzilla.task_intent import intent_gaps
+        for affected, blocked, independent in (
+            ('src/a.py', ('src/a.py', 'src', '.'), ('src/b.py', 'src2/a.py')),
+            ('src/', ('src', 'src/', 'src/nested/a.py', '.'), ('src2', 'src2/a.py')),
+        ):
+            with self.subTest(affected=affected), project_copy(git=True) as root:
+                self.task(root)
+                route = continuity.submit(root, 'Amendment: A must include archived rows; B is unchanged.',
+                                          'intent-owner', event_id='ancestor-amendment')
+                pending = route['context']['pending'][0]['id']
+                self.ask(root, targets=[pending, 'AC-001'], paths=[affected])
+                self.answer(root)
+                self.assertEqual(intent_gaps(root, state.get_active_route(root)), [])
+                self.assertTrue(state.get_active_route(root)['context']['pending'])
+                for expected, paths in (('scope_sync_required', blocked), (None, independent)):
+                    for target in paths:
+                        with self.subTest(target=target, expected=expected):
+                            event = {'tool_name': 'Write', 'tool_input': {'file_path': target, 'content': 'changed'}}
+                            self._assert_intent_decision(root, event, execution_cwd=root, expected=expected)
+                event = {'tool_name': 'Bash', 'tool_input': {'command': 'mv src renamed'}}
+                self._assert_intent_decision(root, event, execution_cwd=root, expected='scope_sync_required')
+
+    def test_answered_question_allows_parent_until_its_answer_becomes_stale(self):
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root, paths=['src/'])
+            event = {'tool_name': 'Bash', 'tool_input': {'command': 'mv src renamed'}}
+            self._assert_intent_decision(root, event, execution_cwd=root, expected='Q-001')
+            self.answer(root)
+            self._assert_intent_decision(root, event, execution_cwd=root, expected=None)
+            spec_path = root / state.get_active_change(root)['path'] / 'change-spec.yaml'
+            spec = load_spec(spec_path)
+            spec['acceptance_criteria'][0]['statement'] = 'A now counts archived rows.'
+            spec_path.write_text(dump_canonical_spec(spec))
+            self._assert_intent_decision(root, event, execution_cwd=root, expected='Q-001')
+            sibling = {'tool_name': 'Write', 'tool_input': {'file_path': 'src2/a.py', 'content': 'changed'}}
+            self._assert_intent_decision(root, sibling, execution_cwd=root, expected=None)
 
     def test_new_human_resolution_changes_completion_context_even_with_same_missing_receipt(self):
         from getzilla.completion import observe_remaining

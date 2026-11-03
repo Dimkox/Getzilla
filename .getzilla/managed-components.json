@@ -935,7 +935,7 @@
         },
         ".getzilla/getzilla/ci_admission.py": {
           "mode": 420,
-          "sha256": "e9fd3d8b8bde934142a99123a86e97462bfa841a9e7671c628f8ffd14e254b21"
+          "sha256": "4b5e5c03316cad2bff1ddd8f2ab0d234df2ae7fe7f8fb7fd319298a59e60dd63"
         },
         ".getzilla/getzilla/ci_evidence.py": {
           "mode": 420,
@@ -955,11 +955,11 @@
         },
         ".getzilla/getzilla/criterion_tests.py": {
           "mode": 420,
-          "sha256": "54aa0df8cb7cdfbdf99d42d78ada1ab04ecb110f9461d03434bda6e9b583a1fe"
+          "sha256": "11ec1e2fab08134a3d18f5f9df68df237135f6d492af22bf6e698809b6769c4a"
         },
         ".getzilla/getzilla/disposable_resources.py": {
           "mode": 420,
-          "sha256": "cdced23ee89fd25a8526951ef7f3070f8b56c530c78a19ac2e66710cbb2eb46c"
+          "sha256": "32a14182696129d5e106c1cdad0bbe0df68eb9a69cc5d9f5bd94d7c780af4927"
         },
         ".getzilla/getzilla/expanded_security.py": {
           "mode": 420,
@@ -967,19 +967,19 @@
         },
         ".getzilla/getzilla/factory_tests.py": {
           "mode": 420,
-          "sha256": "b996f34fae1afbb9ad24c0606552fecb9662ede7ca8a07b4e74bc4aa32e0afa7"
+          "sha256": "684af9b0f3285ad875f30ac67246f27370022f0227e8c1fa5811badcc86f1227"
         },
         ".getzilla/getzilla/known_vulns.py": {
           "mode": 420,
-          "sha256": "66ea166bf4d7fdaa75a8467d112c8308f379b86222ba52ef983328ad053d964e"
+          "sha256": "56ad48b3c2b478d6fed3df0a1f5b66cf1083b66452fd37e04d07f96bcccfa442"
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 420,
-          "sha256": "8a162969cd48799e9f5cd925745477f429bd0166176c2f3786bc1b3c2b7d5f62"
+          "sha256": "affc310f9150fd3988a537f4fd67119f136680c89f3dde3f96c4ecea942a46ab"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 420,
-          "sha256": "4f9474afc66caa26b0d0a5d27a6a7c60b4c880f63afedb311867ecba6d4303e5"
+          "sha256": "9e596b69a6de99d4461ee3d4939c29b1e14a5e77cdbda27fc5334a52827c68dc"
         },
         ".getzilla/getzilla/policy.py": {
           "mode": 420,
@@ -1011,7 +1011,7 @@
         },
         ".getzilla/getzilla/security_data.py": {
           "mode": 420,
-          "sha256": "388aa517887397b4d72d5bb9c75748c30372e2d3b73da24a9ac61fd2586d626e"
+          "sha256": "904c21544c02fb787dcb2ed882b1e14659a5e0fcf2bc87650da9df0afecb9f46"
         },
         ".getzilla/getzilla/security_intelligence.py": {
           "mode": 420,
@@ -1019,7 +1019,7 @@
         },
         ".getzilla/getzilla/security_inventory.py": {
           "mode": 420,
-          "sha256": "b7a89576fda0fb91bd4b96c4a79be8d0fcaf2fdc9e94e5a0ce5f9b0c9af9520d"
+          "sha256": "6ba39c9e32114d951057bc169e476012d7a6457e1fbbcaf160e0cd569575fc31"
         },
         ".getzilla/getzilla/security_license_acquisition.py": {
           "mode": 420,
@@ -1031,11 +1031,11 @@
         },
         ".getzilla/getzilla/security_licenses.py": {
           "mode": 420,
-          "sha256": "0bba9282680df554c7eef8c82f3df33ee805dfad48bdcccfe1077a39e98a452d"
+          "sha256": "412f404e75cd33aa0a3d702e7a345668e27e4572f30c35671e36384d57bbbe76"
         },
         ".getzilla/getzilla/security_tools.py": {
           "mode": 420,
-          "sha256": "78cdd2f1b0403e8dafdef6a2f700a12d77df0e44175e9fd526edbb9607a25fd7"
+          "sha256": "51aa7f15365354388dd66f32a6391786fbb7ac0eff0bc403b66c28ab557f12b1"
         },
         ".getzilla/getzilla/spec.py": {
           "mode": 420,
@@ -1055,7 +1055,7 @@
         },
         ".getzilla/getzilla/task_intent.py": {
           "mode": 420,
-          "sha256": "450e36595779b114ba77e70d2c49b43abcbf1a2bf31f5d10897f057e418ffebd"
+          "sha256": "4ab7d75a3cf7b56ca01ca9c31cdf49b05b2ab18d10f05c477dcfbe16e2eb7c4f"
         },
         ".getzilla/getzilla/updater.py": {
           "mode": 420,
@@ -1063,7 +1063,7 @@
         },
         ".getzilla/getzilla/verification.py": {
           "mode": 420,
-          "sha256": "93863f85730ffb3ba953c59ab9c49db2b858433abc035bbbe897f757a2c2dd18"
+          "sha256": "acf2888856014fe48ceca01514dc98daff561d297ad87b96690708f8fb1169a5"
         },
         ".getzilla/getzilla/verification_plan.py": {
           "mode": 420,
@@ -1520,6 +1520,7 @@
         "delivery/src/getzilla_delivery/landing_publication.py",
         "delivery/src/getzilla_delivery/landing_publication_contracts.py",
         "engineering/contracts/openapi/factory-result-admission.v2.json",
+        "factory/pyproject.toml",
         "factory/tests/__init__.py",
         "factory/tests/decision_contract_cases.py",
         "factory/tests/decision_fixtures.py",
@@ -1607,6 +1608,7 @@
         "factory/tests/test_state.py",
         "factory/tests/test_vibevm_store.py",
         "factory/tests/test_workspace.py",
+        "factory/uv.lock",
         "scripts/getzilla_landing_publish.py",
         "scripts/getzilla_m8.py"
       ],
@@ -1626,6 +1628,10 @@
         "engineering/contracts/openapi/factory-result-admission.v2.json": {
           "mode": 420,
           "sha256": "01d1af5e120c46a1c0c9f1129cd28125a9a8e8237065c4677db67bf739be78ab"
+        },
+        "factory/pyproject.toml": {
+          "mode": 420,
+          "sha256": "4aaf0492e3f377b5355e513d3b536620c13fd2f9273b37a8b3074e5024cd8d18"
         },
         "factory/tests/__init__.py": {
           "mode": 420,
@@ -1673,11 +1679,11 @@
         },
         "factory/tests/postgres_restart_probe.py": {
           "mode": 420,
-          "sha256": "35e30f9d1b8291d5a5f5c9ff1ed05eb8b703a9976a72002395b746ec7bd37865"
+          "sha256": "1b6c2d63f8b068088c2fc5202967afa741e87732b5ee15f0f71c9b09ca489739"
         },
         "factory/tests/run_disposable_exit.py": {
           "mode": 420,
-          "sha256": "21bac600acc9b6494841cc6553f415301748cbf68b1955f819252f9d5243560a"
+          "sha256": "8b99e140e9a4ec03c491ed83503b030398dc53577cf49de58430601f3f060cf1"
         },
         "factory/tests/run_live_suite.py": {
           "mode": 420,
@@ -1701,7 +1707,7 @@
         },
         "factory/tests/test_bb_contracts.py": {
           "mode": 420,
-          "sha256": "1a0ba4ddd4af9772d9b5cd1b711ea0355740913a0cdbeab0685ba63793a468a0"
+          "sha256": "423a14233ed5576e682fdc377c9961f0316d6d2e1ffa22752bd42ac8f92e38be"
         },
         "factory/tests/test_brokers.py": {
           "mode": 420,
@@ -1725,11 +1731,11 @@
         },
         "factory/tests/test_disposable_exit.py": {
           "mode": 420,
-          "sha256": "5e6c24dc3a2ee1d5429f5759fb61825182089a824617ab500203a1896aea1efe"
+          "sha256": "4488c23da6e3b18c2571f73bda2cc88294d1c1c945aff01fb456ed4c7a9b7144"
         },
         "factory/tests/test_execution_contracts.py": {
           "mode": 420,
-          "sha256": "ba9e5e0b79ff5cedf9c72fe528d4d64891354539c6a58b21822430c15a3da9d5"
+          "sha256": "3da2b66e36ba073c0ec8117a488a172c05ac8dcfceb9f3590a1425ad52877b66"
         },
         "factory/tests/test_execution_persistence_postgres.py": {
           "mode": 420,
@@ -1849,7 +1855,7 @@
         },
         "factory/tests/test_migrations.py": {
           "mode": 420,
-          "sha256": "a1da35ad52fd42a16811e0c125835b792553a42e71ce59e5dbb897793de41a00"
+          "sha256": "0722965f707e2f54be79039c59f57e7f0262e4c34f08e8cc532dd13208081702"
         },
         "factory/tests/test_model_rotator_registry.py": {
           "mode": 420,
@@ -1921,7 +1927,7 @@
         },
         "factory/tests/test_semantic_bridge.py": {
           "mode": 420,
-          "sha256": "f9b81249d03c99a3d7fc60f1d772449bd9cca65b7f0e5387390fcf275d46fbd1"
+          "sha256": "624975138d61617898ccdab871734eff03ab862c7ce04c3948c260a3ee8494df"
         },
         "factory/tests/test_semantic_contracts.py": {
           "mode": 420,
@@ -1974,6 +1980,10 @@
         "factory/tests/test_workspace.py": {
           "mode": 420,
           "sha256": "5f9612a5caf2245c0d4fe94603066ae7b4aa5129b8e2eec884128cda2517785b"
+        },
+        "factory/uv.lock": {
+          "mode": 420,
+          "sha256": "e6d5f3f021055951d5273d323051953fb2314a2b2a011d01cf59fa33f08ac929"
         },
         "scripts/getzilla_landing_publish.py": {
           "mode": 420,

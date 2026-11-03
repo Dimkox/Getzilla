@@ -1,4 +1,5 @@
 import hashlib
+import os
 from datetime import datetime, timezone
 import re
 import traceback
@@ -128,7 +129,8 @@ class MigrationTests(unittest.TestCase):
         self.assertNotEqual(run.commands[0][1]["environment"]["FACTORY_TEST_POSTGRES_CONTAINER_ID"],
                             run.commands[1][1]["environment"]["FACTORY_TEST_POSTGRES_CONTAINER_ID"])
         self.assertIn("--locked", commands[2])
-        self.assertTrue(run.commands[3][1]["environment"]["FACTORY_TEST_DATABASE_URL"].endswith(":6543/factory_exit"))
+        self.assertEqual(urlsplit(run.commands[3][1]["environment"]["FACTORY_TEST_DATABASE_URL"]).hostname, "172.28.0.2")
+        self.assertEqual(urlsplit(run.commands[3][1]["environment"]["FACTORY_TEST_DATABASE_URL"]).port, 5432)
         self.assertEqual(run.events[-2:], ["venv-cleanup", "container-cleanup"])
 
     def test_exit_runner_reports_leaked_id_without_mutation_when_binding_fails(self):
@@ -220,6 +222,20 @@ class MigrationTests(unittest.TestCase):
                     nonce,
                 )
             self.assertEqual(run.call_count, 1)
+
+    def test_partial_internal_authority_never_falls_back_to_a_published_port(self):
+        keys = ("FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE")
+        for authority in ({keys[0]: "a" * 64}, {keys[1]: "gz-test"},
+                          {keys[0]: "", keys[1]: "gz-test"},
+                          {keys[0]: "a" * 64, keys[1]: ""}):
+            with self.subTest(authority=authority), patch.dict(os.environ, {}, clear=True), \
+                    patch.dict(os.environ, authority), \
+                    patch.object(postgres_restart_probe, "internal_postgres_endpoint") as internal, \
+                    patch.object(postgres_restart_probe, "_published_port") as published:
+                with self.assertRaises(RuntimeError):
+                    postgres_restart_probe._bound_endpoint("gz-test-db", "b" * 64, "c" * 32)
+                internal.assert_not_called()
+                published.assert_not_called()
 
     def test_exit_runner_container_binding_and_cleanup_are_exact_id_scoped(self):
         container_id = "a" * 64

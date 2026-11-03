@@ -7,6 +7,38 @@ and explicit fixture paths are excluded from discovery and disclosed in the
 inventory. Unbound deployment templates remain unresolved until their actual
 artifact scope and immutable references are supplied.
 
+## Structural YAML inventory
+
+Compose and GitHub Actions manifests are read as YAML syntax events. Block and
+flow collections, quoted keys and values, job containers, service images and
+step action references use the same structural traversal. Each accepted input
+is bound to its exact source-byte SHA-256 and declarations retain source lines.
+`docker://` action references create image obligations. Images need immutable
+SHA-256 references; external actions need full commit references. Observed
+Compose image-variable bindings remain supported.
+
+The qualified checker interpreter needs the PyYAML event interface when these
+YAML manifests are present. This is an operational requirement, **not a claim
+that PyYAML is shipped or installed by every Getzilla consumer**. The parser is
+loaded lazily. Missing parser capability produces `yaml-parser-unavailable`
+and an incomplete inventory; it does not produce a structural absence result.
+Projects without relevant YAML, and excluded fixtures, do not need this parser.
+Getzilla does not install dependencies while collecting inventory.
+
+The reader permits one document, at most 1 MiB of source bytes, 64 levels of
+nesting, 20,000 nodes and 64 KiB per scalar. The alias limit is zero. Anchors,
+aliases, merge keys, duplicate decoded keys, explicit tags, schema directives,
+complex keys, multiple documents and unsupported structural types cause an
+explicit coverage gap. No YAML object constructor, workflow or Compose command
+is executed. The reader does not validate the whole workflow or Compose schema.
+
+Compose `include`, `extends`, `build` and external providers, and local or
+reusable Actions workflow/action references, require a qualified composition
+adapter. Until then they remain incomplete even when a visible image or action
+reference is also recorded. Dynamic references, mutable tags and unknown
+required subtrees also remain unresolved. These gaps keep applicable security
+checks required and blocked; they cannot justify `not_applicable`.
+
 ## One required result set
 
 The isolated public Getzilla job requires these eleven results:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import importlib
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
 PIN = "postgres@sha256:" + "1" * 64
@@ -52,9 +53,11 @@ class DockerDouble:
         self.lie_about_removal = False
         self.unavailable_listing = False
         self.next_id = 3
+        self.commands = []
 
     def __call__(self, command, **kwargs):
         self.assert_bounded(kwargs)
+        self.commands.append(list(command))
         args = command[1:]
         if args[:2] == ["image", "inspect"]:
             value = [{"Id": IMAGE_ID, "RepoDigests": [PIN]}]
@@ -67,6 +70,8 @@ class DockerDouble:
                      "Mountpoint": "/var/lib/docker/volumes/" + name, "Containers": {}}
             if kind == "network":
                 value["Id"] = f"{self.next_id:064x}"
+                value.update(Internal="--internal" in args, Scope="local", Ingress=False,
+                             IPAM={"Config": [{"Subnet": "172.28.0.0/16", "Gateway": "172.28.0.1"}]})
                 self.next_id += 1
             self.items[kind][name] = value
             return subprocess.CompletedProcess(command, 0, value.get("Id", name), "")
@@ -76,16 +81,44 @@ class DockerDouble:
             identifier = f"{self.next_id:064x}"
             self.next_id += 1
             mounts = []
-            if "--mount" in args:
-                parts = dict(x.split("=", 1) for x in args[args.index("--mount")+1].split(","))
-                mounts.append({"Type": "volume", "Name": parts["source"], "Destination": parts["target"]})
+            for index, arg in enumerate(args):
+                if arg != "--mount":
+                    continue
+                parts = dict(x.split("=", 1) if "=" in x else (x, "true")
+                             for x in args[index + 1].split(","))
+                mounts.append({"Type": parts["type"], "Name": parts["source"] if parts["type"] == "volume" else None,
+                               "Source": parts["source"], "Destination": parts["target"],
+                               "RW": "readonly" not in parts})
             value = {"Id": identifier, "Name": "/" + name, "Image": IMAGE_ID,
                      "Config": {"Image": PIN, "Labels": labels}, "Mounts": mounts,
-                     "State": {"Running": True}, "NetworkSettings": {"Networks": {}}}
+                     "State": {"Running": True}, "NetworkSettings": {"Networks": {}, "Ports": {}},
+                     "HostConfig": {"NetworkMode": "default", "PortBindings": {}}}
+            if "--network" in args:
+                network_name = args[args.index("--network") + 1]
+                network = self.items["network"][network_name]
+                endpoint_id = f"{self.next_id + 1000:064x}"
+                address = f"172.28.0.{len(network['Containers']) + 2}"
+                value["HostConfig"]["NetworkMode"] = network_name
+                value["NetworkSettings"]["Networks"][network_name] = {
+                    "NetworkID": network["Id"], "EndpointID": endpoint_id,
+                    "IPAddress": address, "IPPrefixLen": 16, "Gateway": "",
+                }
+                network["Containers"][identifier] = {
+                    "Name": name, "EndpointID": endpoint_id, "IPv4Address": address + "/16",
+                }
+            if "--publish" in args:
+                value["HostConfig"]["PortBindings"] = {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}]}
             self.items["container"][identifier] = value
             return subprocess.CompletedProcess(command, 0, identifier, "")
+        elif args[:1] == ["port"]:
+            # Actual internal bridges have no usable published mapping. The
+            # allocator may still retain the requested HostConfig binding.
+            raise subprocess.CalledProcessError(1, command, stderr="No public port")
         elif args[:2] in (["container", "inspect"], ["volume", "inspect"], ["network", "inspect"]):
-            value = [self.items[args[0]][args[-1]]]
+            selected = self.items[args[0]].get(args[-1])
+            if selected is None:
+                selected = next(x for x in self.items[args[0]].values() if x.get("Id") == args[-1])
+            value = [selected]
         elif len(args) > 1 and args[1] == "ls":
             if self.unavailable_listing:
                 raise subprocess.CalledProcessError(1, command)
@@ -150,6 +183,217 @@ class IsolatedResourceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     owner.container("db", "postgres:17", publish_postgres=True)
             self.assertEqual(docker.items["container"], {})
+
+    def test_dotted_readonly_destination_is_allocated_without_relaxing_mount_structure(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                try:
+                    item = owner.container("db", PIN, bind={Path(raw): "/docker-entrypoint-initdb.d"})
+                except ValueError as error:
+                    self.fail(f"legitimate readonly init-script destination was refused: {error}")
+            mounted = docker.items["container"][item["id"]]["Mounts"]
+            self.assertEqual(mounted, [{"Type": "bind", "Name": None, "Source": str(Path(raw).resolve()),
+                                       "Destination": "/docker-entrypoint-initdb.d", "RW": False}])
+
+    def test_noncanonical_or_option_like_container_paths_never_allocate(self):
+        module = self.module()
+        invalid = ("", "/", "relative", "--privileged", "/a/../b", "/a/./b", "/a//b", "/a/", "/a,b",
+                   "/a:rw", "/a=other", "/a\\b", "/a\nb", "/a b", "/a\x00b", "/a;$HOME", "/%2e%2e/x")
+        for destination in invalid:
+            with self.subTest(destination=repr(destination)), tempfile.TemporaryDirectory() as raw:
+                owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+                docker = DockerDouble()
+                with patch.object(module.subprocess, "run", side_effect=docker):
+                    with self.assertRaises(ValueError):
+                        owner.container("db", PIN, bind={Path(raw): destination})
+                self.assertEqual(docker.items["container"], {})
+
+    def test_factory_uses_the_owned_internal_endpoint_without_publishing_a_host_port(self):
+        from factory.tests import run_disposable_exit as runner
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker), \
+                    patch.object(runner, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                    patch.object(runner, "_final_postgres_ready", return_value=True):
+                network = owner.network("db-network")
+                try:
+                    item, url = runner._postgres(owner, "db", "test-only-pw", network)
+                except subprocess.CalledProcessError:
+                    self.fail("the real runner queried a nonexistent published port on its internal bridge")
+            self.assertEqual(url, "postgresql://factory_exit:test-only-pw@172.28.0.2:5432/factory_exit")
+            self.assertEqual(docker.items["container"][item["id"]]["HostConfig"]["PortBindings"], {})
+            self.assertFalse(any(command[:2] == ["docker", "port"] for command in docker.commands))
+
+    def _endpoint_fixture(self, raw, module, docker):
+        owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+        network = owner.network("db-network")
+        item = owner.container("db", PIN, network=network)
+        arguments = {"container_id": item["id"], "container_name": item["name"],
+                     "image": PIN, "image_id": IMAGE_ID, "nonce": owner.nonce,
+                     "namespace": owner.namespace, "network_id": network["identity"]["Id"]}
+        return arguments, docker.items["container"][item["id"]], docker.items["network"][network["name"]]
+
+    def test_real_endpoint_reader_accepts_only_matching_owned_inspections(self):
+        module = self.module()
+        self.assertTrue(callable(getattr(module, "internal_postgres_endpoint", None)), "bound endpoint reader missing")
+        with tempfile.TemporaryDirectory() as raw:
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                arguments, _, _ = self._endpoint_fixture(raw, module, docker)
+                self.assertEqual(module.internal_postgres_endpoint(**arguments), ("172.28.0.2", 5432))
+
+    def test_internal_endpoint_has_no_default_gateway_even_when_ipam_has_a_bridge_address(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                endpoint = container["NetworkSettings"]["Networks"][network["Name"]]
+                endpoint["Gateway"] = ""
+                self.assertEqual(module.internal_postgres_endpoint(**arguments), ("172.28.0.2", 5432))
+                endpoint["Gateway"] = "172.28.0.99"
+                with self.assertRaises(ValueError):
+                    module.internal_postgres_endpoint(**arguments)
+
+    def test_endpoint_refuses_wrong_network_ip_container_and_external_connectivity(self):
+        module = self.module()
+        self.assertTrue(callable(getattr(module, "internal_postgres_endpoint", None)), "bound endpoint reader missing")
+        cases = ("network-id", "network-label", "network-external", "container-id", "container-image",
+                 "container-nonce", "wrong-ip", "multiple-networks", "published-port", "endpoint-id")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
+                docker = DockerDouble()
+                with patch.object(module.subprocess, "run", side_effect=docker):
+                    arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                    endpoint = container["NetworkSettings"]["Networks"][network["Name"]]
+                    if case == "network-id":
+                        endpoint["NetworkID"] = "e" * 64
+                    elif case == "network-label":
+                        network["Labels"]["getzilla.ci.nonce"] = "e" * 32
+                    elif case == "network-external":
+                        network["Internal"] = False
+                    elif case == "container-id":
+                        container["Id"] = "e" * 64
+                    elif case == "container-image":
+                        container["Image"] = "sha256:" + "e" * 64
+                    elif case == "container-nonce":
+                        container["Config"]["Labels"]["getzilla.ci.nonce"] = "e" * 32
+                    elif case == "wrong-ip":
+                        endpoint["IPAddress"] = "172.28.0.99"
+                    elif case == "multiple-networks":
+                        container["NetworkSettings"]["Networks"]["bridge"] = copy.deepcopy(endpoint)
+                    elif case == "published-port":
+                        container["HostConfig"]["PortBindings"] = {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5432"}]}
+                    else:
+                        endpoint["EndpointID"] = "e" * 64
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        module.internal_postgres_endpoint(**arguments)
+
+    def test_endpoint_reader_detects_identity_change_during_observation(self):
+        module = self.module()
+        self.assertTrue(callable(getattr(module, "internal_postgres_endpoint", None)), "bound endpoint reader missing")
+        with tempfile.TemporaryDirectory() as raw:
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                arguments, container, _ = self._endpoint_fixture(raw, module, docker)
+            reads = []
+            def boundary(command, **kwargs):
+                if command[1:3] == ["container", "inspect"]:
+                    reads.append(command)
+                    if len(reads) == 2:
+                        container["Config"]["Labels"]["getzilla.ci.nonce"] = "e" * 32
+                return docker(command, **kwargs)
+            with patch.object(module.subprocess, "run", side_effect=boundary), self.assertRaises((ValueError, RuntimeError)):
+                module.internal_postgres_endpoint(**arguments)
+
+    def test_real_preflight_accepts_the_exact_internal_endpoint_and_cluster(self):
+        self._preflight_case("172.28.0.2", 5432, expect_pass=True)
+
+    def test_real_preflight_rejects_a_different_private_ip_or_port_before_database_access(self):
+        for host, port in (("172.28.0.99", 5432), ("172.28.0.2", 5433), ("127.0.0.1", 5432)):
+            with self.subTest(host=host, port=port):
+                self._preflight_case(host, port, expect_pass=False)
+
+    def test_restart_rechecks_live_network_and_container_before_waiting_for_database(self):
+        from factory.tests import postgres_restart_probe as probe
+        module = self.module()
+        for case in ("network", "ip", "container"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
+                docker = DockerDouble()
+                with patch.object(module.subprocess, "run", side_effect=docker):
+                    arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                restarts = []
+
+                def boundary(command, **kwargs):
+                    if command[:2] == ["docker", "restart"]:
+                        self.assertEqual(command[2:], [arguments["container_id"]])
+                        restarts.append(command)
+                        endpoint = container["NetworkSettings"]["Networks"][network["Name"]]
+                        if case == "network":
+                            endpoint["NetworkID"] = "e" * 64
+                        elif case == "ip":
+                            endpoint["IPAddress"] = "172.28.0.99"
+                        else:
+                            container["Id"] = "e" * 64
+                        return subprocess.CompletedProcess(command, 0)
+                    return docker(command, **kwargs)
+
+                environment = {"FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                               "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"]}
+                owner_url = "postgresql://factory_exit:test-only-pw@172.28.0.2:5432/factory_exit"
+                with patch.object(module.subprocess, "run", side_effect=boundary), \
+                        patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                        patch.dict(os.environ, environment), \
+                        patch.object(probe, "_assert_disposable_target") as initial_preflight, \
+                        patch.object(probe, "_postmaster_started_at", return_value=1), \
+                        patch.object(probe, "_wait_for_database") as wait:
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        probe._restart_database(arguments["container_name"], arguments["container_id"],
+                                                arguments["nonce"], owner_url, owner_url, owner_url)
+                    initial_preflight.assert_called_once()
+                    wait.assert_not_called()
+                self.assertEqual(len(restarts), 1)
+
+    def _preflight_case(self, host, port, *, expect_pass):
+        from factory.tests import postgres_restart_probe as probe
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                arguments, container, _ = self._endpoint_fixture(raw, module, docker)
+            def boundary(command, **kwargs):
+                if command[:2] == ["docker", "inspect"]:
+                    value = "\t".join((container["Id"], container["Name"], PIN, "true", arguments["nonce"], IMAGE_ID))
+                    return subprocess.CompletedProcess(command, 0, value, "")
+                if command[:2] == ["docker", "exec"]:
+                    value = "cluster-bound" if "psql" in command else ""
+                    return subprocess.CompletedProcess(command, 0, value, "")
+                return docker(command, **kwargs)
+            connection = MagicMock()
+            connection.execute.return_value.fetchone.return_value = ("factory_exit", "factory_exit", 170_006, "cluster-bound")
+            environment = {"FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                           "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"]}
+            url = f"postgresql://factory_exit:test-only-pw@{host}:{port}/factory_exit"
+            with patch.object(module.subprocess, "run", side_effect=boundary), \
+                    patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                    patch.dict(os.environ, environment), patch("psycopg.connect") as connect:
+                connect.return_value.__enter__.return_value = connection
+                if expect_pass:
+                    try:
+                        probe._assert_disposable_target(url, arguments["container_name"], arguments["container_id"], arguments["nonce"])
+                    except (RuntimeError, subprocess.SubprocessError) as error:
+                        self.fail(f"valid owned endpoint was refused before real preflight checks: {type(error).__name__}")
+                    self.assertEqual(connect.call_args.args, (url,))
+                    self.assertIn("pg_control_system", connection.execute.call_args.args[0])
+                else:
+                    with self.assertRaises((RuntimeError, ValueError, subprocess.SubprocessError)):
+                        probe._assert_disposable_target(url, arguments["container_name"], arguments["container_id"], arguments["nonce"])
+                    self.assertFalse(connect.called)
 
     def test_removal_success_without_absence_is_failure(self):
         module = self.module()

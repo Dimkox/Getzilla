@@ -70,7 +70,7 @@ def load_policy(root: Path) -> dict:
     try:
         policy = _policy(_json(read_file(root, POLICY_PATH, 65536)))
         process = subprocess.run(['git', '-C', str(root), 'remote', 'get-url', 'origin'],
-                                 capture_output=True, text=True, check=False, timeout=5)
+                                 capture_output=True, text=True, encoding='utf-8', check=False, timeout=5)
         identity = _repository_identity(process.stdout.strip()) if process.returncode == 0 else None
         if identity is None or identity.lower() != policy['project_repository'].lower():
             raise ArtifactError('license-policy-missing', 'license policy belongs to another or unknown project; choose a project-specific policy')

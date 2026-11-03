@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
-                            osv_coverage, publish_snapshot, read_snapshot)
+                            osv_aliases, osv_coverage, publish_snapshot, read_snapshot)
 
 try:
     import tomllib
@@ -497,6 +497,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
 
 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
+    try:
+        aliases = osv_aliases(record)
+    except SecurityDataError as exc:
+        raise VulnerabilityError(str(exc)) from exc
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
@@ -521,7 +525,7 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(str(alias) for alias in record.get('aliases') or []),
+        aliases=sorted(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,

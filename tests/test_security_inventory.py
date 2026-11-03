@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 import tempfile
+import hashlib
 import json
+import os
+import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from getzilla.security_inventory import collect_inventory
+
+NOW = datetime(2026, 11, 3, tzinfo=timezone.utc)
+IMAGE = 'postgres@sha256:' + 'a' * 64
+ACTION = 'actions/checkout@' + 'b' * 40
+CONSTRUCTED = []
+
+
+def forbidden_yaml_constructor():
+    CONSTRUCTED.append('executed')
+    return {}
 
 
 class InventoryTests(unittest.TestCase):
@@ -92,6 +108,241 @@ class InventoryTests(unittest.TestCase):
         observed = collect_inventory(self.root, image_bindings={'DB_IMAGE': 'postgres@sha256:' + 'b' * 64})
         self.assertTrue(observed['complete'])
         self.assertEqual(observed['images'][0]['reference'], 'postgres@sha256:' + 'b' * 64)
+
+
+class StructuralYamlInventoryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='security-yaml-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.root.chmod(0o700)
+        self.environment = mock.patch.dict(os.environ, {'GIT_CEILING_DIRECTORIES': str(self.root.parent)})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.inputs = set()
+
+    def fixture(self, path, text, **kwargs):
+        for previous in self.inputs:
+            previous.unlink()
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding='utf-8', newline='\n')
+        self.inputs = {target}
+        inventory = collect_inventory(self.root, **kwargs)
+        if path.endswith(('.yaml', '.yml')) and 'fixtures' not in Path(path).parts and len(text.encode()) <= 1024 * 1024:
+            self.assertIn({'path': path, 'sha256': hashlib.sha256(text.encode()).hexdigest()}, inventory['manifests'])
+        return inventory
+
+    def consumers(self):
+        from getzilla.expanded_security import run_checks, security_obligations
+        planned = {item['check_id']: item for item in security_obligations(self.root, environ={}, now=NOW)}
+        checked = {item['name']: item for item in run_checks(self.root, environ={}, now=NOW)}
+        return planned, checked
+
+    def assert_required_blocked(self, *names):
+        planned, checked = self.consumers()
+        for name in names:
+            self.assertEqual(planned[name]['applicability'], 'required', (name, planned))
+            self.assertEqual(checked[name]['status'], 'fail', (name, checked))
+            self.assertEqual(checked[name]['details'][0]['outcome'], 'blocked', (name, checked))
+
+    def assert_incomplete(self, inventory):
+        self.assertFalse(inventory['complete'], inventory)
+        self.assertTrue(inventory['gaps'])
+        self.assert_required_blocked('security-inventory', 'security-container-images', 'security-licenses',
+                                     'security-kev', 'security-epss', 'security-malicious-packages')
+
+    def test_compose_block_flow_and_decoded_quoted_keys_have_the_same_image_obligations(self):
+        variants = [f'services:\n  db:\n    image: {IMAGE}\n',
+                    f'services: {{db: {{image: "{IMAGE}"}}}}\n',
+                    f'"services": {{"db": {{"image": "{IMAGE}"}}}}\n',
+                    f"'services':\n  'db':\n    'image': '{IMAGE}'\n",
+                    f'"serv\\u0069ces": {{db: {{"im\\u0061ge": "{IMAGE}"}}}}\n']
+        for text in variants:
+            with self.subTest(text=text):
+                inventory = self.fixture('compose.yaml', text)
+                self.assertTrue(inventory['complete'], inventory)
+                self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
+                self.assertGreater(inventory['images'][0]['line'], 0)
+                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss', 'security-licenses')
+
+    def test_compose_override_names_do_not_hide_the_same_structural_model(self):
+        for path in ('docker-compose.override.yml', 'docker-compose.production.yaml', 'compose.override.yml'):
+            with self.subTest(path=path):
+                inventory = self.fixture(path, f'services: {{db: {{image: "{IMAGE}"}}}}\n')
+                self.assertTrue(inventory['complete'], inventory)
+                self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
+                self.assert_required_blocked('security-container-images', 'security-licenses')
+
+    def test_actions_step_block_flow_and_quoted_keys_retain_tools(self):
+        variants = [f'jobs:\n  scan:\n    steps:\n      - uses: {ACTION}\n',
+                    f'jobs: {{scan: {{steps: [{{uses: "{ACTION}"}}]}}}}\n',
+                    f'"jobs": {{"scan": {{"steps": [{{"uses": "{ACTION}"}}]}}}}\n',
+                    f"jobs:\n  scan:\n    steps:\n      - 'uses': '{ACTION}'\n"]
+        for text in variants:
+            with self.subTest(text=text):
+                inventory = self.fixture('.github/workflows/check.yml', text)
+                self.assertTrue(inventory['complete'], inventory)
+                self.assertEqual([item['reference'] for item in inventory['tools']], [ACTION])
+                self.assert_required_blocked('security-licenses')
+
+    def test_actions_job_container_string_object_and_service_images_are_inventoried(self):
+        variants = [f'jobs:\n  scan:\n    container: {IMAGE}\n    steps: [{{run: echo ok}}]\n',
+                    f'jobs:\n  scan:\n    container:\n      image: "{IMAGE}"\n    steps: []\n',
+                    f'jobs: {{scan: {{container: "{IMAGE}", steps: []}}}}\n',
+                    f'jobs: {{scan: {{container: {{image: "{IMAGE}"}}, steps: []}}}}\n',
+                    f'jobs:\n  scan:\n    services:\n      db:\n        image: {IMAGE}\n    steps: []\n',
+                    f'"jobs": {{scan: {{"services": {{db: {{"image": "{IMAGE}"}}}}, steps: []}}}}\n']
+        for text in variants:
+            with self.subTest(text=text):
+                inventory = self.fixture('.github/workflows/check.yml', text)
+                self.assertTrue(inventory['complete'], inventory)
+                self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
+                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss', 'security-licenses')
+
+    def test_docker_action_is_an_image(self):
+        for reference in ('docker://' + IMAGE, 'docker://postgres:latest'):
+            inventory = self.fixture('.github/workflows/check.yml', f'jobs: {{scan: {{steps: [{{uses: "{reference}"}}]}}}}\n')
+            self.assertEqual([item['reference'] for item in inventory['images']], [reference.removeprefix('docker://')])
+            self.assertEqual(inventory['complete'], reference.endswith('a' * 64))
+            self.assert_required_blocked('security-container-images', 'security-licenses')
+
+    def test_reusable_or_local_actions_are_unresolved_composition(self):
+        for reference in ('./.github/actions/local', './.github/workflows/reusable.yml',
+                          '$/.github/workflows/reusable.yml',
+                          'owner/repo/.github/workflows/reusable.yml@' + 'c' * 40):
+            for direct_job in (False, True):
+                with self.subTest(reference=reference, direct_job=direct_job):
+                    text = (f'jobs: {{scan: {{uses: "{reference}"}}}}\n' if direct_job else
+                            f'jobs: {{scan: {{steps: [{{uses: "{reference}"}}]}}}}\n')
+                    inventory = self.fixture('.github/workflows/check.yml', text)
+                    self.assertEqual([item['reference'] for item in inventory['tools']], [reference])
+                    self.assert_incomplete(inventory)
+
+    def test_compose_indirection_does_not_establish_absence_even_with_a_visible_image(self):
+        variants = ['include: [other.yml]\n', 'services: {api: {extends: {file: other.yml, service: api}}}\n',
+                    'services: {api: {build: .}}\n',
+                    f'services: {{api: {{image: "{IMAGE}", build: {{context: ., dockerfile: custom.build}}}}}}\n',
+                    'services: {api: {build: {context: https://example.invalid/repo.git}}}\n']
+        for text in variants:
+            with self.subTest(text=text):
+                self.assert_incomplete(self.fixture('compose.yaml', text))
+
+    def test_anchors_aliases_merges_duplicate_keys_tags_and_multiple_documents_refuse(self):
+        variants = [f'x-base: &base {{image: "{IMAGE}"}}\nservices: {{db: *base}}\n',
+                    f'services:\n  db: &base\n    image: {IMAGE}\n  other:\n    <<: *base\n',
+                    f'services: {{db: {{<<: {{image: "{IMAGE}"}}}}}}\n',
+                    f'services: {{}}\n"services": {{db: {{image: "{IMAGE}"}}}}\n',
+                    f'services: {{db: {{image: "{IMAGE}", "image": "{IMAGE}"}}}}\n',
+                    'services: !unqualified {}\n',
+                    '!!python/object/apply:tests.test_security_inventory.forbidden_yaml_constructor []\n',
+                    f'services: {{}}\n---\nservices: {{db: {{image: "{IMAGE}"}}}}\n',
+                    '%YAML 1.1\n---\nservices: {}\n']
+        before = list(CONSTRUCTED)
+        for text in variants:
+            with self.subTest(text=text):
+                self.assert_incomplete(self.fixture('compose.yaml', text))
+        self.assertEqual(CONSTRUCTED, before, 'YAML parser must never invoke object construction')
+
+    def test_dynamic_mutable_missing_and_unsupported_types_cannot_be_empty_complete(self):
+        fixtures = [
+            ('compose.yaml', 'services: [db]\n'), ('compose.yaml', 'services: {db: null}\n'),
+            ('compose.yaml', 'services: {db: {image: [postgres]}}\n'),
+            ('compose.yaml', 'services: {db: {image: postgres:latest}}\n'),
+            ('compose.yaml', 'services: {db: {image: "${IMAGE}"}}\n'),
+            ('compose.yaml', 'services: {db: {image: 123}}\n'),
+            ('compose.yaml', 'services: {db: {command: echo}}\n'),
+            ('.github/workflows/check.yml', 'jobs: [scan]\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: null}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {container: false}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {container: {options: --rm}}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {services: []}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {steps: {uses: local}}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {steps: [null]}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {steps: [{uses: [actions/checkout]}]}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {steps: [{uses: "actions/checkout@main"}]}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {container: "${{ matrix.image }}"}}\n'),
+            ('.github/workflows/check.yml', 'jobs: {scan: {steps: [{uses: "${{ inputs.action }}"}]}}\n'),
+        ]
+        for path, text in fixtures:
+            with self.subTest(path=path, text=text):
+                self.assert_incomplete(self.fixture(path, text))
+
+    def test_yaml_limits_are_fail_closed_without_recursive_alias_expansion(self):
+        variants = [('# ' + 'x' * (1024 * 1024) + '\njobs: {}\n', 'bound|limit'),
+                    ('name: "' + 'x' * 65537 + '"\njobs: {}\n', 'scalar|limit'),
+                    ('env: ' + '[' * 70 + '0' + ']' * 70 + '\njobs: {}\n', 'depth|limit'),
+                    ('env: [' + ','.join(['0'] * 20001) + ']\njobs: {}\n', 'node|limit')]
+        for text, message in variants:
+            with self.subTest(bound=message):
+                inventory = self.fixture('.github/workflows/check.yml', text)
+                self.assert_incomplete(inventory)
+                self.assertRegex(' '.join(gap['message'] for gap in inventory['gaps']), message)
+
+    def test_parser_missing_blocks_only_relevant_yaml_and_preserves_ignored_fixtures(self):
+        with mock.patch.dict(sys.modules, {'yaml': None}):
+            plain = self.fixture('src/main.py', 'print("hello")\n')
+            self.assertTrue(plain['complete'], plain)
+            ignored = self.fixture('tests/fixtures/compose.yaml', 'services: {db: {image: unsafe}}\n')
+            self.assertTrue(ignored['complete'], ignored)
+            self.assertIn('tests/fixtures/compose.yaml', ignored['excluded_fixture_paths'])
+            inventory = self.fixture('compose.yaml', f'services: {{db: {{image: "{IMAGE}"}}}}\n')
+            self.assert_incomplete(inventory)
+            self.assertIn('yaml-parser-unavailable', {gap['code'] for gap in inventory['gaps']})
+
+    def test_incompatible_parser_interface_is_an_explicit_gap(self):
+        incompatible = SimpleNamespace(parse=None, BaseLoader=None, events=None, YAMLError=ValueError)
+        with mock.patch.dict(sys.modules, {'yaml': incompatible}):
+            try:
+                inventory = self.fixture('compose.yaml', 'services: {}\n')
+            except (AttributeError, TypeError) as exc:
+                self.fail(f'parser capability failure must be a structured inventory gap: {type(exc).__name__}')
+            self.assert_incomplete(inventory)
+            self.assertIn('yaml-parser-unavailable', {gap['code'] for gap in inventory['gaps']})
+
+    def test_run_scalars_decode_downloads_without_becoming_structural_uses(self):
+        text = f'jobs: {{scan: {{steps: [{{run: "echo uses: {ACTION}"}}]}}}}\n'
+        control = self.fixture('.github/workflows/check.yml', text)
+        self.assertTrue(control['complete'], control)
+        self.assertEqual(control['tools'], [])
+        self.assertEqual(control['images'], [])
+        text = 'jobs: {scan: {steps: [{run: "c\\u0075rl https://example.invalid/tool"}]}}\n'
+        inventory = self.fixture('.github/workflows/check.yml', text)
+        self.assert_incomplete(inventory)
+        self.assertEqual([item['kind'] for item in inventory['tools']], ['script-download'])
+        self.assertTrue(inventory['tools'][0]['reference'].startswith('curl '))
+
+    def test_exact_yaml_bytes_bind_inventory_even_when_objects_are_equal(self):
+        text = f'services: {{db: {{image: "{IMAGE}"}}}}\n'
+        first = self.fixture('compose.yaml', text)
+        second = self.fixture('compose.yaml', '# source changed\n' + text)
+        self.assertEqual([item['reference'] for item in first['images']], [IMAGE])
+        self.assertEqual([item['reference'] for item in second['images']], [IMAGE])
+        self.assertNotEqual(first['digest'], second['digest'])
+        self.assertNotEqual(first['manifests'], second['manifests'])
+
+    def test_isolated_cli_and_required_plan_keep_flow_image_required_and_blocked(self):
+        from getzilla.expanded_security import security_obligations
+        from getzilla.security_cli import evaluate
+        from getzilla.verification_plan import build_required_plan
+        inventory = self.fixture('compose.yaml', f'services: {{db: {{image: "{IMAGE}"}}}}\n')
+        source = {'head_sha': 'a' * 40, 'tree_sha': 'b' * 40, 'checker_sha': 'c' * 40,
+                  'checker_tree_sha': 'd' * 40, 'candidate_clean': True, 'checker_clean': True,
+                  'same_project': True}
+        runtime = self.root / '.getzilla/runtime'
+        # Only native Git identities are fixture inputs. All inventory, planning,
+        # local security producers and final CLI aggregation run normally.
+        with mock.patch('getzilla.security_cli.source_binding', return_value=source):
+            report = evaluate(self.root, runtime / 'db', runtime / 'artifacts', runtime / 'tools', now=NOW)
+        self.assertEqual(report['status'], 'fail')
+        images = next(item for item in report['checks'] if item['name'] == 'security-container-images')
+        self.assertEqual(images['details'][0]['outcome'], 'blocked')
+        plan = build_required_plan(self.root, mode='fast', context={}, source=source, inventory=inventory,
+                                   risk={'risk': 'high'}, selection={'mode': 'fast'},
+                                   extra_obligations=security_obligations(self.root, environ={}, now=NOW))
+        image_obligation = next(item for item in plan['obligations'] if item['check_id'] == 'security-container-images')
+        self.assertEqual(image_obligation['applicability'], 'required')
+        self.assertEqual(image_obligation['evidence']['inventory_sha256'], inventory['digest'])
 
 
 if __name__ == '__main__':

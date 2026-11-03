@@ -12,11 +12,12 @@ import sys
 import tempfile
 import time
 import uuid
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla.disposable_resources import OwnedDocker, image_pins, ensure_images
+from getzilla.disposable_resources import OwnedDocker, image_pins, ensure_images, internal_postgres_endpoint
 
 POSTGRES = image_pins(ROOT)["postgres"]
 
@@ -49,6 +50,16 @@ def _error_detail(error: BaseException | None) -> str:
         detail += " signal=2"
     elif isinstance(error, SystemExit) and type(error.code) is int:
         detail += f" exit={error.code}"
+    command = getattr(error, "cmd", None)
+    if isinstance(command, (list, tuple)) and len(command) >= 2 and command[0] == "docker":
+        operation = None
+        if command[1] in {"run", "exec", "port", "inspect", "restart", "rm"}:
+            operation = command[1]
+        elif (len(command) >= 3 and command[1] in {"image", "container", "network", "volume"}
+                and command[2] in {"inspect", "create", "ls", "rm"}):
+            operation = command[1] + "." + command[2]
+        if operation is not None:
+            detail += " operation=docker." + operation
     return detail
 
 
@@ -160,7 +171,7 @@ def _new_owner() -> OwnedDocker:
 def _postgres(owner, suffix, password, network):
     volume = owner.volume(suffix + "-data")
     item = owner.container(suffix, POSTGRES["reference"], volume=volume, network=network,
-                           publish_postgres=True, environment={"POSTGRES_DB": "factory_exit",
+                           environment={"POSTGRES_DB": "factory_exit",
                            "POSTGRES_USER": "factory_exit", "POSTGRES_PASSWORD": password})
     if item["image_id"] != POSTGRES["image_id"]:
         raise RuntimeError("Pinned PostgreSQL image configuration mismatch")
@@ -170,10 +181,14 @@ def _postgres(owner, suffix, password, network):
         if time.monotonic() >= deadline:
             raise RuntimeError("disposable PostgreSQL final postmaster did not become ready")
         time.sleep(0.25)
-    port = _published_loopback_port(subprocess.run(
-        ["docker", "port", identifier, "5432/tcp"], check=True, text=True,
-        capture_output=True, timeout=10).stdout)
-    return item, f"postgresql://factory_exit:{password}@127.0.0.1:{port}/factory_exit"
+    host, port = _internal_endpoint(owner, item, network)
+    return item, f"postgresql://factory_exit:{password}@{host}:{port}/factory_exit"
+
+
+def _internal_endpoint(owner, item, network):
+    return internal_postgres_endpoint(container_id=item["id"], container_name=item["name"],
+        image=POSTGRES["reference"], image_id=POSTGRES["image_id"], nonce=owner.nonce,
+        namespace=owner.namespace, network_id=network["identity"]["Id"])
 
 
 def main() -> int:
@@ -192,12 +207,15 @@ def main() -> int:
         environment = os.environ.copy()
         environment["GETZILLA_LIVE_ARTIFACTS"] = str(owner.manifest.parent)
         for variable in ("FACTORY_TEST_DATABASE_URL", "FACTORY_FRESH_CLUSTER_DATABASE_URL",
-                         "FACTORY_TEST_POSTGRES_CONTAINER", "FACTORY_TEST_POSTGRES_CONTAINER_ID", "FACTORY_TEST_POSTGRES_NONCE"):
+                         "FACTORY_TEST_POSTGRES_CONTAINER", "FACTORY_TEST_POSTGRES_CONTAINER_ID", "FACTORY_TEST_POSTGRES_NONCE",
+                         "FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE"):
             environment.pop(variable, None)
         environment["PYTHONPATH"] = os.pathsep.join((str(ROOT / "factory/src"), str(ROOT), str(ROOT / ".getzilla")))
         phase = "container-create"
         container_status = "unbound"
         network = owner.network("db-network")
+        environment.update(FACTORY_TEST_POSTGRES_NETWORK_ID=network["identity"]["Id"],
+                           FACTORY_TEST_POSTGRES_NAMESPACE=owner.namespace)
         item, database_url = _postgres(owner, "db", password, network)
         container_id, name = item["id"], item["name"]
         phase = "container-bind"
@@ -229,6 +247,11 @@ def main() -> int:
         _run([*uv, "python", "factory/tests/postgres_restart_probe.py", "--preflight-only"],
              environment=fresh_environment)
         environment["FACTORY_FRESH_CLUSTER_DATABASE_URL"] = fresh_url
+        phase = "suite-bind"
+        for database, url in ((item, database_url), (fresh, fresh_url)):
+            endpoint = urlsplit(url)
+            if _internal_endpoint(owner, database, network) != (endpoint.hostname, endpoint.port):
+                raise RuntimeError("Disposable PostgreSQL endpoint changed after preflight")
         phase = "suite"
         _run(
             [
@@ -246,17 +269,10 @@ def main() -> int:
             raise RuntimeError(
                 f"disposable container binding changed after tests; leaked id={container_id}"
             )
-        phase = "restart-port"
-        published = subprocess.run(
-            ["docker", "port", container_id, "5432/tcp"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=10,
-        ).stdout.strip()
-        port = _published_loopback_port(published)
+        phase = "restart-endpoint"
+        host, port = _internal_endpoint(owner, item, network)
         environment["FACTORY_TEST_DATABASE_URL"] = (
-            f"postgresql://factory_exit:{password}@127.0.0.1:{port}/factory_exit"
+            f"postgresql://factory_exit:{password}@{host}:{port}/factory_exit"
         )
         phase = "restart"
         _run([*uv, "python", "factory/tests/postgres_restart_probe.py"], environment=environment)

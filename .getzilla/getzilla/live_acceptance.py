@@ -33,7 +33,7 @@ def validate_components(output, cell):
         path = output / name
         if path.is_symlink() or path.stat().st_size > OUTPUT_LIMIT:
             raise ValueError("Unsafe live component report")
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     try:
         if cell == "factory":
             suite, restart = read("factory-suite.json"), read("factory-restart.json")
@@ -63,13 +63,13 @@ def validate_components(output, cell):
 
 
 def _write(path, value):
-    with Path(path).open("x", encoding="utf-8") as stream:
+    with Path(path).open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, indent=2, sort_keys=True)
 
 
 def _git(root, *args):
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
-                          text=True, timeout=15).stdout.strip()
+                          text=True, encoding="utf-8", timeout=15).stdout.strip()
 
 
 def _stop(process, grace):
@@ -135,7 +135,7 @@ def observe(command, *, root, environment, output, timeout, grace=75,
         readable = raw_log.decode("utf-8", errors="backslashreplace")
         readable = re.sub(r"(postgres(?:ql)?://[^\s'\"/@:]+:)[^\s'\"/@]+@", r"\1[redacted]@", readable)
         readable = re.sub(r"(?i)(password\s*=\s*)[^\s'\"]+", r"\1[redacted]", readable)
-        (output / "command.log").write_text(readable)
+        (output / "command.log").write_text(readable, encoding="utf-8", newline="\n")
         journals = sorted(output.glob("*-resources.json"))
         if require_resources and not journals:
             result["cleanup_outcome"] = "unknown"
@@ -167,7 +167,7 @@ def observe(command, *, root, environment, output, timeout, grace=75,
 
 
 def _run(command, *, timeout=60, environment=None):
-    process = subprocess.run(command, check=False, text=True, capture_output=True,
+    process = subprocess.run(command, check=False, text=True, encoding="utf-8", capture_output=True,
                              timeout=timeout, env=environment)
     if process.stderr:
         print(process.stderr, file=sys.stderr)

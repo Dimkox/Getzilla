@@ -81,7 +81,8 @@ class FactoryDiscoveryTests(unittest.TestCase):
             "import os,unittest\n"
             "names=('FACTORY_TEST_DATABASE_URL','FACTORY_FRESH_CLUSTER_DATABASE_URL',"
             "'FACTORY_TEST_POSTGRES_CONTAINER','FACTORY_TEST_POSTGRES_CONTAINER_ID',"
-            "'FACTORY_TEST_POSTGRES_NONCE')\n"
+            "'FACTORY_TEST_POSTGRES_NONCE','FACTORY_TEST_POSTGRES_NETWORK_ID',"
+            "'FACTORY_TEST_POSTGRES_NAMESPACE')\n"
             "assert not any(os.environ.get(name) for name in names), 'ambient DB authority reached import'\n"
             "class Probe(unittest.TestCase):\n def test_probe(self): self.assertTrue(True)\n"
         )
@@ -91,6 +92,8 @@ class FactoryDiscoveryTests(unittest.TestCase):
             "FACTORY_TEST_POSTGRES_CONTAINER": "sentinel",
             "FACTORY_TEST_POSTGRES_CONTAINER_ID": "1" * 64,
             "FACTORY_TEST_POSTGRES_NONCE": "2" * 32,
+            "FACTORY_TEST_POSTGRES_NETWORK_ID": "3" * 64,
+            "FACTORY_TEST_POSTGRES_NAMESPACE": "gz-sentinel",
         }):
             root = Path(raw)
             self.project(root, {"test_contracts.py": source})

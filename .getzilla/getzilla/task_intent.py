@@ -5,7 +5,7 @@ import copy
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import state
@@ -241,6 +241,13 @@ def update_intent(root: Path, request: dict[str, Any]) -> dict[str, Any]:
     return state._commit_route(root, updated, expected=route)
 
 
+def _paths_overlap(path: str, affected: str) -> bool:
+    """Compare canonical repository-relative paths in both directions at component boundaries."""
+    target_parts, affected_parts = PurePosixPath(path).parts, PurePosixPath(affected).parts
+    common = min(len(target_parts), len(affected_parts))
+    return target_parts[:common] == affected_parts[:common]
+
+
 def mutation_block_reason(root: Path, event: dict[str, Any], *, execution_cwd: Path | None = None) -> str | None:
     """Use native structured targets and the existing shell parser, not prompt keywords."""
     route = state.get_active_route(root)
@@ -305,14 +312,12 @@ def mutation_block_reason(root: Path, event: dict[str, Any], *, execution_cwd: P
         if question['id'] not in active_ids:
             continue
         paths = question['paths']
-        if not paths or any(path == affected or affected.endswith('/') and path.startswith(affected)
-                            for path in normalized for affected in paths):
+        if not paths or any(_paths_overlap(path, affected) for path in normalized for affected in paths):
             blocked.append(question['id'])
     reasons = []
     if blocked:
         reasons.append('intent_unresolved: ask the human about ' + ', '.join(blocked) + ' before the affected implementation')
     for region in _pending_regions(route):
-        if not region['paths'] or any(path == affected or affected.endswith('/') and path.startswith(affected)
-                                     for path in normalized for affected in region['paths']):
+        if not region['paths'] or any(_paths_overlap(path, affected) for path in normalized for affected in region['paths']):
             reasons.append('scope_sync_required: ' + region['id'] + ': typed scope synchronization is required before this product write')
     return '; '.join(reasons) or None

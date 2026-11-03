@@ -194,7 +194,7 @@ def load_records(artifacts, run_id, attempt):
 
 def _git(root, *args):
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
-                          text=True, timeout=15).stdout.strip()
+                          text=True, encoding="utf-8", timeout=15).stdout.strip()
 
 
 def security_envelope(root, checker, selected_ref, selection, report_path, output):
@@ -219,7 +219,7 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
     encoded = json.dumps(report, sort_keys=True, indent=2).encode()
     (output / "security-expanded.json").write_bytes(encoded)
     record["files"] = [{"path": "security-expanded.json", "sha256": hashlib.sha256(encoded).hexdigest()}]
-    (output / "manifest.json").write_text(json.dumps(record, sort_keys=True, indent=2))
+    (output / "manifest.json").write_text(json.dumps(record, sort_keys=True, indent=2), encoding="utf-8", newline="\n")
     return not problems
 
 

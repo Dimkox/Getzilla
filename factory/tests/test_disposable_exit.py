@@ -20,6 +20,18 @@ DIAGNOSTIC_SENTINEL = "test-only-diagnostic-payload"
 
 
 class DisposableExitTests(unittest.TestCase):
+    def test_error_diagnostics_name_only_a_fixed_docker_operation(self):
+        for command, operation in ((["docker", "port", CONTAINER_ID, "5432/tcp"], "docker.port"),
+                                   (["docker", "run", "--env", "POSTGRES_PASSWORD=" + DIAGNOSTIC_SENTINEL], "docker.run"),
+                                   (["docker", "network", "inspect", DIAGNOSTIC_SENTINEL], "docker.network.inspect")):
+            with self.subTest(operation=operation):
+                error = subprocess.CalledProcessError(1, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
+                detail = runner._error_detail(error)
+                self.assertIn("operation=" + operation, detail)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
+        detail = runner._error_detail(subprocess.CalledProcessError(1, ["docker", DIAGNOSTIC_SENTINEL]))
+        self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
+
     @contextmanager
     def harness(self, *, primary=None, venv_error=None, container_error=None):
         events = []
@@ -61,11 +73,15 @@ class DisposableExitTests(unittest.TestCase):
 
         owner = SimpleNamespace(namespace="gz-fixture", nonce="b" * 32,
                                 manifest=Path("/inert/factory-resources.json"),
-                                network=lambda _suffix: {}, cleanup=remove)
+                                network=lambda _suffix: {"identity": {"Id": "d" * 64}}, cleanup=remove)
         def create(_owner, suffix, _password, _network):
             events.append("create" if suffix == "db" else "fresh-create")
             identifier = CONTAINER_ID if suffix == "db" else "c" * 64
-            return {"id": identifier, "name": "gz-fixture-" + suffix}, "postgresql://factory_exit:synthetic@127.0.0.1:5432/factory_exit"
+            host = "172.28.0.2" if suffix == "db" else "172.28.0.3"
+            return {"id": identifier, "name": "gz-fixture-" + suffix}, f"postgresql://factory_exit:synthetic@{host}:5432/factory_exit"
+
+        def endpoint(_owner, item, _network):
+            return ("172.28.0.2" if item["id"] == CONTAINER_ID else "172.28.0.3"), 5432
 
         with (
             patch.object(runner.subprocess, "run", side_effect=docker),
@@ -74,6 +90,7 @@ class DisposableExitTests(unittest.TestCase):
             patch.object(runner, "_run", side_effect=execute),
             patch.object(runner, "_new_owner", return_value=owner),
             patch.object(runner, "_postgres", side_effect=create),
+            patch.object(runner, "_internal_endpoint", side_effect=endpoint),
             patch.object(runner.tempfile, "TemporaryDirectory", return_value=Environment()),
             redirect_stdout(stdout),
             redirect_stderr(stderr),
@@ -90,6 +107,24 @@ class DisposableExitTests(unittest.TestCase):
             run.events,
             ["create", "preflight", "fresh-create", "preflight", "suite", "restart", "venv-cleanup", "container-cleanup", "printed"],
         )
+
+    def test_main_propagates_exact_network_authority_to_each_preflight(self):
+        with self.harness() as run:
+            self.assertEqual(runner.main(), 0)
+        for _command, options in run.commands:
+            environment = options["environment"]
+            self.assertEqual(environment.get("FACTORY_TEST_POSTGRES_NETWORK_ID"), "d" * 64)
+            self.assertEqual(environment.get("FACTORY_TEST_POSTGRES_NAMESPACE"), "gz-fixture")
+
+    def test_changed_endpoint_after_preflight_blocks_mutating_suite_and_still_cleans_up(self):
+        with self.harness() as run:
+            with patch.object(runner, "_internal_endpoint", return_value=("172.28.0.99", 5432)):
+                self.assertEqual(runner._cli(), 1)
+        self.assertNotIn("suite", run.events)
+        self.assertNotIn("restart", run.events)
+        self.assertEqual(run.events[-2:], ["venv-cleanup", "container-cleanup"])
+        self.assertIn("phase=suite-bind", run.stderr.getvalue())
+        self.assertNotIn(PASS_LINE, run.stdout.getvalue())
 
     def test_success_with_failed_cleanup_never_prints_pass(self):
         for venv_error, container_error in (

@@ -184,7 +184,7 @@ def main() -> int:
     if not 0 < len(args.reference) <= MAX_REFERENCES:
         parser.error('required selection exceeds reference bound')
     observed = _execute_references(Path.cwd(), sorted(set(args.reference)))
-    args.output.write_text(json.dumps(observed, ensure_ascii=True), encoding='utf-8')
+    args.output.write_text(json.dumps(observed, ensure_ascii=True), encoding='utf-8', newline='\n')
     return 0 if observed['status'] == 'pass' else 1
 
 

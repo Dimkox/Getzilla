@@ -108,6 +108,17 @@ def _json(data: bytes) -> dict[str, Any]:
     return result
 
 
+def osv_aliases(record: dict[str, Any]) -> list[str]:
+    """Validate identifiers used for exception and CVE matching without coercion."""
+    if not isinstance(record, dict):
+        raise SecurityDataError('OSV aliases require a record object')
+    aliases = record.get('aliases', [])
+    if (not isinstance(aliases, list) or not all(
+            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases)):
+        raise SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers')
+    return list(aliases)
+
+
 def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
     """Derive OSV archive coverage from every complete JSON member and CRC."""
     if ecosystem not in OSV_ECOSYSTEMS:
@@ -136,6 +147,7 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                 if not isinstance(identifier, str) or not identifier.strip() or identifier in record_ids:
                     raise ValueError('OSV record requires a unique nonempty id')
                 record_ids.add(identifier)
+                osv_aliases(record)
                 if 'withdrawn' in record:
                     withdrawn = record['withdrawn']
                     if not isinstance(withdrawn, str) or re.fullmatch(

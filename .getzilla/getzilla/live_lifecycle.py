@@ -22,11 +22,11 @@ from .python_test_runner import RunCancelled, execute
 
 def _run(*args, timeout=30):
     return subprocess.run(["docker", *args], check=True, capture_output=True,
-                          text=True, timeout=timeout).stdout.strip()
+                          text=True, encoding="utf-8", timeout=timeout).stdout.strip()
 
 
 def _write(path, value):
-    with path.open("x") as stream:
+    with path.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, indent=2, sort_keys=True)
 
 
@@ -173,14 +173,14 @@ def _child_cycle(root, output, namespace, mode):
                 raise RuntimeError("Verifier did not observe the requested cancellation")
         elif result.returncode != expected:
             raise RuntimeError("Primary failure or timeout was lost")
-        if json.loads((output / (namespace + "-ack.json")).read_text()).get("cleanup") != "removed":
+        if json.loads((output / (namespace + "-ack.json")).read_text(encoding="utf-8")).get("cleanup") != "removed":
             raise RuntimeError("Native cleanup acknowledgement is absent")
         cleanup_kind = "native_acknowledged"
     owner = OwnedDocker.recover(journal)
     owner.cleanup()
     if owner.cleanup_status != "removed":
         raise RuntimeError("Lifecycle cleanup readback failed")
-    sample = json.loads((output / (namespace + "-sample.json")).read_text())
+    sample = json.loads((output / (namespace + "-sample.json")).read_text(encoding="utf-8"))
     return {**sample, "mode": mode, "cleanup_kind": cleanup_kind,
             "child_returncode": result.returncode, "cancellation": cancellation,
             "disposable_remaining": sum(item["status"] != "removed" for item in owner.resources)}

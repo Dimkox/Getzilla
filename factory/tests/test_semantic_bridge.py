@@ -230,7 +230,7 @@ class SemanticBridgeTests(unittest.TestCase):
             self.assertEqual(set(variant["required"]), set(variant["properties"]))
             self.assertEqual(variant["properties"]["schema_version"], {"const": 2 if name == "cohort_evidence" else 1})
 
-    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed in this test environment")
     def test_bridge_records_validate_with_jsonschema_cli(self):
         built = self.build()
         for name, value in (

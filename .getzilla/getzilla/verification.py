@@ -2097,7 +2097,7 @@ def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
                             '--output', str(output), '--timeout-seconds', str(budget)],
                             budget + 300, termination_grace=180)
     try:
-        record = json.loads((output / 'manifest.json').read_text())
+        record = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
         checks = record['checks']
         if (record.get('status') != 'pass' or {item['id'] for item in checks} != set(names)
                 or len(checks) != len(names) or any(item['status'] != 'pass' for item in checks)):

@@ -11,12 +11,21 @@ import json
 import re
 import stat
 import tomllib
+from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .known_vulns import MAX_MANIFEST_BYTES, REQUIREMENTS_RE, _manifest_parser, _tracked_files, normalize_name
 
 MAX_FILES = 100_000
+MAX_YAML_BYTES = 1024 * 1024
+MAX_YAML_DEPTH = 64
+MAX_YAML_NODES = 20_000
+MAX_YAML_SCALAR_BYTES = 65_536
+_IMAGE_DIGEST = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}\Z')
+_ACTION_COMMIT = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[a-f0-9]{40}\Z')
+_NONSTRING_SCALAR = re.compile(r'(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9_.]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\Z')
 _PIN = re.compile(r'([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\[([A-Za-z0-9_,.-]+)\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.!+_-]*)(?:\s*;[^\r\n]+)?\Z')
 _UNSUPPORTED = frozenset({'pom.xml', 'build.gradle', 'build.gradle.kts', 'Pipfile', 'Gemfile',
                           'packages.config', 'packages.lock.json', 'Project.toml', 'Manifest.toml'})
@@ -27,7 +36,7 @@ def canonical_digest(value: Any) -> str:
                                     ensure_ascii=True, allow_nan=False).encode()).hexdigest()
 
 
-def _safe_bytes(root: Path, relative: str) -> bytes:
+def _safe_bytes(root: Path, relative: str, *, maximum: int = MAX_MANIFEST_BYTES) -> bytes:
     pure = PurePosixPath(relative)
     if pure.is_absolute() or '..' in pure.parts or not pure.parts or '\\' in relative:
         raise ValueError('unsafe inventory path')
@@ -37,15 +46,123 @@ def _safe_bytes(root: Path, relative: str) -> bytes:
         if path.is_symlink():
             raise ValueError('symlink inventory input')
     before = path.stat()
-    if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_MANIFEST_BYTES:
+    if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
         raise ValueError('inventory input is not a bounded regular file')
-    payload = path.read_bytes()
+    with path.open('rb') as stream:
+        payload = stream.read(maximum + 1)
     after = path.stat()
     def identity(value):
         return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+    if len(payload) > maximum:
+        raise ValueError('inventory input exceeded its byte bound during read')
     if identity(before) != identity(after) or len(payload) != before.st_size:
         raise ValueError('inventory input changed during read')
     return payload
+
+
+class _YamlError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class _YamlNode:
+    kind: str
+    value: Any
+    line: int
+    style: str | None = None
+
+
+def _parse_inventory_yaml(text: str) -> _YamlNode:
+    """Bound syntax events; never invoke YAML constructors or expand aliases.
+
+    PyYAML is a lazy checker capability, not an implicitly shipped dependency.
+    Rejecting unsupported syntax is an inventory gap, never proof of absence.
+    """
+    if len(text.encode('utf-8')) > MAX_YAML_BYTES:
+        raise _YamlError('yaml-limit', 'YAML byte limit exceeded')
+    try:
+        import yaml
+    except ImportError as exc:
+        raise _YamlError('yaml-parser-unavailable', 'structural YAML inventory needs PyYAML in the qualified checker runtime') from exc
+    event_names = ('StreamStartEvent', 'StreamEndEvent', 'DocumentStartEvent', 'DocumentEndEvent',
+                   'AliasEvent', 'ScalarEvent', 'MappingStartEvent', 'MappingEndEvent',
+                   'SequenceStartEvent', 'SequenceEndEvent')
+    if (not callable(getattr(yaml, 'parse', None)) or not callable(getattr(yaml, 'BaseLoader', None))
+            or not isinstance(getattr(yaml, 'YAMLError', None), type)
+            or not issubclass(yaml.YAMLError, Exception)
+            or not all(isinstance(getattr(getattr(yaml, 'events', None), name, None), type) for name in event_names)):
+        raise _YamlError('yaml-parser-unavailable', 'checker YAML parser lacks the required event interface')
+    count = 0
+
+    def node(event, stream, depth=0):
+        nonlocal count
+        count += 1
+        if count > MAX_YAML_NODES or depth > MAX_YAML_DEPTH:
+            raise _YamlError('yaml-limit', 'YAML node or depth limit exceeded')
+        if isinstance(event, yaml.events.AliasEvent) or getattr(event, 'anchor', None) is not None:
+            raise _YamlError('unsupported-yaml', 'YAML anchors and aliases require a qualified composition adapter (alias limit zero)')
+        if getattr(event, 'tag', None) is not None:
+            raise _YamlError('unsupported-yaml', 'explicit YAML tags are unsupported; no object construction is permitted')
+        line = event.start_mark.line + 1
+        if isinstance(event, yaml.events.ScalarEvent):
+            if len(event.value.encode('utf-8')) > MAX_YAML_SCALAR_BYTES:
+                raise _YamlError('yaml-limit', 'YAML scalar limit exceeded')
+            return _YamlNode('scalar', event.value, line, event.style)
+        if isinstance(event, yaml.events.MappingStartEvent):
+            value = {}
+            while not isinstance(child := next(stream), yaml.events.MappingEndEvent):
+                key = node(child, stream, depth + 1)
+                if key.kind != 'scalar' or not key.value or key.value == '<<':
+                    raise _YamlError('unsupported-yaml', 'YAML mapping needs nonempty scalar keys and cannot contain merges')
+                if key.value in value:
+                    raise _YamlError('unsupported-yaml', f'duplicate decoded YAML mapping key at line {key.line}')
+                value[key.value] = node(next(stream), stream, depth + 1)
+            return _YamlNode('mapping', value, line)
+        if isinstance(event, yaml.events.SequenceStartEvent):
+            value = []
+            while not isinstance(child := next(stream), yaml.events.SequenceEndEvent):
+                value.append(node(child, stream, depth + 1))
+            return _YamlNode('sequence', value, line)
+        raise _YamlError('unsupported-yaml', 'unexpected YAML node event')
+
+    try:
+        with closing(yaml.parse(text, Loader=yaml.BaseLoader)) as stream:
+            if not isinstance(next(stream), yaml.events.StreamStartEvent):
+                raise _YamlError('unsupported-yaml', 'YAML stream start is missing')
+            start = next(stream)
+            if not isinstance(start, yaml.events.DocumentStartEvent) or start.version or start.tags:
+                raise _YamlError('unsupported-yaml', 'one YAML document without schema/tag directives is required')
+            document = node(next(stream), stream)
+            if (not isinstance(next(stream), yaml.events.DocumentEndEvent) or
+                    not isinstance(next(stream), yaml.events.StreamEndEvent)):
+                raise _YamlError('unsupported-yaml', 'multiple YAML documents are unsupported')
+            return document
+    except _YamlError:
+        raise
+    except (yaml.YAMLError, StopIteration, RecursionError) as exc:
+        mark = getattr(exc, 'problem_mark', None)
+        suffix = f' near line {mark.line + 1}' if mark is not None else ''
+        raise _YamlError('unsupported-yaml', 'malformed or unsupported YAML' + suffix) from exc
+
+
+def _yaml_map(node: _YamlNode | None, label: str) -> dict[str, _YamlNode]:
+    if node is None or node.kind != 'mapping':
+        raise _YamlError('unsupported-yaml', label + ' must be a static mapping')
+    return node.value
+
+
+def _yaml_text(node: _YamlNode | None, label: str) -> str:
+    if (node is None or node.kind != 'scalar' or not node.value or
+            (node.style is None and _NONSTRING_SCALAR.fullmatch(node.value))):
+        raise _YamlError('unsupported-yaml', label + ' must be a nonempty string')
+    return node.value
+
+
+def _is_compose(name: str) -> bool:
+    return (name in {'compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'}
+            or (name.startswith(('compose.', 'docker-compose.')) and name.endswith(('.yaml', '.yml'))))
 
 
 def _logical_requirements(text: str):
@@ -91,6 +208,96 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
         else:
             add('PyPI', match[1], match[3], path, usage, match[2] or '')
 
+    def image(reference: str, path: str, line: int, *, require_digest=False, source_reference=None):
+        original = reference
+        variable = re.fullmatch(r'\$\{([A-Z][A-Z0-9_]*)(?::[?+-][^}]*)?\}', reference)
+        if variable:
+            observed = bindings.get(variable[1], '') if isinstance(bindings, dict) else ''
+            reference = observed if isinstance(observed, str) else ''
+            if not _IMAGE_DIGEST.fullmatch(reference):
+                gap('unresolved-image', path, f'{variable[1]} needs an observed immutable image binding')
+        elif '$' in reference or not reference:
+            gap('unresolved-image', path, 'dynamic image expression needs an observed immutable binding')
+        elif require_digest and not _IMAGE_DIGEST.fullmatch(reference):
+            gap('unresolved-image', path, 'image requires an immutable sha256 reference')
+        result['images'].append({'reference': reference or original,
+                                 'source_reference': original if source_reference is None else source_reference,
+                                 'manifest': path, 'line': line})
+
+    def yaml_image(value: _YamlNode | None, path: str, label: str, *, container=False):
+        if container and value is not None and value.kind == 'mapping':
+            value = value.value.get('image')
+        reference = _yaml_text(value, label)
+        image(reference, path, value.line, require_digest=True)
+
+    def action(value: _YamlNode, path: str, *, reusable=False):
+        reference = _yaml_text(value, 'Actions uses')
+        if reference.startswith('docker://') and not reusable:
+            image(reference.removeprefix('docker://'), path, value.line, require_digest=True, source_reference=reference)
+            return
+        result['tools'].append({'kind': 'github-action', 'reference': reference, 'manifest': path, 'line': value.line})
+        local = reference.startswith(('./', '$/'))
+        if reusable or local or '/.github/workflows/' in reference:
+            gap('unsupported-ci-composition', path, 'local or reusable workflow/action needs qualified referenced-source coverage')
+        if not local and not _ACTION_COMMIT.fullmatch(reference):
+            gap('unresolved-ci-tool', path, 'external action is not bound to a full commit')
+
+    def yaml_objects(relative: str, text: str, *, compose: bool):
+        document = _yaml_map(_parse_inventory_yaml(text), 'YAML document')
+        if compose:
+            known = {'version', 'name', 'services', 'networks', 'volumes', 'secrets', 'configs', 'include'}
+            if any(key not in known and not key.startswith('x-') for key in document):
+                gap('unsupported-compose-composition', relative, 'unrecognized top-level Compose model field')
+            if 'include' in document:
+                gap('unsupported-compose-composition', relative, 'Compose include needs qualified referenced-source coverage')
+            services = _yaml_map(document.get('services'), 'Compose services')
+            for service in services.values():
+                fields = _yaml_map(service, 'Compose service')
+                for indirect in ('build', 'extends', 'provider'):
+                    if indirect in fields:
+                        gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
+                if 'image' in fields:
+                    yaml_image(fields['image'], relative, 'Compose image')
+                elif not set(fields) & {'build', 'extends', 'provider'}:
+                    gap('unresolved-image', relative, 'Compose service has no resolved image; override/composition needs evidence')
+            return
+        known = {'name', 'run-name', 'on', 'permissions', 'env', 'defaults', 'concurrency', 'cache-mode', 'jobs'}
+        if set(document) - known:
+            gap('unsupported-ci-composition', relative, 'unrecognized top-level Actions workflow field')
+        jobs = _yaml_map(document.get('jobs'), 'Actions jobs')
+        for job in jobs.values():
+            fields = _yaml_map(job, 'Actions job')
+            if 'uses' in fields:
+                action(fields['uses'], relative, reusable=True)
+            if 'container' in fields:
+                yaml_image(fields['container'], relative, 'Actions job container image', container=True)
+            if 'services' in fields:
+                for service in _yaml_map(fields['services'], 'Actions services').values():
+                    definition = _yaml_map(service, 'Actions service')
+                    yaml_image(definition.get('image'), relative, 'Actions service image')
+            if 'steps' not in fields:
+                if 'uses' not in fields:
+                    gap('unsupported-yaml', relative, 'Actions job needs steps or a reusable workflow reference')
+                continue
+            steps = fields['steps']
+            if steps.kind != 'sequence':
+                raise _YamlError('unsupported-yaml', 'Actions steps must be a static sequence')
+            for step in steps.value:
+                definition = _yaml_map(step, 'Actions step')
+                if 'parallel' in definition:
+                    gap('unsupported-ci-composition', relative, 'parallel/nested Actions steps need qualified composition coverage')
+                if 'uses' in definition:
+                    action(definition['uses'], relative)
+                if 'run' in definition:
+                    command = _yaml_text(definition['run'], 'Actions run')
+                    for line in command.splitlines():
+                        if re.search(r'\b(?:curl|wget|Invoke-WebRequest)\b', line):
+                            result['tools'].append({'kind': 'script-download', 'reference': line[:500],
+                                                    'manifest': relative, 'line': definition['run'].line})
+                            gap('unresolved-ci-tool', relative, 'downloaded executable needs digest-bound artifact evidence')
+                if not set(definition) & {'uses', 'run'}:
+                    gap('unsupported-ci-composition', relative, 'Actions step has no covered run/uses operation')
+
     files = _tracked_files(root)
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
@@ -104,17 +311,17 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
             continue
         name = pure.name
         parser = _manifest_parser(name)
+        is_yaml = _is_compose(name) or (relative.startswith('.github/workflows/') and pure.suffix in {'.yaml', '.yml'})
         relevant = (parser is not None or name in _UNSUPPORTED or name in {'package.json', 'composer.json', 'Cargo.toml'}
                     or name.endswith('.csproj') or name.lower().startswith('dockerfile')
-                    or name.endswith('.Dockerfile') or name in {'compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'}
-                    or (name.startswith('compose.') and name.endswith(('.yaml', '.yml')))
+                    or name.endswith('.Dockerfile') or is_yaml
                     or relative == '.getzilla/config/ci-images.json'
-                    or relative.startswith('.github/workflows/'))
+                    )
         result['files'].append(relative)
         if not relevant:
             continue
         try:
-            payload = _safe_bytes(root, relative)
+            payload = _safe_bytes(root, relative, maximum=MAX_YAML_BYTES if is_yaml else MAX_MANIFEST_BYTES)
             text = payload.decode('utf-8')
             texts[relative] = text
             result['manifests'].append({'path': relative, 'sha256': hashlib.sha256(payload).hexdigest()})
@@ -201,45 +408,29 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
     for relative, text in texts.items():
         pure = PurePosixPath(relative)
         name = pure.name
+        is_yaml = _is_compose(name) or (relative.startswith('.github/workflows/') and pure.suffix in {'.yaml', '.yml'})
+        if is_yaml:
+            try:
+                yaml_objects(relative, text, compose=_is_compose(name))
+            except _YamlError as exc:
+                gap(exc.code, relative, str(exc)[:300])
+            continue
         is_docker = name.lower().startswith('dockerfile') or name.endswith('.Dockerfile')
         stages = set()
         for line_number, raw in enumerate(text.splitlines(), 1):
             line = raw.strip()
-            image = None
+            reference = None
             if is_docker and re.match(r'FROM\s', line, re.IGNORECASE):
                 parts = line.split()
                 parts = [part for part in parts[1:] if not part.startswith('--platform=')]
-                image = parts[0] if parts else ''
-                internal_stage = image.lower() == 'scratch' or image.lower() in stages
+                reference = parts[0] if parts else ''
+                internal_stage = reference.lower() == 'scratch' or reference.lower() in stages
                 if len(parts) >= 3 and parts[1].upper() == 'AS':
                     stages.add(parts[2].lower())
                 if internal_stage:
                     continue
-            elif 'compose' in name and re.match(r'image\s*:', line):
-                image = line.split(':', 1)[1].strip().split(' #', 1)[0].strip('"\'')
-            if image is not None:
-                original = image
-                variable = re.fullmatch(r'\$\{([A-Z][A-Z0-9_]*)(?::[?+-][^}]*)?\}', image)
-                if variable:
-                    image = bindings.get(variable[1], '')
-                    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}', image):
-                        gap('unresolved-image', relative, f'{variable[1]} needs an observed immutable image binding')
-                elif '$' in image or not image:
-                    gap('unresolved-image', relative, 'dynamic image expression needs an observed immutable binding')
-                result['images'].append({'reference': image or original, 'source_reference': original,
-                                         'manifest': relative, 'line': line_number})
-            if relative.startswith('.github/workflows/'):
-                action = re.match(r'(?:-\s*)?uses:\s*["\']?([^"\'\s#]+)', line)
-                if action:
-                    reference = action[1]
-                    result['tools'].append({'kind': 'github-action', 'reference': reference,
-                                            'manifest': relative, 'line': line_number})
-                    if not reference.startswith('./') and not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[a-f0-9]{40}', reference):
-                        gap('unresolved-ci-tool', relative, 'external action is not bound to a full commit')
-                if re.search(r'\b(?:curl|wget|Invoke-WebRequest)\b', line):
-                    result['tools'].append({'kind': 'script-download', 'reference': line[:500],
-                                            'manifest': relative, 'line': line_number})
-                    gap('unresolved-ci-tool', relative, 'downloaded executable needs digest-bound artifact evidence')
+            if reference is not None:
+                image(reference, relative, line_number)
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     result['complete'] = not result['gaps']
     result['artifact_coverage'] = 'not_evaluated'

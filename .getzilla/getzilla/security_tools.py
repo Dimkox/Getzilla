@@ -389,7 +389,7 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     # Bandit's substring excludes otherwise hide e.g. tests_cli.py.
                     settings.pop('exclude_dirs', None)
                     bandit_config = scratch / 'bandit.yaml'
-                    bandit_config.write_text(safe_dump(settings), encoding='utf-8')
+                    bandit_config.write_text(safe_dump(settings), encoding='utf-8', newline='\n')
                     command = [sys.executable, '-I', '-m', 'bandit', '-c', str(bandit_config),
                                '--ignore-nosec', '-q', '-f', 'json', '-o', str(output), '--', *files]
                 elif name == 'opengrep':
