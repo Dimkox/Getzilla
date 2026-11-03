@@ -12,7 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.receipts import write_receipt
+from getzilla.receipts import validate_evidence, write_receipt
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path, get_active_route
 from tests._support import activate_owned_route
@@ -1401,14 +1401,18 @@ class HookTests(unittest.TestCase):
     def test_stop_allows_current_evidence(self) -> None:
         with project_copy(git=True) as root:
             from tests.test_package_status import PackageStatusTests
-            route, _, _, _ = PackageStatusTests().prepare(root, complete=True)
+            _, _, _, package = PackageStatusTests().prepare(root, complete=True)
+            # Structural package completeness does not finish its native task list.
+            (package / 'tasks.md').write_text('# Tasks\n\n- [x] Complete fixture work.\n', encoding='utf-8')
             (root / 'feature.txt').write_text('changed')
             review = prepare_review_source(root)
             current = get_active_route(root)
-            for kind in route['required_evidence']:
+            for kind in current['required_evidence']:
                 write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
+            self.assertEqual(validate_evidence(root, current), [])
             _, data, err = run_hook(root, 'stop_gate.py', {
-                'cwd': str(root), 'session_id': current['session_id'], 'stop_hook_active': False,
+                'cwd': str(root), 'sessionId': current['session_id'], 'stopHookActive': False,
+                'hookEventName': 'stop', 'reason': 'end_turn',
             })
             self.assertEqual(data, {}, err)
             self.assertEqual(get_active_route(root), current, 'Stop is not an explicit completion request')
