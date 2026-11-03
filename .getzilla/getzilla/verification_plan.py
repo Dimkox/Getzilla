@@ -27,6 +27,7 @@ SECURITY_FAMILIES = {'security-inventory': 'inventory', 'known-vulnerabilities':
     'security-container-images': 'container-images'}
 SECURITY_IDS = frozenset(SECURITY_FAMILIES)
 _KEYS = {'id', 'check_id', 'requirement_ids', 'applicability', 'reason', 'evidence', 'expected_tests', 'data_sources'}
+_UNREAD_DOCUMENTS = object()
 _POLICY_PATHS = (
     '.getzilla/getzilla/verification_plan.py', '.getzilla/getzilla/quality_gates.py',
     '.getzilla/getzilla/verification.py', '.getzilla/getzilla/criterion_tests.py',
@@ -227,12 +228,51 @@ def obligation(name: str, *, required=True, reason='native verification policy',
             'evidence': evidence or {}, 'expected_tests': list(expected_tests), 'data_sources': []}
 
 
-def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *, files=None, profiles=None, bases=None) -> list[dict]:
+def _plan_documents(root: Path, route: dict) -> dict | None:
+    """Read supported legacy selection without relaxing modern attachment or inventing package data."""
+    from . import state
+    from .continuity import has_task_context, legacy_evidence_allowed, package_documents, validate_package_state
+    from .package_status import read_package_file
+    from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
+    from .workflow_storage import valid_package_path
+    if has_task_context(route) or not legacy_evidence_allowed(route):
+        return package_documents(root, route)
+    active = state.get_active_change(root)
+    if active is None:
+        if route.get('change_id') is not None:
+            raise ValueError('legacy task has no selected package')
+        return None
+    if (not route or not isinstance(active, dict) or set(active) != {'change_id', 'path'} or
+            not valid_package_path(active['path'], active['change_id']) or
+            route.get('change_id') not in (None, active['change_id'])):
+        raise ValueError('legacy selected package does not match its task')
+    relative = active['path']
+    raw = read_package_file(root, relative + '/change-spec.yaml', MAX_SPEC_BYTES)
+    spec = _parse_canonical_json(raw, root / relative / 'change-spec.yaml')
+    _validate_document(spec, gate=True, root=root)
+    if spec.get('change_id') != active['change_id']:
+        raise ValueError('legacy typed spec change identity mismatch')
+    package_state = None
+    state_path = root / relative / 'state.json'
+    if state_path.exists() or state_path.is_symlink():
+        package_state = state._route_document(root, state_path)
+        validate_package_state(package_state, route, active['change_id'])
+    requirements_digest = None
+    requirements_path = root / relative / 'requirements.md'
+    if requirements_path.exists() or requirements_path.is_symlink():
+        requirements = read_package_file(root, relative + '/requirements.md')
+        requirements.decode('utf-8', 'strict')
+        requirements_digest = hashlib.sha256(requirements).hexdigest()
+    return {'path': relative, 'state': package_state, 'spec': spec,
+            'spec_digest': canonical_spec_digest(spec), 'requirements_digest': requirements_digest}
+
+
+def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *, files=None, profiles=None,
+                        bases=None, documents=_UNREAD_DOCUMENTS) -> list[dict]:
     from .quality_gates import MANDATORY_PR_CHECKS, MANDATORY_PYTHON_PR_CHECKS
     from .verification import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
                                composer_check_selection, node_check_selection, python_check_selection)
     from .verification_tools import load_checks
-    from .continuity import package_documents
     names = {'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
     files = files or []
     profiles = profiles or route.get('quality_profiles', ['base'])
@@ -241,7 +281,8 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
     if mode != FOCUSED_MODE:
         names |= MANDATORY_PR_CHECKS | MANDATORY_PYTHON_PR_CHECKS
         names.update({'diff-risk', 'cost-guard', 'hook-health', 'eu-ai-act', 'workflow-baseline'})
-    documents = package_documents(root, route) if route else None
+    if documents is _UNREAD_DOCUMENTS:
+        documents = _plan_documents(root, route)
     if documents and mode != FOCUSED_MODE:
         names.add('change-spec')
     # A JavaScript-only tests/ directory is not evidence that Python quality tools apply.
@@ -375,9 +416,14 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
     from .verification import _docs_state_status_inventory
     from .expanded_security import security_obligations
     route = get_active_route(root) or {}
+    documents = _plan_documents(root, route)
     context = context_binding(root, route) if route and not legacy_evidence_allowed(route) else {
         'version': 1, 'variant': 'legacy' if route else 'unrouted', 'route_id': route.get('route_id'),
         'task_digest': digest({'task': route.get('task'), 'context': route.get('context')})}
+    if context.get('variant') == 'legacy' and documents is not None:
+        context['package'] = {'path': documents['path'], 'change_id': documents['spec']['change_id'],
+                              'spec_digest': documents['spec_digest'],
+                              'requirements_digest': documents['requirements_digest']}
     range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
     ranges = _git_range_selection(root, route or None, range_mode)
     files, metadata = _changed_file_inventory(root, route or None, mode, ranges)
@@ -419,7 +465,7 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
                  'delivery_expected': route.get('delivery_expected', False),
                  'light_diff': route.get('light_diff'), 'mode': mode, 'docs_scope': docs_scope}
     obligations = _native_obligations(root, mode, route, docs_scope, files=files,
-                                     profiles=selection['profiles'], bases=source['base'])
+                                     profiles=selection['profiles'], bases=source['base'], documents=documents)
     security = security_obligations(root)
     if (not isinstance(security, list) or len(security) != len(SECURITY_IDS) or
             {item.get('check_id') for item in security if isinstance(item, dict)} != SECURITY_IDS or

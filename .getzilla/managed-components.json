@@ -1067,7 +1067,7 @@
         },
         ".getzilla/getzilla/verification_plan.py": {
           "mode": 420,
-          "sha256": "5d55ee209e44573a2095d6d93b1493b7e91d732c396bd125d9ea0c2ebbedb572"
+          "sha256": "4283662d83dcc8b9ba6f226a0044dce84b81a90ac7303276cfe0c4c316a03fb5"
         },
         "scripts/getzilla_agent.py": {
           "mode": 420,

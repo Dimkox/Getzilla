@@ -120,9 +120,14 @@ def activate_owned_route(root: Path, route: dict) -> None:
 
 
 @contextlib.contextmanager
-def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
-    with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
+def project_copy(*, git: bool = False, minimal_runtime: bool = False,
+                 source_only_runtime: bool = False) -> Iterator[Path]:
+    """Copy the runtime; an explicit source-only fixture has no bundled dependency/image inputs.
+
+    Unlike minimal_runtime, source_only_runtime keeps the real engine for subprocess hooks.
+    Its complete empty external-object inventory is measured by the verifier, never waived.
+    """
+    with _test_directory() as tmp, _scanner_environment(minimal_runtime or source_only_runtime), _session_environment():
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -137,9 +142,11 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                     omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
                     omitted.update(name for name in names if name != '__init__.py')
-                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/sast':
+                if (minimal_runtime or source_only_runtime) and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore)
         runtime = root / '.getzilla/runtime'
@@ -240,6 +247,28 @@ def observed_context(root: Path):
     from getzilla.continuity import context_binding, legacy_evidence_allowed
     route = get_active_route(root)
     return None if legacy_evidence_allowed(route) else context_binding(root, route)
+
+
+def write_current_verification(root: Path) -> dict:
+    """Record real current native verification for positive receipt/Stop fixtures.
+
+    Review receipts remain an explicit test seam; this helper never substitutes assertions
+    for executed checks or manufactures database evidence.
+    """
+    from getzilla.security_inventory import collect_inventory
+    from getzilla.verification import verify
+    from getzilla.verification_plan import report_gaps
+    inventory = collect_inventory(root)
+    if not inventory['complete'] or any(inventory[key] for key in ('dependencies', 'images', 'tools')):
+        raise AssertionError('current-verification fixture must have a complete source-only inventory')
+    report = verify(root, mode='pr', record=True)
+    if report['status'] != 'pass':
+        failed = [item for item in report['checks'] if item['status'] == 'fail']
+        raise AssertionError(report.get('required_plan_error') or failed)
+    gaps = report_gaps(root, report)
+    if gaps:
+        raise AssertionError(gaps)
+    return report
 
 
 def prepare_review_source(root: Path) -> dict[str, str]:
