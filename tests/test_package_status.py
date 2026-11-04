@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import errno
 import json
 import os
 import shutil
@@ -76,8 +77,17 @@ class PackageStatusTests(unittest.TestCase):
 
     @staticmethod
     def git(root: Path, *args: str) -> str:
-        proc = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, check=True)
-        return proc.stdout.strip()
+        from getzilla.architecture import ArchitectureError
+        from getzilla.architecture_diff import _GIT_EXECUTABLE, _git_environment, _run_capped
+        try:
+            code,output,error = _run_capped([_GIT_EXECUTABLE,*args],cwd=root,env=_git_environment(),
+                stdout_limit=65536,stderr_limit=65536,timeout=15)
+        except (ArchitectureError,OSError) as error:
+            raise AssertionError(f'Git fixture {args[:1]!r} failed within bounded execution: {error}') from error
+        if code:
+            raise AssertionError(f'Git fixture {args[:1]!r} exit={code}; '
+                f'stdout[{len(output)}]={output[:2048]!r}; stderr[{len(error)}]={error[:2048]!r}')
+        return output.decode('utf-8','surrogateescape').strip()
 
     @staticmethod
     def install_cli(root: Path):
@@ -705,21 +715,115 @@ class PackageStatusTests(unittest.TestCase):
             finally:
                 self.git(root, 'worktree', 'remove', '--force', str(linked))
 
-    @unittest.skipUnless(os.name == 'posix', 'non-UTF8/newline root paths require POSIX')
-    def test_root_identity_check_preserves_non_utf8_and_special_root_paths(self):
+    def check_linked_root(self, root, route, linked):
+        self.git(root,'worktree','add','--quiet','--detach',str(linked),'HEAD')
+        try:
+            result = self.module().collect_worktree(linked,route)
+            self.assertTrue(result['git_available'],result['findings'])
+            self.assertEqual(result['head'],route['base_commit'])
+            self.assertEqual(result['commits_ahead'],0)
+        finally:
+            self.git(root,'worktree','remove','--force',str(linked))
+
+    def test_root_identity_check_preserves_unicode_root_paths(self):
         with project_copy(git=True) as root:
             route, _, _, _ = self.prepare(root)
-            linked = root.parent/os.fsdecode(b'linked-\xff-\n\t-root')
-            subprocess.run(['git', 'worktree', 'add', '--quiet', '--detach', str(linked), 'HEAD'],
-                           cwd=root, capture_output=True, check=True)
+            self.check_linked_root(root,route,root.parent/'linked-é-имя-root')
+
+    @unittest.skipUnless(os.name == 'posix', 'newline/tab filename characters require POSIX')
+    def test_root_identity_check_preserves_newline_and_tab_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            self.check_linked_root(root,route,root.parent/'linked-\n\t-root')
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filenames require POSIX')
+    def test_root_identity_check_preserves_non_utf8_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            control = root.parent/'path-capability-é'
+            control.mkdir()
             try:
-                result = self.module().collect_worktree(linked, route)
-                self.assertTrue(result['git_available'], result['findings'])
-                self.assertEqual(result['head'], route['base_commit'])
-                self.assertEqual(result['commits_ahead'], 0)
+                probe = root.parent/os.fsdecode(b'path-capability-\xff')
+                try:
+                    probe.mkdir()
+                except OSError as error:
+                    if error.errno not in (errno.EILSEQ,errno.EINVAL):
+                        raise
+                    self.skipTest(f'filesystem rejects raw filename byte0xff; errno={error.errno}; '
+                                  f'platform={sys.platform}; fsencoding={sys.getfilesystemencoding()}')
+                else:
+                    probe.rmdir()
             finally:
-                subprocess.run(['git', 'worktree', 'remove', '--force', str(linked)],
-                               cwd=root, capture_output=True, check=True)
+                control.rmdir()
+            # Deliberately exercise Git's transparent byte-path mode in this
+            # owned fixture only. Unicode/newline tests keep native defaults.
+            self.git(root,'config','--local','core.precomposeunicode','false')
+            self.check_linked_root(root,route,root.parent/os.fsdecode(b'linked-\xff-root'))
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_raw_filename_encoding_refusal_is_a_specific_skip(self):
+        original = Path.mkdir
+        for code in (errno.EILSEQ,errno.EINVAL):
+            def mkdir(path,*args,**kwargs):
+                if '\udcff' in path.name:
+                    raise OSError(code,'synthetic filesystem encoding refusal')
+                return original(path,*args,**kwargs)
+
+            with self.subTest(errno=code), patch.object(Path,'mkdir',mkdir):
+                with self.assertRaisesRegex(unittest.SkipTest,'raw filename.*errno='+str(code)):
+                    self.test_root_identity_check_preserves_non_utf8_root_paths()
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_raw_filename_permission_failure_is_not_a_skip(self):
+        original = Path.mkdir
+
+        def mkdir(path,*args,**kwargs):
+            if '\udcff' in path.name:
+                raise PermissionError(errno.EACCES,'synthetic permission refusal')
+            return original(path,*args,**kwargs)
+
+        with patch.object(Path,'mkdir',mkdir):
+            try:
+                self.test_root_identity_check_preserves_non_utf8_root_paths()
+            except PermissionError:
+                pass
+            except unittest.SkipTest as error:
+                self.fail('permission failure became an unsupported-path skip: '+str(error))
+            else:
+                self.fail('raw filename capability was not checked')
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_valid_name_failure_is_not_a_raw_filename_skip(self):
+        original = Path.mkdir
+
+        def mkdir(path,*args,**kwargs):
+            if path.name == 'path-capability-é':
+                raise PermissionError(errno.EACCES,'synthetic valid-name refusal')
+            if '\udcff' in path.name:
+                raise OSError(errno.EINVAL,'synthetic raw-name refusal')
+            return original(path,*args,**kwargs)
+
+        with patch.object(Path,'mkdir',mkdir):
+            try:
+                self.test_root_identity_check_preserves_non_utf8_root_paths()
+            except PermissionError:
+                pass
+            except unittest.SkipTest as error:
+                self.fail('missing valid-name control became a skip: '+str(error))
+            else:
+                self.fail('paired valid-name capability was not checked')
+
+    def test_git_fixture_failure_retains_bounded_stderr_diagnostics(self):
+        with project_copy(git=True) as root:
+            try:
+                self.git(root,'rev-parse','--verify','refs/heads/nonexistent-fixture-ref')
+            except (subprocess.CalledProcessError,AssertionError) as error:
+                diagnostic = str(error)
+            else:
+                self.fail('invalid fixture revision unexpectedly succeeded')
+            self.assertIn('exit=128',diagnostic)
+            self.assertIn('fatal:',diagnostic)
+            self.assertLess(len(diagnostic),20000)
 
     def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
         with project_copy(git=True) as root:
