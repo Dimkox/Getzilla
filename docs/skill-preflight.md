@@ -67,3 +67,10 @@ General free-form semantic review, native script activation, universal native/MC
 OS/credential isolation remain unqualified. #150 owns canonical action authority, #156 owns model/MCP trust
 and stop mechanisms, and #166 owns lifecycle generations/observations. This feature creates no second route
 for a trial, permission ledger, service, queue or daemon. Native macOS/Windows execution requires #338 evidence.
+
+Detectable Python completion interruptions, including KeyboardInterrupt and SystemExit, use the same
+bounded owned-record restoration and then propagate with their original exception semantics. The
+restoration makes at most two attempts/observations and never overwrites a foreign record. If it cannot
+verify denial, the original exception carries `publication_state: unknown` (and a fixed note where
+supported); inspect it manually. This is not permission for automatic recovery. An undetectable hard
+termination, power loss or unavailable persistent storage has no rollback/durable-denial qualification.

@@ -306,3 +306,179 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
             self.install()
         self.assertFalse((self.root / '.agents').exists())
+
+    def test_detectable_completion_exceptions_keep_denial_and_original_exception(self):
+        from getzilla.component_state import ComponentTransaction
+
+        class InterruptedCompletion(BaseException):
+            pass
+
+        errors = (KeyboardInterrupt('fixture interrupt'), SystemExit(27), RuntimeError('fixture runtime'),
+                  OSError('fixture I/O'), ValueError('fixture invalid'), InterruptedCompletion('fixture direct base'))
+        for error in errors:
+            with self.subTest(exception=type(error).__name__):
+                fixture = PublicationTests()
+                fixture.setUp()
+                try:
+                    fixture.grant()
+                    original = ComponentTransaction.write
+
+                    def lose_completion(transaction, name, content, mode, *, expected):
+                        result = original(transaction, name, content, mode, expected=expected)
+                        if name.endswith('/skill-publications/example.json') and json.loads(content)['status'] == 'complete':
+                            raise error
+                        return result
+
+                    with mock.patch.object(ComponentTransaction, 'write', lose_completion):
+                        try:
+                            fixture.install()
+                        except BaseException as observed:
+                            if isinstance(error, OSError):
+                                from getzilla.component_state import ComponentStateError
+                                self.assertIsInstance(observed, ComponentStateError)
+                                self.assertIs(observed.__cause__, error)
+                            else:
+                                self.assertIs(observed, error)
+                        else:
+                            self.fail('completion fault returned success')
+                    marker = fixture.root / '.getzilla/runtime/skill-publications/example.json'
+                    self.assertEqual(json.loads(marker.read_bytes())['status'], 'incomplete')
+                    with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+                        fixture.install()
+                    self.assertEqual((fixture.root / '.getzilla/runtime/skill-intake/example/SKILL.md').read_bytes(),
+                                     dict(fixture.source.files)['SKILL.md'])
+                    self.assertFalse((fixture.root / '.agents').exists())
+                finally:
+                    fixture.doCleanups()
+
+    def test_completion_restoration_preserves_foreign_record_and_original_interrupt(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        original = ComponentTransaction.write
+        error = KeyboardInterrupt('fixture original')
+        foreign = encoded({'schema_version': 1, 'status': 'foreign'})
+        path = self.root / '.getzilla/runtime/skill-publications/example.json'
+
+        def foreign_after_completion(transaction, name, content, mode, *, expected):
+            result = original(transaction, name, content, mode, expected=expected)
+            if name.endswith('/skill-publications/example.json') and json.loads(content)['status'] == 'complete':
+                path.write_bytes(foreign)
+                raise error
+            return result
+
+        with mock.patch.object(ComponentTransaction, 'write', foreign_after_completion):
+            try:
+                self.install()
+            except BaseException as observed:
+                self.assertIs(observed, error)
+            else:
+                self.fail('interrupt returned success')
+        self.assertEqual(path.read_bytes(), foreign)
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()
+
+    def test_completion_restoration_cas_does_not_overwrite_a_changed_foreign_record(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        original = ComponentTransaction.write
+        error = SystemExit(29)
+        foreign = encoded({'schema_version': 1, 'status': 'foreign after snapshot'})
+        path = self.root / '.getzilla/runtime/skill-publications/example.json'
+        completing = []
+
+        def change_before_restore(transaction, name, content, mode, *, expected):
+            if name.endswith('/skill-publications/example.json'):
+                if json.loads(content)['status'] == 'complete':
+                    original(transaction, name, content, mode, expected=expected)
+                    completing.append(True)
+                    raise error
+                if completing:
+                    path.write_bytes(foreign)
+            return original(transaction, name, content, mode, expected=expected)
+
+        with mock.patch.object(ComponentTransaction, 'write', change_before_restore):
+            try:
+                self.install()
+            except BaseException as observed:
+                self.assertIs(observed, error)
+            else:
+                self.fail('interrupt returned success')
+        self.assertEqual(path.read_bytes(), foreign)
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()
+
+    def test_one_secondary_restoration_interruption_is_bounded_and_rechecked(self):
+        from getzilla.component_state import ComponentTransaction
+        for after_write in (False, True):
+            with self.subTest(after_write=after_write):
+                fixture = PublicationTests()
+                fixture.setUp()
+                try:
+                    fixture.grant()
+                    original = ComponentTransaction.write
+                    error = KeyboardInterrupt('fixture primary')
+                    completing, restorations = [], []
+
+                    def interrupt_restore(transaction, name, content, mode, *, expected):
+                        if name.endswith('/skill-publications/example.json'):
+                            status = json.loads(content)['status']
+                            if status == 'complete':
+                                original(transaction, name, content, mode, expected=expected)
+                                completing.append(True)
+                                raise error
+                            if completing:
+                                restorations.append(True)
+                                if len(restorations) == 1:
+                                    if after_write:
+                                        original(transaction, name, content, mode, expected=expected)
+                                    raise SystemExit(31)
+                        return original(transaction, name, content, mode, expected=expected)
+
+                    with mock.patch.object(ComponentTransaction, 'write', interrupt_restore):
+                        try:
+                            fixture.install()
+                        except BaseException as observed:
+                            self.assertIs(observed, error)
+                        else:
+                            self.fail('interrupt returned success')
+                    self.assertLessEqual(len(restorations), 2)
+                    with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+                        fixture.install()
+                finally:
+                    fixture.doCleanups()
+
+    def test_unverifiable_restoration_propagates_original_with_explicit_unknown(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        original_write, original_read = ComponentTransaction.write, ComponentTransaction.read
+        error = KeyboardInterrupt('fixture original')
+        completing, failed_reads = [], []
+
+        def complete_then_interrupt(transaction, name, content, mode, *, expected):
+            result = original_write(transaction, name, content, mode, expected=expected)
+            if name.endswith('/skill-publications/example.json') and json.loads(content)['status'] == 'complete':
+                completing.append(True)
+                raise error
+            return result
+
+        def unavailable_restoration(transaction, name, **kwargs):
+            if completing and name.endswith('/skill-publications/example.json'):
+                failed_reads.append(True)
+                raise OSError('fixture unavailable restoration observation')
+            return original_read(transaction, name, **kwargs)
+
+        with mock.patch.object(ComponentTransaction, 'write', complete_then_interrupt), \
+                mock.patch.object(ComponentTransaction, 'read', unavailable_restoration):
+            try:
+                self.install()
+            except BaseException as observed:
+                self.assertIs(observed, error)
+                self.assertEqual(observed.publication_state, 'unknown')
+                if hasattr(BaseException, 'add_note'):
+                    self.assertTrue(any('PUBLICATION_CUSTODY_UNKNOWN' in note for note in observed.__notes__))
+            else:
+                self.fail('unverified restoration returned success')
+        self.assertEqual(len(failed_reads), 2)
+        # The observed source cannot certify durable denial while storage cannot
+        # be observed. Do not model an automatic retry as qualified recovery.
+        self.assertFalse((self.root / '.agents').exists())

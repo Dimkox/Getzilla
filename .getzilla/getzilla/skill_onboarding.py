@@ -237,12 +237,39 @@ def install_external(root: Path, relative: str) -> dict:
                     if (current is None or current.content != content or not mode_matches(current.mode, 0o644)
                             or current.identity[:2] != identities[destination + '/' + name]):
                         raise ValueError('PUBLICATION_CUSTODY_CHANGED')
-            except (ValueError, OSError):
-                # Do not turn a detected uncertain completion into a reusable
-                # complete record. Never remove or overwrite foreign payloads.
-                current_record = transaction.read(intent_path, limit=4096)
-                if current_record is not None and current_record.content == canonical(expected_record):
-                    transaction.write(intent_path, canonical(pending), 0o600, expected=current_record)
+            except BaseException as interrupted:
+                # Completion can be interrupted after its write by SystemExit,
+                # KeyboardInterrupt or another BaseException. Preserve that exact
+                # exception while boundedly verifying the owned denial restoration.
+                restored = False
+                for _attempt in range(2):
+                    try:
+                        current_record = transaction.read(intent_path, limit=4096)
+                        if current_record is None or not mode_matches(current_record.mode, 0o600):
+                            break
+                        if current_record.content == canonical(pending):
+                            restored = True
+                            break
+                        if current_record.content != canonical(expected_record):
+                            break  # Preserve foreign records; they are not ours to replace.
+                        transaction.write(intent_path, canonical(pending), 0o600, expected=current_record)
+                        observed = transaction.read(intent_path, limit=4096)
+                        if (observed is not None and observed.content == canonical(pending)
+                                and mode_matches(observed.mode, 0o600)):
+                            restored = True
+                            break
+                    except BaseException:
+                        # One fresh bounded observation also handles a lost
+                        # restoration response. Never replace the original exit.
+                        continue
+                if not restored:
+                    try:
+                        BaseException.__setattr__(interrupted, 'publication_state', 'unknown')
+                        add_note = getattr(BaseException, 'add_note', None)
+                        if add_note is not None:
+                            add_note(interrupted, 'PUBLICATION_CUSTODY_UNKNOWN: denial restoration was not verified; inspection required.')
+                    except BaseException:
+                        raise interrupted from None  # Reporting must not replace the original exit.
                 raise
     return {'schema_version': 1, 'status': 'staged', 'destination': destination,
             'snapshot_digest': snapshot.digest, 'descriptor_digest': digest(descriptor),
