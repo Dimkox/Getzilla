@@ -22,6 +22,86 @@ ORIGINAL = 'Fix API authentication, database migration and PDF catalogue. Preser
 
 
 class ContinuityTests(unittest.TestCase):
+    def context_package(self, root, task, rows):
+        shutil.copytree(PROJECT / 'schemas', root / 'schemas', dirs_exist_ok=True)
+        route = build_route(root, task, 's1').to_dict()
+        state.bind_session('s1')
+        state.set_active_route(root, route)
+        _, path = self.package(root)
+        document = json.loads((path / 'state.json').read_text())
+        document['evidence_accounting']['obligations'] = rows
+        state.durable_json(root, path / 'state.json', document)
+        return state.get_active_route(root), path
+
+    def test_unresolved_evidence_precedes_long_ascii_and_unicode_intake(self):
+        from getzilla.continuity import render_context
+        rows = [{'id': 'DEV_CHECK_REMAINING_BUTTONS', 'kind': 'run', 'status': 'not_run',
+                 'reason': 'DEV acceptance pending'}]
+        for task in ('x' * 1024, 'x' * 20480, 'Доводи все результаты. ' * 1500):
+            with self.subTest(bytes=len(task.encode('utf-8'))), project_copy(git=True) as root:
+                route, path = self.context_package(root, task, rows)
+                before = (path / 'state.json').read_bytes()
+                result = render_context(root, route)
+                self.assertLessEqual(len(result.encode('utf-8')), 16384)
+                self.assertIn('Unresolved evidence count: 1', result)
+                self.assertIn('Unresolved evidence: DEV_CHECK_REMAINING_BUTTONS: not_run', result)
+                self.assertLess(result.index('Unresolved evidence:'), result.index('Original task:'))
+                self.assertEqual((path / 'state.json').read_bytes(), before)
+                self.assertEqual(state.get_active_route(root), route)
+
+    def test_evidence_list_overflow_discloses_hidden_count_and_exact_recovery(self):
+        from getzilla.continuity import render_context
+        rows = [{'id': f'DEV_CHECK_{index:04d}_' + 'X' * 64, 'kind': 'run',
+                 'status': 'not_run', 'reason': 'DEV acceptance pending'} for index in range(500)]
+        with project_copy(git=True) as root:
+            route, path = self.context_package(root, 'x' * 20480, rows)
+            result = render_context(root, route)
+            self.assertLessEqual(len(result.encode('utf-8')), 16384)
+            self.assertIn('Unresolved evidence count: 500', result)
+            visible = result.count('Unresolved evidence: ')
+            self.assertGreater(visible, 0)
+            self.assertLess(visible, len(rows))
+            self.assertIn(f'Unresolved evidence hidden: {len(rows) - visible}', result)
+            self.assertIn(path.relative_to(root).as_posix() + '/state.json', result)
+            self.assertIn('evidence_accounting.obligations', result)
+
+    def test_recorded_passing_evidence_is_not_reported_as_unresolved(self):
+        from getzilla.continuity import render_context
+        rows = [{'id': 'DEV_EXPERT', 'kind': 'run', 'status': 'recorded', 'outcome': 'pass'},
+                {'id': 'DEV_REMAINING', 'kind': 'run', 'status': 'recorded', 'outcome': 'fail'}]
+        with project_copy(git=True) as root:
+            route, _ = self.context_package(root, 'Finish the remaining DEV checks.', rows)
+            result = render_context(root, route)
+            self.assertIn('Unresolved evidence count: 1', result)
+            self.assertNotIn('Unresolved evidence: DEV_EXPERT:', result)
+            self.assertIn('Unresolved evidence: DEV_REMAINING: recorded (fail)', result)
+
+    def test_session_start_without_chat_keeps_three_remaining_dev_checks(self):
+        from getzilla.continuity import submit
+        remaining = ('DEV_ADDITIONAL_RESULTS', 'DEV_OTHER_MODELS', 'DEV_INTERVALS')
+        rows = [{'id': 'DEV_EXPERT', 'kind': 'run', 'status': 'recorded', 'outcome': 'pass'},
+                *[{'id': item, 'kind': 'run', 'status': 'not_run',
+                   'reason': 'Merged to main; not yet observed on DEV'} for item in remaining]]
+        with project_copy(git=True) as root:
+            route, path = self.context_package(root, 'Проверить кнопки Pulse на DEV. ' * 700, rows)
+            submit(root, '', 's2', continue_route=route['route_id'], expected_epoch=0,
+                   expected_revision=route['state_revision'], request_id='fresh-dev-session')
+            code, data, err = run_hook(root, 'user_prompt_submit.py', {
+                'cwd': str(root), 'session_id': 's2', 'prompt': 'Доводи'})
+            self.assertEqual(code, 0, err)
+            current = state.get_active_route(root)
+            package_before = (path / 'state.json').read_bytes()
+            code, data, err = run_hook(root, 'session_start.py', {'cwd': str(root), 'session_id': 's2'})
+            self.assertEqual(code, 0, err)
+            result = data['hookSpecificOutput']['additionalContext']
+            self.assertLessEqual(len(result.encode('utf-8')), 16384)
+            self.assertIn('Unresolved evidence count: 3', result)
+            for item in remaining:
+                self.assertIn(f'Unresolved evidence: {item}: not_run', result)
+            self.assertNotIn('Unresolved evidence: DEV_EXPERT:', result)
+            self.assertEqual((path / 'state.json').read_bytes(), package_before)
+            self.assertEqual(state.get_active_route(root), current)
+
     def setUp(self):
         state.bind_session(None)
 
