@@ -1,0 +1,479 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "intents": {
+      "maxProperties": 256,
+      "type": "object"
+    },
+    "records": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "additionalProperties": false,
+            "properties": {
+              "claim": {
+                "const": "committed"
+              },
+              "external_mutations": {
+                "const": false,
+                "type": "boolean"
+              },
+              "kind": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": "string"
+              },
+              "token_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "token_digest",
+              "claim",
+              "external_mutations"
+            ],
+            "type": "object"
+          },
+          "cleanup_status": {
+            "enum": [
+              "not_required",
+              "pending",
+              "confirmed",
+              "failed",
+              "unconfirmed"
+            ]
+          },
+          "deadline": {
+            "additionalProperties": false,
+            "properties": {
+              "duration_seconds": {
+                "maximum": 86400,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "hard_deadline_at": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "submitted_at": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "submitted_at",
+              "hard_deadline_at",
+              "duration_seconds"
+            ],
+            "type": "object"
+          },
+          "event_receipts": {
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "execution_generation": {
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "execution_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "execution_status": {
+            "enum": [
+              "cancelled",
+              "failed",
+              "orphaned",
+              "succeeded",
+              "timed_out",
+              "running",
+              "cancel_requested"
+            ]
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "input": {
+            "additionalProperties": false,
+            "properties": {
+              "display": {
+                "additionalProperties": false,
+                "properties": {
+                  "label": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9 ._-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label"
+                ],
+                "type": "object"
+              },
+              "intent_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "request_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "intent_digest",
+              "request_digest",
+              "display"
+            ],
+            "type": "object"
+          },
+          "mcp_request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9:._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9:._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_outcome": {
+            "enum": [
+              "confirmed_applied",
+              "confirmed_not_applied",
+              "unknown",
+              "not_applicable"
+            ]
+          },
+          "output": {
+            "maxProperties": 32,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "owner": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_generation": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "agent_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "authority_epoch": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "change_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "logical_task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": "string"
+              },
+              "principal_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": "string"
+              },
+              "principal_kind": {
+                "enum": [
+                  "session",
+                  "agent"
+                ]
+              },
+              "project": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "route_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": "string"
+              },
+              "run_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9:._-]+$",
+                "type": "string"
+              },
+              "workspace": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspace",
+              "project",
+              "session_id",
+              "route_id",
+              "logical_task_id",
+              "change_id",
+              "authority_epoch",
+              "principal_kind",
+              "principal_id",
+              "agent_id",
+              "agent_generation",
+              "run_id"
+            ],
+            "type": "object"
+          },
+          "remote_task_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9:._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retention_until": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "source": {
+            "additionalProperties": false,
+            "properties": {
+              "context_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirty": {
+                "type": "boolean"
+              },
+              "evidence_links": {
+                "items": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "fingerprint": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "git_head": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inventory_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "git_head",
+              "fingerprint",
+              "inventory_digest",
+              "dirty",
+              "context_digest",
+              "evidence_links"
+            ],
+            "type": "object"
+          },
+          "source_changed": {
+            "type": "boolean"
+          },
+          "source_final": {
+            "additionalProperties": false,
+            "properties": {
+              "context_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirty": {
+                "type": "boolean"
+              },
+              "evidence_links": {
+                "items": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "fingerprint": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "git_head": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inventory_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "git_head",
+              "fingerprint",
+              "inventory_digest",
+              "dirty",
+              "context_digest",
+              "evidence_links"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "terminal_reason": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "execution_id",
+          "revision",
+          "execution_generation",
+          "owner",
+          "input",
+          "source",
+          "deadline",
+          "backend",
+          "operation_id",
+          "mcp_request_id",
+          "remote_task_id",
+          "execution_status",
+          "cleanup_status",
+          "operation_outcome",
+          "terminal_reason",
+          "source_final",
+          "source_changed",
+          "output",
+          "retention_until",
+          "expired",
+          "event_receipts"
+        ],
+        "type": "object"
+      },
+      "maxProperties": 256,
+      "type": "object"
+    },
+    "revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "revision",
+    "records",
+    "intents"
+  ],
+  "type": "object"
+}
