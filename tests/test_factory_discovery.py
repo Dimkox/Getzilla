@@ -1,6 +1,9 @@
 """Factory unit admission must execute new modules without inheriting database authority."""
 from __future__ import annotations
 import os
+import json
+import copy
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -121,6 +124,114 @@ class FactoryDiscoveryTests(unittest.TestCase):
             self.assertEqual(evidence["collected_ids"], expected)
             self.assertEqual(evidence["executed"], expected)
             self.assertEqual(evidence["database_obligations"], "not_run_in_unit_mode")
+
+    def test_mixed_required_skip_fails_and_is_not_executed(self):
+        skipped = "import unittest\nclass Probe(unittest.TestCase):\n @unittest.skip('not available')\n def test_required(self): pass\n"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS, "test_required.py": skipped})
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "fail", result)
+            self.assertNotIn("factory.tests.test_required.Probe.test_required", result.details[0]["executed"])
+
+    def test_borrowing_a_known_skip_reason_does_not_qualify_an_unknown_case(self):
+        skipped = "import unittest\n@unittest.skip('FACTORY_TEST_DATABASE_URL must name a disposable database')\nclass Probe(unittest.TestCase):\n def test_required(self): pass\n"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS, "test_unknown.py": skipped})
+            self.assertEqual(verification._factory_unit(root)[0].status, "fail")
+
+    def test_load_tests_cannot_remove_a_required_case(self):
+        source = ("import unittest\nclass Probe(unittest.TestCase):\n"
+                  " def test_pass(self): pass\n def test_required(self): self.fail('required')\n"
+                  "def load_tests(loader, standard, pattern): return unittest.TestSuite([Probe('test_pass')])\n")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": source})
+            self.assertEqual(verification._factory_unit(root)[0].status, "fail")
+
+    def test_partial_pass_report_cannot_replace_executed_inventory(self):
+        def partial(_root, name, command, *args, **kwargs):
+            report = Path(command[command.index("--report") + 1])
+            report.write_text(json.dumps({"schema_version": 1, "check_id": name, "status": "pass"}))
+            return verification.CheckResult(name, "pass", "exit=0")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS})
+            with patch.object(verification, "_command_check", side_effect=partial):
+                self.assertEqual(verification._factory_unit(root)[0].status, "fail")
+
+    def test_known_database_cases_have_observed_unit_applicability(self):
+        database = ("import os, unittest\n@unittest.skipUnless(os.environ.get('FACTORY_TEST_DATABASE_URL'), "
+                    "'FACTORY_TEST_DATABASE_URL must name a disposable database')\n"
+                    "class PostgresFactoryTests(unittest.TestCase):\n"
+                    " def test_database(self): self.fail('unit mode reached a database case')\n")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS, "test_postgres_integration.py": database})
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "pass", result)
+            evidence = result.details[0]
+            skipped = "factory.tests.test_postgres_integration.PostgresFactoryTests.test_database"
+            self.assertEqual(evidence["skipped"], [{"id": skipped,
+                             "reason": "FACTORY_TEST_DATABASE_URL must name a disposable database",
+                             "applicability": "separate-disposable-postgres"}])
+            self.assertNotIn(skipped, evidence["executed"])
+            self.assertNotIn(skipped, evidence["required_ids"])
+            self.assertEqual(evidence["tests_run"], 2)
+
+    def test_complete_reports_require_current_binding_and_consistent_accounting(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS})
+            baseline = verification._factory_unit(root)[0]
+            self.assertEqual(baseline.status, "pass", baseline)
+            def invent_case(report):
+                identifier = "factory.tests.test_invented.Probe.test_not_in_source"
+                for field in ("collected_ids", "expected_ids", "required_ids", "started", "executed"):
+                    report[field] = sorted([*report[field], identifier])
+                report["collected"] += 1
+                report["tests_run"] += 1
+            mutations = [
+                invent_case,
+                lambda report: report.pop("executed"),
+                lambda report: report.update(extra="unrecognized"),
+                lambda report: report.update(collected=True),
+                lambda report: report.update(tests_run=0),
+                lambda report: report.update(executed=[]),
+                lambda report: report.update(collected_ids=report["collected_ids"] * 2),
+                lambda report: report["binding"].update(invocation_id="stale"),
+                lambda report: report["binding"].update(source_inventory={}),
+                lambda report: report.update(expected_ids=[]),
+                lambda report: report.update(required_ids=[]),
+                lambda report: report.update(missing_required=["omitted"]),
+                lambda report: report.update(skipped=[{"id": "invented", "reason": "unavailable", "applicability": None}]),
+            ]
+            for index, mutate in enumerate([None, *mutations]):
+                def complete(_root, name, command, *args, **kwargs):
+                    report = copy.deepcopy(baseline.details[0])
+                    request = Path(command[command.index("--request") + 1])
+                    report["binding"] = json.loads(request.read_text())
+                    if mutate is not None:
+                        mutate(report)
+                    Path(command[command.index("--report") + 1]).write_text(json.dumps(report))
+                    return verification.CheckResult(name, "pass", "exit=0")
+                with self.subTest(mutation=index), patch.object(verification, "_command_check", side_effect=complete):
+                    result = verification._factory_unit(root)[0]
+                    self.assertEqual(result.status, "pass" if mutate is None else "fail", result)
+
+    def test_factory_marker_cannot_silently_lose_the_test_directory(self):
+        class Dispatch:
+            def __init__(self): self.results = []
+            def batch(self, _names, callback): self.results.extend(callback())
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS})
+            shutil.rmtree(root / "factory/tests")
+            dispatch = Dispatch()
+            verification._dispatch_factory_unit(root, dispatch)
+            self.assertEqual(len(dispatch.results), 1)
+            self.assertEqual(dispatch.results[0].status, "fail")
 
     def test_spawned_python_uses_the_same_candidate_package(self):
         source = (

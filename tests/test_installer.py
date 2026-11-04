@@ -156,6 +156,38 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
             self.assertNotEqual(missing_contract.returncode, 0, 'missing OpenAPI input silently passed')
             self.assertIn('factory-result-admission.v2.json', missing_contract.stderr)
 
+    @unittest.skipUnless(os.name == 'posix', 'Factory publication runtime requires POSIX')
+    def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
+        code = """
+import json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'stderr': result.stderr[-3000:],
+                  'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', [])),
+                  'unqualified_skips': evidence.get('unqualified_skips')}))
+"""
+        with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
+                tempfile.TemporaryDirectory(prefix='g-', dir=os.path.realpath('/tmp')) as child_temp:
+            target = Path(temporary) / 'c'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(ROOT, target, selection=selection)
+            self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
+            environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    env=environment, text=True, capture_output=True, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertGreater(evidence['collected'], 0)
+            self.assertGreater(evidence['executed'], 0)
+            self.assertEqual(evidence['unqualified_skips'], [])
+
     def test_factory_consumer_payload_keeps_complete_discovery_sources(self) -> None:
         entries = MODULE.build_payload(ROOT)
         names = [entry.path for entry in entries]
