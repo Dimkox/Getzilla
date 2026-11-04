@@ -5,9 +5,9 @@
   getzilla par [-j N] --each "tests/php/test_*.php" -- php {}
 
 Each command is checked by the repository policy first; when any is refused nothing runs.
-Output is a short summary (failures with their last lines); full logs stay in
-.getzilla/runtime/par/<run>/. Exit 0 when every command passed, 1 when any failed, 2 when
-refused or empty.
+Output is a bounded summary with byte counts and loss flags. Logs retain at most 32 MiB
+per batch in .getzilla/runtime/par/<run>/. Truncated output is not full-report evidence.
+Exit 0 when every command passed, 1 when any failed, 2 when refused or empty.
 """
 from __future__ import annotations
 
