@@ -2016,6 +2016,10 @@ def _factory_unit(root: Path) -> list[CheckResult]:
     environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
                    'PYTHONPATH': os.pathsep.join((str(STACK_DIR), str(root), str(root / 'factory/src')))}
     with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
+        cache = Path(temporary) / 'pycache'
+        cache.mkdir(mode=0o700)
+        # Select the private cache before child startup; -B alone still reads old bytecode.
+        environment['PYTHONPYCACHEPREFIX'] = str(cache)
         report = Path(temporary) / 'results.json'
         request = Path(temporary) / 'request.json'
         try:
