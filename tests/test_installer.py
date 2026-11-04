@@ -103,7 +103,8 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('PROJECT_STATE.json', full)
         self.assertFalse(any(path.startswith(('tests/', 'side-projects/')) for path in full))
 
-    @unittest.skipUnless(os.name == 'posix', 'Factory publication runtime requires POSIX')
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
     def test_installed_factory_controls_use_only_their_payload(self) -> None:
         # Isolated Python disables ambient PYTHONPATH and the source checkout.
         # Collect every module, then execute the affected offline contracts.
@@ -156,7 +157,8 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
             self.assertNotEqual(missing_contract.returncode, 0, 'missing OpenAPI input silently passed')
             self.assertIn('factory-result-admission.v2.json', missing_contract.stderr)
 
-    @unittest.skipUnless(os.name == 'posix', 'Factory publication runtime requires POSIX')
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
     def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
         code = """
 import json, pathlib, sys
@@ -187,6 +189,42 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertGreater(evidence['collected'], 0)
             self.assertGreater(evidence['executed'], 0)
             self.assertEqual(evidence['unqualified_skips'], [])
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
+    def test_archived_engine_verifier_rejects_consumer_package_shadowing(self):
+        code = """
+import json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'stderr': result.stderr[-1000:], 'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', []))}))
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(ROOT, target, selection=selection)
+            # Bound the launch regression to one real case; complete installed
+            # source discovery has its own archive control above.
+            import shutil
+            shutil.rmtree(target / 'factory/tests')
+            (target / 'factory/tests').mkdir()
+            (target / 'factory/tests/__init__.py').touch()
+            (target / 'factory/tests/test_probe.py').write_text(
+                "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): pass\n")
+            (target / 'getzilla').mkdir()
+            (target / 'getzilla/__init__.py').write_text("raise RuntimeError('consumer shadowed selected engine')\n")
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertEqual(evidence['collected'], 1)
+            self.assertEqual(evidence['executed'], 1)
 
     def test_factory_consumer_payload_keeps_complete_discovery_sources(self) -> None:
         entries = MODULE.build_payload(ROOT)

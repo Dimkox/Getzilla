@@ -2008,6 +2008,9 @@ def _factory_unit(root: Path) -> list[CheckResult]:
         return []
     if not factory_tests.is_dir():
         return [CheckResult('factory-unit', 'fail', 'Factory unit source directory is missing')]
+    if sys.version_info < (3, 11):
+        return [CheckResult('factory-unit', 'fail',
+                            'Factory units require Python >=3.11; Core source checks support Python >=3.10')]
     from . import STACK_DIR
     from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_inventory, validate_report
     environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
@@ -2021,7 +2024,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
             return [CheckResult('factory-unit', 'fail', 'Factory invocation unavailable: ' + str(exc))]
         request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8')
         result = _command_check(
-            root, 'factory-unit', [sys.executable, '-m', 'getzilla.factory_tests',
+            root, 'factory-unit', [sys.executable, '-P', '-m', 'getzilla.factory_tests',
                                   '--root', str(root), '--request', str(request), '--report', str(report)],
             300, env=environment,
         )
