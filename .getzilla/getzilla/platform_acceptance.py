@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -105,6 +106,9 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
     """Only run installers on disposable Actions hosts; tests exercise helpers separately."""
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise ValueError('live platform acceptance requires a disposable GitHub Actions runner')
+    if any(not re.fullmatch(r'[1-9][0-9]{0,19}', os.environ.get(name, ''))
+           for name in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')):
+        raise ValueError('live platform acceptance requires exact Actions run and attempt identities')
     if not workspace.is_absolute():
         raise ValueError('acceptance workspace must be an absolute absent path')
     workspace.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -114,6 +118,7 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
         raise ValueError('unsupported platform cell')
     system, arch = native_platform(platform.system(), platform.machine())
     record = {'schema': 'getzilla-platform-install-v1', 'cell': cell_id, 'os': system, 'arch': arch,
+              'repository': os.environ.get('GITHUB_REPOSITORY'),
               'head': expected_head, 'tree': None, 'run_id': os.environ.get('GITHUB_RUN_ID'),
               'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'), 'authority': 'observations-only',
               'stable': contract['previous_stable'], 'scenarios': {name: {'status': 'not_run'}
@@ -191,6 +196,8 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
         command(['git', 'clone', '--quiet', '--mirror', '--no-hardlinks', source, mirror])
         command(['git', '--git-dir', mirror, 'update-ref', 'refs/heads/platform-candidate', expected_head])
         command(['git', 'clone', '--quiet', '--no-hardlinks', '--branch', stable['tag'], mirror, stable_source])
+        if text(['git', '-C', stable_source, 'rev-parse', 'HEAD']) != stable['commit']:
+            raise ScenarioFailed('previous stable source clone differs from its immutable commit')
         for scenario in ('clean', 'upgrade'):
             checks = {'status': 'fail'}
             phase_start, command_start = time.monotonic(), len(record['commands'])
@@ -242,6 +249,8 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
     finally:
         record['seconds'] = round(time.monotonic()-started, 3)
         record['producer'] = {'path': '.github/workflows/getzilla.yml',
+                              'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
+                              'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'),
                               'sha256': digest(source/'.github/workflows/getzilla.yml')}
         (workspace/'result.json').write_text(json.dumps(record, indent=2, allow_nan=False)+'\n', encoding='utf-8')
         summary = os.environ.get('GITHUB_STEP_SUMMARY')

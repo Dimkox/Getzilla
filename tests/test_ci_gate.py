@@ -276,6 +276,9 @@ class WorkflowTemplateTests(unittest.TestCase):
         for names in ([], ['unknown'], ['windows-arm64'], ['linux-x64', 'linux-x64']):
             with self.subTest(names=names), self.assertRaises(ci_gate.CiGateError):
                 ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main', platforms=names)
+        altered = TEMPLATE.read_bytes().replace(b'Install OpenGrep for taint analysis', b'Changed unsupported bootstrap')
+        with self.assertRaises(ci_gate.CiGateError):
+            ci_gate.render_workflow(altered, 'main', platforms=['linux-x64'])
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML not installed')
     def test_generated_client_aggregate_executes_failure_and_skip_controls(self) -> None:
@@ -283,6 +286,9 @@ class WorkflowTemplateTests(unittest.TestCase):
         document = yaml.safe_load(ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main',
                                                         platforms=['linux-x64', 'windows-x64']))
         final = document['jobs']['getzilla-verify']
+        steps = document['jobs']['getzilla-verify-platform']['steps']
+        native = next(step for step in steps if step.get('name', '').startswith('Verify native runner'))
+        self.assertEqual(native['shell'], 'bash')
         guard = final['steps'][0]
         self.assertEqual(guard['shell'], 'python')
         for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
@@ -290,6 +296,26 @@ class WorkflowTemplateTests(unittest.TestCase):
                                      env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
                                      capture_output=True, timeout=5)
             self.assertEqual(process.returncode, expected, result)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash') and os.name != 'nt',
+                         'requires POSIX executable fixture and YAML')
+    def test_native_identity_failure_prevents_the_following_download(self) -> None:
+        import yaml
+        document = yaml.safe_load(ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main', platforms=['windows-x64']))
+        step = next(step for step in document['jobs']['getzilla-verify-platform']['steps']
+                    if step.get('name', '').startswith('Verify native runner'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            interpreter = root/'python'
+            marker = root/'download-ran'
+            interpreter.write_text('#!/bin/sh\nif [ "$2" = "--check-platform" ]; then exit 3; fi\nprintf bad > "$MARKER"\n')
+            interpreter.chmod(0o755)
+            program = step['run'].replace('${{ matrix.platform }}', 'windows-x64')
+            process = subprocess.run([step['shell'], '-c', program],
+                        env={**os.environ, 'PATH': str(root)+os.pathsep+os.environ.get('PATH', ''), 'MARKER': str(marker)},
+                        capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, 3)
+            self.assertFalse(marker.exists())
 
     def test_template_is_minimal_pinned_and_runs_the_pr_gate(self) -> None:
         text = TEMPLATE.read_text(encoding='utf-8')
@@ -352,6 +378,20 @@ class WorkflowTemplateTests(unittest.TestCase):
 
 
 class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
+    def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
+        import yaml
+        document = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        linux = document['jobs']['linux']
+        self.assertEqual(linux['if'], 'always()')
+        self.assertIn('platform-install-results', linux['needs'])
+        guard = next(step for step in linux['steps'] if step.get('name') == 'Require every supported native installer cell')
+        for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
+            process = subprocess.run(['bash', '-c', guard['run']],
+                                     env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
+                                     capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, expected, result)
+
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_smoke_environment_preserves_hook_owner_for_cli_package_start(self) -> None:
         import yaml
@@ -409,6 +449,25 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = CLI.main(list(argv), **dependencies)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_client_example_writes_selected_platforms_idempotently_and_refuses_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            arguments = ('--write', '--json', '--target', tmp, '--visibility', 'public',
+                         '--platform', 'linux-x64', '--platform', 'windows-x64')
+            code, output, _ = self.run_cli(*arguments)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output)['result'], 'written')
+            before = _snapshot(target)
+            workflow = (target / ci_gate.WORKFLOW_PATH).read_text()
+            self.assertIn('windows-2025', workflow)
+            self.assertIn('needs: getzilla-verify-platform', workflow)
+            code, output, _ = self.run_cli(*arguments)
+            self.assertEqual((code, json.loads(output)['result']), (0, 'unchanged'))
+            code, _, _ = self.run_cli('--write', '--target', tmp, '--visibility', 'public',
+                                      '--platform', 'unknown')
+            self.assertEqual(code, 2)
+            self.assertEqual(_snapshot(target), before)
 
     def test_plan_json_reports_visibility_gate_and_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

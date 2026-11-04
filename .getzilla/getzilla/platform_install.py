@@ -40,9 +40,8 @@ def decode_result(raw: bytes) -> dict:
 
 
 def load_contract(root: Path) -> dict:
-    path = root / MATRIX_PATH
-    with path.open('rb') as handle:
-        value = decode_result(handle.read(MAX_RESULT_BYTES + 1))
+    from .architecture import _read_regular_bytes
+    value = decode_result(_read_regular_bytes(root, MATRIX_PATH, label='platform support inventory'))
     cells = value.get('cells', [])
     if (type(value.get('schema_version')) is not int or value['schema_version'] != 1
             or not isinstance(cells, list) or len(cells) != 6
@@ -91,10 +90,12 @@ def select_platforms(matrix: list[dict], requested: list[str] | None) -> list[di
 
 
 def validate_results(records: list[dict], *, matrix: list[dict], required: list[str], head: str, tree: str,
-                     run_id: str, run_attempt: str, version: str, cli_sha256: str,
+                     repository: str, run_id: str, run_attempt: str, version: str, cli_sha256: str,
                      managed_sha256: str, stable: dict, job_result: str = 'success') -> list[str]:
     """Fail closed on required native cells. A pass here is only an Actions observation."""
     problems = []
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}', repository):
+        problems.append('missing or malformed candidate repository identity')
     if (not re.fullmatch(r'[1-9][0-9]{0,19}', run_id)
             or not re.fullmatch(r'[1-9][0-9]{0,19}', run_attempt)):
         problems.append('missing or malformed exact Actions run/attempt identity')
@@ -116,6 +117,7 @@ def validate_results(records: list[dict], *, matrix: list[dict], required: list[
             problems.append(f'{name}: missing result')
             continue
         expected = {'schema': 'getzilla-platform-install-v1', 'head': head, 'tree': tree,
+                    'repository': repository,
                     'head_after': head, 'tree_after': tree, 'source_clean': True,
                     'run_id': run_id, 'run_attempt': run_attempt, 'os': cell['os'], 'arch': cell['arch'],
                     'authority': 'observations-only'}

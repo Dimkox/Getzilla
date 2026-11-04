@@ -54,17 +54,17 @@ def main(argv=None):
             return 0 if not record.get('error') and all(s.get('status') == 'pass' for s in record['scenarios'].values()) else 1
         from getzilla.architecture import _read_regular_bytes
         records = []
-        paths = list(args.aggregate.rglob('result.json'))
-        if len(paths) > len(required):
-            raise ValueError('unexpected or duplicate platform result artifacts')
-        for path in paths:
+        for path in args.aggregate.rglob('result.json'):
+            if len(records) >= len(required):
+                raise ValueError('unexpected or duplicate platform result artifacts')
             records.append(decode_result(_read_regular_bytes(args.aggregate, path.relative_to(args.aggregate).as_posix(),
                                                             label='platform observation')))
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, timeout=20).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True, timeout=20).strip()
         if head != args.head:
             raise ValueError('aggregate checkout differs from expected candidate SHA')
         problems = validate_results(records, matrix=contract['cells'], required=[c['id'] for c in required],
+                    repository=os.environ.get('GITHUB_REPOSITORY', ''),
                     head=head, tree=tree, run_id=os.environ.get('GITHUB_RUN_ID', ''),
                     run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT', ''), stable=contract['previous_stable'],
                     version=(ROOT/'VERSION').read_text(encoding='utf-8').strip(),

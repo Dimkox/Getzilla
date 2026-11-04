@@ -287,11 +287,16 @@ def render_workflow(template: bytes, branch: str, *, platforms: list[str] | None
         if text.count(original) != 1:
             raise CiGateError('platform matrix requires the known client workflow template')
         text = text.replace(original, replacement)
-        start = text.index('      - name: Install OpenGrep for taint analysis')
-        end = text.index('      - name: Record startup capacity', start)
+        try:
+            start = text.index('      - name: Install OpenGrep for taint analysis')
+            end = text.index('      - name: Record startup capacity', start)
+        except ValueError as error:
+            raise CiGateError('platform matrix requires the known portable bootstrap boundary') from error
         text = text[:start] + ("      - name: Verify native runner and install its pinned OpenGrep\n"
+                              "        shell: bash\n"
                               "        env:\n          GETZILLA_RUNNER_OS: ${{ runner.os }}\n"
                               "        run: |\n"
+                              "          set -euo pipefail\n"
                               "          python scripts/getzilla_platform_install.py --check-platform ${{ matrix.platform }}\n"
                               "          python scripts/getzilla_update.py --only opengrep\n") + text[end:]
         text = text.replace('name: getzilla-evidence-${{ github.run_id }}-${{ github.run_attempt }}',

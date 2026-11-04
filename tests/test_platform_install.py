@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import subprocess
 import tempfile
 import time
 import sys
@@ -43,8 +45,23 @@ class PlatformContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     acceptance.load_matrix(root)
 
+    def test_support_inventory_refuses_a_link_instead_of_reading_another_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root/'outside.json'
+            outside.write_bytes((ROOT/acceptance.MATRIX_PATH).read_bytes())
+            path = root/acceptance.MATRIX_PATH
+            path.parent.mkdir(parents=True)
+            try:
+                path.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest('symbolic link fixture not available')
+            with self.assertRaises(ValueError):
+                acceptance.load_matrix(root)
+
     def record(self):
         return {'schema': 'getzilla-platform-install-v1', 'cell': 'linux-x64',
+                'repository': 'example-owner/example-repo',
                 'os': 'linux', 'arch': 'x64', 'head': 'a' * 40, 'tree': 'b' * 40,
                 'head_after': 'a' * 40, 'tree_after': 'b' * 40, 'source_clean': True,
                 'run_id': '123', 'run_attempt': '2', 'authority': 'observations-only',
@@ -62,6 +79,7 @@ class PlatformContractTests(unittest.TestCase):
     def validate(self, records, job_result='success'):
         return acceptance.validate_results(records, matrix=acceptance.load_matrix(ROOT),
                  required=['linux-x64'], head='a' * 40, tree='b' * 40, run_id='123', run_attempt='2',
+                 repository='example-owner/example-repo',
                  version='2.3.1', cli_sha256='c' * 64, managed_sha256='e' * 64,
                  stable=self.record()['stable'], job_result=job_result)
 
@@ -73,6 +91,7 @@ class PlatformContractTests(unittest.TestCase):
         for result in ('skipped', 'cancelled', 'failure', 'missing'):
             self.assertTrue(self.validate([good], result))
         for field, value in [('head', 'd' * 40), ('tree', 'd' * 40), ('run_attempt', '1'),
+                             ('repository', 'another-owner/another-repo'),
                              ('arch', 'arm64'), ('authority', 'security-approved'),
                              ('error', 'producer failed'), ('source_clean', False), ('head_after', 'd' * 40)]:
             bad = copy.deepcopy(good)
@@ -97,6 +116,27 @@ class PlatformContractTests(unittest.TestCase):
 
 
 class ActualCommandTests(unittest.TestCase):
+    def test_cli_checks_native_identity_and_refuses_local_live_installer_before_writes(self):
+        script = ROOT/'scripts/getzilla_platform_install.py'
+        matrix = subprocess.run([sys.executable, str(script), '--matrix'], capture_output=True,
+                                text=True, timeout=5)
+        self.assertEqual(matrix.returncode, 0, matrix.stderr)
+        self.assertEqual(len(json.loads(matrix.stdout)['include']), 5)
+        unknown = subprocess.run([sys.executable, str(script), '--check-platform', 'unknown'],
+                                 capture_output=True, text=True, timeout=5)
+        self.assertEqual(unknown.returncode, 1)
+        self.assertNotIn('Traceback', unknown.stdout+unknown.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)/'absent'
+            environment = dict(os.environ)
+            environment.pop('GITHUB_ACTIONS', None)
+            live = subprocess.run([sys.executable, str(script), '--cell', 'linux-x64',
+                                   '--workspace', str(workspace), '--head', 'a'*40],
+                                  env=environment, capture_output=True, text=True, timeout=5)
+            self.assertEqual(live.returncode, 1)
+            self.assertFalse(workspace.exists())
+            self.assertEqual(json.loads(live.stdout)['authority'], 'observations-only')
+
     def test_real_producer_is_drained_past_report_quota_without_false_complete_evidence(self):
         from getzilla.platform_acceptance import run_command
         with tempfile.TemporaryDirectory() as directory:
