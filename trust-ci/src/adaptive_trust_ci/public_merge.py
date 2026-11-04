@@ -418,7 +418,7 @@ def execute(backend: AtomicBackend, verifier: Verifier, *, owner_id: int, owner_
                 return Result(outcome.state, 'atomic-backend-receipt', ticket)
             return Result('blocked', f'atomic-backend-{outcome.state}', ticket)
     except Exception:
-        pass
+        return Result('unknown', 'receipt-unavailable', ticket)
     # A transport failure can occur after the durable write. Keep the PR-wide fence.
     return Result('unknown', 'receipt-unavailable', ticket)
 
@@ -441,5 +441,5 @@ def reconcile(backend: AtomicBackend, ticket: Ticket) -> Result:
                     return Result('not-merged', 'backend-confirmed-no-effect', ticket)
                 return Result('already-merged', 'durable-receipt', ticket)
     except Exception:
-        pass
+        return Result('unknown', 'receipt-unavailable', ticket)
     return Result('unknown', 'receipt-unavailable', ticket)
