@@ -17,6 +17,7 @@ PASS = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self):
 FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): self.fail('new module was executed')\n"
 
 
+@unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
 class FactoryDiscoveryTests(unittest.TestCase):
     def test_pytest_consumer_cannot_bypass_factory_discovery(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -232,6 +233,24 @@ class FactoryDiscoveryTests(unittest.TestCase):
             verification._dispatch_factory_unit(root, dispatch)
             self.assertEqual(len(dispatch.results), 1)
             self.assertEqual(dispatch.results[0].status, "fail")
+
+    def test_consumer_package_cannot_shadow_the_selected_source_engine(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.project(root, {"test_contracts.py": PASS})
+            (root / "getzilla").mkdir()
+            (root / "getzilla/__init__.py").write_text("raise RuntimeError('consumer shadowed selected engine')\n")
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "pass", result)
+
+    def test_factory_python_requirement_does_not_change_core_python_support(self):
+        with tempfile.TemporaryDirectory() as raw, patch.object(sys, "version_info", (3, 10, 99)):
+            root = Path(raw)
+            self.assertEqual(verification._factory_unit(root), [])
+            self.project(root, {"test_contracts.py": PASS})
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "fail", result)
+            self.assertIn("Factory units require Python >=3.11", result.summary)
 
     def test_spawned_python_uses_the_same_candidate_package(self):
         source = (
