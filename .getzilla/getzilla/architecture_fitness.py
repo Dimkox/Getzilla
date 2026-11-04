@@ -368,6 +368,7 @@ class _QueueAdapterNamesResult(NamedTuple):
     unsupported: bool
     modules: frozenset[str] = frozenset()
     height: int = 0
+    unproved_queue_callback: bool = False
 
 
 class _OperationDependencies(NamedTuple):
@@ -2562,6 +2563,143 @@ def _prepared_module_member_demand(preparation: tuple, access_name: str) -> froz
     return frozenset(members) or None
 
 
+class _CallableUseProof(NamedTuple):
+    identity: frozenset[str]
+    returns: frozenset[str]
+    opaque: frozenset[str]
+    stable_imports: frozenset[str]
+    function_calls: tuple[tuple[str, frozenset[str]], ...]
+
+
+def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict) -> _CallableUseProof:
+    """Positive proof for plain callees/aliases; all other value uses are opaque.
+
+    This is a complete syntactic use inventory, not a carrier recognizer. A
+    future or unsupported expression therefore cannot make an import disappear.
+    Caller-owned trees are prepared afresh; only owned immutable source bytes
+    may cache the result. Whole-source binding uniqueness is conservative across
+    lexical scopes and includes exception/pattern/comprehension writes.
+    """
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    bindings = binding_events(tree)
+    counts: dict[str, int] = {}
+    for event in bindings:
+        counts[event.name] = counts.get(event.name, 0) + 1
+    loads: dict[str, list[ast.Name]] = {}
+    declared_nonlocal = {name for node in nodes if isinstance(node, (ast.Global, ast.Nonlocal)) for name in node.names}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loads.setdefault(node.id, []).append(node)
+    getter_values = {}
+    structural = set()
+    if namespace_closed and not counts.get('getattr'):
+        for node in nodes:
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr'
+                    and len(node.args) in (2, 3) and not node.keywords and isinstance(node.args[0], ast.Name)
+                    and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str)
+                    and node.args[1].value.isidentifier()):
+                getter_values[node] = node.args[0].id + '.' + node.args[1].value
+                structural.add(node.args[0])
+    for node in nodes:
+        if isinstance(node, ast.Call) and id(node) in patches:
+            structural.add(node.args[0])
+
+    def reference(node):
+        parts = []
+        while isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            parts.append(node.attr)
+            node = node.value
+        if node in getter_values:
+            prefix = getter_values[node]
+            return '.'.join((prefix, *reversed(parts)))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            return '.'.join((node.id, *reversed(parts)))
+        return None
+
+    memo = {}
+    alias_work = 0
+
+    def use_kind(node, visiting=frozenset()):
+        nonlocal alias_work
+        # Qualifiers belong to the complete direct member expression. Literal
+        # getters/patch targets use the already-validated member projection.
+        if node in structural:
+            holder = parents[node]
+            if holder in getter_values:
+                node = holder
+            else:
+                return 0
+        while (isinstance(parents.get(node), ast.Attribute) and parents[node].value is node
+               and isinstance(parents[node].ctx, ast.Load)):
+            node = parents[node]
+        if node in memo:
+            return memo[node]
+        parent = parents.get(node)
+        if isinstance(parent, ast.Call) and parent.func is node:
+            # This proves a direct use of the callable object. Its result is
+            # governed separately by scoped consumed-return/source demand.
+            result = 0 if namespace_closed else 1
+        elif (namespace_closed and isinstance(parent, ast.Assign) and parent.value is node
+              and len(parent.targets) == 1 and isinstance(parent.targets[0], ast.Name)
+              and counts.get(parent.targets[0].id) == 1 and parent.targets[0].id not in declared_nonlocal):
+            alias = parent.targets[0].id
+            readers = loads.get(alias, ())
+            if alias in visiting:
+                result = 2
+            elif not readers:
+                # An exhaustive zero-reader inventory proves a plain copy,
+                # rather than an unsupported carrier or invocation.
+                result = 0
+            else:
+                alias_work += 1
+                if alias_work > MAX_QUEUE_DEPENDENCY_WORK or len(visiting) >= 64:
+                    # Failure to finish a positive proof grants no admission.
+                    # Existing dependency/source budgets still decide whether
+                    # resolving the conservative demand itself is possible.
+                    result = 2
+                else:
+                    result = max(use_kind(reader, visiting | {alias}) for reader in readers)
+        else:
+            result = 2
+        memo[node] = result
+        return result
+
+    kinds = {}
+    for node in nodes:
+        if node in structural:
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Attribute) and parent.value is node and isinstance(parent.ctx, ast.Load):
+            continue
+        name = reference(node)
+        if name:
+            kinds[name] = max(kinds.get(name, 0), use_kind(node))
+    stable_imports = set()
+    if namespace_closed:
+        for event in bindings:
+            if isinstance(event.node, (ast.Import, ast.ImportFrom)) and counts[event.name] == 1:
+                stable_imports.add(event.name)
+    function_calls: dict[str, set[str]] = {}
+    for node in nodes:
+        if not isinstance(node, ast.Call) or not (called := reference(node.func)):
+            continue
+        owner = parents.get(node)
+        while owner is not None and not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            owner = parents.get(owner)
+        if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            function_calls.setdefault(owner.name, set()).add(called)
+        elif isinstance(owner, ast.Lambda):
+            assignment = parents.get(owner)
+            if isinstance(assignment, ast.Assign) and assignment.value is owner:
+                for target in assignment.targets:
+                    if isinstance(target, ast.Name):
+                        function_calls.setdefault(target.id, set()).add(called)
+    return _CallableUseProof(*(frozenset(name for name, kind in kinds.items() if kind == value)
+                               for value in range(3)), frozenset(stable_imports),
+                             tuple((name, frozenset(values)) for name, values in sorted(function_calls.items())))
+
+
 def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, returns: bool = False,
                            callbacks: set[str] | None = None) -> frozenset[str]:
     """Distinguish a callable object from a value returned into an operation."""
@@ -2796,6 +2934,7 @@ class _QueueSourcePreparation(NamedTuple):
     tree: ast.Module
     namespace_closed: bool
     plain_callables: frozenset[str]
+    callable_uses: _CallableUseProof
 
 
 @lru_cache(maxsize=128)
@@ -2804,7 +2943,8 @@ def _queue_source_preparation(path: str, source: bytes) -> _QueueSourcePreparati
     tree = _queue_normalized_source_tree(path, source)
     closed = namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True,
                                  forbidden_imports=_QUEUE_IMPORTS)
-    return _QueueSourcePreparation(tree, closed, _plain_callable_names(tree) if closed else frozenset())
+    uses = _callable_use_proof(tree, namespace_closed=closed, patches=literal_patch_members(tree) if closed else {})
+    return _QueueSourcePreparation(tree, closed, _plain_callable_names(tree) if closed else frozenset(), uses)
 
 
 @lru_cache(maxsize=256)
@@ -2968,6 +3108,8 @@ def _local_queue_resolution_impl(
             analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
+        if imported.unproved_queue_callback:
+            raise ArchitectureError('queue-bearing callback return is unsupported', code='fitness')
         # A projection with no queue imports, values or effects cannot create a
         # queue return. Avoid reslicing every ordinary helper in that case.
         try:
@@ -3034,6 +3176,7 @@ def _queue_adapter_names(
     unsupported = False
     modules: set[str] = set()
     height = 0
+    unproved_queue_callback = False
     active = resolving if resolving is not None else set()
     seen = visited if visited is not None else set()
     dependency_result = _operation_dependencies(tree, requested=requested)
@@ -3060,11 +3203,66 @@ def _queue_adapter_names(
                                            if preparation is not None else None)
         return member_demands[access_name]
 
+    if source_preparation is not None:
+        use_proof = source_preparation.callable_uses
+        use_namespace_closed = source_preparation.namespace_closed
+    else:
+        preparation = _prepare_module_member_demands(tree, patches)
+        prepared = True
+        use_namespace_closed = preparation is not None
+        use_proof = _callable_use_proof(tree, namespace_closed=use_namespace_closed, patches=patches)
+    pending_returns = deque(sorted(return_demands))
+    return_functions = dict(use_proof.function_calls)
+    expanded_functions = set()
+    while pending_returns:
+        name = pending_returns.popleft()
+        function = name.rsplit('.', 1)[-1]
+        if function in expanded_functions or function not in return_functions:
+            continue
+        if len(expanded_functions) >= MAX_QUEUE_DEPENDENCY_WORK:
+            raise ArchitectureError('local callable return dependency limit exceeded', code='limit')
+        expanded_functions.add(function)
+        for called in return_functions[function]:
+            if called not in return_demands:
+                return_demands |= {called}
+                dependencies.add(called.split('.')[0])
+                pending_returns.append(called)
+
+    def complete_callable_use(prefix: str) -> bool:
+        if local_name not in use_proof.stable_imports:
+            return False
+        relevant = {name for name in use_proof.identity | use_proof.returns | use_proof.opaque
+                    if name == prefix or name.startswith(prefix + '.') or prefix.startswith(name + '.')}
+        if relevant:
+            return relevant <= use_proof.identity
+        # An explicit, stable import reexport may forward the caller's proved
+        # object-only demand. No recognized use at a root is not such a proof.
+        return callable_only_exports and local_name in requested
+
+    def callback_has_queue_export(resolution: _QueueAdapterResolution) -> bool:
+        for value in callback_demands:
+            if wildcard:
+                prefix = value
+            else:
+                if value == access_name or access_name.startswith(value + '.'):
+                    suffix = ''
+                elif value.startswith(access_name + '.'):
+                    suffix = value[len(access_name):]
+                else:
+                    continue
+                prefix = suffix.lstrip('.') if whole_module else target_name + suffix
+            if not prefix and resolution.exports:
+                return True
+            if any(export == prefix or export.startswith(prefix + '.') for export in resolution.exports):
+                return True
+        return False
+
     def resolve_import(module: str, members: frozenset[str] | None, *, split: bool) -> _QueueAdapterResolution:
         if not split or not members:
             return _local_queue_resolution(root, diff, module, side, cache, active, seen,
                 source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=members,
-                callable_only=(callable_only_exports or local_name not in requested)
+                callable_only=complete_callable_use(access_name)
+                and (callable_only_exports or local_name not in requested)
                 and local_name not in return_demands, budget=budget)
         results = []
         for member in sorted(members):
@@ -3072,7 +3270,8 @@ def _queue_adapter_names(
             returned = (local_name in requested and not callable_only_exports) or local_name in return_demands or any(
                 value == prefix or value.startswith(prefix + '.') for value in return_demands)
             results.append(_local_queue_resolution(root, diff, module, side, cache, active, seen,
-                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=frozenset({member}), callable_only=not returned, budget=budget))
+                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=frozenset({member}),
+                callable_only=not returned and complete_callable_use(prefix), budget=budget))
         if len(results) == 1:
             return results[0]
         state = ('unsupported' if any(item.state == 'unsupported' for item in results)
@@ -3108,6 +3307,24 @@ def _queue_adapter_names(
         else:
             continue
         normalized.extend(imports)
+    for _module, _target, name, access, _level, _whole, wildcard in normalized:
+        if wildcard:
+            # A wildcard supplies no complete binding/use proof for a callable.
+            return_demands |= {name}
+            for value in use_proof.returns | use_proof.opaque:
+                dependencies.add(value.split('.')[0])
+                return_demands |= {value}
+            callback_demands.update(use_proof.opaque)
+            continue
+        for value in use_proof.returns | use_proof.opaque:
+            if value == access or value.startswith(access + '.') or access.startswith(value + '.'):
+                dependencies.add(name)
+                return_demands |= {value, name}
+                if value in use_proof.opaque:
+                    callback_demands.add(value)
+                    if not use_namespace_closed or access.startswith(value + '.'):
+                        callback_demands.add(access)
+    reachable = dependencies | set(dependency_result.frontier)
     relevant = [item for item in normalized if item[0].split(".")[0] not in _QUEUE_IMPORTS and (item[6] and reachable or item[2] in dependencies or item[2] in dependency_result.frontier_imports)]
     _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
     for target_module, target_name, local_name, access_name, level, whole_module, wildcard in normalized:
@@ -3137,9 +3354,12 @@ def _queue_adapter_names(
                 (target_name and any(value == target_name or value.startswith(target_name + '.') for value in resolution.exports))
                 or (not target_name and bool(resolution.exports))
             )
-            if export_resolved and any(name == access_name or name.startswith(access_name + '.')
-                                       for name in callback_demands):
-                raise ArchitectureError('queue-bearing callback return is unsupported', code='fitness')
+            if callback_has_queue_export(resolution):
+                if dependency_result.exhausted:
+                    raise ArchitectureError('callable use dependency frontier is exhausted', code='limit')
+                # Validate the unchanged interpreter bounds before reporting a
+                # semantic refusal; a limit must not turn into new_queue.
+                unproved_queue_callback = True
             if target_name and not wildcard:
                 members = [value[len(target_name):] for value in resolution.exports if value.startswith(target_name + '.')]
                 if members:
@@ -3214,7 +3434,7 @@ def _queue_adapter_names(
                 target_name and target_name in resolution.exports
             ) or (not target_name and resolution.exports):
                 proven.add(local_name)
-    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height)
+    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height, unproved_queue_callback)
 
 
 def _queue_signals(
@@ -3249,6 +3469,8 @@ def _queue_signals(
         analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
+    if adapters.unproved_queue_callback:
+        raise ArchitectureError('queue-bearing callback return is unsupported', code='fitness')
     unresolved = bool((adapters.unsupported or analysis.uncertain) and analysis.signals)
     return _QueueProvenanceResult(
         "unsupported" if unresolved else ("resolved" if analysis.signals else "not_queue"),

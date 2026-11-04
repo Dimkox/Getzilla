@@ -79,6 +79,110 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_unproved_callable_carriers_and_selections_retain_source_governance(self):
+        consume = 'def consume(factory): return factory()\n'
+        literal = "__import__('bridge', fromlist=['helper']).helper"
+        variants = {
+            'direct': consume + 'consume(bridge.helper).enqueue(work)',
+            'list': 'def consume(items): return items[0]()\nconsume([bridge.helper]).enqueue(work)',
+            'tuple': 'def consume(items): return items[0]()\nconsume((bridge.helper,)).enqueue(work)',
+            'set': 'def consume(items): return items.pop()()\nconsume({bridge.helper}).enqueue(work)',
+            'comprehension': 'def consume(items): return items[0]()\nconsume([bridge.helper for _ in (0,)]).enqueue(work)',
+            'dict': 'def consume(items): return items["factory"]()\nconsume({"factory": bridge.helper}).enqueue(work)',
+            'aliased-list': 'def consume(items): return items[0]()\nholder = [bridge.helper]\nconsume(holder).enqueue(work)',
+            'starred': consume + 'consume(*(bridge.helper,)).enqueue(work)',
+            'starred-keywords': consume + 'consume(**{"factory": bridge.helper}).enqueue(work)',
+            'keyword-container': 'def consume(*, items): return items[0]()\nconsume(items=[bridge.helper]).enqueue(work)',
+            'tuple-selection': consume + 'consume((bridge.helper,)[0]).enqueue(work)',
+            'dict-selection': consume + 'consume({"selected": bridge.helper}["selected"]).enqueue(work)',
+            'conditional': consume + 'consume(bridge.helper if enabled else bridge.helper).enqueue(work)',
+            'unpacked': 'selected, = (bridge.helper,)\nselected().enqueue(work)',
+            'nested-unpacked': '((selected,),) = ((bridge.helper,),)\nselected().enqueue(work)',
+            'returned-member': 'def select(): return bridge.helper\nselect()().enqueue(work)',
+            'returned-invocation': 'def select(): return bridge.helper()\nselect().enqueue(work)',
+            'returned-invocation-alias': 'def select():\n    result = bridge.helper()\n    return result\nselect().enqueue(work)',
+            'returned-literal': 'def select(): return ' + literal + '\nselect()().enqueue(work)',
+            'lambda-returned-literal': 'select = lambda: ' + literal + '\nselect()().enqueue(work)',
+            'nested-carrier': 'def consume(items): return items[0]["selected"][0]()\nconsume([{"selected": (bridge.helper,)}]).enqueue(work)',
+            'nested-return': 'def select(): return [{"selected": bridge.helper}]\n'
+                             'def consume(items): return items[0]["selected"]()\nconsume(select()).enqueue(work)',
+            'generator-carrier': 'def consume(items): return next(items)()\nconsume(item for item in [bridge.helper]).enqueue(work)',
+        }
+        providers = ((True, 'from rq import Queue\ndef helper(): return Queue()\n'),
+                     (False, 'class Ordinary:\n    def enqueue(self, work): return None\ndef helper(): return Ordinary()\n'))
+        for governed, provider in providers:
+            for label, operation in variants.items():
+                with self.subTest(label=label, governed=governed):
+                    repo = GitArchitectureRepo(self)
+                    system = _system()
+                    system['nodes'][0]['repository_paths'] = ['src']
+                    repo.model(system, _rules())
+                    repo.write_text('src/provider.py', provider)
+                    repo.write_text('src/bridge.py', 'from provider import helper\n')
+                    base = repo.commit('existing callable reexport')
+                    repo.write_text('src/consumer.py', 'import bridge\n' + operation + '\n')
+                    head = repo.commit('callable value use')
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
+                    self.assertEqual('new_queue' in report.triggers, governed)
+
+    def test_complete_use_proof_rechecks_caller_mutation_and_source_byte_versions(self):
+        original = b'import bridge\nbridge.helper()\n'
+        changed = b'import bridge\nconsume([bridge.helper]).enqueue(work)\n'
+        caller = ast.parse(original)
+        first = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
+        self.assertIn('bridge.helper', first.identity)
+        caller.body[:] = ast.parse(changed).body
+        current = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
+        self.assertIn('bridge.helper', current.opaque)
+        self.assertNotIn('bridge.helper', current.identity)
+        self.assertIn('bridge.helper', first.identity)
+        owned = FIT._queue_source_preparation('changed-use.py', original)
+        refreshed = FIT._queue_source_preparation('changed-use.py', changed)
+        self.assertIn('bridge.helper', owned.callable_uses.identity)
+        self.assertIn('bridge.helper', refreshed.callable_uses.opaque)
+        self.assertIsNot(owned, refreshed)
+
+    def test_unproved_wildcard_callable_use_cannot_gain_identity_admission(self):
+        for governed, provider in ((True, 'from rq import Queue\ndef helper(): return Queue()\n'),
+                                   (False, 'def helper(): return None\n')):
+            for operation in ('def consume(items): return items[0]()\nconsume([helper]).enqueue(work)',
+                              'def select(): return helper\nselect()().enqueue(work)'):
+                with self.subTest(governed=governed, operation=operation):
+                    repo = GitArchitectureRepo(self)
+                    repo.model(_system(), _rules())
+                    repo.write_text('provider.py', provider)
+                    repo.write_text('bridge.py', 'from provider import helper\n')
+                    base = repo.commit('wildcard callable provider')
+                    repo.write_text('consumer.py', 'from bridge import *\n' + operation + '\n')
+                    head = repo.commit('wildcard value carrier')
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
+                    self.assertEqual('new_queue' in report.triggers, governed)
+
+    def test_ordinary_callback_field_does_not_inherit_a_queue_sibling(self):
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        repo.write_text('provider.py', 'from rq import Queue\nclass Box: pass\nbox = Box()\n'
+                        'box.queue = Queue()\nbox.ordinary = lambda: None\n')
+        repo.write_text('bridge.py', 'from provider import box\n')
+        base = repo.commit('separate ordinary and queue fields')
+        repo.write_text('consumer.py', 'import bridge\ndef consume(items): return items[0]()\n'
+                        'consume([bridge.box.ordinary]).enqueue(work)\n')
+        head = repo.commit('ordinary callable field carrier')
+        snapshot = ARCHITECTURE.load_architecture(repo.root)
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+        result = next(item for item in report.results if item.category == 'background_job')
+        self.assertEqual(result.status, 'not_applicable')
+        self.assertNotIn('new_queue', report.triggers)
+
     def test_namespace_without_importer_never_expands_literal_import_proof(self):
         for source, closed in (("import adapter\nselected = getattr(adapter, 'ordinary')\n", True),
                                ('from builtins import __dict__ as namespace\n', False)):
