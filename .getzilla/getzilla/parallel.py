@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from . import STACK_DIR, fsx
+from .execution_output import credential_preview, utf8_tail
 
 CONFIG = '.getzilla/config/parallel.json'
 SNAPSHOT = '.getzilla/runtime/startup-capacity.json'
@@ -127,15 +128,12 @@ def expand_each(patterns: list[str], template: str, cwd: Path) -> list[str]:
 
 def _text(data: bytes, limit: int) -> str:
     """Decode only a bounded slice; discard incomplete UTF-8 at either boundary."""
-    return data[-limit:].decode('utf-8', 'ignore')
+    return utf8_tail(data, limit)
 
 
 def _preview(data: bytes) -> str:
     # Suppress likely credentials as a whole preview. Command text is never persisted or shown.
-    text = _text(data, PREVIEW_BYTES)
-    if re.search(r'(?i)(?:password|secret|token|api[_-]?key)\s*[:=]|PRIVATE KEY|AKIA[0-9A-Z]{16}', text):
-        return '[preview withheld: possible credential]'
-    return text
+    return credential_preview(data)
 
 
 @contextmanager

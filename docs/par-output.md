@@ -32,6 +32,10 @@ unsupported result before commands run. POSIX groups do not sandbox a child that
 deliberately leaves the group. Native Windows process and junction controls need
 their real CI run; adapter tests on POSIX do not establish that qualification.
 
-No cursor or host-path retrieval interface is provided. EX-02 must normalize old
-results before restoring them to context. Historical restore integration and
-global disk retention remain outside this change.
+No cursor or host-path retrieval interface is provided by the synchronous runner.
+The optional EX-02 registry now shares these UTF-8 and credential-preview helpers
+and normalizes historical output before observation or explicit restore. Its
+ACL-checked bounded artifact reader accepts only validated references in the
+existing `par` namespace; it does not reopen historical host-path strings. See
+[the execution registry contract](execution-registry.md). Global disk retention
+and production execution/cancellation integration remain separate work.
