@@ -24,6 +24,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -43,6 +44,7 @@ from getzilla.component_state import (
     validate_manifest_publication,
 )
 from getzilla.harnesses import render_codex_hooks
+from getzilla.spec import MAX_SPEC_BYTES, SpecError, _parse_canonical_json
 
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
 OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--help')
@@ -379,7 +381,8 @@ def planned_changes(installer, home: Path, project: Path,
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
             changes.append((entry.path, content, mode))
     planned_contents = {path: content for path, content, _mode in changes}
-    legacy_dependencies = False
+    legacy_dependencies = consumer_overlay is not None and not _neutral_hook_configuration(
+        consumer_overlay.content, incoming_overlay.content if incoming_overlay else None)
     for config_path in ('.grok/hooks.json', '.grok/hooks/adaptive.json', '.claude/settings.json',
                         '.qwen/settings.json', '.codex/hooks.json', '.gemini/settings.json',
                         '.github/hooks/getzilla.json'):
@@ -394,9 +397,8 @@ def planned_changes(installer, home: Path, project: Path,
                 and matches_owned(current, owned_proof(state.manifest, config_path))):
             continue  # This declaration retires in the same commit.
         content = planned_contents.get(config_path, current.content if current else None)
-        # Windows command paths can use different letter case. Retain safely on every platform.
-        normalized = content.lower() if content is not None else b''
-        if b'.grok' in normalized and b'hooks' in normalized:
+        canonical = by_path.get(config_path)
+        if content is not None and not _neutral_hook_configuration(content, canonical.content if canonical else None):
             legacy_dependencies = True
     # Publish neutral replacements and retire old sources in the same Git commit.
     # A path alone never proves ownership; changed, kept and unknown files stay.
@@ -406,7 +408,7 @@ def planned_changes(installer, home: Path, project: Path,
             if path in by_path or path in kept or replacement is None:
                 continue
             if legacy_dependencies and path.startswith('.grok/hooks/'):
-                continue  # A preserved adapter still uses this compatibility engine.
+                continue  # A custom or unsupported declaration may still need these helpers.
             if replacement not in by_path and path != '.grok/config.toml':
                 continue
             current = binding.read(path)
@@ -426,6 +428,40 @@ def planned_changes(installer, home: Path, project: Path,
     if encoded is not None:
         changes.append((MANIFEST, encoded, '100644'))
     return changes
+
+
+_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+
+
+def _neutral_hook_configuration(content: bytes, canonical: bytes | None) -> bool:
+    """Only an exact neutral canonical artifact can authorize compatibility retirement.
+
+    Decoded strings give dependency evidence, never shell-expression authority.
+    Custom, malformed and unsupported configurations conservatively keep helpers.
+    """
+    if type(content) is not bytes or len(content) > MAX_SPEC_BYTES:
+        return False
+    try:
+        document = _parse_canonical_json(content, Path('hook-configuration.json'))
+    except SpecError:
+        return False
+    if type(document.get('hooks')) is not dict:
+        return False
+    pending = [document]
+    while pending:
+        value = pending.pop()
+        if type(value) is dict:
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif type(value) is list:
+            pending.extend(value)
+        elif type(value) is str:
+            normalized = re.sub(r'/+', '/', value.translate(_ASCII_LOWER).replace(chr(92), '/'))
+            if '.grok/hooks' in normalized:
+                return False
+        elif type(value) is float and not math.isfinite(value):
+            return False
+    return canonical is not None and content == canonical
 
 
 def neutral_source_path(path: str) -> str | None:
