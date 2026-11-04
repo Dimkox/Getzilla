@@ -105,22 +105,70 @@ def _pairs_from_requirements(text: str) -> Iterable[tuple[str, str]]:
             yield match.group(1), match.group(2)
 
 
-def _pairs_from_toml_packages(text: str, *, registry_only: bool) -> Iterable[tuple[str, str]]:
+def _pairs_from_toml_packages(text: str, *, registry_only: bool, local_packages=()) -> Iterable[tuple[str, str]]:
     if tomllib is None:
         raise ValueError('TOML lockfiles need Python 3.11 or newer')
     data = tomllib.loads(text)
     for item in data.get('package', []):
         if not isinstance(item, dict):
+            if registry_only:
+                raise ValueError('malformed Cargo lock package')
             continue
         name, version = item.get('name'), item.get('version')
         if not isinstance(name, str) or not isinstance(version, str):
+            if registry_only:
+                raise ValueError('Cargo lock package identity is missing')
             continue
         source = item.get('source')
-        if registry_only and not (isinstance(source, str) and source.startswith('registry+')):
-            continue
+        if registry_only:
+            if source is None and (name, version) in local_packages:
+                continue  # Only the exact manifest-owned project is first-party source.
+            if not isinstance(source, str) or source not in {'registry+https://github.com/rust-lang/crates.io-index', 'sparse+https://index.crates.io/'}:
+                raise ValueError('Cargo source requires a qualified registry/artifact adapter')
         if isinstance(source, dict) and ({'editable', 'directory', 'path', 'virtual', 'git'} & set(source)):
             continue
         yield name, version
+
+
+
+def _cargo_manifest(text: str) -> tuple[set[tuple[str, str]], set[str]]:
+    data = tomllib.loads(text)
+    if any(key in data for key in ('workspace', 'patch', 'replace')):
+        raise ValueError('Cargo workspace or source override requires a qualified resolver')
+    local, declared = set(), set()
+    project = data.get('package', {})
+    if project:
+        if not isinstance(project, dict) or not all(isinstance(project.get(k), str) for k in ('name', 'version')):
+            raise ValueError('Cargo project identity is unresolved')
+        local.add((project['name'], project['version']))
+    targets = data.get('target', {})
+    if not isinstance(targets, dict) or any(not isinstance(v, dict) for v in targets.values()):
+        raise ValueError('Cargo target dependency model is malformed')
+    for section in (data, *targets.values()):
+        for group in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+            dependencies = section.get(group, {})
+            if not isinstance(dependencies, dict):
+                raise ValueError('Cargo dependency table is malformed')
+            for name, value in dependencies.items():
+                if isinstance(value, str) and value:
+                    declared.add(name)
+                elif (isinstance(value, dict) and isinstance(value.get('version'), str) and value['version']
+                      and not set(value) - {'version', 'features', 'optional', 'default-features', 'package'}):
+                    package = value.get('package', name)
+                    if not isinstance(package, str) or not package:
+                        raise ValueError('Cargo renamed package identity is malformed')
+                    declared.add(package)
+                else:
+                    raise ValueError('Cargo Git/path/workspace or unsupported dependency requires a qualified adapter')
+    return local, declared
+
+
+def _cargo_lock_pairs(text: str, manifest: str | None = None) -> list[tuple[str, str]]:
+    local, declared = _cargo_manifest(manifest) if manifest is not None else (set(), set())
+    pairs = list(_pairs_from_toml_packages(text, registry_only=True, local_packages=local))
+    if declared - {name for name, _version in pairs}:
+        raise ValueError('Cargo declaration has no exact qualified lock entry')
+    return pairs
 
 
 def _pairs_from_pyproject(text: str) -> Iterable[tuple[str, str]]:
@@ -268,7 +316,7 @@ MANIFESTS: dict[str, tuple[str, Callable[[str], Iterable[tuple[str, str]]]]] = {
     'pnpm-lock.yaml': ('npm', _pairs_from_pnpm_lock),
     'yarn.lock': ('npm', _pairs_from_yarn_lock),
     'go.mod': ('Go', _pairs_from_go_mod),
-    'Cargo.lock': ('crates.io', lambda text: _pairs_from_toml_packages(text, registry_only=True)),
+    'Cargo.lock': ('crates.io', _cargo_lock_pairs),
     'composer.lock': ('Packagist', _pairs_from_composer_lock),
     'Gemfile.lock': ('RubyGems', _pairs_from_gemfile_lock),
     'gradle.lockfile': ('Maven', _pairs_from_gradle_lockfile),
@@ -311,14 +359,35 @@ def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE
     manifests: list[str] = []
     for relative in _tracked_files(root):
         parser = _manifest_parser(PurePosixPath(relative).name)
-        if parser is None or _excluded(relative, patterns):
+        if _excluded(relative, patterns):
+            continue
+        if PurePosixPath(relative).name == 'Cargo.toml':
+            try:
+                manifest_path = root / relative
+                if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+                    raise ValueError('Cargo manifest is not a bounded regular file')
+                _cargo_manifest(manifest_path.read_text(encoding='utf-8'))
+                if not (root / relative).with_name('Cargo.lock').is_file():
+                    raise ValueError('Cargo manifest has no resolved lock')
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise VulnerabilityError(f'cannot parse {relative}: {exc}') from exc
+        if parser is None:
             continue
         path = root / relative
         if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
+            if path.name == 'Cargo.lock':
+                raise VulnerabilityError('Cargo lock is not a bounded regular file')
             continue
         ecosystem, parse = parser
         try:
-            pairs = list(parse(path.read_text(encoding='utf-8')))
+            text = path.read_text(encoding='utf-8')
+            manifest = path.with_name('Cargo.toml')
+            if path.name == 'Cargo.lock' and manifest.exists():
+                if manifest.is_symlink() or not manifest.is_file() or manifest.stat().st_size > MAX_MANIFEST_BYTES:
+                    raise ValueError('Cargo manifest is not a bounded regular file')
+                pairs = _cargo_lock_pairs(text, manifest.read_text(encoding='utf-8'))
+            else:
+                pairs = list(parse(text))
         except (UnicodeDecodeError, ValueError) as exc:
             raise VulnerabilityError(f'cannot parse {relative}: {exc}') from exc
         manifests.append(relative)

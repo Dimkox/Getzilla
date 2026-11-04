@@ -16,6 +16,13 @@ A failed refresh preserves the previous snapshot pointer and acquisition time.
 Legacy `known_vulns.py`, `updater.py`, `scripts/getzilla_vulns.py` and their existing
 consumers retain their current behavior. Their migration remains separate work.
 
+Cargo coverage accepts default-registry lock entries and the exact local project
+identity from its manifest. Git, path, workspace, alternate-registry and source
+override forms remain unresolved gaps. The final report rejects contradictory
+per-check bindings, incomplete sources and unresolved findings. Accepted OSV
+exceptions, reviewed secret dispositions and informational EPSS/license records
+retain their distinct meanings. These API checks add no authentication authority.
+
 Artifact evidence distinguishes exact source, digest, platform/ABI and use/output
 context. Extracted Factory output needs its actual archive, detached identity,
 complete source-wheel composition and retained license/notice members. The six

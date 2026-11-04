@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .security_osv_snapshot import MAX_MANIFEST_BYTES, REQUIREMENTS_RE, _manifest_parser, _tracked_files, normalize_name
+from .security_osv_snapshot import _cargo_manifest, _cargo_lock_pairs, MAX_MANIFEST_BYTES, REQUIREMENTS_RE, _manifest_parser, _tracked_files, normalize_name
 
 MAX_FILES = 100_000
 MAX_YAML_BYTES = 1024 * 1024
@@ -372,14 +372,22 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                         gap('unresolved-dependency', relative, 'non-registry lock source needs an artifact adapter')
                     else:
                         add('PyPI', package.get('name'), package.get('version'), relative, usage)
+            elif name == 'Cargo.lock':
+                manifest = str(pure.with_name('Cargo.toml'))
+                manifest_text = (_safe_bytes(root, manifest).decode('utf-8')
+                                 if (root / manifest).exists() else None)
+                for package, version in _cargo_lock_pairs(text, manifest_text):
+                    add('crates.io', package, version, relative, usage)
+            elif name == 'Cargo.toml':
+                _cargo_manifest(text)
+                if not (root / pure.parent / 'Cargo.lock').is_file():
+                    gap('unresolved-dependency', relative, 'Cargo manifest has no resolved lock')
             elif parser is not None:
                 ecosystem, parse = parser
                 for package, version in parse(text):
                     add(ecosystem, package, version, relative, usage)
             elif name in _UNSUPPORTED or name.endswith('.csproj'):
                 gap('unsupported-manifest', relative, 'manifest needs a qualified resolution adapter')
-            elif name == 'Cargo.toml' and not (root / pure.parent / 'Cargo.lock').is_file():
-                gap('unresolved-dependency', relative, 'Cargo manifest has no resolved lock')
         except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
             gap('unreadable-manifest', relative, str(exc)[:300])
 

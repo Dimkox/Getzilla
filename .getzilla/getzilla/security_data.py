@@ -616,7 +616,8 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
             return payload, evidence
     except (OSError, ValueError, KeyError, TypeError, SecurityDataError) as exc:
         legacy = f' (legacy {source_id.removeprefix("osv:")}/all.zip is insufficient)' if source_id.startswith('osv:') else ''
-        refresh = (f'refresh with scripts/getzilla_vulns.py --download-db DIR --ecosystem {source_id.removeprefix("osv:")} '
+        refresh = ('refresh with python3 scripts/getzilla_security.py --root ROOT --database DIR '
+                   '--artifacts ARTIFACTS --tools TOOLS --json-out REPORT --refresh '
                    'on a network-enabled host, then copy the complete snapshot directory') if source_id.startswith('osv:') else (
                        f'refresh {source_id} through its configured updater, then copy manifest and content objects')
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import sys
 import tempfile
 import unittest
@@ -177,8 +178,37 @@ class SnapshotTests(unittest.TestCase):
         archive = self.database / 'PyPI/all.zip'
         archive.parent.mkdir(parents=True)
         archive.write_bytes(osv_bytes())
-        with self.assertRaisesRegex(SD.SecurityDataError, r'getzilla_vulns.py --download-db DIR --ecosystem PyPI'):
+        with self.assertRaisesRegex(SD.SecurityDataError, r'python3 scripts/getzilla_security.py --root ROOT --database DIR'):
             SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_recovery_command_drives_the_explicit_strict_refresh_entrypoint(self):
+        from getzilla import security_cli
+        from getzilla.security_acquisition import FetchResult, refresh_feeds
+        from tests.test_security_intelligence import epss_payload, kev_payload
+        with self.assertRaises(SD.SecurityDataError) as caught:
+            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        command = str(caught.exception).split('refresh with ', 1)[1].split(' on a network-enabled host', 1)[0]
+        arguments = shlex.split(command)
+        self.assertEqual(arguments[:2], ['python3', 'scripts/getzilla_security.py'])
+        (self.root / 'requirements.txt').write_text('example==1.0.0\n')
+        locations = {'ROOT':str(self.root), 'DIR':str(self.database),
+                     'ARTIFACTS':str(self.root/'artifacts'), 'TOOLS':str(self.root/'tools'),
+                     'REPORT':str(self.root/'report.json')}
+        def evaluate(root, database, artifacts, tools, *, refresh=False, provision=False):
+            def fetch(url):
+                body = (osv_bytes() if url == SD.SOURCE_URLS['osv:PyPI'] else
+                        kev_payload() if url == SD.SOURCE_URLS['kev'] else epss_payload())
+                return FetchResult(body,url,url,200)
+            from getzilla.security_inventory import collect_inventory
+            ecosystems = sorted({d['ecosystem'] for d in collect_inventory(root)['dependencies']})
+            reports = refresh_feeds(database,ecosystems,fetch=fetch,now=NOW) if refresh else []
+            passed = len(reports)==3 and all(r['status']=='pass' for r in reports)
+            return {'status':'pass' if passed else 'fail', 'checks':[], 'qualification_gaps':[]}
+        with mock.patch.object(security_cli,'evaluate',side_effect=evaluate):
+            self.assertEqual(security_cli.main([locations.get(value,value) for value in arguments[2:]]),0)
+        payload, evidence = SD.read_snapshot(self.database,'osv:PyPI',now=NOW)
+        self.assertEqual(payload,osv_bytes())
+        self.assertEqual(evidence['acquisition']['last_verified_sync_utc'],NOW.isoformat())
 
     def test_arbitrary_source_ids_never_select_files(self) -> None:
         for source_id in ('../outside', 'osv:../../outside', 'osv:Hex', 'https://example.invalid'):

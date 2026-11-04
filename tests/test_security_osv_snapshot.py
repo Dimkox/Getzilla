@@ -83,6 +83,7 @@ MANIFESTS = {
         'node_modules/linked': {'link': True},
     }}),
     'svc/go.mod': 'module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgolang.org/x/net v0.17.0 // indirect\n)\nrequire github.com/a/b v1.2.3\n',
+    'rs/Cargo.toml': '[package]\nname="local"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n',
     'rs/Cargo.lock': '[[package]]\nname = "local"\nversion = "0.1.0"\n\n[[package]]\nname = "smallvec"\nversion = "1.6.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
     'php/composer.lock': json.dumps({'packages': [{'name': 'guzzlehttp/guzzle', 'version': 'v7.4.0'}],
                                      'packages-dev': [{'name': 'x/y', 'version': 'dev-main'}]}),
