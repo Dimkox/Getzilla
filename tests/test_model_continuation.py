@@ -227,7 +227,7 @@ class ModelContinuationTest(unittest.TestCase):
             for harness in ('grok', 'qwen', 'claude', 'codex', 'gemini', 'copilot'):
                 with self.subTest(harness=harness):
                     result = subprocess.run(
-                        [sys.executable, str(root / '.grok/hooks/session_start.py'), '--harness', harness],
+                        [sys.executable, str(root / '.getzilla/hooks/session_start.py'), '--harness', harness],
                         cwd=root, input=json.dumps({'cwd': str(root), 'session_id': 'rotation-owner'}).encode(),
                         capture_output=True, timeout=15,
                         env={**os.environ, 'HOME': str(root), 'PYTHONDONTWRITEBYTECODE': '1'})
