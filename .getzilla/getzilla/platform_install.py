@@ -225,7 +225,12 @@ def validate_results(records: list[dict], *, matrix: list[dict], required: list[
                       'doctor_exit': 0, 'logs_complete': True, 'agents': ['qwen']}
             if scenario == 'upgrade':
                 wanted.update(user_preserved=True, settings_preserved=True, update_exit=0,
-                              from_head=stable['commit'], from_version=stable['tag'].removeprefix('v'))
+                              from_head=stable['commit'], from_version=stable['tag'].removeprefix('v'),
+                              from_project_version=stable['tag'].removeprefix('v'))
+                wanted.update(baseline_mode='restored-v230-artifact' if cell['os'] == 'macos' else 'stock-installer-create',
+                              historical_installer_create='unsupported' if cell['os'] == 'macos' else 'pass')
+                if cell['os'] == 'macos':
+                    wanted.update(historical_bootstrap_exit=0, historical_baseline_apply_exit=0)
             if (not isinstance(checks, dict)
                     or any(type(checks.get(key)) is not type(value) or checks.get(key) != value
                            for key, value in wanted.items())):

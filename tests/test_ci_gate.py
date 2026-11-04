@@ -378,6 +378,24 @@ class WorkflowTemplateTests(unittest.TestCase):
 
 
 class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_source_and_generated_evidence_require_a_successful_checkout(self) -> None:
+        import yaml
+        workflow = yaml.safe_load((ROOT/'.github/workflows/getzilla.yml').read_text())
+        steps = workflow['jobs']['linux']['steps']
+        checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout.get('id'), 'source_checkout')
+        self.assertEqual(checkout.get('if'), 'always()')
+        for step in steps:
+            condition = step.get('if', '')
+            if step.get('run') and ('failure()' in condition or 'always()' in condition):
+                self.assertIn("steps.source_checkout.outcome == 'success'", condition, step['name'])
+        template = yaml.safe_load((ROOT/'.getzilla/templates/ci/github-actions-verify.yml').read_text())
+        generated = template['jobs']['getzilla-verify']['steps']
+        self.assertEqual(generated[0].get('id'), 'source_checkout')
+        export = next(s for s in generated if s.get('id') == 'export_evidence')
+        self.assertIn("steps.source_checkout.outcome == 'success'", export['if'])
+
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
         import yaml

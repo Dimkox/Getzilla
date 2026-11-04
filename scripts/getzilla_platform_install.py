@@ -24,13 +24,21 @@ def main(argv=None):
     actions.add_argument('--check-platform')
     actions.add_argument('--cell')
     actions.add_argument('--aggregate', type=Path)
+    actions.add_argument('--restore-stable-payload', type=Path, metavar='VERIFIED_V230_CHECKOUT')
     parser.add_argument('--workspace', type=Path)
+    parser.add_argument('--project', type=Path, help='absent target for the exact historical payload restore')
     parser.add_argument('--head')
     parser.add_argument('--job-result', default='missing')
     args = parser.parse_args(argv)
     try:
         contract = load_contract(ROOT)
         required = [c for c in contract['cells'] if c['required']]
+        if args.restore_stable_payload is not None:
+            if args.project is None:
+                raise ValueError('--restore-stable-payload requires an absent --project target')
+            from getzilla.install_baseline import restore_release_payload
+            print(json.dumps(restore_release_payload(ROOT, args.restore_stable_payload, args.project)))
+            return 0
         if args.matrix:
             print(json.dumps({'include': required}, separators=(',', ':')))
             return 0

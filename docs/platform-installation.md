@@ -24,7 +24,8 @@ no unqualified path selector silently removes a required cell.
 `install.ps1`, non-interactively and without installing a coding agent. Each cell
 also installs the exact previous stable release, creates and commits user files
 and settings, bootstraps the candidate installation, adopts the explicit legacy
-adapter choice, and invokes the actual installed `getzilla update` command.
+adapter choice before the candidate's existing-project plan, and invokes the
+actual installed `getzilla update` command.
 It checks actual Git identities, installed engine version, CLI and managed-file
 hashes, selection, user files, CLI help and doctor. Reports bind head/tree, run and
 attempt, native OS/architecture, stable tag/object/commit, log hashes and duration.
@@ -46,15 +47,15 @@ The pinned previous stable is **v2.3.0**, tag object
 not production qualification. Native installer runs are still required for this
 candidate; local unit fixtures do not replace them.
 
-For older projects, first update the user installation with the candidate's
-normal installer. Stable v2.3.0's `getzilla update` updates tools only. From the
-project, run the new installation's explicit components script to adopt the full
-choice, then review and commit the manifest before updating:
+Stable v2.3.0's `getzilla update` updates tools only. Before the candidate installer
+plans an existing legacy project, use the reviewed candidate checkout's explicit
+components script to record the complete choice. Review and commit it first:
 
 ```text
-python /path/to/updated/Getzilla/scripts/getzilla_components.py adopt --agents qwen
+python /path/to/candidate/Getzilla/scripts/getzilla_components.py adopt --agents qwen
 git add .getzilla/managed-components.json
 git commit -m "Record complete adapter selection"
+# Bootstrap the candidate user installation with its normal installer, then:
 /path/to/updated/Getzilla/bin/getzilla update --no-self --no-tools --baseline-release v2.3.0
 ```
 
@@ -75,10 +76,48 @@ During a private one-time qualification, every archive manifest entry matched
 the pinned Git source; both actual historical materializers produced the same
 695-file full-layout inventory. The runtime reads only the immutable catalog,
 whose complete digest is pinned in code; it executes no historical source and
-accepts no caller-supplied catalog or release path. Rendered historical files
+accepts no caller-supplied catalog or release identity. Rendered historical files
 use their actual materialized bytes, not the source template hash. The full
 inventory is a superset: only the project's committed selection can authorize
 incoming files. This qualification does not replace native installer CI.
+
+macOS upgrade cells use the explicit baseline mode `restored-v230-artifact`.
+The historical v2.3.0 new-project installer calls Linux `renameat2`, which is
+unavailable on macOS; its create path remains **unsupported**, not passed.
+The alternative restores exactly the 695 qualified vendor files and the old
+65-byte sync record into an absent directory. All file hashes and modes must
+match before the current portable publisher starts its ordinary no-replace
+transaction. The eleven rendered paths use only the old published templates.
+No historical Python runs during restoration, no candidate payload is staged,
+and no component selection, ownership proof or runtime authority is fabricated.
+
+The restore input is the exact v2.3.0 checkout with its pinned annotated tag:
+
+```text
+python /path/to/candidate/Getzilla/scripts/getzilla_platform_install.py --restore-stable-payload /path/to/verified-v2.3.0 --project /absent/legacy-project
+```
+
+The native upgrade scenario then runs the actual old installer in its
+existing-project mode and the installed old baseline application, using uv's
+observed executable directory. It checks the old installation SHA/version and
+the restored project's actual engine version before creating user files and
+committing explicit qwen adoption. A user-authored ignore rule keeps local
+runtime locks out of Git. Candidate bootstrap and update follow. Linux and
+Windows retain `stock-installer-create`; their historical create result must
+be `pass`. The aggregate requires the correct baseline mode and old bootstrap
+outcomes for each platform. Candidate clean installation always uses the stock
+candidate installer on every required native pair.
+
+The [fa8c2cc native run](https://github.com/Dimkox/Getzilla/actions/runs/41882805843)
+observed a Windows x64 clean/upgrade pass. Linux clean installs passed but both
+upgrades stopped at unresolved legacy selection. macOS ARM64 clean passed;
+macOS x64 clean stopped when the installed `specify` executable was outside
+PATH. Both historical macOS create paths failed at `renameat2`. Every retained
+command log matched its artifact hash/length. No OSV refusal occurred in that
+run. These are observations of fa8c2cc; the repaired candidate still needs its
+own native run. The required Linux job keeps the native failure and collects
+source checks only after a successful checkout, including after earlier native
+failures. Generated client evidence exports use the same checkout guard.
 
 The [observed macOS installer failure](https://github.com/Dimkox/Getzilla/actions/runs/41841095688/job/126612562552)
 on candidate `2f45b2c66f434f00373da85e481394bb2b8f44ed` followed successful clone,

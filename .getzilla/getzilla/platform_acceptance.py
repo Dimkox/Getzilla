@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -100,6 +101,14 @@ def run_command(arguments: list[str], *, cwd: Path, log: Path, timeout: float,
 
 class ScenarioFailed(RuntimeError):
     pass
+
+
+def bootstrap_candidate(source, home, project, command, installer):
+    """Commit the explicit legacy choice before the candidate's read-only plan."""
+    command([sys.executable, source/'scripts/getzilla_components.py', 'adopt', '--agents', 'qwen'], cwd=project)
+    command(['git', 'add', '.getzilla/managed-components.json'], cwd=project)
+    command(['git', 'commit', '--quiet', '--allow-empty', '-m', 'Record complete adapter selection'], cwd=project)
+    return installer(source, home, project, 'platform-candidate', create=False)
 
 
 def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str) -> dict:
@@ -210,24 +219,46 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
                 if scenario == 'clean':
                     checks['installer_exit'] = installer(source, home, project, 'platform-candidate', create=True)['exit']
                 else:
-                    installer(stable_source, home, project, stable['tag'], create=True)
+                    if system == 'macos':
+                        command([sys.executable, source/'scripts/getzilla_platform_install.py',
+                                 '--restore-stable-payload', stable_source, '--project', project])
+                        checks.update(baseline_mode='restored-v230-artifact', historical_installer_create='unsupported')
+                        checks['historical_bootstrap_exit'] = installer(stable_source, home, project, stable['tag'], create=False)['exit']
+                        uv = home/'.venv/bin/uv'
+                        executable = str(uv) if uv.is_file() else shutil.which('uv', path=environment.get('PATH'))
+                        if executable is None:
+                            raise ScenarioFailed('historical baseline uv executable unavailable')
+                        tool_bin = text([executable, 'tool', 'dir', '--bin'])
+                        if (any(character in tool_bin for character in (os.pathsep, '\n', '\r', '\0'))
+                                or not Path(tool_bin).is_absolute() or not Path(tool_bin).is_dir()):
+                            raise ScenarioFailed('historical baseline tool directory unavailable')
+                        old_env = {**environment, 'PATH': os.pathsep.join((tool_bin, str(home/'.venv/bin'),
+                                                                         environment.get('PATH', '')))}
+                        checks['historical_baseline_apply_exit'] = command([sys.executable,
+                            home/'scripts/getzilla_baseline.py', 'apply', '--project', project, '--agent', 'qwen'],
+                            env=old_env)['exit']
+                    else:
+                        checks.update(baseline_mode='stock-installer-create', historical_installer_create='pass')
+                        installer(stable_source, home, project, stable['tag'], create=True)
                     checks['from_head'] = text(['git', '-C', home, 'rev-parse', 'HEAD'])
                     checks['from_version'] = (home/'VERSION').read_text(encoding='utf-8').strip()
+                    checks['from_project_version'] = text([sys.executable, '-c',
+                        "import sys; sys.path.insert(0,'.getzilla'); import getzilla; print(getzilla.__version__)"], cwd=project)
                     if checks['from_head'] != stable['commit'] or checks['from_version'] != stable['tag'].removeprefix('v'):
                         raise ScenarioFailed('previous stable was not actually installed')
+                    if checks['from_project_version'] != checks['from_version']:
+                        raise ScenarioFailed('previous stable project engine differs from the installed release')
                     command(['git', 'init', '--quiet', project])
                     (project/'user-file.txt').write_text('user-owned fixture\n', encoding='utf-8')
                     settings = project/'user-settings.json'
                     settings.write_text('{"agents":["qwen"],"theme":"fixture"}\n', encoding='utf-8')
+                    ignore = project/'.gitignore'
+                    if not ignore.exists():
+                        ignore.write_text('.getzilla/runtime/\n', encoding='utf-8')
                     user_before, settings_before = digest(project/'user-file.txt'), digest(settings)
                     command(['git', 'add', '-A'], cwd=project)
                     command(['git', 'commit', '--quiet', '-m', 'Record stable project and user settings'], cwd=project)
-                    # Old releases dispatch "update" to the tool updater. Bootstrap the
-                    # candidate user installation before the documented selection adoption.
-                    checks['installer_exit'] = installer(source, home, project, 'platform-candidate', create=False)['exit']
-                    command([sys.executable, home/'scripts/getzilla_components.py', 'adopt', '--agents', 'qwen'], cwd=project)
-                    command(['git', 'add', '.getzilla/managed-components.json'], cwd=project)
-                    command(['git', 'commit', '--quiet', '--allow-empty', '-m', 'Record complete adapter selection'], cwd=project)
+                    checks['installer_exit'] = bootstrap_candidate(source, home, project, command, installer)['exit']
                     checks['update_exit'] = command(cli(home, 'update', '--no-self', '--no-tools',
                                                         '--baseline-release', stable['tag'], str(project)),
                                                     cwd=project, env={**environment, 'GETZILLA_HOME': str(home)})['exit']
@@ -268,6 +299,9 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
             for name, checks in record['scenarios'].items():
                 rows.append(f"| {name} | {checks['status']} | {checks.get('seconds', '-')} | "
                             + ', '.join(checks.get('logs', [])) + ' |')
+            upgrade = record['scenarios']['upgrade']
+            rows += ['', f"Historical baseline mode: {upgrade.get('baseline_mode', 'not_run')}; "
+                      f"historical installer create: {upgrade.get('historical_installer_create', 'not_run')}."]
             rows += ['', f'[Install/upgrade artifacts]({run_url}#artifacts)',
                      'Actions observations only. Missing native cells block acceptance; this is not an independent security verdict.']
             with open(summary, 'a', encoding='utf-8') as handle:

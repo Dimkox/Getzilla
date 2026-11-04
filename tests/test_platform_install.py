@@ -73,11 +73,13 @@ class PlatformContractTests(unittest.TestCase):
                                     'version': '2.3.1', 'cli_sha256': 'c' * 64,
                                     'managed_sha256': 'e' * 64,
                                     'from_head': '2bb417431f1e4b9494e4af71ebf27adb1d04d898', 'from_version': '2.3.0',
+                                    'from_project_version': '2.3.0',
                                     'cli_exit': 0, 'doctor_exit': 0, 'installer_exit': 0,
                                     'user_preserved': True, 'settings_preserved': True,
                                     'agents': ['qwen'], 'update_exit': 0, 'logs_complete': True}
                               for name in ('clean', 'upgrade')}}
         record['commands'] = []
+        record['scenarios']['upgrade'].update(baseline_mode='stock-installer-create', historical_installer_create='pass')
         for index, checks in enumerate(record['scenarios'].values(), 1):
             log = f'{index:03d}.log'
             checks['logs'] = [log]
@@ -110,6 +112,8 @@ class PlatformContractTests(unittest.TestCase):
         for field, value in [('status', 'skipped'), ('installer_exit', 1), ('doctor_exit', 1),
                              ('logs_complete', False), ('user_preserved', False),
                              ('settings_preserved', False), ('agents', ['codex']),
+                             ('baseline_mode', 'restored-v230-artifact'),
+                             ('historical_installer_create', 'unsupported'), ('from_project_version', '2.3.1'),
                              ('installed_head', 'd' * 40), ('cli_sha256', 'd' * 64)]:
             bad = copy.deepcopy(good)
             bad['scenarios']['upgrade'][field] = value
@@ -185,6 +189,10 @@ class CollectedArtifactTests(unittest.TestCase):
             record = PlatformContractTests().record()
             record.update(cell=cell['id'], os=cell['os'], arch=cell['arch'], head=self.head,
                           tree=tree, head_after=self.head, tree_after=tree, commands=[])
+            if cell['os'] == 'macos':
+                record['scenarios']['upgrade'].update(baseline_mode='restored-v230-artifact',
+                    historical_installer_create='unsupported', historical_bootstrap_exit=0,
+                    historical_baseline_apply_exit=0)
             folder = self.root / cell['id']
             folder.mkdir()
             for index, (name, scenario) in enumerate(record['scenarios'].items(), 1):
