@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 import copy
 import math
+from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
+
+from .python_source_proof import binding_events, namespace_is_closed
 
 LiteralKey: TypeAlias = tuple[str, object]
 QueueState = Literal[
@@ -65,24 +68,7 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
     nodes = list(ast.walk(tree))
     if len(nodes) > 16384:
         return tree
-    instrumentation = {'unittest', 'mock', 'pytest', '_pytest'}
-    if any(isinstance(node, ast.Import) and any(item.name.split('.')[0] in instrumentation for item in node.names)
-           or isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] in instrumentation
-           for node in nodes):
-        return tree
-    if any(isinstance(node, ast.ImportFrom) and any(item.name == '*' for item in node.names) for node in nodes):
-        return tree
-    if any(isinstance(node, ast.ImportFrom) and node.module == 'sys'
-           and any(item.name == 'modules' for item in node.names) for node in nodes):
-        return tree
-    if any(isinstance(node, ast.Attribute) and node.attr in {
-            '__dict__', '__class__', '__bases__', '__globals__', '__code__',
-            '__import__', 'import_module', 'modules'}
-           or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-           and node.id in {'globals', 'locals', 'vars', 'exec', 'eval', '__builtins__', '__import__', 'setattr', 'delattr'}
-           or isinstance(node, ast.ImportFrom) and any(
-               item.name in {'__import__', 'import_module'} for item in node.names)
-           for node in nodes):
+    if not namespace_is_closed(tree):
         return tree
     parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
     module_roots = {item.asname or item.name for node in nodes if isinstance(node, ast.Import)
@@ -98,10 +84,9 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
         if (not isinstance(access.ctx, ast.Load) or not isinstance(parents.get(access), ast.Call)
                 or parents[access].func is not access):
             return tree
-    rebound = {node.id for node in nodes if isinstance(node, ast.Name)
-               and isinstance(node.ctx, (ast.Store, ast.Del))}
-    rebound.update(node.arg for node in nodes if isinstance(node, ast.arg))
-    rebound.update(node.name for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    bindings = binding_events(tree)
+    counts = Counter(event.name for event in bindings)
+    rebound = {event.name for event in bindings if not isinstance(event.node, (ast.Import, ast.ImportFrom))}
     imported = []
     for node in nodes:
         if isinstance(node, ast.Import):
@@ -109,14 +94,12 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
         elif isinstance(node, ast.ImportFrom):
             imported.extend(item.asname or item.name for item in node.names)
     rebound.update(name for name in imported if imported.count(name) != 1)
-    if factories & rebound:
+    if factories & rebound or any(counts[name] != 1 for name in factories):
         return tree
     constants = {target.id: node.value for node in getattr(tree, 'body', ()) if isinstance(node, ast.Assign)
                  for target in node.targets if isinstance(target, ast.Name)}
     constants = {name: value for name, value in constants.items()
-                 if sum(isinstance(node, ast.Name) and node.id == name
-                        and isinstance(node.ctx, (ast.Store, ast.Del)) for node in nodes) == 1
-                 and not any(isinstance(node, ast.arg) and node.arg == name for node in nodes)}
+                 if counts[name] == 1}
     guard_builtins = {'type', 'bytes', 'len', 'OSError'}
     guards_unshadowed = not (guard_builtins & (rebound | set(imported)))
 
@@ -139,16 +122,12 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
         """Resolve one lexical assignment; unknown or replaced bytes stay governed."""
         current = enclosing(reference)
         while current is not None:
-            bindings = [item for item in nodes if isinstance(item, ast.Name) and item.id == reference.id
-                        and isinstance(item.ctx, (ast.Store, ast.Del)) and enclosing(item) is current]
-            if any((isinstance(item, ast.arg) and item.arg == reference.id
-                    or isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                    and item.name == reference.id) and enclosing(item) is current for item in nodes):
-                return None
-            if bindings:
-                assignment = parents.get(bindings[0])
-                return assignment.value if (len(bindings) == 1 and isinstance(assignment, ast.Assign)
-                                            and len(assignment.targets) == 1 and assignment.targets[0] is bindings[0]) else None
+            local = [event.node for event in bindings if event.name == reference.id and enclosing(event.node) is current]
+            if local:
+                assignment = parents.get(local[0])
+                return assignment.value if (len(local) == 1 and isinstance(local[0], ast.Name)
+                                            and isinstance(assignment, ast.Assign)
+                                            and len(assignment.targets) == 1 and assignment.targets[0] is local[0]) else None
             current = enclosing(current)
         return None
 
@@ -228,8 +207,8 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
             return tree
         name = targets[0].id
         scope = list(ast.walk(owner))
-        if (sum(isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, (ast.Store, ast.Del))
-                for item in scope) != 1 or any(isinstance(item, ast.arg) and item.arg == name for item in scope)
+        scope_counts = Counter(event.name for event in binding_events(owner))
+        if (scope_counts[name] != 1
                 or any(isinstance(item, (ast.Global, ast.Nonlocal)) and name in item.names for item in scope)
                 or any(isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
                        and item.func.id in {'eval', 'exec', 'locals', 'globals', 'vars'} for item in scope)):
@@ -276,13 +255,15 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
         thread_names = {item.asname or item.name for statement in getattr(tree, 'body', ())
                         if isinstance(statement, ast.ImportFrom) and statement.module == 'threading' and not statement.level
                         for item in statement.names if item.name == 'Thread'}
-        thread_names -= rebound
+        thread_names = {name for name in thread_names if counts[name] == 1 and name not in rebound}
         for item in nodes:
             if isinstance(item, ast.Name) and item.id in thread_names and isinstance(item.ctx, ast.Load):
                 parent = parents.get(item)
                 if not isinstance(parent, ast.Call) or parent.func is not item:
                     return tree
         for function in nested:
+            if scope_counts[function.name] != 1:
+                return tree
             if any(isinstance(item, (ast.Global, ast.Nonlocal)) and function.name in item.names for item in scope):
                 return tree
             for use in scope:
@@ -302,8 +283,7 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
                     thread_name = allocation.targets[0].id
                     if any(isinstance(item, (ast.Global, ast.Nonlocal)) and thread_name in item.names for item in scope):
                         return tree
-                    if sum(isinstance(item, ast.Name) and item.id == thread_name
-                           and isinstance(item.ctx, (ast.Store, ast.Del)) for item in scope) != 1:
+                    if scope_counts[thread_name] != 1:
                         return tree
                     for item in scope:
                         if not isinstance(item, ast.Name) or item.id != thread_name or not isinstance(item.ctx, ast.Load):
@@ -352,6 +332,8 @@ def _project_channel_tree(tree: ast.AST, imported: ast.AST, replaced: set[int]) 
 
 def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
     """Resolve only unshadowed stdlib mock.patch.object with a literal member."""
+    if not namespace_is_closed(tree, allow_instrumentation=True):
+        return {}
     aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == 'unittest':
@@ -360,10 +342,9 @@ def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | 
             aliases.update((alias.asname or alias.name) + '.object' for alias in node.names if alias.name == 'patch')
         elif isinstance(node, ast.Import):
             aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'unittest.mock')
-    shadowed = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
-    shadowed.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
-    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
-    aliases = {name for name in aliases if name.split('.')[0] not in shadowed}
+    bindings = binding_events(tree)
+    counts = Counter(event.name for event in bindings)
+    aliases = {name for name in aliases if counts[name.split('.')[0]] == 1}
     result = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or len(node.args) < 2 or any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):

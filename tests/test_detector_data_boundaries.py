@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -46,6 +47,113 @@ def drain(runner):
     reader.join(timeout=1)
     return len(data)
 '''
+
+
+def binding_statement(name, kind):
+    return {
+        'except': f'try:\n    opaque()\nexcept Exception as {name}:\n    pass',
+        'as': f'match opaque:\n    case {name}:\n        pass',
+        'star': f'match opaque:\n    case [*{name}]:\n        pass',
+        'mapping': f'match opaque:\n    case {{**{name}}}:\n        pass',
+    }[kind]
+
+
+NAMESPACE_CAPABILITIES = (
+    "from builtins import __dict__ as namespace\nnamespace['bytes'] = Payload",
+    "from builtins import __dict__ as namespace\nnamespace.update({'getattr': replacement})",
+    "import builtins\nbuiltins.__dict__.update({'getattr': replacement})",
+    "import builtins\nbuiltins.__setattr__('bytes', Payload)",
+    "import builtins\nbuiltins.__delattr__('getattr')",
+    "__builtins__['bytes'] = Payload",
+    "__builtins__ = replacement",
+    "namespace = __builtins__\nnamespace.update({'getattr': replacement})",
+    "from builtins import __setattr__ as mutate\nmutate('bytes', Payload)",
+    "__setattr__ = replacement\n__setattr__('bytes', Payload)",
+    "namespace = __dict__\nnamespace.update({'getattr': replacement})",
+    "__import__('builtins').__setattr__('getattr', replacement)",
+    "loader = __import__\nnamespace = loader(name)",
+    "from importlib import import_module as loader\nnamespace = loader('builtins')",
+    "from unittest.mock import patch\nwith patch('builtins.getattr', replacement):\n    pass",
+)
+
+
+class CompleteSourceProofTests(unittest.TestCase):
+    def test_string_field_bindings_keep_all_channel_dependencies_governed(self):
+        for kind in ('except', 'as', 'star', 'mapping'):
+            for name in ('type', 'bytes', 'len', 'OSError', 'Queue', 'Thread', 'CHUNK_BYTES'):
+                source = PIPE_CHANNEL.replace('def drain(runner):', binding_statement(name, kind) + '\ndef drain(runner):')
+                self.assert_governed(source, (name, kind))
+            for name, marker, indentation in (
+                    ('chunk', '        chunks.put(chunk, timeout=0.05)', 8),
+                    ('chunks', '    def read():', 4),
+                    ('read', '    reader = Thread(target=read)', 4),
+                    ('reader', '    reader.start()', 4)):
+                source = PIPE_CHANNEL.replace(marker, textwrap.indent(binding_statement(name, kind), ' ' * indentation) + '\n' + marker)
+                self.assert_governed(source, (name, kind))
+
+    def assert_governed(self, source, label):
+        with self.subTest(label=label):
+            tree = ast.parse(source)
+            original = ast.dump(tree, include_attributes=True)
+            self.assertTrue(analyze_queue_tree(tree).signals)
+            self.assertEqual(ast.dump(tree, include_attributes=True), original)
+
+    def test_getter_bindings_and_namespace_capabilities_retain_full_closure(self):
+        prefixes = [binding_statement('getattr', kind) for kind in ('except', 'as', 'star', 'mapping')]
+        for prefix in [*prefixes, *NAMESPACE_CAPABILITIES]:
+            with self.subTest(prefix=prefix):
+                tree = ast.parse('import adapter\n' + prefix + "\nselected = getattr(adapter, 'ordinary', None)\nselected()\n")
+                self.assertIsNone(FIT._module_member_demands(tree, 'adapter'))
+
+    def test_namespace_capabilities_never_prove_local_byte_payloads(self):
+        for prefix in NAMESPACE_CAPABILITIES:
+            self.assert_governed(prefix + '\n' + PIPE_CHANNEL, prefix)
+
+    def test_plain_mock_imports_keep_real_consumer_literal_member_demand(self):
+        source = ("import unittest\nfrom unittest.mock import patch\nimport verification_module\n"
+                  "selector = getattr(verification_module, 'select_static_seo_landing_scope', None)\nselector()\n")
+        self.assertEqual(FIT._module_member_demands(ast.parse(source), 'verification_module'),
+                         frozenset({'select_static_seo_landing_scope'}))
+
+    def test_actual_verification_consumer_keeps_ordinary_literal_member_demand(self):
+        content = (ROOT / 'tests/test_verification_doctor.py').read_text(encoding='utf-8')
+        demanded = FIT._module_member_demands(ast.parse(content), 'verification_module')
+        self.assertIsNotNone(demanded)
+        self.assertIn('select_static_seo_landing_scope', demanded)
+
+    def test_patch_alias_string_field_rebinding_retains_full_member_closure(self):
+        for kind in ('except', 'as', 'star', 'mapping'):
+            with self.subTest(kind=kind):
+                source = ('from unittest.mock import patch\nimport adapter\n'
+                          + binding_statement('patch', kind) + "\npatch.object(adapter, 'ordinary')\n")
+                self.assertIsNone(FIT._module_member_demands(ast.parse(source), 'adapter'))
+
+    def test_source_bound_fitness_keeps_unknown_getters_governed(self):
+        lookup = "selected = getattr(adapter, 'ordinary', None)\nselected()\n"
+        variants = (
+            ('ordinary', 'import unittest\nfrom unittest.mock import patch\n' + lookup, False),
+            ('exception', 'class Lookup(Exception):\n    def __call__(self, module, name, default=None): return module.jobs\n'
+             'try:\n    raise Lookup()\nexcept Lookup as getattr:\n' + textwrap.indent(lookup, '    '), True),
+            ('capture', binding_statement('getattr', 'as') + '\n' + lookup, True),
+            ('namespace', "from builtins import __dict__ as namespace\nnamespace.update({'getattr': replacement})\n" + lookup, True),
+            ('dunder-setter', "import builtins\nbuiltins.__setattr__('getattr', replacement)\n" + lookup, True),
+        )
+        for label, source, governed in variants:
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                repo.write_text('src/adapter.py', 'from rq import Queue\njobs = Queue()\ndef ordinary(): return None\n')
+                base = repo.commit('queue-bearing adapter')
+                repo.write_text('src/consumer.py', 'import adapter\n' + source)
+                head = repo.commit('getter source')
+                snapshot = ARCHITECTURE.load_architecture(repo.root)
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                result = next(item for item in report.results if item.category == 'background_job')
+                self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
+                self.assertEqual('new_queue' in report.triggers, governed)
 
 
 class LocalByteChannelTests(unittest.TestCase):

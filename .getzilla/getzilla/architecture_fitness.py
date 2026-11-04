@@ -38,6 +38,7 @@ from .architecture_diff import (
     read_diff_files,
 )
 from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members, _CONTAINER_MUTATORS
+from .python_source_proof import binding_events, namespace_is_closed
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -2186,16 +2187,10 @@ def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Modu
     Function returns have their own dependency closure. Dynamic namespaces keep
     the full bounded analysis rather than pretending an export is ordinary.
     """
-    if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-           and node.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'}
-           for node in ast.walk(tree)):
+    if not namespace_is_closed(tree, allow_instrumentation=True):
         return tree
 
-    shadowed = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
-    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef)))
-    shadowed.update(alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names)
-    shadowed.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
-    shadowed.update(node.name for node in ast.walk(tree) if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name)
+    shadowed = {event.name for event in binding_events(tree)}
 
     class Scalars(ast.NodeTransformer):
         def visit_JoinedStr(self, node):
@@ -2513,23 +2508,15 @@ def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
 
 
 def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
+    if not namespace_is_closed(tree, allow_instrumentation=True):
+        return None
     members: set[str] = set()
     covered: set[int] = set()
     patches = literal_patch_members(tree) if patches is None else patches
     nodes = tuple(ast.walk(tree))
     # A literal builtin lookup is a member demand, not a module escape. Any
     # observable rebinding retains the full closure, as dynamic lookup does.
-    shadowed_getattr = any(
-        isinstance(node, ast.Name) and node.id == 'getattr' and isinstance(node.ctx, (ast.Store, ast.Del))
-        or isinstance(node, ast.arg) and node.arg == 'getattr'
-        or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == 'getattr'
-        or isinstance(node, (ast.Import, ast.ImportFrom)) and any(
-            (alias.asname or alias.name.split('.')[0]) == 'getattr' for alias in node.names)
-        or isinstance(node, ast.Attribute) and node.attr == 'getattr' and isinstance(node.ctx, (ast.Store, ast.Del))
-        or isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id in {'setattr', 'delattr', 'exec', 'eval'}
-        for node in nodes
-    )
+    shadowed_getattr = any(event.name == 'getattr' for event in binding_events(tree))
     for node in nodes:
         if (not shadowed_getattr and isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name) and node.func.id == 'getattr'
@@ -2621,34 +2608,19 @@ def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, retur
 
 def _plain_callable_declaration(tree: ast.Module, requested: frozenset[str] | None) -> bool:
     """A stable undecorated function object is ordinary; this says nothing about its return."""
-    if not requested:
+    if not requested or not namespace_is_closed(tree, allow_instrumentation=True):
         return False
     definitions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     if not requested <= definitions.keys() or any(definitions[name].decorator_list for name in requested):
         return False
-    # Python binds names through more nodes than Name(Store). Inspect these
-    # across conditional and nested bodies; uncertainty falls back to analysis.
+    if any(event.name in requested and event.node is not definitions[event.name]
+           for event in binding_events(tree)):
+        return False
     if any((isinstance(node, (ast.Global, ast.Nonlocal)) and requested.intersection(node.names))
-           or (isinstance(node, ast.alias) and (node.name == '*' or (node.asname or node.name.split('.')[0]) in requested))
-           or (isinstance(node, ast.ExceptHandler) and node.name in requested)
-           or (isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in requested)
-           or (isinstance(node, ast.MatchMapping) and node.rest in requested)
-           or (isinstance(node, ast.Name) and node.id in requested and isinstance(node.ctx, (ast.Store, ast.Del)))
-           or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-               and node.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'})
            or (isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
                and any(isinstance(part, ast.Name) and part.id in requested for part in ast.walk(node.value)))
            for node in ast.walk(tree)):
         return False
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is definitions.get(node.name):
-            continue
-        if any((isinstance(child, ast.Name) and child.id in requested and isinstance(child.ctx, (ast.Store, ast.Del)))
-               or (isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child.name in requested)
-               or (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
-                   and child.func.id in {'exec', 'eval', 'globals', 'locals', 'setattr', 'delattr'})
-               for child in ast.walk(node)):
-            return False
     return True
 
 
