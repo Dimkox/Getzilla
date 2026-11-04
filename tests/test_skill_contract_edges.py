@@ -146,7 +146,7 @@ class EdgeContracts(unittest.TestCase):
             read_snapshot(fixture.root, 'intake/example')
         self.assertFalse(any(name.endswith('/.env') for name in opened))
 
-    def test_modified_archive_with_original_source_record_refuses_before_extraction(self):
+    def test_modified_manifest_with_original_source_record_refuses_before_materialization(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = json.loads((ROOT / '.getzilla/config/toolchain.json').read_bytes())

@@ -5,6 +5,8 @@ import unittest
 import sys
 import csv
 import hashlib
+import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -16,6 +18,71 @@ from getzilla import baseline_assets  # noqa: E402
 
 
 class BaselineAssetTests(unittest.TestCase):
+    def test_actual_consumer_refuses_missing_stale_foreign_and_tampered_assets_before_writes(self):
+        from getzilla import baseline
+        from tests.test_mandatory_baseline import FakeTools, which_all
+        cases = ('missing-manifest', 'tampered-manifest', 'foreign-manifest', 'stale-source',
+                 'missing-blob', 'tampered-blob', 'wrong-script')
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, project, home = root / 'distribution', root / 'project', root / 'home'
+                project.mkdir()
+                shutil.copytree(ROOT / '.getzilla/templates/baseline', source / '.getzilla/templates/baseline')
+                config_path = source / '.getzilla/config/toolchain.json'
+                config_path.parent.mkdir(parents=True)
+                config = json.loads((ROOT / '.getzilla/config/toolchain.json').read_bytes())
+                component = next(item for item in config['workflow_sources']['components'] if item['id'] == 'bmad')
+                record = component['generated_assets']['claude-sh']
+                manifest_path = source / record['path']
+                manifest = json.loads(manifest_path.read_bytes())
+                if case == 'missing-manifest':
+                    manifest_path.unlink()
+                elif case == 'tampered-manifest':
+                    manifest_path.write_bytes(manifest_path.read_bytes() + b'altered')
+                elif case == 'foreign-manifest':
+                    foreign = component['generated_assets']['grok-sh']
+                    manifest_path.write_bytes((source / foreign['path']).read_bytes())
+                    record['sha256'] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                elif case == 'stale-source':
+                    manifest['binding']['source_commit'] = 'b' * 40
+                    manifest_path.write_text(json.dumps(manifest))
+                    record['sha256'] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                elif case in ('missing-blob', 'tampered-blob'):
+                    blob = source / '.getzilla/templates/baseline/blobs' / (manifest['files'][0]['sha256'] + '.txt')
+                    if case == 'missing-blob':
+                        blob.unlink()
+                    else:
+                        blob.write_bytes(b'tampered code-bearing bytes')
+                else:
+                    component = next(item for item in config['workflow_sources']['components'] if item['id'] == 'spec-kit')
+                    record = component['generated_assets']['claude-sh']
+                    foreign = component['generated_assets']['claude-ps']
+                    (source / record['path']).write_bytes((source / foreign['path']).read_bytes())
+                    record['sha256'] = hashlib.sha256((source / record['path']).read_bytes()).hexdigest()
+                config_path.write_text(json.dumps(config))
+                tools = FakeTools()
+                baseline.install_user(home, run=tools, which=which_all)
+                # Substitute an installed distribution's file root, not authority.
+                # The real consumer, manifest loader and no-follow filesystem run.
+                with mock.patch.object(baseline_assets, 'STACK_DIR', source / '.getzilla'):
+                    steps = baseline.apply_project(project, 'claude', home, run=tools)
+                self.assertTrue(any(step.status == 'fail' for step in steps), steps)
+                self.assertFalse(list(project.iterdir()))
+
+    def test_all_generated_bytes_have_readable_pinned_source_representation(self):
+        from getzilla.baseline import components
+        for component in components().values():
+            for record in component['generated_assets'].values():
+                self.assertTrue(record['path'].endswith('.json'))
+                manifest = json.loads((ROOT / record['path']).read_bytes())
+                for entry in manifest['files']:
+                    blob = ROOT / '.getzilla/templates/baseline/blobs' / (entry['sha256'] + '.txt')
+                    content = blob.read_bytes()
+                    content.decode('utf-8')
+                    self.assertNotIn(b'\0', content)
+                    self.assertEqual(hashlib.sha256(content).hexdigest(), entry['sha256'])
+
     def test_constructed_or_modified_payload_cannot_claim_shipped_source_approval(self):
         payload = baseline_assets.load('bmad', 'claude')
         forged = replace(payload, files=(('_bmad/core/config.yaml', b'unregistered instructions', 0o644),))

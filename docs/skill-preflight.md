@@ -61,6 +61,8 @@ Existing Getzilla installer/on-demand payloads and generated harnesses keep thei
 Their canonical/adapter byte inventory rejects conflicting aliases and reports provenance only. Normal
 baseline onboarding uses [fixed generated assets](baseline.md), including upstream LICENSE custody; it
 does not run an ambient installer. Source/provenance approval is separate from semantic safety.
+Readable content-addressed blobs are executable supply-chain content, with per-variant manifests. Their
+file extensions do not make them documentation: asset-only edits keep full verification and risk reviews.
 
 General free-form semantic review, native script activation, universal native/MCP tool trust and cross-client
 OS/credential isolation remain unqualified. #150 owns canonical action authority, #156 owns model/MCP trust

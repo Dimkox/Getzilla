@@ -62,11 +62,16 @@ getzilla baseline status [--project DIR] [--agent NAME]
 - BMAD/Spec Kit files come from fixed generated assets, not `npx` or ambient `specify`. Their generation
   used pinned source and hash-checked dependencies in a disposable Linux network/PID/user namespace,
   with read-only source/dependencies, an empty environment and scratch output. Exact source, dependency,
-  command and per-file bindings are retained inside each archive and in `toolchain.json`.
-- Consumer installation validates complete archive/file custody before copying. It does not execute
+  command and per-file bindings are retained in each variant manifest and in `toolchain.json`.
+- Generated output is stored as readable UTF-8 content-addressed blobs and24variant manifests, without
+  binary encoding. Blob hashes bind exact original bytes, including upstream CRLF. The scoped Git
+  attribute disables newline conversion while keeping normal text diff detection.
+- Consumer installation validates complete manifest/blob/file custody before copying. It does not execute
   upstream code, install dependencies, activate skills or grant network/secret/tool permissions.
   Existing `_bmad/` and `.specify/` directories remain untouched; conflicting/unsafe new paths refuse.
   BMAD project-name rendering updates its file manifest and produces a separate materialized digest.
+- The entire asset path is code-bearing supply-chain data. Asset-only `.txt`/`.json` edits retain full
+  executable verification and security/release risk reviews; they cannot use docs-focused or light lanes.
 - Six agent adapters are covered. Spec Kit has separate `sh` and `ps` assets. Native Windows/macOS
   script execution and sandbox behavior require their own qualification; data-copy tests do not prove it.
 
