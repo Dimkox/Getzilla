@@ -378,21 +378,23 @@ def planned_changes(installer, home: Path, project: Path,
         # A migrated custom overlay remains a consumer input, without an ownership claim.
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
             changes.append((entry.path, content, mode))
+    planned_contents = {path: content for path, content, _mode in changes}
     legacy_dependencies = False
     for config_path in ('.grok/hooks.json', '.grok/hooks/adaptive.json', '.claude/settings.json',
                         '.qwen/settings.json', '.codex/hooks.json', '.gemini/settings.json',
                         '.github/hooks/getzilla.json'):
-        if config_path in by_path:
-            continue
-        current = binding.read(config_path)
-        if observations is not None:
-            observations[config_path] = current
-        if current is None:
-            continue
-        if (config_path not in kept and neutral_source_path(config_path) in by_path
+        if observations is not None and config_path in observations:
+            current = observations[config_path]
+        else:
+            current = binding.read(config_path)
+            if observations is not None:
+                observations[config_path] = current
+        if (config_path not in planned_contents and config_path not in kept
+                and neutral_source_path(config_path) in by_path
                 and matches_owned(current, owned_proof(state.manifest, config_path))):
             continue  # This declaration retires in the same commit.
-        if b'.grok' in current.content and b'hooks' in current.content:
+        content = planned_contents.get(config_path, current.content if current else None)
+        if content is not None and b'.grok' in content and b'hooks' in content:
             legacy_dependencies = True
     # Publish neutral replacements and retire old sources in the same Git commit.
     # A path alone never proves ownership; changed, kept and unknown files stay.
