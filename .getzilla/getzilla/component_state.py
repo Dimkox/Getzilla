@@ -75,7 +75,43 @@ def agent_of(path: str) -> str | None:
     return next((name for name, prefixes in AGENT_COMPONENT_PATHS.items() if path.startswith(prefixes)), None)
 
 
+def module_name(value: object) -> bool:
+    return type(value) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,63}', value) is not None
+
+
+def module_component(value: object) -> bool:
+    return type(value) is str and value.startswith('module:') and module_name(value[7:])
+
+
+def _module_state(value: object, name: str) -> None:
+    fields = {'schema_version', 'version', 'enabled', 'manifest_sha256', 'registry_sha256', 'publisher',
+              'license', 'entitlement', 'dependencies', 'permissions', 'grants', 'transaction'}
+    if type(value) is not dict or set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1:
+        raise ComponentStateError(f'invalid module state: {name}')
+    def version(v):
+        return type(v) is str and re.fullmatch(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}', v) is not None
+    def scope(v):
+        return type(v) is str and re.fullmatch(r'[a-z][a-z0-9_.:-]{0,127}', v) is not None
+    if (not version(value['version']) or type(value['enabled']) is not bool
+            or not all(type(value[k]) is str and re.fullmatch('[0-9a-f]{64}', value[k]) for k in ('manifest_sha256', 'registry_sha256'))
+            or not module_name(value['publisher']) or type(value['license']) is not str or not scope(value['license'].lower())
+            or value['entitlement'] is not None and not scope(value['entitlement'])
+            or type(value['dependencies']) is not dict or len(value['dependencies']) > 32
+            or any(not module_name(k) or not version(v) for k, v in value['dependencies'].items())
+            or type(value['transaction']) is not str or re.fullmatch('[0-9a-f]{32}', value['transaction']) is None):
+        raise ComponentStateError(f'invalid module identity: {name}')
+    for field in ('permissions', 'grants'):
+        items = value[field]
+        if type(items) is not list or len(items) > 32 or any(not scope(item) for item in items) or len(set(items)) != len(items):
+            raise ComponentStateError(f'invalid module scopes: {name}')
+    if (set(value['grants']) != set(value['permissions']) if value['enabled'] else bool(value['grants'])):
+        raise ComponentStateError(f'invalid module activation: {name}')
+
+
 def component_of(path: str) -> str:
+    parts = path.split('/')
+    if len(parts) >= 4 and parts[:2] == ['.getzilla', 'modules'] and module_name(parts[2]):
+        return 'module:' + parts[2]
     if path.startswith('factory/'):
         return 'factory'
     for name, markers in EXTRA_COMPONENT_PATHS.items():
@@ -150,18 +186,25 @@ def decode_manifest(content: bytes) -> dict[str, Any]:
             raise ComponentStateError('manifest agents must be an array')
         validate_agents(data['agents'])
     records = data['components']
-    if type(records) is not dict or not set(records) <= COMPONENTS:
+    if type(records) is not dict or any(name not in COMPONENTS and not module_component(name) for name in records):
         raise ComponentStateError('invalid component records')
     seen: set[str] = set()
     for name, record in records.items():
-        fields = {'files', 'added_at', 'source_version'} | ({'owned'} if selected else set())
+        is_module = module_component(name)
+        fields = {'files', 'added_at', 'source_version'} | ({'owned'} if selected else set()) | ({'module'} if is_module else set())
         if type(record) is not dict or 'files' not in record or not set(record) <= fields:
             raise ComponentStateError(f'invalid record for {name}')
+        if is_module:
+            if not selected or 'module' not in record:
+                raise ComponentStateError('optional modules require selected v2 ownership state')
+            _module_state(record['module'], name)
         files = record['files']
         if type(files) is not list or len(files) > MAX_FILES:
             raise ComponentStateError(f'invalid file list for {name}')
         for path in files:
             _ledger_path(path)
+            if is_module and component_of(path) != name:
+                raise ComponentStateError('module file escapes its owned namespace')
             if path.casefold() in seen:
                 raise ComponentStateError(f'duplicate component file: {path}')
             seen.add(path.casefold())
