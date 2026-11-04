@@ -52,15 +52,21 @@ the default local builder with `--pull=false --network=none`.
 It uses an empty private Docker config and HOME for each invocation. It keeps that
 directory alive until its Docker clients exit, then removes it. Saved host
 contexts and credential configuration do not enter the client environment.
-If an attached client cannot be reaped, the fixture raises
+All synchronous and attached clients register before interruptible waits.
+If a client cannot be reaped, the fixture raises
 `client_cleanup_unconfirmed` and retains its config/HOME. The exception's
 `cleanup_context` is an in-memory ownership handle with the exact created
 process objects. Its `reconcile(handle.processes)` method checks termination
 without sending signals or replaying work, and removes only the original
-directory after its identity still matches. Foreign or changed process
+directory through verified open directory descriptors. Cleanup has a 4096-entry
+and 16-level limit. A replaced root cannot redirect traversal to foreign data;
+uncertain removal remains unknown. This descriptor cleanup requires POSIX.
+Foreign or changed process
 identities, replaced directories and links refuse cleanup. Losing the handle
 does not trigger deleting garbage collection or authorize cleanup by PID/path.
 Process crashes can still require recorded, task-owned investigation cleanup.
+An interrupted constructor without a captured PID retains its directory but
+cannot be reconciled by this in-memory API. It grants no path-based adoption.
 All three executable-input readers share nonblocking, no-follow regular-file
 admission, a 512 MiB limit, bounded streaming hashes and source-identity checks
 before and after reading. FIFOs, links, empty or oversized files and changes

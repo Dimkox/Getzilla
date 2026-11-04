@@ -254,7 +254,16 @@ class ControlledFixtureTest(unittest.TestCase):
     def test_docker_errors_distinguish_timeout_without_exposing_output(self):
         for error, reason in ((subprocess.TimeoutExpired(['docker'], 1), 'container_timeout'),
                               (subprocess.CalledProcessError(1, ['docker'], stderr='private'), 'container_command_failed')):
-            with self.subTest(reason=reason), patch.object(controlled_fixture.subprocess, 'run', side_effect=error):
+            from unittest.mock import Mock
+            process = Mock(pid=424242,returncode=0)
+            process.communicate.side_effect = error
+            process.poll.return_value = process.wait.return_value = 0
+
+            def popen(argv,**kwargs):
+                process.args = argv
+                return process
+
+            with self.subTest(reason=reason), patch.object(controlled_fixture.subprocess, 'Popen', side_effect=popen):
                 with self.assertRaisesRegex(controlled_fixture.FixtureError, '^' + reason + '$'):
                     controlled_fixture._command(['docker', 'inspect', 'synthetic'])
 

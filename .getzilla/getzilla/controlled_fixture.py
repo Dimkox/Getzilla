@@ -48,9 +48,45 @@ class FixtureError(ValueError):
 
 def _directory_identity(path):
     info = path.lstat()
+    return _directory_stat_identity(info)
+
+
+def _directory_stat_identity(info):
     if fsx.is_link(info) or not stat.S_ISDIR(info.st_mode):
         raise OSError('private client directory identity is unavailable')
     return info.st_dev, info.st_ino, info.st_mode, info.st_uid
+
+
+def _empty_client_directory(handle, budget, depth=0):
+    """Traverse the already-open owned inode; never reopen its root pathname."""
+    if depth > 16:
+        raise OSError('private directory depth exceeded')
+    with fsx.scandir(handle) as entries:
+        for entry in entries:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise OSError('private directory inventory exceeded')
+            info = fsx.lstat_at(handle, entry.name)
+            if fsx.is_link(info):
+                raise OSError('unexpected private directory link')
+            if stat.S_ISDIR(info.st_mode):
+                child = fsx.open_dir_at(handle, entry.name)
+                try:
+                    identity = _directory_stat_identity(info)
+                    if _directory_stat_identity(fsx.fstat_dir(child)) != identity:
+                        raise OSError('private child replaced')
+                    _empty_client_directory(child, budget, depth+1)
+                    if _directory_stat_identity(fsx.lstat_at(handle, entry.name)) != identity:
+                        raise OSError('private child moved')
+                    fsx.rmdir_at(handle, entry.name)
+                    if fsx.fstat_dir(child).st_nlink != 0:
+                        raise OSError('private child removal unconfirmed')
+                finally:
+                    fsx.close_dir(child)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                fsx.unlink_at(handle, entry.name)
+            else:
+                raise OSError('unexpected private directory entry')
 
 
 class _ClientContext:
@@ -68,8 +104,10 @@ class _ClientContext:
         return tuple(row['process'] for row in self._clients)
 
     def register(self, process, argv):
-        self._clients.append({'process': process, 'pid': getattr(process, 'pid', None),
-                              'argv': tuple(argv), 'exit': None})
+        row = {'process': process, 'pid': getattr(process, 'pid', None),
+               'argv': tuple(argv), 'exit': None}
+        self._clients.append(row)
+        return row
 
     def _owned(self, process):
         for row in self._clients:
@@ -107,15 +145,28 @@ class _ClientContext:
             return False
         if self._cleaned:
             return not os.path.lexists(self.directory)
+        parent = directory = None
         try:
-            if (_directory_identity(self.directory) != self._identity
-                    or _directory_identity(self.directory.parent) != self._parent_identity):
+            parent = fsx.open_dir(self.directory.parent)
+            # WindowsDirectory currently provides pathname checks, not a pinned
+            # descriptor. This POSIX synthetic fixture refuses that boundary.
+            if type(parent) is not int or _directory_stat_identity(fsx.fstat_dir(parent)) != self._parent_identity:
                 return False
-            shutil.rmtree(self.directory)
-            if os.path.lexists(self.directory):
+            directory = fsx.open_dir_at(parent, self.directory.name)
+            if type(directory) is not int or _directory_stat_identity(fsx.fstat_dir(directory)) != self._identity:
+                return False
+            _empty_client_directory(directory, [4096])
+            if _directory_stat_identity(fsx.lstat_at(parent, self.directory.name)) != self._identity:
+                return False
+            fsx.rmdir_at(parent, self.directory.name)
+            if (fsx.fstat_dir(directory).st_nlink != 0 or os.path.lexists(self.directory)
+                    or _directory_identity(self.directory.parent) != self._parent_identity):
                 return False
         except OSError:
             return False
+        finally:
+            fsx.close_dir(directory)
+            fsx.close_dir(parent)
         self._cleaned = True
         return True
 
@@ -217,9 +268,18 @@ def _docker_environment():
 def _command(args, timeout=60):
     try:
         with _docker_client(), tempfile.TemporaryFile() as output:
-            subprocess.run(_docker_argv(args), stdin=subprocess.DEVNULL, stdout=output,
-                           stderr=subprocess.DEVNULL, env=_docker_environment(),
-                           timeout=timeout, check=True)
+            process = _client_popen(args, stdin=subprocess.DEVNULL, stdout=output,
+                                    stderr=subprocess.DEVNULL)
+            try:
+                process.communicate(timeout=timeout)
+                code = process.returncode
+            finally:
+                if not _stop_client(process):
+                    raise FixtureError('client_cleanup_unconfirmed', cleanup_context=_DOCKER_CONFIG.get()) from None
+            if type(code) is not int:
+                raise FixtureError('container_unavailable')
+            if code:
+                raise subprocess.CalledProcessError(code, process.args)
             output.seek(0)
             data = output.read(MAX_FRAME + 1)
         if len(data) > MAX_FRAME:
@@ -243,11 +303,25 @@ def _docker_argv(args):
 
 def _client_popen(args, **kwargs):
     context = _DOCKER_CONFIG.get()
-    if context is None or len(context.processes) >= 2:
+    if (context is None or len(context.processes) >= 1024
+            or sum(row['exit'] is None for row in context._clients) >= 2):
         raise FixtureError('container_unavailable')
     argv = _docker_argv(args)
-    process = subprocess.Popen(argv, env=_docker_environment(), **kwargs)
-    context.register(process, argv)
+    factory = subprocess.Popen
+    if isinstance(factory, type):
+        # Own the object before __init__ can enter an interruptible spawn/wait.
+        # A failed constructor remains unknown unless this exact object later
+        # supplies a positive PID and consistent exit proof.
+        process = factory.__new__(factory)
+        row = context.register(process, argv)
+        try:
+            factory.__init__(process, argv, env=_docker_environment(), **kwargs)
+        finally:
+            row['pid'] = getattr(process, 'pid', None)
+    else:
+        # Test-only callable factories still register their returned object.
+        process = factory(argv, env=_docker_environment(), **kwargs)
+        context.register(process, argv)
     return process
 
 

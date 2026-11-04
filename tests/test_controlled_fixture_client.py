@@ -1,7 +1,7 @@
 """Client cleanup uncertainty uses inert stand-ins; no Docker or provider runs."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import gc
 import json
 import os
@@ -50,8 +50,21 @@ class InertClient:
         return self.returncode
 
 
+class InterruptedClient(InertClient):
+    __enter__ = subprocess.Popen.__enter__
+    __exit__ = subprocess.Popen.__exit__
+    stderr = None
+    _sigint_wait_secs = 0.01
+
+    def communicate(self,input=None,timeout=None):
+        raise KeyboardInterrupt
+
+    def _wait(self,timeout=None):
+        raise subprocess.TimeoutExpired(self.args,timeout)
+
+
 @contextmanager
-def public_cleanup_case(mode, *, uncertain):
+def public_cleanup_case(mode, *, uncertain, sync=False):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         policy = enabled_policy()
@@ -63,7 +76,7 @@ def public_cleanup_case(mode, *, uncertain):
         binding = journal.Binding('fixture-chain','fixture-task','fixture-owner','fixture-route',
             'fixture-session','a'*64,'b'*64,'c'*64)
         budget = journal.TaskBudget(2,4,'1.5',int(time.time())+120)
-        process = InertClient(uncertain)
+        process = (InterruptedClient if sync else InertClient)(uncertain)
         owners = {}
 
         def popen(argv,**kwargs):
@@ -97,11 +110,15 @@ def public_cleanup_case(mode, *, uncertain):
                 process.events.append('lines.close')
 
         error = None
+        def image(*args,**kwargs):
+            fixture._command(['/never-run','image','inspect','synthetic'])
+            raise AssertionError('interrupted command returned')
+
         with patch.object(fixture.shutil,'which',return_value='/never-run'), \
                 patch.object(fixture,'_read_input'), \
-                patch.object(fixture,'_immutable_image',return_value='sha256:'+'b'*64), \
+                patch.object(fixture,'_immutable_image',side_effect=image) if sync else patch.object(fixture,'_immutable_image',return_value='sha256:'+'b'*64), \
                 patch.object(fixture,'_validate_container',return_value=True), \
-                patch.object(fixture,'_command',side_effect=command), \
+                nullcontext() if sync else patch.object(fixture,'_command',side_effect=command), \
                 patch.object(fixture.subprocess,'Popen',side_effect=popen), \
                 patch.object(fixture,'_Lines',Lines), \
                 patch.object(fenced_fixture,'_helper',return_value=''), \
@@ -109,7 +126,7 @@ def public_cleanup_case(mode, *, uncertain):
                 patch.object(fenced_fixture,'_create',return_value='a'*64):
             try:
                 (fixture.run if mode == 'controlled' else fenced_fixture.run)(root,binding,budget)
-            except fixture.FixtureError as caught:
+            except (fixture.FixtureError,KeyboardInterrupt) as caught:
                 error = caught
         assert error is not None
         try:
@@ -125,6 +142,190 @@ def public_cleanup_case(mode, *, uncertain):
 
 @unittest.skipIf(os.name == 'nt','public journal fixture requires POSIX directory fsync')
 class ClientCleanupTests(unittest.TestCase):
+    def test_constructor_without_pid_retains_unknown_context_without_adoption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            original_mkdtemp = tempfile.mkdtemp
+
+            class FailedConstructor:
+                def __init__(self,*args,**kwargs):
+                    raise OSError('modeled constructor with no exit proof')
+
+            with patch.object(fixture.tempfile,'mkdtemp',side_effect=lambda **kwargs: original_mkdtemp(dir=temporary,**kwargs)), \
+                    patch.object(fixture.subprocess,'Popen',FailedConstructor):
+                with self.assertRaises(fixture.FixtureError) as caught:
+                    fixture._command(['/never-run','synthetic'])
+            context = caught.exception.cleanup_context
+            self.assertTrue(context.directory.is_dir())
+            self.assertFalse(context.reconcile(context.processes))
+            self.assertFalse(context.reconcile(()))
+            # No child exists in this inert constructor. Only the test's whole
+            # owned temporary namespace removes this unreconcilable model.
+
+    def test_real_harmless_sync_child_uses_registered_exit_proof(self):
+        import sys
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary)/'harmless-client'
+            executable.write_text('#!'+sys.executable+'\nprint("owned sync output")\n')
+            executable.chmod(0o700)
+            with fixture._docker_client():
+                context = fixture._DOCKER_CONFIG.get()
+                self.assertEqual(fixture._command([str(executable),'synthetic']),'owned sync output')
+                self.assertEqual(len(context.processes),1)
+                self.assertEqual(context._clients[0]['exit'],0)
+                self.assertTrue(context.directory.is_dir())
+            self.assertFalse(context.directory.exists())
+
+    def test_sync_clients_share_exit_proof_and_constructor_failure_ownership(self):
+        for failure in ('communicate','wait','constructor','interrupt-constructor'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                clients = []
+                original_mkdtemp = tempfile.mkdtemp
+
+                class Client(InertClient):
+                    def __init__(self,argv,**kwargs):
+                        super().__init__(True)
+                        self.args = argv
+                        self.directory = Path(kwargs['env']['HOME'])
+                        clients.append(self)
+                        if failure == 'constructor':
+                            raise OSError('modeled failure after child creation')
+                        if failure == 'interrupt-constructor':
+                            raise KeyboardInterrupt
+
+                    def communicate(self,timeout):
+                        if failure == 'communicate':
+                            raise SystemExit('modeled interrupted communicate')
+                        self.returncode = 0
+
+                    def wait(self,timeout):
+                        if failure == 'wait':
+                            raise KeyboardInterrupt
+                        return super().wait(timeout)
+
+                with patch.object(fixture.tempfile,'mkdtemp',side_effect=lambda **kwargs: original_mkdtemp(dir=temporary,**kwargs)), \
+                        patch.object(fixture.subprocess,'Popen',Client):
+                    with self.assertRaises(fixture.FixtureError) as caught:
+                        fixture._command(['/never-run','synthetic'])
+                error = caught.exception
+                self.assertEqual(str(error),'client_cleanup_unconfirmed')
+                context = error.cleanup_context
+                self.assertEqual(context.processes,tuple(clients))
+                self.assertTrue(context.directory.is_dir())
+                client = clients[0]
+                client.returncode = 0
+                # Restore a normal wait on this exact object after the modeled
+                # interruption. Reconciliation sends no signal or command.
+                client.wait = lambda timeout: 0
+                self.assertTrue(context.reconcile((client,)))
+
+    def test_sync_success_and_failure_confirm_exit_before_config_removal(self):
+        for code in (0,7):
+            with self.subTest(code=code):
+                clients = []
+
+                class Client(InertClient):
+                    def __init__(self,argv,**kwargs):
+                        super().__init__(False)
+                        self.args = argv
+                        self.directory = Path(kwargs['env']['HOME'])
+                        self.output = kwargs['stdout']
+                        clients.append(self)
+
+                    def communicate(self,timeout):
+                        self.output.write(b'owned output\n')
+                        self.returncode = code
+
+                with patch.object(fixture.subprocess,'Popen',Client):
+                    if code:
+                        with self.assertRaisesRegex(fixture.FixtureError,'container_command_failed'):
+                            fixture._command(['/never-run','synthetic'])
+                    else:
+                        self.assertEqual(fixture._command(['/never-run','synthetic']),'owned output')
+                self.assertEqual(len(clients),1)
+                self.assertFalse(clients[0].directory.exists())
+                self.assertNotIn('kill',clients[0].events)
+
+    def test_descriptor_cleanup_bounds_and_links_refuse_without_fd_leaks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'owned'
+            root.mkdir()
+            (root/'retained').write_bytes(b'owned bytes')
+            before = len(os.listdir('/proc/self/fd')) if Path('/proc/self/fd').exists() else None
+            descriptor = fixture.fsx.open_dir(root)
+            try:
+                with self.assertRaises(OSError):
+                    fixture._empty_client_directory(descriptor,[0])
+                self.assertEqual((root/'retained').read_bytes(),b'owned bytes')
+                (root/'retained').unlink()
+                foreign = Path(temporary)/'foreign'
+                foreign.write_bytes(b'foreign bytes')
+                (root/'link').symlink_to(foreign)
+                with self.assertRaises(OSError):
+                    fixture._empty_client_directory(descriptor,[4096])
+                with self.assertRaises(OSError):
+                    fixture._empty_client_directory(descriptor,[4096],17)
+                self.assertTrue((root/'link').is_symlink())
+                self.assertEqual(foreign.read_bytes(),b'foreign bytes')
+            finally:
+                fixture.fsx.close_dir(descriptor)
+            if before is not None:
+                self.assertEqual(len(os.listdir('/proc/self/fd')),before)
+
+    def test_public_sync_interrupt_retains_owned_config_and_reconciliation_handle(self):
+        for mode in ('controlled','fenced'):
+            with self.subTest(mode=mode), public_cleanup_case(mode,uncertain=True,sync=True) as (process,error,state):
+                self.assertTrue(process.directory.is_dir(),'sync interrupt deleted private config')
+                self.assertEqual(str(error),'client_cleanup_unconfirmed')
+                context = error.cleanup_context
+                self.assertEqual(context.processes,(process,))
+                self.assertEqual(state['attempts'][-1]['state'],'active_unknown')
+                self.assertFalse(context.reconcile((process,)))
+                process.returncode = -9
+                self.assertTrue(context.reconcile((process,)))
+
+    def test_root_replacement_at_deletion_preserves_foreign_data(self):
+        for mode in ('controlled','fenced'):
+            with self.subTest(mode=mode), public_cleanup_case(mode,uncertain=True) as (process,error,_state):
+                context = error.cleanup_context
+                process.returncode = -9
+                original = process.directory
+                moved = original.with_name(original.name+'-race-owned')
+                real_rmtree = fixture.shutil.rmtree
+                real_scandir = fixture.fsx.scandir
+                replaced = False
+
+                def replace():
+                    nonlocal replaced
+                    if replaced:
+                        return
+                    replaced = True
+                    original.rename(moved)
+                    original.mkdir()
+                    (original/'foreign').write_bytes(b'preserve foreign bytes')
+
+                def replace_then_delete(path,*args,**kwargs):
+                    replace()
+                    return real_rmtree(path,*args,**kwargs)
+
+                def replace_then_scan(handle):
+                    replace()
+                    return real_scandir(handle)
+
+                try:
+                    with patch.object(fixture.shutil,'rmtree',side_effect=replace_then_delete), \
+                            patch.object(fixture.fsx,'scandir',side_effect=replace_then_scan):
+                        self.assertFalse(context.reconcile((process,)))
+                    self.assertEqual((original/'foreign').read_bytes(),b'preserve foreign bytes')
+                    self.assertTrue(moved.is_dir())
+                finally:
+                    if original.exists():
+                        real_rmtree(original)
+                    if moved.exists():
+                        moved.rename(original)
+                    if context._cleaned and original.exists():
+                        real_rmtree(original)
+                self.assertTrue(context.reconcile((process,)))
+
     def test_public_paths_retain_private_config_when_client_exit_is_unknown(self):
         for mode in ('controlled','fenced'):
             for uncertain in (True,'kill-failure'):

@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from getzilla import controlled_fixture as fixture
 from getzilla import fenced_fixture
@@ -27,8 +27,15 @@ class FixtureImageContractTests(unittest.TestCase):
             command.assert_not_called()
 
     def test_docker_command_uses_the_local_socket_despite_context_environment(self):
+        process = Mock(pid=424242,returncode=0)
+        process.poll.return_value = process.wait.return_value = 0
+
+        def popen(argv,**kwargs):
+            process.args = argv
+            return process
+
         with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://untrusted.invalid:2375', 'DOCKER_CONTEXT': 'untrusted'}), \
-                patch.object(fixture.subprocess, 'run') as run:
+                patch.object(fixture.subprocess, 'Popen', side_effect=popen) as run:
             self.assertEqual(fixture._command(['/usr/bin/docker', 'version']), '')
             args = run.call_args.args[0]
             self.assertEqual(args[:2], ['/usr/bin/docker', '--config'])
