@@ -14,7 +14,7 @@ import secrets
 import stat
 import time
 from contextlib import ExitStack, contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, localcontext
 from pathlib import Path
 from typing import Any
@@ -107,8 +107,10 @@ def _integer(value: Any, maximum: int = 1_000_000_000) -> bool:
 def _binding(binding: Binding) -> dict:
     if type(binding) is not Binding:
         raise JournalError('invalid_binding')
-    value = asdict(binding)
-    if any(not isinstance(v, str) or not (_DIGEST if k.endswith('_digest') else _ID).fullmatch(v)
+    # Reject containers and string subclasses before any recursive dataclass
+    # copying can call a hook or traverse caller-controlled cyclic structures.
+    value = {field.name: getattr(binding, field.name) for field in fields(Binding)}
+    if any(type(v) is not str or not (_DIGEST if k.endswith('_digest') else _ID).fullmatch(v)
            for k, v in value.items()):
         raise JournalError('invalid_binding')
     return value
