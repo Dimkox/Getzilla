@@ -95,6 +95,7 @@ class ContinuityTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             result = data['hookSpecificOutput']['additionalContext']
             self.assertLessEqual(len(result.encode('utf-8')), 16384)
+            self.assertIn('Model continuation:', result)
             self.assertIn('Unresolved evidence count: 3', result)
             for item in remaining:
                 self.assertIn(f'Unresolved evidence: {item}: not_run', result)
