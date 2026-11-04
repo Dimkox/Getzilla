@@ -428,6 +428,122 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
         self.assertEqual(hooks[1]['hooks'][0]['command'], 'python3 ' + path)
 
+    def test_custom_relocated_agent_policy_refuses_before_generated_permissions_change(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for scenario in ('kept', 'divergent', 'unowned', 'mode-only'):
+                    with self.subTest(scenario=scenario):
+                        self.project = Path(tmp) / scenario
+                        git(original_project, 'clone', '--quiet', str(original_project), str(self.project))
+                        manifest = self.select(('codex',))
+                        legacy = '.grok/agents/general_implementer.toml'
+                        active = '.codex/agents/general_implementer.toml'
+                        baseline = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+                        custom = baseline.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"')
+                        if scenario == 'mode-only':
+                            custom = baseline
+                        else:
+                            self.assertNotEqual(custom, baseline)
+                        for relative in (legacy, active):
+                            target = self.project / relative
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(custom)
+                            target.chmod(0o644)
+                        if scenario == 'mode-only':
+                            (self.project / legacy).chmod(0o444)
+                        original_mode = (self.project / legacy).stat().st_mode
+                        if scenario != 'unowned':
+                            record_owned(manifest, legacy, baseline, 0o644)
+                        record_owned(manifest, active, custom, 0o644)
+                        if scenario == 'kept':
+                            (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                                'schema_version': 1, 'kept_local': [legacy],
+                                'kept_local_sha256': {legacy: hashlib.sha256(custom).hexdigest()}}))
+                        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                        self.commit('custom canonical read-only policy')
+                        before = git(self.project, 'rev-parse', 'HEAD')
+                        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
+                            upgrade.sync_project(ROOT, self.project)
+                        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                        self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+                        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+                        self.assertEqual((self.project / legacy).read_bytes(), custom)
+                        self.assertEqual((self.project / legacy).stat().st_mode, original_mode)
+                        self.assertEqual((self.project / active).read_bytes(), custom)
+                        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+                        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+            finally:
+                self.project = original_project
+
+    def test_custom_relocated_cursor_source_refuses_before_publication(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('cursor',))
+        legacy = '.grok/cursor-rules/00-core.toml'
+        source = self.project / legacy
+        source.parent.mkdir(parents=True)
+        baseline = (ROOT / '.getzilla/cursor-rules/00-core.toml').read_bytes()
+        custom = baseline.replace(b'# Getzilla engineering contract', b'# Local Cursor policy: keep this workspace read-only')
+        source.write_bytes(custom)
+        source.chmod(0o644)
+        record_owned(manifest, legacy, baseline, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('custom Cursor canonical policy')
+        before = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/cursor-rules/00-core\.toml'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual(source.read_bytes(), custom)
+        self.assertFalse((self.project / '.getzilla/cursor-rules/00-core.toml').exists())
+        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+
+    def test_canonical_role_migrates_and_rolls_back_without_touching_grok_markdown(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        legacy = '.grok/agents/general_implementer.toml'
+        content = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        old = self.project / legacy
+        old.parent.mkdir(parents=True)
+        old.write_bytes(content)
+        old.chmod(0o644)
+        record_owned(manifest, legacy, content, 0o644)
+        extension = self.project / '.grok/agents/local-extension.md'
+        extension.write_bytes(b'# Local Grok-only adapter extension\n')
+        extension.chmod(0o600)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('ordinary canonical input and independent Grok brief')
+        original = git(self.project, 'rev-parse', 'HEAD')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertFalse(old.exists())
+        self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), content)
+        self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
+        git(self.project, 'switch', '--quiet', 'main')
+        self.assertEqual(old.read_bytes(), content)
+        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+        self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+
+    def test_owned_previous_canonical_baseline_can_upgrade_to_incoming_source(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        current = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        previous = current.replace(b'description = "Default write owner for generic application changes."',
+                                   b'description = "Prior managed role description."')
+        self.assertNotEqual(previous, current)
+        for relative in ('.grok/agents/general_implementer.toml', '.codex/agents/general_implementer.toml'):
+            path = self.project / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(previous)
+            path.chmod(0o644)
+            record_owned(manifest, relative, previous, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('unchanged previous managed role baseline')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), current)
+        self.assertEqual((self.project / '.codex/agents/general_implementer.toml').read_bytes(), current)
+
     def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
         original = upgrade.planned_changes
         def moving(*args, **kwargs):

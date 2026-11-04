@@ -294,6 +294,28 @@ def planned_changes(installer, home: Path, project: Path,
             raise installer.UnsafeInstallTarget(str(exc)) from exc
         for record in manifest['components'].values():
             record.get('owned', {}).pop(path, None)
+    # Relocation must not bypass the old ownership collision for policy inputs.
+    # In particular, resetting a local role source could widen generated sandbox permissions.
+    for path, entry in sorted(by_path.items()):
+        legacy_path = next((old + path[len(new):] for new, old in (
+            ('.getzilla/agents/', '.grok/agents/'),
+            ('.getzilla/cursor-rules/', '.grok/cursor-rules/'))
+            if path.startswith(new) and path.endswith('.toml') and '/' not in path[len(new):]), None)
+        if legacy_path is None:
+            continue
+        if observations is not None and legacy_path in observations:
+            current = observations[legacy_path]
+        else:
+            current = binding.read(legacy_path)
+            if observations is not None:
+                observations[legacy_path] = current
+        if current is None:
+            continue
+        incoming_match = current.content == entry.content and mode_matches(current.mode, entry.mode)
+        baseline_match = matches_owned(current, owned_proof(state.manifest, legacy_path))
+        if not incoming_match and (legacy_path in kept or not baseline_match):
+            raise UpdateError('custom legacy canonical source requires reconciliation before neutral migration: '
+                              f'{legacy_path} -> {path}')
     # Never silently deactivate a customized canonical legacy guard. Unknown
     # extra hooks stay; a customization of a replaced entrypoint needs review.
     for path in sorted(by_path):
