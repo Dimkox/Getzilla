@@ -18,6 +18,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -27,10 +29,109 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
+  platform-plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.inventory.outputs.matrix }}
+    steps:
+      - name: Check out the exact candidate and stable history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the declared required native pairs
+        id: inventory
+        shell: bash
+        run: |
+          matrix=$(python scripts/getzilla_platform_install.py --matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  platform-install:
+    needs: platform-plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platform-plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      GETZILLA_PLATFORM_CELL: ${{ matrix.id }}
+    steps:
+      - name: Keep installer bytes as committed
+        shell: bash
+        run: git config --global core.autocrlf false
+      - name: Check out the exact candidate and previous stable history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up native Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          architecture: ${{ matrix.arch }}
+      - name: Exercise the real user installer and previous-stable project upgrade
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          cell = os.environ['GETZILLA_PLATFORM_CELL']
+          workspace = pathlib.Path(os.environ['RUNNER_TEMP']) / ('platform-' + cell)
+          sys.exit(subprocess.call([sys.executable, 'scripts/getzilla_platform_install.py',
+              '--cell', cell, '--workspace', str(workspace), '--head', os.environ['GETZILLA_EXPECTED_HEAD']]))
+      - name: Retain actual install and upgrade observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-platform-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/platform-${{ matrix.id }}/result.json
+            ${{ runner.temp }}/platform-${{ matrix.id }}/*.log
+          retention-days: 30
+          if-no-files-found: error
+
+  platform-install-results:
+    if: always()
+    needs: [platform-plan, platform-install]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact candidate for observation validation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download only this run and attempt's platform observations
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: getzilla-platform-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-results
+      - name: Require complete native install and upgrade observations
+        env:
+          GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          GETZILLA_PLATFORM_JOB_RESULT: ${{ needs.platform-install.result }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          results = pathlib.Path(os.environ['RUNNER_TEMP']) / 'platform-results'
+          sys.exit(subprocess.call([sys.executable, 'scripts/getzilla_platform_install.py',
+              '--aggregate', str(results), '--head', os.environ['GETZILLA_EXPECTED_HEAD'],
+              '--job-result', os.environ['GETZILLA_PLATFORM_JOB_RESULT']]))
+
   linux:
+    if: always()
+    needs: platform-install-results
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Require every supported native installer cell
+        shell: python
+        env:
+          GETZILLA_PLATFORM_RESULT: ${{ needs.platform-install-results.result }}
+        run: |
+          import os, sys
+          sys.exit(0 if os.environ.get('GETZILLA_PLATFORM_RESULT') == 'success' else 1)
       - name: Check out the exact commit with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

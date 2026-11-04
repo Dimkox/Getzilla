@@ -28,6 +28,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
+from . import STACK_DIR
 from typing import Callable, NamedTuple, Sequence
 
 PUBLIC = 'public'
@@ -264,14 +265,44 @@ def default_branch(root: Path | str, *, runner: Runner = run_command) -> tuple[s
     return FALLBACK_BRANCH, 'fallback'
 
 
-def render_workflow(template: bytes, branch: str) -> bytes:
+def render_workflow(template: bytes, branch: str, *, platforms: list[str] | None = None) -> bytes:
     """The consumer workflow: template bytes with LF newlines and the push branch filled in."""
     if not _valid_branch(branch):
         raise CiGateError(f'unsupported default branch name: {branch!r}')
     text = template.replace(b'\r\n', b'\n').decode('utf-8')
     if text.count(BRANCH_PLACEHOLDER) != 1:
         raise CiGateError(f'{TEMPLATE_PATH} must contain {BRANCH_PLACEHOLDER} exactly once')
-    return text.replace(BRANCH_PLACEHOLDER, branch).encode('utf-8')
+    text = text.replace(BRANCH_PLACEHOLDER, branch)
+    if platforms is not None:
+        from .platform_install import load_matrix, select_platforms
+        try:
+            selected = select_platforms(load_matrix(STACK_DIR.parent), platforms)
+        except (ValueError, OSError) as error:
+            raise CiGateError(str(error)) from error
+        cells = [{'platform': c['id'], 'runner': c['runner']} for c in selected]
+        original = '  getzilla-verify:\n    runs-on: ubuntu-latest'
+        replacement = ('  getzilla-verify-platform:\n    strategy:\n      fail-fast: false\n'
+                       '      matrix:\n        include: ' + json.dumps(cells) + '\n'
+                       '    runs-on: ${{ matrix.runner }}')
+        if text.count(original) != 1:
+            raise CiGateError('platform matrix requires the known client workflow template')
+        text = text.replace(original, replacement)
+        start = text.index('      - name: Install OpenGrep for taint analysis')
+        end = text.index('      - name: Record startup capacity', start)
+        text = text[:start] + ("      - name: Verify native runner and install its pinned OpenGrep\n"
+                              "        env:\n          GETZILLA_RUNNER_OS: ${{ runner.os }}\n"
+                              "        run: |\n"
+                              "          python scripts/getzilla_platform_install.py --check-platform ${{ matrix.platform }}\n"
+                              "          python scripts/getzilla_update.py --only opengrep\n") + text[end:]
+        text = text.replace('name: getzilla-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+                            'name: getzilla-evidence-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}')
+        text += ("\n  getzilla-verify:\n    if: always()\n    needs: getzilla-verify-platform\n"
+                 "    runs-on: ubuntu-latest\n    steps:\n"
+                 "      - name: Require every selected platform\n        shell: python\n"
+                 "        env:\n          GETZILLA_PLATFORM_RESULT: ${{ needs.getzilla-verify-platform.result }}\n"
+                 "        run: |\n          import os, sys\n"
+                 "          sys.exit(0 if os.environ.get('GETZILLA_PLATFORM_RESULT') == 'success' else 1)\n")
+    return text.encode('utf-8')
 
 
 def _join(root: Path, relative: str) -> Path:
@@ -340,6 +371,7 @@ def plan_gate(
     *,
     visibility: str | None = None,
     branch: str | None = None,
+    platforms: list[str] | None = None,
     runner: Runner = run_command,
     fetch: Fetcher = https_get,
     which: Which = shutil.which,
@@ -373,7 +405,7 @@ def plan_gate(
         template_file = _join(stack, TEMPLATE_PATH)
         if not template_file.is_file():
             raise CiGateError(f'missing workflow template: {TEMPLATE_PATH}')
-        content = render_workflow(template_file.read_bytes(), branch_name)
+        content = render_workflow(template_file.read_bytes(), branch_name, platforms=platforms)
         if _same_directory(root, stack) and _join(root, SOURCE_WORKFLOW_PATH).is_file():
             state, reason = 'source-repository', f'gated by its own {SOURCE_WORKFLOW_PATH}'
         else:
@@ -383,6 +415,7 @@ def plan_gate(
             'template': TEMPLATE_PATH,
             'state': state,
             'reason': reason,
+            'platforms': platforms or ['linux-x64'],
             'push_branch': branch_name,
             'push_branch_source': branch_source,
             'sha256': hashlib.sha256(content).hexdigest(),
@@ -453,13 +486,14 @@ def apply_gate(
     *,
     visibility: str | None = None,
     branch: str | None = None,
+    platforms: list[str] | None = None,
     runner: Runner = run_command,
     fetch: Fetcher = https_get,
     which: Which = shutil.which,
 ) -> dict[str, object]:
     """Plan, then perform the only write the plan allows; ``result`` says what happened."""
     root = Path(target_root)
-    plan = plan_gate(root, stack_root, visibility=visibility, branch=branch, runner=runner, fetch=fetch, which=which)
+    plan = plan_gate(root, stack_root, visibility=visibility, branch=branch, platforms=platforms, runner=runner, fetch=fetch, which=which)
     gate = plan['gate']
     if gate is None:
         plan['result'] = 'undetermined'
@@ -476,7 +510,7 @@ def apply_gate(
         plan['result'] = 'nothing-to-write'
     elif state == 'create':
         template = _join(Path(stack_root), TEMPLATE_PATH).read_bytes()
-        content = render_workflow(template, str(entry['push_branch']))
+        content = render_workflow(template, str(entry['push_branch']), platforms=platforms)
         recheck, reason = workflow_state(root, content)
         if recheck == 'create' and _create_exclusively(_join(root, WORKFLOW_PATH), content):
             plan['result'] = 'written'

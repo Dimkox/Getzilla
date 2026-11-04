@@ -263,6 +263,34 @@ class GateSelectionTests(unittest.TestCase):
 
 
 class WorkflowTemplateTests(unittest.TestCase):
+    def test_explicit_platforms_render_native_matrix_and_reject_unknown_before_write(self) -> None:
+        rendered = ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main',
+                                         platforms=['linux-x64', 'macos-arm64', 'windows-x64']).decode()
+        self.assertIn('runner.os', rendered)
+        self.assertIn('macos-15', rendered)
+        self.assertIn('windows-2025', rendered)
+        self.assertIn('fail-fast: false', rendered)
+        self.assertIn('needs: getzilla-verify-platform', rendered)
+        self.assertIn('if: always()', rendered)
+        self.assertIn('python scripts/getzilla_update.py --only opengrep', rendered)
+        for names in ([], ['unknown'], ['windows-arm64'], ['linux-x64', 'linux-x64']):
+            with self.subTest(names=names), self.assertRaises(ci_gate.CiGateError):
+                ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main', platforms=names)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML not installed')
+    def test_generated_client_aggregate_executes_failure_and_skip_controls(self) -> None:
+        import yaml
+        document = yaml.safe_load(ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main',
+                                                        platforms=['linux-x64', 'windows-x64']))
+        final = document['jobs']['getzilla-verify']
+        guard = final['steps'][0]
+        self.assertEqual(guard['shell'], 'python')
+        for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
+            process = subprocess.run([sys.executable, '-c', guard['run']],
+                                     env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
+                                     capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, expected, result)
+
     def test_template_is_minimal_pinned_and_runs_the_pr_gate(self) -> None:
         text = TEMPLATE.read_text(encoding='utf-8')
         self.assertEqual(text.count(ci_gate.BRANCH_PLACEHOLDER), 1)
