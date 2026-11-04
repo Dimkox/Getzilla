@@ -157,8 +157,8 @@ def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[st
             raise ComponentStateError(f'kept-local Codex activation requires the complete existing pair: {path}')
         if current is not None and (current.content != entry.content or not mode_matches(current.mode, entry.mode)):
             raise ComponentStateError(f'custom Codex activation must be reconciled before adding files: {path}')
-    source_overlay = payload.get('.grok/codex-hooks.json')
-    current_overlay = binding.read('.grok/codex-hooks.json')
+    source_overlay = payload.get('.getzilla/config/codex-hooks.json')
+    current_overlay = binding.read('.getzilla/config/codex-hooks.json')
     if (current_overlay.content if current_overlay else None) != (source_overlay.content if source_overlay else None):
         raise ComponentStateError('custom Codex canonical overlay must be reconciled before adding files')
 

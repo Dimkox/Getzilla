@@ -39,22 +39,24 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
 
     required = [
-        'AGENTS.md', '.grok/config.toml', '.grok/hooks.json',
+        'AGENTS.md', '.getzilla/config/hooks.json',
         '.agents/skills/getzilla-delivery/SKILL.md', '.getzilla/config/routing.json',
     ]
     for rel in required:
         items.append(DoctorItem('pass' if (root / rel).exists() else 'fail', f'file:{rel}', 'present' if (root / rel).exists() else 'missing'))
 
     for rel in ('.grok/config.toml',):
+        if not (root / rel).exists():
+            continue
         try:
             tomllib.loads((root / rel).read_text(encoding='utf-8'))
             items.append(DoctorItem('pass', f'toml:{rel}', 'valid TOML'))
         except Exception as exc:
             items.append(DoctorItem('fail', f'toml:{rel}', str(exc)))
 
-    for rel in ('.grok/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json',
+    for rel in ('.getzilla/config/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json',
                 '.gemini/settings.json', '.github/hooks/getzilla.json'):
-        if rel != '.grok/hooks.json' and not (root / rel).exists():
+        if rel != '.getzilla/config/hooks.json' and not (root / rel).exists():
             items.append(DoctorItem('info', f'json:{rel}', 'harness not installed'))
             continue
         try:
@@ -74,7 +76,7 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     extra_agents = managed.get('extra_agents') if isinstance(managed.get('extra_agents'), dict) else {}
 
     for name in managed_agents:
-        path = root / '.grok/agents' / f'{name}.toml'
+        path = root / '.getzilla/agents' / f'{name}.toml'
         if not path.is_file():
             if name in extra_agents:
                 items.append(DoctorItem('info', f'agent:{name}', f'not installed; add it with getzilla components add {extra_agents[name]}'))
@@ -100,7 +102,7 @@ def run_doctor(root: Path) -> list[DoctorItem]:
         valid = skill_text.startswith('---\n') and '\nname:' in skill_text[:500] and '\ndescription:' in skill_text[:1000]
         items.append(DoctorItem('pass' if valid else 'fail', f'skill:{name}', 'valid frontmatter' if valid else 'invalid frontmatter'))
 
-    unmanaged_agents = [path.name for path in (root / '.grok/agents').glob('*.toml') if path.stem not in managed_agents]
+    unmanaged_agents = [path.name for path in (root / '.getzilla/agents').glob('*.toml') if path.stem not in managed_agents]
     unmanaged_skills = [path.parent.name for path in (root / '.agents/skills').glob('*/SKILL.md')
                         if path.parent.name not in managed_skills and path.parent.name not in extra_skills]
     if unmanaged_agents:

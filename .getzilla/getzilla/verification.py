@@ -1696,7 +1696,7 @@ QUALITY_PY_PATHS = (
     '.getzilla/integrations',
     'scripts',
     'tests',
-    '.grok/hooks',
+    '.getzilla/hooks',
     'user_prompt_submit.py',
     'pre_tool_use.py',
     'post_tool_use.py',

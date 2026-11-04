@@ -4,7 +4,7 @@ globs: .getzilla/getzilla/**,factory/src/**,factory/runtime/**,.grok/**
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/50-agent-runtime.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/50-agent-runtime.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Bounded agent execution
 

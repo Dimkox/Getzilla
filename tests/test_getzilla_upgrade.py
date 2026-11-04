@@ -108,8 +108,8 @@ class ProjectSyncTests(unittest.TestCase):
     def test_codex_update_preserves_canonical_overlay_and_custom_enabled_configuration(self) -> None:
         self.select(('codex',))
         overlay = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo user-stop'}]}]}}
-        (self.project / '.grok').mkdir()
-        overlay_path = self.project / '.grok/codex-hooks.json'
+        (self.project / '.getzilla/config').mkdir(parents=True, exist_ok=True)
+        overlay_path = self.project / '.getzilla/config/codex-hooks.json'
         overlay_path.write_text(json.dumps(overlay))
         (self.project / '.codex').mkdir()
         config = self.project / '.codex/config.toml'
@@ -122,6 +122,102 @@ class ProjectSyncTests(unittest.TestCase):
         hooks = json.loads((self.project / '.codex/hooks.json').read_text())['hooks']['Stop']
         self.assertIn('stop_gate.py', hooks[0]['hooks'][0]['command'])
         self.assertEqual(hooks[1:], overlay['hooks']['Stop'])
+
+    def test_neutral_upgrade_preserves_legacy_overlay_and_retires_only_proven_sources(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned, read_state
+        manifest = self.select(('codex',))
+        overlay = b'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"entire hooks codex stop"}]}]}}\n'
+        sources = {'.grok/hooks/pre_tool_use.py': b'# previous managed guard\n',
+                   '.grok/agents/code_reviewer.toml': b'# previous role\n',
+                   '.grok/codex-hooks.json': overlay}
+        for path, content in sources.items():
+            target = self.project / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            target.chmod(0o644)
+            record_owned(manifest, path, content, 0o644)
+        # These files have no valid ownership proof and must survive the migration.
+        custom = self.project / '.grok/hooks/custom.py'
+        custom.write_bytes(b'# user hook\n')
+        # Pre-neutral installs classified these shared sources as Core.
+        old = manifest['components'].pop('agent:grok')
+        manifest['components']['core'] = old
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('legacy common sources with proof')
+        original = git(self.project, 'rev-parse', 'HEAD')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
+        migrated = read_state(self.project).manifest['components']['core']
+        self.assertIn('.getzilla/config/codex-hooks.json', migrated['files'])
+        self.assertNotIn('.getzilla/config/codex-hooks.json', migrated['owned'])
+        for path in sources:
+            self.assertFalse((self.project / path).exists(), path)
+        self.assertEqual(custom.read_bytes(), b'# user hook\n')
+        hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
+        self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
+        self.assertEqual(hooks[1]['hooks'][0]['command'], 'entire hooks codex stop')
+        self.assertNotIn('.grok/hooks/pre_tool_use.py', read_state(self.project).manifest['components']['core']['files'])
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
+        current = git(self.project, 'rev-parse', 'HEAD')
+        planned = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+        self.assertEqual([path for path, _, _ in planned], [])
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), current)
+        git(self.project, 'switch', '--quiet', 'main')
+        self.assertEqual((self.project / '.grok/hooks/pre_tool_use.py').read_bytes(), sources['.grok/hooks/pre_tool_use.py'])
+        self.assertFalse((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    def test_custom_legacy_canonical_guard_refuses_without_publication(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest
+        relative = '.grok/hooks/pre_tool_use.py'
+        target = self.project / relative
+        for scenario in ('changed', 'unowned', 'kept'):
+            with self.subTest(scenario=scenario):
+                manifest = self.select(('codex',))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                current = b'# consumer-specific policy\n'
+                target.write_bytes(current)
+                target.chmod(0o644)
+                if scenario != 'unowned':
+                    baseline = b'# managed baseline\n' if scenario == 'changed' else current
+                    manifest['components']['core'] = {'files': [relative], 'owned': {
+                        relative: {'sha256': hashlib.sha256(baseline).hexdigest(), 'mode': 0o644}}}
+                if scenario == 'kept':
+                    (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                        'schema_version': 1, 'kept_local': [relative],
+                        'kept_local_sha256': {relative: hashlib.sha256(current).hexdigest()}}))
+                (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                self.commit('custom legacy guard ' + scenario)
+                original = git(self.project, 'rev-parse', 'HEAD')
+                with self.assertRaisesRegex(upgrade.UpdateError, 'legacy hook.*reconciled'):
+                    upgrade.sync_project(ROOT, self.project)
+                self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
+                self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+                self.assertEqual(target.read_bytes(), current)
+                self.assertFalse((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    def test_unselected_custom_adapter_keeps_legacy_guard_dependency(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# baseline used by a custom unselected adapter\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        # A custom unselected adapter can still depend on the previous launcher.
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + relative}]}]}}).encode()
+        config.write_bytes(custom)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('custom adapter depends on legacy hook')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), custom)
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+        self.assertIn('.getzilla/hooks/pre_tool_use.py', (self.project / '.codex/hooks.json').read_text())
 
     def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
         original = upgrade.planned_changes
