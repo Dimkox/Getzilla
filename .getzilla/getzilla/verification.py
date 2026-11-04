@@ -2004,24 +2004,36 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
 
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
-    if not ((root / 'factory/pyproject.toml').is_file() and factory_tests.is_dir()):
+    if not (root / 'factory/pyproject.toml').is_file():
         return []
+    if not factory_tests.is_dir():
+        return [CheckResult('factory-unit', 'fail', 'Factory unit source directory is missing')]
+    from . import STACK_DIR
+    from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_inventory, validate_report
+    environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
+                   'PYTHONPATH': os.pathsep.join((str(STACK_DIR), str(root), str(root / 'factory/src')))}
     with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
         report = Path(temporary) / 'results.json'
+        request = Path(temporary) / 'request.json'
+        try:
+            binding = invocation(root, path=environment['PATH'])
+        except (OSError, ValueError, RuntimeError, SyntaxError) as exc:
+            return [CheckResult('factory-unit', 'fail', 'Factory invocation unavailable: ' + str(exc))]
+        request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8')
         result = _command_check(
-            root, 'factory-unit',
-            [sys.executable, str(Path(__file__).with_name('factory_tests.py')),
-             '--root', str(root), '--report', str(report)], 300,
+            root, 'factory-unit', [sys.executable, '-m', 'getzilla.factory_tests',
+                                  '--root', str(root), '--request', str(request), '--report', str(report)],
+            300, env=environment,
         )
         try:
-            if report.stat().st_size > 4 * 1024 * 1024:
+            if report.stat().st_size > MAX_REPORT_BYTES:
                 raise ValueError('Factory result exceeds evidence bound')
-            evidence = json.loads(report.read_text(encoding='utf-8'))
-            if (evidence.get('schema_version') != 1 or evidence.get('check_id') != 'factory-unit'
-                    or evidence.get('status') != result.status):
-                raise ValueError('Factory result does not match subprocess outcome')
+            evidence = decode_document(report.read_text(encoding='utf-8'))
+            validate_report(evidence, binding)
+            if evidence['status'] != result.status or source_inventory(root) != binding['source_inventory']:
+                raise ValueError('Factory result does not match subprocess outcome or current source')
             result.details.append(evidence)
-        except (OSError, ValueError, TypeError, AttributeError) as exc:
+        except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
             result.status = 'fail'
             result.summary += '; Factory result missing or invalid: ' + str(exc)
         return [result]
@@ -2104,7 +2116,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
 
 
 def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
-    if (root / 'factory/pyproject.toml').is_file() and (root / 'factory/tests').is_dir():
+    if (root / 'factory/pyproject.toml').is_file():
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
