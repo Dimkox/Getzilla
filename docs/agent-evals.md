@@ -1,8 +1,7 @@
 # Offline agent replay
 
 `getzilla evals` checks approved recorded outputs with executable assertions.
-It makes no network calls and needs no provider SDK. It never loads production
-inputs or calls a model. Select and approve incident cases through the existing
+It makes no network calls and needs no provider SDK. It reads only the local files you select and never calls a model. Select and approve incident cases through the existing
 review process in [issue #154](https://github.com/Dimkox/Getzilla/issues/154).
 A passing replay qualifies the recorded examples only. It does not qualify a
 model or grant merge, release or external-write authority.
@@ -48,7 +47,8 @@ selects the complete output.
 A missing path fails. A prose note is invalid. An unknown operation or unavailable
 adapter/grader version is unsupported. `length` and `reported_confidence` signals
 are descriptive. They never change correctness. Reported confidence is a value
-from the recording; it is not a probability of correctness.
+from the recording; it is not a probability of correctness. Out-of-range numeric
+telemetry is invalid. Numeric bounds are checked before float conversion.
 
 A [recording](../tests/fixtures/agent-evals/v1/outputs-control.json) has
 `schema_version: 1` and `outputs`. Every entry binds `case_id`, `case_sha256` and
@@ -62,9 +62,9 @@ Each case returns `pass`, `fail`, `invalid`, `timeout`, `not_run` or `unsupporte
 with a reason code and assertion verdicts. Zero cases, duplicate IDs, missing
 outputs, invalid schema and exhausted budgets cannot pass. Limits are 1 MiB per
 input file, 100 cases, 32 assertions per case, 16 path components, and a 60-second
-maximum replay budget (`--timeout`, default 10 seconds). JSON reports stay within
+maximum replay budget (`--timeout`, default 10 seconds). The complete JSON export, including baseline comparison, stays within
 512 KiB. If evidence exceeds that limit, the result is invalid with
-`report_size_limit`. Assertions run in process through a fixed operation list;
+`report_size_limit`; comparison is inconclusive. Oversized successful results are not exported. Assertions run in process through a fixed operation list;
 there is no shell, code evaluation or user regex. Regular-file reads and fixed
 operations are bounded; this is not a sandbox for executing external adapters.
 
@@ -76,7 +76,11 @@ and runner produce the same canonical verdicts and digest.
 
 ## Baseline comparison and acceptance
 
-Create the baseline parent directory first. Then explicitly accept a passing run:
+Baseline transactions require POSIX descriptor-relative file operations. Other
+platforms return `baseline_descriptor_unsupported` and keep offline replay
+available. Create a trusted baseline parent directory first. Missing parents
+are refused and are never created by replay or acceptance. Then explicitly accept
+a passing run:
 
 ```bash
 getzilla evals accept \
@@ -104,7 +108,11 @@ budget. Version 1 accepts only `repetitions: 1`.
 
 `accept` reruns the supplied files and refuses any nonpassing run. It appends
 reason, scope, timestamp and the previous acceptance digest to a hash-linked
-history. Atomic replacement and an exclusive sibling lock serialize acceptance.
+history. Atomic replacement and an exclusive sibling lock serialize acceptance. Baseline
+reads, lock/temp creation, replacement and cleanup use held parent descriptors.
+The runner holds and validates every ancestor before and after operations; a
+changed directory name or destination identity causes refusal. It never reopens
+the selected parent by path during a baseline transaction.
 Corrupt history is refused. All previous entries remain. Each baseline file
 holds at most 32 acceptances; at the limit, select a new baseline path and retain
 the old file. A process crash can leave `<baseline>.lock`; inspect the stopped
