@@ -66,6 +66,71 @@ class SecurityCliTests(unittest.TestCase):
         detail['findings'][0]['status']='fail'
         self.assertEqual(finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)['status'],'fail')
 
+    def accepted(self, deadline, identifier='OSV-accepted'):
+        return {'ecosystem':'PyPI','package':'example','version':'1.0.0','manifest':'requirements.txt',
+                'id':identifier,'aliases':[],'summary':'accepted fixture','severity':'MODERATE',
+                'fixed':[],'accepted_until':deadline}
+
+    def test_selected_license_must_match_an_approved_original_branch(self):
+        cases=[('MIT OR Apache-2.0','Apache-2.0','pass'),
+               ('GPL-3.0-only OR MIT','MIT','pass'),
+               ('(MIT OR Apache-2.0) AND BSD-2-Clause','Apache-2.0 AND BSD-2-Clause','pass'),
+               ('MIT AND Apache-2.0','Apache-2.0 AND MIT','pass'),
+               ('GPL-3.0-only','MIT','fail'), ('MIT AND Apache-2.0','MIT','fail'),
+               ('MIT OR Apache-2.0','BSD-2-Clause','fail'),
+               ('MIT OR Apache-2.0','MIT AND Apache-2.0','fail'),
+               ('MIT','MIT OR Apache-2.0','fail'), ('MIT AND GPL-3.0-only','MIT','fail'),
+               ('MIT OR (Apache-2.0 AND BSD-2-Clause)','Apache-2.0','fail'),
+               ('LicenseRef-custom OR MIT','MIT','fail')]
+        for expression,selected,want in cases:
+            with self.subTest(expression=expression,selected=selected):
+                source,checks=self.report()
+                detail=next(c['details'][0] for c in checks if c['name']=='security-licenses')
+                detail['findings']=[{'ecosystem':'PyPI','package':'example','version':'1.0.0',
+                    'manifest':'requirements.txt','status':'pass','expression':expression,
+                    'selected_expression':selected,'distribution':'internal','artifact_sha256':'a'*64,
+                    'origin':{},'license_files':[{'path':'LICENSE','sha256':'b'*64}],
+                    'notice_files':[],'obligations':'internal use; license evidence retained'}]
+                result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
+                self.assertEqual(result['status'],want,result['qualification_gaps'])
+
+    def test_accepted_exception_validity_stops_at_the_inclusive_utc_date_boundary(self):
+        source,checks=self.report()
+        checks[1]['details'][0]['accepted']=[self.accepted('2026-11-03')]
+        for current in (NOW,datetime(2026,11,3,23,59,59,999999,tzinfo=timezone.utc)):
+            result=finalize_report(source,source,checks,'e'*64,'f'*64,now=current)
+            self.assertEqual(result['status'],'pass',result['qualification_gaps'])
+            self.assertEqual(result['valid_until_utc'],'2026-11-04T00:00:00+00:00')
+        result=finalize_report(source,source,checks,'e'*64,'f'*64,
+                               now=datetime(2026,11,4,tzinfo=timezone.utc))
+        self.assertEqual(result['status'],'fail')
+        self.assertIsNone(result['valid_until_utc'])
+
+    def test_earliest_exception_and_source_deadlines_both_bound_report_validity(self):
+        for older_hours,want in ((0,'2026-11-04T00:00:00+00:00'),(60,'2026-11-03T12:00:00+00:00')):
+            for dates in (('2026-11-05','2026-11-03'),('2026-11-03','2026-11-05')):
+                with self.subTest(source_age=older_hours,dates=dates):
+                    source,checks=self.report()
+                    checks[1]['details'][0]['accepted']=[self.accepted(d,'OSV-'+str(i)) for i,d in enumerate(dates)]
+                    checks[3]['details'][0]['data_sources'][0]['acquisition']['source_published_at']=(NOW-timedelta(hours=older_hours)).isoformat()
+                    result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
+                    self.assertEqual(result['status'],'pass',result['qualification_gaps'])
+                    self.assertEqual(result['valid_until_utc'],want)
+
+    def test_malformed_exception_dates_refuse_and_far_future_dates_keep_source_bound(self):
+        for deadline in ('bad-date','2026-02-30','2026-11-03T00:00:00',None):
+            source,checks=self.report()
+            checks[1]['details'][0]['accepted']=[self.accepted(deadline)]
+            with self.subTest(deadline=deadline):
+                result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
+                self.assertEqual(result['status'],'fail')
+                self.assertIsNone(result['valid_until_utc'])
+        source,checks=self.report()
+        checks[1]['details'][0]['accepted']=[self.accepted('9999-12-31')]
+        result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
+        self.assertEqual(result['status'],'pass',result['qualification_gaps'])
+        self.assertEqual(result['valid_until_utc'],'2026-11-06T00:00:00+00:00')
+
     def test_incomplete_sources_coverage_and_expired_acceptance_block(self):
         source, baseline=self.report()
         cases=[('source',None),('coverage',None),('expired',None),('shape',None)]

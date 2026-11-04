@@ -150,7 +150,11 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
                     or not finding['license_files'] or not isinstance(finding['notice_files'], list)):
                 return False
             try:
-                _select_expression(finding['selected_expression'], list(ALLOWED))
+                selected, _ = _select_expression(finding['selected_expression'], list(ALLOWED))
+                chosen, _ = _select_expression(finding['expression'], selected)
+                if (finding['selected_expression'] != ' AND '.join(selected)
+                        or set(chosen) != set(selected)):
+                    return False
             except ValueError:
                 return False
             if any(not isinstance(f, dict) or not _digest(f.get('sha256'))
@@ -242,8 +246,17 @@ def finalize_report(before: dict, after: dict, checks: list[dict], inventory_dig
             gaps.append(f'{check.get("name")}: missing unique structured result')
             continue
         detail = details[0]
-        if not _detail_consistent(check.get('name'), detail, inventory_digest, policy_digest, current):
+        consistent = _detail_consistent(check.get('name'), detail, inventory_digest, policy_digest, current)
+        if not consistent:
             gaps.append(f'{check.get("name")}: contradictory or incomplete per-check evidence')
+        if consistent and check['name'] == 'known-vulnerabilities':
+            for finding in detail.get('accepted', []):
+                accepted_date = date.fromisoformat(finding['accepted_until'])
+                # Avoid adding a day to a far-future maximum date: it cannot shorten this report.
+                if accepted_date < expiry.date():
+                    boundary = datetime.combine(accepted_date + timedelta(days=1),
+                                                datetime.min.time(), tzinfo=timezone.utc)
+                    expiry = min(expiry, boundary)
         if check.get('status') == 'skip':
             expected = {'complete': True, 'inventory_sha256': inventory_digest, 'reason': 'complete-inventory-no-objects'}
             if detail.get('outcome') != 'not_applicable' or detail.get('applicability_evidence') != expected:
