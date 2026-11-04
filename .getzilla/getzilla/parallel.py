@@ -31,6 +31,7 @@ from contextlib import contextmanager
 import shlex
 import subprocess
 import time
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -172,7 +173,12 @@ def _create_log(directory: int, name: str):
 
 
 def _capture(job: Job, directory: int, cwd: Path, quota: int, timeout: float | None,
-             runner: Callable[..., Any], preview_limit: int = PREVIEW_BYTES) -> None:
+             runner: Callable[..., Any], preview_limit: int = PREVIEW_BYTES,
+             cancelled: Event | None = None) -> None:
+    cancelled = cancelled or Event()
+    if cancelled.is_set():
+        job.returncode = 130
+        return
     head_limit, tail_limit = quota // 2, quota - quota // 2
     tail: deque[bytes] = deque()
     tail_bytes = head_bytes = 0
@@ -204,52 +210,68 @@ def _capture(job: Job, directory: int, cwd: Path, quota: int, timeout: float | N
     started = time.monotonic()
     try:
         # One merged pipe drains both streams. Every shell command passed policy preflight.
-        with runner(job.command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B604
-                    start_new_session=True) as process:
+        process = runner(job.command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B604
+                         start_new_session=True)
+        timed_out = False
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                stopped_at = None
+                # EOF does not imply process exit: the deadline and cancellation
+                # must cover children which close both descriptors before waiting.
+                while selector.get_map() or process.poll() is None:
+                    now = time.monotonic()
+                    timed_out = timed_out or (timeout is not None and now - started >= timeout)
+                    if stopped_at is None and (timed_out or cancelled.is_set()):
+                        stopped_at = now
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if stopped_at is not None and now - stopped_at >= 1:
+                        job.log_error = 'process-group cleanup or output drain unconfirmed'
+                        break
+                    if not selector.get_map():
+                        time.sleep(0.01)
+                        continue
+                    for key, _ in selector.select(0.05):
+                        data = os.read(key.fd, CHUNK_BYTES)
+                        if not data:
+                            selector.unregister(key.fileobj)
+                            break
+                        job.observed_bytes += len(data)
+                        if preview_limit:
+                            preview.extend(data)
+                            del preview[:-preview_limit]
+                        head = data[:max(0, head_limit - head_bytes)]
+                        write(head)
+                        head_bytes += len(head)
+                        rest = data[len(head):]
+                        if rest and tail_limit:
+                            tail.append(rest)
+                            tail_bytes += len(rest)
+                            while tail_bytes > tail_limit:
+                                excess = tail_bytes - tail_limit
+                                first = tail.popleft()
+                                if len(first) > excess:
+                                    tail.appendleft(first[excess:])
+                                    tail_bytes -= excess
+                                else:
+                                    tail_bytes -= len(first)
+                job.returncode = 130 if cancelled.is_set() else (124 if timed_out else process.returncode)
+        finally:
+            # An interrupted parent must not leave its owned process group running.
             try:
-                with selectors.DefaultSelector() as selector:
-                    selector.register(process.stdout, selectors.EVENT_READ)
-                    timed_out = False
-                    while selector.get_map():
-                        if timeout is not None and time.monotonic() - started >= timeout and not timed_out:
-                            timed_out = True
-                            try:
-                                os.killpg(process.pid, signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
-                        for key, _ in selector.select(0.05):
-                            data = os.read(key.fd, CHUNK_BYTES)
-                            if not data:
-                                selector.unregister(key.fileobj)
-                                break
-                            job.observed_bytes += len(data)
-                            if preview_limit:
-                                preview.extend(data)
-                                del preview[:-preview_limit]
-                            head = data[:max(0, head_limit - head_bytes)]
-                            write(head)
-                            head_bytes += len(head)
-                            rest = data[len(head):]
-                            if rest and tail_limit:
-                                tail.append(rest)
-                                tail_bytes += len(rest)
-                                while tail_bytes > tail_limit:
-                                    excess = tail_bytes - tail_limit
-                                    first = tail.popleft()
-                                    if len(first) > excess:
-                                        tail.appendleft(first[excess:])
-                                        tail_bytes -= excess
-                                    else:
-                                        tail_bytes -= len(first)
-                    process.wait()
-                    job.returncode = 124 if timed_out else process.returncode
-            finally:
-                # An interrupted parent must not leave its owned process group running.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if process.stdout is not None:
+                process.stdout.close()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                job.log_error = 'process-group cleanup unconfirmed'
+                job.returncode = 124 if timed_out else 130
         for chunk in tail:
             write(chunk)
     except OSError as error:
@@ -293,15 +315,26 @@ def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeo
         if any(job.refused for job in jobs):
             return jobs, folder
 
+        cancellation = Event()
+
         def one(job: Job) -> None:
             job.log = folder / f'{job.index:03d}.log'
             quota = log_quota // len(jobs) + int(job.index <= log_quota % len(jobs))
             _capture(job, directory, cwd, quota, timeout, runner,
-                     preview_limit=min(PREVIEW_BYTES, RESPONSE_BYTES // len(jobs)))
+                     preview_limit=min(PREVIEW_BYTES, RESPONSE_BYTES // len(jobs)),
+                     cancelled=cancellation)
 
-        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(jobs)))) as pool:
+        pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(jobs))))
+        try:
             for _ in pool.map(one, jobs):
                 pass
+        except BaseException:
+            # Signal running workers before executor shutdown waits for them.
+            cancellation.set()
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
         from .resource_inventory import classify
         owned = os.fstat(directory)
         try:

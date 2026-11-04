@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -224,6 +226,55 @@ class BatchTests(unittest.TestCase):
                             workers=1, cwd=self.root, timeout=0.15)
         self.assertEqual(jobs[0].returncode, 124)
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_timeout_still_applies_after_both_output_descriptors_close(self) -> None:
+        script = "import os,time; os.close(1); os.close(2); time.sleep(2)"
+        started = time.monotonic()
+        jobs, _ = run_batch(self.root, ['exec ' + shlex.join([sys.executable, '-c', script])],
+                            workers=1, cwd=self.root, timeout=0.1)
+        self.assertEqual(jobs[0].returncode, 124)
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_main_thread_interrupt_stops_owned_group_before_returning(self) -> None:
+        pidfile = self.root / 'owned-group.json'
+        queued_marker = self.root / 'queued-command-ran'
+        producer = ("import os,json,time; "
+                    f"open({str(pidfile)!r},'w').write(json.dumps([os.getpid(),os.getpgrp()])); "
+                    "time.sleep(20)")
+        command = shlex.join([sys.executable, '-c', producer])
+        queued = shlex.join(['touch', str(queued_marker)])
+        wrapper = ("import sys; from pathlib import Path; "
+                   f"sys.path.insert(0,{str(ROOT / '.getzilla')!r}); "
+                   "from getzilla.parallel import run_batch; "
+                   f"root=Path({str(self.root)!r}); "
+                   f"run_batch(root,[{command!r},{queued!r}],workers=1,cwd=root)")
+        parent = subprocess.Popen([sys.executable, '-c', wrapper], stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, start_new_session=True)
+        group = None
+        try:
+            deadline = time.monotonic() + 3
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(pidfile.exists(), 'producer did not start')
+            pid, group = json.loads(pidfile.read_text())
+            parent.send_signal(signal.SIGINT)
+            try:
+                parent.communicate(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                self.fail('main cancellation waited for the uncancelled worker')
+            self.assertFalse(queued_marker.exists(), 'a queued command ran after cancellation')
+            # An orphan may briefly be a zombie until init reaps it. It must not run.
+            status = Path(f'/proc/{pid}/stat')
+            if status.exists():
+                self.assertEqual(status.read_text().split()[2], 'Z')
+        finally:
+            for owned_group in (parent.pid, group):
+                if owned_group is not None:
+                    try:
+                        os.killpg(owned_group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            parent.communicate(timeout=3)
 
     def test_replaced_log_directory_cannot_redirect_writes(self) -> None:
         outside = self.root / 'outside'
