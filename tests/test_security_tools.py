@@ -6,8 +6,10 @@ import codecs
 import copy
 import hashlib
 import json
+import struct
 import tempfile
 import unittest
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -174,6 +176,57 @@ class SecurityToolTests(unittest.TestCase):
                     self.assertEqual(result['binary_inputs'][0]['sha256'], hashlib.sha256(pixel).hexdigest())
                 else:
                     self.assertFalse(result['binary_inputs'])
+
+    def test_plain_text_with_asset_signature_still_gets_one_redacted_finding(self):
+        sentinel = 'only-public-asset-fixture'
+        assignment = 'pass' + 'word = ' + repr(sentinel) + '\n'
+        for suffix, identifier in (('gif', 'GIF89a'), ('woff2', 'wOF2')):
+            with self.subTest(suffix=suffix):
+                name = 'source.' + suffix
+                raw = (identifier + ' = 1\n' + assignment).encode()
+                ast.parse(raw)
+                (self.root / name).write_bytes(raw)
+                result = scan_secrets(self.root, [name], trusted_root=self.root)
+                self.assertEqual(result['outcome'], 'finding')
+                self.assertEqual([f['rule'] for f in result['findings']], ['generic-secret'])
+                self.assertFalse(result['binary_inputs'])
+                self.assertNotIn(sentinel, json.dumps(result))
+
+    def test_real_png_metadata_is_scanned_for_visible_patterns(self):
+        def chunk(kind, content):
+            return (struct.pack('>I', len(content)) + kind + content
+                    + struct.pack('>I', zlib.crc32(kind + content)))
+
+        header = struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
+        sentinel = 'only-public-pixel-metadata'
+        assignment = ('pass' + 'word = ' + repr(sentinel)).encode()
+        for note, expected in ((b'pixel only', 'pass'), (assignment, 'finding')):
+            with self.subTest(expected=expected):
+                raw = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'tEXt', b'Comment\0' + note)
+                       + chunk(b'IDAT', zlib.compress(b'\0\0\0\0')) + chunk(b'IEND', b''))
+                (self.root / 'pixel.png').write_bytes(raw)
+                result = scan_secrets(self.root, ['pixel.png'], trusted_root=self.root)
+                self.assertEqual(result['outcome'], expected)
+                self.assertEqual(len(result['findings']), int(expected == 'finding'))
+                self.assertEqual(result['binary_inputs'][0]['sha256'], hashlib.sha256(raw).hexdigest())
+                if expected == 'finding':
+                    self.assertEqual(result['findings'][0]['byte_offset'], raw.index(assignment))
+                self.assertNotIn(sentinel, json.dumps(result))
+
+    def test_visible_bytes_in_unknown_source_and_wide_text_are_not_lost(self):
+        sentinel = 'only-public-visible-byte-fixture'
+        assignment = ('pass' + 'word = ' + repr(sentinel)).encode()
+        wide = codecs.BOM_UTF16_LE + '# text\n'.encode('utf-16-le') + assignment
+        wide += b' ' * (len(wide) % 2)
+        for raw, expected in ((b'\x00\xff\n' + assignment, 'blocked'), (wide, 'finding')):
+            with self.subTest(expected=expected):
+                (self.root / 'metadata.txt').write_bytes(raw)
+                result = scan_secrets(self.root, ['metadata.txt'], trusted_root=self.root)
+                self.assertEqual(result['outcome'], expected)
+                self.assertEqual([f['rule'] for f in result['findings']], ['generic-secret'])
+                self.assertEqual(result['findings'][0]['byte_offset'], raw.index(assignment))
+                self.assertEqual(bool(result['gaps']), expected == 'blocked')
+                self.assertNotIn(sentinel, json.dumps(result))
 
 
 if __name__ == '__main__':

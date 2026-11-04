@@ -326,7 +326,7 @@ _SOURCE_CODECS = {'ascii', 'us-ascii', 'utf8', 'utf-8', 'utf-8-sig', 'latin1', '
 
 
 def _opaque_asset(path: Path, raw: bytes) -> bool:
-    """Only recognized asset types may be disclosed as outside the text scan."""
+    """Classify undecodable assets for disclosure, never for a scanning exemption."""
     suffix = path.suffix.lower()
     return ((suffix == '.png' and raw.startswith(b'\x89PNG\r\n\x1a\n'))
             or (suffix in {'.jpg', '.jpeg'} and raw.startswith(b'\xff\xd8\xff'))
@@ -336,10 +336,8 @@ def _opaque_asset(path: Path, raw: bytes) -> bool:
             or (suffix == '.woff2' and raw.startswith(b'wOF2')))
 
 
-def _secret_text(relative: str, raw: bytes) -> str | None:
+def _secret_text(relative: str, raw: bytes) -> str:
     path = Path(relative)
-    if _opaque_asset(path, raw):
-        return None
     first = raw[:512].split(b'\n', 1)[0]
     python = path.suffix.lower() in {'.py', '.pyw', '.pyi'} or (
         first.startswith(b'#!') and re.search(rb'[/ \t]python[0-9.]*(?:[ \t\r]|$)', first))
@@ -378,23 +376,34 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
             total += len(raw)
             if total > MAX_SOURCE_TOTAL:
                 raise SecurityDataError('secret input inventory exceeds the bounded total')
-            try:
-                text = _secret_text(relative, raw)
-            except (ValueError, SyntaxError, LookupError):
-                gaps.append({'code': 'secret-text-coverage', 'path': relative,
-                             'message': 'cannot establish supported text encoding or opaque asset type'})
-                continue
-            if text is None:
-                binary.append({'path': relative, 'sha256': hashlib.sha256(raw).hexdigest(),
-                               'reason': 'recognized opaque asset; text-pattern scanner not applicable'})
-                continue
             digest = hashlib.sha256(raw).hexdigest()
-            for label, pattern in dispositions.SECRET_PATTERNS.items():
-                for match in pattern.finditer(text):
-                    line, column = dispositions.location(text, match.start())
-                    entry = policy.secret(relative, digest, text, match) if label == 'generic-secret' else None
-                    findings.append({'rule': label, 'path': relative, 'line': line, 'column': column,
-                                     'file_sha256': digest, 'disposition': entry.get('id') if entry else None})
+            try:
+                views = [(_secret_text(relative, raw), False)]
+            except (ValueError, SyntaxError, LookupError):
+                views = []
+                if _opaque_asset(Path(relative), raw):
+                    binary.append({'path': relative, 'sha256': digest,
+                                   'reason': 'recognized asset; visible bytes checked, opaque contents not decoded'})
+                else:
+                    gaps.append({'code': 'secret-text-coverage', 'path': relative,
+                                 'message': 'cannot establish supported text encoding or opaque asset type'})
+            # The supported narrow codecs preserve ASCII. A wide decoder can hide
+            # a separate contiguous ASCII string, so inspect visible bytes there
+            # too. Latin-1 here is a 1:1 byte view, not an encoding assertion.
+            if not views or raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE,
+                                            codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+                views.append((raw.decode('latin-1'), True))
+            for text, byte_view in views:
+                for label, pattern in dispositions.SECRET_PATTERNS.items():
+                    for match in pattern.finditer(text):
+                        line, column = dispositions.location(text, match.start())
+                        entry = (policy.secret(relative, digest, text, match)
+                                 if label == 'generic-secret' and not byte_view else None)
+                        finding = {'rule': label, 'path': relative, 'line': line, 'column': column,
+                                   'file_sha256': digest, 'disposition': entry.get('id') if entry else None}
+                        if byte_view:
+                            finding['byte_offset'] = match.start()
+                        findings.append(finding)
         policy.assert_current()
     except (OSError, ValueError, RuntimeError) as exc:
         gaps.append({'code': 'secret-input-unavailable', 'message': str(exc)})

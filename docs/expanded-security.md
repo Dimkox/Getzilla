@@ -59,9 +59,13 @@ The isolated public Getzilla job requires these eleven results:
 
 The text scan reads UTF-8, BOM-qualified UTF-16/UTF-32 text and a closed set
 of standard Python source encodings (ASCII, UTF-8, Latin-1 and Windows
-1251/1252). It does not load candidate codec names. Only recognized opaque
-image/font assets with matching filename and signature are disclosed as binary;
-unknown or undecodable inputs and NUL-bearing text produce a coverage gap.
+1251/1252). It does not load candidate codec names. Decodable text is scanned
+even when its name and prefix resemble an image or font. In opaque assets
+the same patterns also inspect visible bytes; this does not cover compressed
+or otherwise hidden content. Raw-byte findings include the byte offset and no
+secret value. Unknown undecodable inputs and NUL-bearing text remain coverage
+gaps even when a visible byte pattern is found. BOM-qualified wide text is
+also checked for separately embedded sequences of visible bytes.
 
 The wire statuses remain `pass`, `fail`, `skip` and `cancelled`. A permitted
 `skip` needs a versioned `security-result` with `outcome=not_applicable` and a
