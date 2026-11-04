@@ -132,6 +132,8 @@ class CompleteSourceProofTests(unittest.TestCase):
         lookup = "selected = getattr(adapter, 'ordinary', None)\nselected()\n"
         variants = (
             ('ordinary', 'import unittest\nfrom unittest.mock import patch\n' + lookup, False),
+            ('ordinary-import', "real_check = __import__('ordinary', fromlist=['helper']).helper\n" + lookup, False),
+            ('external-queue-import', "real_check = __import__('rq', fromlist=['Queue']).Queue\n" + lookup, True),
             ('exception', 'class Lookup(Exception):\n    def __call__(self, module, name, default=None): return module.jobs\n'
              'try:\n    raise Lookup()\nexcept Lookup as getattr:\n' + textwrap.indent(lookup, '    '), True),
             ('capture', binding_statement('getattr', 'as') + '\n' + lookup, True),
@@ -154,6 +156,42 @@ class CompleteSourceProofTests(unittest.TestCase):
                 result = next(item for item in report.results if item.category == 'background_job')
                 self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
                 self.assertEqual('new_queue' in report.triggers, governed)
+
+    def test_static_import_equivalent_read_preserves_ordinary_getter_demand(self):
+        for imported in ("__import__('ordinary', fromlist=['helper']).helper",
+                         "__import__('ordinary.module', fromlist=('helper',), level=0).helper"):
+            with self.subTest(imported=imported):
+                source = ('import adapter\nreal_check = ' + imported
+                          + "\nselected = getattr(adapter, 'ordinary', None)\nselected()\n")
+                self.assertEqual(FIT._module_member_demands(ast.parse(source), 'adapter'), frozenset({'ordinary'}))
+
+    def test_dynamic_namespace_shadowed_and_escaped_importers_keep_full_closure(self):
+        imports = [f"__import__('{module}', fromlist=['helper']).helper"
+                   for module in ('builtins', 'sys', 'importlib', 'queue', 'threading', 'rq')]
+        imports.extend((
+            "__import__(module, fromlist=['helper']).helper",
+            "__import__('ordinary', fromlist=members).helper",
+            "__import__('ordinary', fromlist=['different']).helper",
+            "__import__('ordinary', fromlist=['__dict__']).__dict__",
+            "__import__('ordinary', fromlist=['setattr']).setattr",
+            "__import__('ordinary', fromlist=['eval']).eval",
+            "__import__('ordinary.class', fromlist=['helper']).helper",
+            "__import__('ordinary', fromlist=['helper'], level=1).helper",
+            "__import__('ordinary', fromlist=['helper'], extra=True).helper",
+            "__import__(*arguments).helper",
+            "__import__('ordinary', **options).helper",
+            "__import__('ordinary', fromlist=['helper'])",
+            "__import__('ordinary', fromlist=['helper']).helper.namespace",
+        ))
+        prefixes = ['value = ' + imported for imported in imports]
+        prefixes.append('loader = __import__')
+        prefixes.extend(binding_statement('__import__', kind)
+                        + "\nvalue = __import__('ordinary', fromlist=['helper']).helper"
+                        for kind in ('except', 'as', 'star', 'mapping'))
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                source = 'import adapter\n' + prefix + "\nselected = getattr(adapter, 'ordinary')\nselected()\n"
+                self.assertIsNone(FIT._module_member_demands(ast.parse(source), 'adapter'))
 
 
 class LocalByteChannelTests(unittest.TestCase):

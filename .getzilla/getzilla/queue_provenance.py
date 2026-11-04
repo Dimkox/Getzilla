@@ -332,7 +332,7 @@ def _project_channel_tree(tree: ast.AST, imported: ast.AST, replaced: set[int]) 
 
 def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
     """Resolve only unshadowed stdlib mock.patch.object with a literal member."""
-    if not namespace_is_closed(tree, allow_instrumentation=True):
+    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
         return {}
     aliases: set[str] = set()
     for node in ast.walk(tree):

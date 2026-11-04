@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import ast
-from typing import NamedTuple
+import keyword
+from typing import AbstractSet, NamedTuple
 
 
 class Binding(NamedTuple):
@@ -39,13 +40,15 @@ def binding_events(tree: ast.AST) -> tuple[Binding, ...]:
     return tuple(events)
 
 
-def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False) -> bool:
+def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False,
+                        static_import_reads: bool = False, forbidden_imports: AbstractSet[str] = frozenset()) -> bool:
     """Refuse declared namespace/reflection capabilities, without alias inference.
 
     Ordinary mock imports are compatible with member demands, but IPC projection
     admits no instrumentation. This does not constrain hidden external effects.
     """
-    if any(event.name == '__builtins__' for event in binding_events(tree)):
+    bound = {event.name for event in binding_events(tree)}
+    if '__builtins__' in bound:
         return False
     roots = {'builtins', '__builtin__'}
     if not allow_instrumentation:
@@ -55,6 +58,41 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False) -
                   '__import__', 'import_module', 'modules'}
     functions = {'globals', 'locals', 'vars', 'exec', 'eval', 'setattr', 'delattr', '__import__', '__builtins__'}
     functions |= {name for name in reflective if name.startswith('__')}
+    parents = None
+
+    def ordinary_import_read(reference):
+        """Only the syntax-equivalent of `from literal_module import member`."""
+        nonlocal parents
+        if not static_import_reads or '__import__' in bound:
+            return False
+        if parents is None:
+            parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        call = parents.get(reference)
+        if (not isinstance(call, ast.Call) or call.func is not reference or len(call.args) != 1
+                or not isinstance(call.args[0], ast.Constant) or not isinstance(call.args[0].value, str)):
+            return False
+        module = call.args[0].value.split('.')
+        capabilities = {'builtins', '__builtin__', 'sys', 'importlib', 'queue', 'threading',
+                        'unittest', 'mock', 'pytest', '_pytest'} | set(forbidden_imports)
+        if not all(part.isidentifier() and not keyword.iskeyword(part) for part in module) or module[0] in capabilities:
+            return False
+        keywords = {item.arg: item.value for item in call.keywords}
+        if (len(keywords) != len(call.keywords) or not {'fromlist'} <= keywords.keys()
+                or keywords.keys() - {'fromlist', 'level'}):
+            return False
+        level = keywords.get('level', ast.Constant(value=0))
+        members = keywords['fromlist']
+        member = parents.get(call)
+        if (not isinstance(level, ast.Constant) or type(level.value) is not int or level.value != 0
+                or not isinstance(members, (ast.List, ast.Tuple)) or len(members.elts) != 1
+                or not isinstance(members.elts[0], ast.Constant) or not isinstance(members.elts[0].value, str)
+                or not isinstance(member, ast.Attribute) or not isinstance(member.ctx, ast.Load)
+                or not member.attr.isidentifier() or member.attr.startswith('__') or member.attr in reflective | functions
+                or members.elts[0].value != member.attr
+                or isinstance(parents.get(member), (ast.Attribute, ast.Subscript))):
+            return False
+        return True
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import) and any(alias.name.split('.')[0] in roots for alias in node.names):
             return False
@@ -66,6 +104,8 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False) -
                 node.attr in {'type', 'bytes', 'len', 'OSError', 'getattr'} and isinstance(node.ctx, (ast.Store, ast.Del)))):
             return False
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in functions:
+            if node.id == '__import__' and ordinary_import_read(node):
+                continue
             return False
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
                 node.value in reflective or node.value.startswith(('builtins.', '__builtin__.', '__builtins__.'))):

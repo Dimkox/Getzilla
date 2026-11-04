@@ -2187,7 +2187,7 @@ def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Modu
     Function returns have their own dependency closure. Dynamic namespaces keep
     the full bounded analysis rather than pretending an export is ordinary.
     """
-    if not namespace_is_closed(tree, allow_instrumentation=True):
+    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
         return tree
 
     shadowed = {event.name for event in binding_events(tree)}
@@ -2508,7 +2508,7 @@ def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
 
 
 def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
-    if not namespace_is_closed(tree, allow_instrumentation=True):
+    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
         return None
     members: set[str] = set()
     covered: set[int] = set()
@@ -2608,7 +2608,8 @@ def _returned_call_demands(tree: ast.AST, dependencies: frozenset[str], *, retur
 
 def _plain_callable_declaration(tree: ast.Module, requested: frozenset[str] | None) -> bool:
     """A stable undecorated function object is ordinary; this says nothing about its return."""
-    if not requested or not namespace_is_closed(tree, allow_instrumentation=True):
+    if not requested or not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True,
+                                               forbidden_imports=_QUEUE_IMPORTS):
         return False
     definitions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     if not requested <= definitions.keys() or any(definitions[name].decorator_list for name in requested):
