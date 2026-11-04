@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import secrets
+import time
 from typing import Any, Protocol
 
 from . import continuity, state
@@ -19,6 +21,7 @@ from .spec import _bounded_walk
 
 _ISSUER = object()
 _UNCERTAIN: set[tuple[str, str]] = set()
+_LIVE: dict[tuple[str, str], tuple[Any, float, str]] = {}
 _ID = re.compile(r'[A-Za-z0-9:._-]{1,128}')
 
 
@@ -26,6 +29,18 @@ class ExecutionError(ValueError):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+
+
+class Clock:
+    monotonic = staticmethod(time.monotonic)
+    sleep = staticmethod(time.sleep)
+
+    @staticmethod
+    def utcnow():
+        return datetime.now(timezone.utc)
+
+
+SYSTEM_CLOCK = Clock()
 
 
 @dataclass(frozen=True, init=False)
@@ -170,6 +185,9 @@ def _source(root, route):
                 relative = path.relative_to(root).as_posix()
                 if entry.name in {'.git', '__pycache__', '.pytest_cache'} or relative == '.getzilla/runtime':
                     continue
+                if (entry.name == '.env' or entry.name.startswith('.env.') or entry.name in {'.ssh', 'id_rsa'}
+                        or path.suffix.lower() in {'.pem', '.key'}):
+                    raise ExecutionError('source_inventory_unavailable')
                 if len(entries) + len(pending) >= 4096:
                     raise ExecutionError('source_inventory_unavailable')
                 if entry.is_symlink():
@@ -181,7 +199,7 @@ def _source(root, route):
                     total += len(raw)
                     if total > 16 * 1024 * 1024:
                         raise ExecutionError('source_inventory_unavailable')
-                    entries.append((relative, 'file', hashlib.sha256(raw).hexdigest()))
+                    entries.append((relative, entry.stat(follow_symlinks=False).st_mode, hashlib.sha256(raw).hexdigest()))
                 else:
                     raise ExecutionError('source_inventory_unavailable')
     inventory = hashlib.sha256(json.dumps(sorted(entries), ensure_ascii=True).encode()).hexdigest()
@@ -194,7 +212,7 @@ def _source(root, route):
         if code != 0 or head is None or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', head):
             raise ExecutionError('source_inventory_unavailable')
         dirty = bool(status)
-    binding = continuity.context_binding(root, route)['digest']
+    binding = continuity.context_binding(root, route, discovery=True)['digest']
     return {'git_head': head, 'fingerprint': hashlib.sha256((str(head) + inventory).encode()).hexdigest(),
             'dirty': dirty, 'inventory_digest': inventory, 'context_digest': binding, 'evidence_links': []}
 
@@ -205,6 +223,8 @@ def _view(root, record):
     result.pop('event_receipts')
     result['evidence_authority'] = False
     result['observation_status'] = 'expired' if record['expired'] else 'ready'
+    live = _LIVE.get((str(root.resolve()), record['execution_id']))
+    result['deadline_elapsed'] = bool(live and live[0].monotonic() >= live[1])
     if (str(root.resolve()), record['execution_id']) in _UNCERTAIN:
         result.update(observation_status='persistence_unknown', execution_status='orphaned',
                       operation_outcome='unknown', cleanup_status='unconfirmed')
@@ -236,7 +256,8 @@ def _backend(backend):
         raise ExecutionError('unsupported_backend')
 
 
-def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend: ExecutionBackend | None = None):
+def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend: ExecutionBackend | None = None,
+           clock: Clock = SYSTEM_CLOCK):
     _backend(backend)
     if (type(request) is not SubmitRequest or type(request.hard_timeout_seconds) is not int
             or not 1 <= request.hard_timeout_seconds <= 86400 or not isinstance(request.intent_key, str)
@@ -260,7 +281,10 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
         intent = _digest([owner['workspace'], owner['principal_kind'], owner['principal_id'],
                           owner['logical_task_id'], request.intent_key])
         token = secrets.token_hex(32)
-        now = datetime.now(timezone.utc)
+        now = clock.utcnow()
+        started = clock.monotonic()
+        if now.tzinfo is None or not math.isfinite(started):
+            raise ExecutionError('invalid_clock')
         def allocate(registry):
             existing = registry['intents'].get(intent)
             if existing:
@@ -295,6 +319,8 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
     record = registry['records'][execution_id]
     if not dispatch:
         return _view(root, record)
+    _LIVE[(str(root.resolve()), execution_id)] = (clock, started + request.hard_timeout_seconds,
+                                                 record['execution_generation'])
     admission = Admission(execution_id, record['execution_generation'], record['revision'], token)
     try:
         result = backend.dispatch(root, admission, request)
@@ -312,6 +338,7 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
     return _view(root, record)
 
 
+@state.serialized_task
 def record_event(root, backend_token, execution_id, expected_revision, execution_generation, event_id, event):
     if (not isinstance(backend_token, str) or not re.fullmatch(r'[0-9a-f]{64}', backend_token)
             or not isinstance(event_id, str) or not _ID.fullmatch(event_id) or not isinstance(event, dict)
@@ -329,6 +356,9 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
             if record['event_receipts'][event_id] != digest:
                 raise ExecutionError('event_conflict')
             return
+        live = _LIVE.get((str(root.resolve()), execution_id))
+        if not live or live[2] != execution_generation or live[0].monotonic() >= live[1]:
+            raise ExecutionError('event_fenced')
         if (type(expected_revision) is not int or record['revision'] != expected_revision
                 or record['execution_status'] in store.TERMINAL or len(record['event_receipts']) >= 64):
             raise ExecutionError('event_fenced')
@@ -338,9 +368,73 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
         record['revision'] += 1
         record['event_receipts'][event_id] = digest
         if record['execution_status'] in store.TERMINAL:
-            record['retention_until'] = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+            record['retention_until'] = (live[0].utcnow() + timedelta(days=1)).isoformat()
+            try:
+                route = state.canonical_route(root, record['owner']['route_id'])
+                record['source_final'] = _source(root.resolve(), route)
+                record['source_changed'] = record['source_final'] != record['source']
+            except (ValueError, OSError):
+                record['source_final'] = None
+                record['source_changed'] = True
     registry, _ = store.mutate_registry(root, apply)
     return _view(root, registry['records'][execution_id])
+
+
+def wait(root, caller, execution_id, timeout_seconds, *, clock: Clock = SYSTEM_CLOCK):
+    if (type(timeout_seconds) not in {int, float} or not 0 < timeout_seconds <= 30
+            or not math.isfinite(timeout_seconds)):
+        raise ExecutionError('invalid_wait_timeout')
+    end = clock.monotonic() + timeout_seconds
+    while True:
+        view = get(root, caller, execution_id)
+        if view['execution_status'] in store.TERMINAL or view['observation_status'] == 'expired':
+            return {'wait_status': 'ready', 'execution': view}
+        remaining = end - clock.monotonic()
+        if remaining <= 0:
+            return {'wait_status': 'wait_expired', 'execution': view}
+        clock.sleep(min(.01, remaining))
+
+
+@state.serialized_task
+def restore(root, *, clock: Clock = SYSTEM_CLOCK):
+    """Explicit local maintenance, never a process recovery or external reconciliation."""
+    session = state.current_session()
+    if not session:
+        raise ExecutionError('actor_unavailable')
+    now = clock.utcnow()
+    if now.tzinfo is None:
+        raise ExecutionError('invalid_clock')
+    counts = {'orphaned': 0, 'expired': 0, 'unchanged': 0, 'unavailable': 0}
+    def maintain(registry):
+        for execution_id, record in registry['records'].items():
+            if record['owner']['session_id'] != session:
+                counts['unavailable'] += 1
+                continue
+            try:
+                _owner_current(root, record)
+            except ExecutionError:
+                counts['unavailable'] += 1
+                continue
+            if record['execution_status'] in store.TERMINAL:
+                if (not record['expired'] and record['retention_until'] is not None
+                        and datetime.fromisoformat(record['retention_until']) <= now):
+                    record.update(expired=True, output=None, revision=record['revision'] + 1)
+                    counts['expired'] += 1
+                else:
+                    counts['unchanged'] += 1
+                continue
+            live = _LIVE.get((str(root.resolve()), execution_id))
+            if (live and live[0] is clock and live[0].monotonic() < live[1]
+                    and (str(root.resolve()), execution_id) not in _UNCERTAIN):
+                counts['unchanged'] += 1
+                continue
+            record.update(execution_status='orphaned', cleanup_status='unconfirmed',
+                          operation_outcome='unknown' if record['operation_id'] else 'not_applicable',
+                          terminal_reason='recovery_uncertain', retention_until=(now + timedelta(days=1)).isoformat(),
+                          revision=record['revision'] + 1)
+            counts['orphaned'] += 1
+    store.mutate_registry(root, maintain)
+    return counts
 
 
 def cancel(root, caller, execution_id, *, backend=None):
