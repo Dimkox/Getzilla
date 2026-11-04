@@ -2,9 +2,11 @@
 """PreToolUse — policy gate; a policy that fails to load still refuses protected actions (#78)."""
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -12,43 +14,194 @@ from typing import Any
 
 # Standard library only: used when the Getzilla policy or its helper library did not load (#78).
 _DEGRADED_SHELL_TOOLS = frozenset({'Bash', 'bash', 'run_shell_command', 'shell', 'exec_command', 'PowerShell',
-                                   'powershell', 'Monitor', 'monitor', 'terminal', 'run_in_terminal'})
+                                   'powershell', 'Monitor', 'monitor', 'terminal', 'run_in_terminal',
+                                   'run_terminal_command', 'local_shell', 'container.exec'})
 _DEGRADED_WRITE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit', 'replace',
                                    'edit_file', 'apply_patch', 'create_file', 'str_replace_editor'})
-_DEGRADED_PROTECTED_SHELL = re.compile(
-    r'(?:^|[\s;&|(`])(?:'
-    r'git(?:\s+\S+)*?\s+(?:push|merge|tag|reset\s+--hard)\b'
-    r'|gh(?:\s+\S+)*?\s+(?:pr\s+(?:merge|review)|release|workflow\s+run|api)\b'
-    r'|docker(?:\s+\S+)*?\s+push\b|npm(?:\s+\S+)*?\s+publish\b|twine\s+upload\b'
-    r'|terraform\s+(?:apply|destroy)\b|kubectl\s+(?:apply|delete)\b|rm\s+-\S*[rRf]'
-    r')'
-)
 _DEGRADED_CONTROL_PLANE = re.compile(r'(?:^|[\s/"\'=>:])(?:\.getzilla/|\.grok/|\.claude/|\.codex/|\.qwen/|\.gemini/|AGENTS\.md\b)')
-_DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|truncate|touch|rsync)\b|\bsed\s+-i|\bperl\s+-\S*i')
 
 
-def _degraded_denial(tool: str, inputs: Any) -> str | None:
-    """Why a protected action is refused while the policy is not loaded, or None for anything else."""
-    if not isinstance(inputs, dict):
-        return None
-    reason = ('Getzilla policy did not load, so this protected action is refused until the hook is repaired '
-              '(see .getzilla/runtime/hook-events.jsonl). Reads and ordinary edits stay allowed.')
-    if tool in _DEGRADED_SHELL_TOOLS:
-        command = inputs.get('command', inputs.get('cmd'))
-        if isinstance(command, list):
-            command = ' '.join(str(part) for part in command)
-        if not isinstance(command, str):
+
+# Kept independent of _lib/policy: both can be unavailable here. Defaults are
+# covered through the real hook protocol, including every normal secret pattern.
+_DEGRADED_SECRET_PATHS = (
+    '.env', '.env.*', '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
+    '**/id_rsa', '**/id_ed25519', '**/credentials*', '**/secrets/**', 'trust-ci/env/*.env', 'trust-ci/runtime/**',
+    '**/id_ecdsa', '**/id_dsa', '**/.ssh/**', '**/.git-credentials', '**/.netrc', '**/_netrc', '**/.npmrc', '**/.pypirc',
+    '**/.pgpass', '**/.config/gh/hosts.yml', '**/.config/gh/**', '**/.docker/config.json', '**/.kube/config', '**/.aws/**',
+    '**/.claude/.credentials.json', '**/.codex/auth.json', '**/.vault-token',
+    '**/.composer/auth.json', '**/.config/composer/auth.json', '**/.config/gcloud/**',
+    '**/.azure/**', '**/.terraform.d/credentials.tfrc.json', '**/.cargo/credentials*', '**/.gem/credentials',
+)
+_DEGRADED_PUBLIC_NAMES = (
+    '*.pub', '.env.example', '.env.sample', '.env.template', '.env.dist',
+    'known_hosts', 'known_hosts.old', 'authorized_keys', 'authorized_keys2',
+)
+_DEGRADED_READ_TOOLS = frozenset({'read', 'read_file', 'read_many_files', 'open_file', 'fs_read',
+                                    'view', 'grep', 'notebookread', 'search'})
+_DEGRADED_PATH_KEYS = frozenset({'path', 'file', 'filename', 'file_path', 'filepath', 'absolute_path',
+                                     'notebook_path', 'directory', 'target', 'paths', 'file_paths', 'files', 'glob'})
+_DEGRADED_REASON = (
+    'Getzilla policy did not load. Protected actions and unresolved reads are refused until the hook is repaired '
+    '(see .getzilla/runtime/hook-events.jsonl). Explicit public file reads and ordinary structured edits stay allowed.'
+)
+
+
+def _degraded_patterns() -> tuple[str, ...] | None:
+    """Read only bounded non-secret policy configuration; never import the failed stack."""
+    try:
+        path = Path(__file__).resolve().parents[2] / '.getzilla/config/policy.json'
+        with path.open('rb') as handle:
+            raw = handle.read(65537)
+        if len(raw) > 65536:
             return None
-        if _DEGRADED_PROTECTED_SHELL.search(command):
-            return reason
-        if _DEGRADED_CONTROL_PLANE.search(command) and _DEGRADED_SHELL_WRITE.search(command):
-            return reason
+        config = json.loads(raw)
+        extra = config.get('secret_read_paths', []) if isinstance(config, dict) else None
+        if (not isinstance(extra, list) or len(extra) > 128
+                or any(not isinstance(item, str) or not item or len(item) > 4096 for item in extra)):
+            return None
+        return (*_DEGRADED_SECRET_PATHS, *extra)
+    except FileNotFoundError:
+        return _DEGRADED_SECRET_PATHS
+    except (OSError, ValueError, RuntimeError):
         return None
+
+
+def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
+    """Check names and symlink metadata only. Directories and expansions need the full policy."""
+    if (not isinstance(value, str) or not value or len(value) > 4096
+            or any(char in value for char in '$`*?[]{}~\x00\r\n')):
+        return False
+    try:
+        raw = value.replace('\\', '/')
+        # A drive/URI has no unambiguous POSIX meaning; Windows resolves native drives below.
+        if ':' in raw and (sys.platform != 'win32' or len(raw) < 3 or raw[1] != ':' or ':' in raw[2:]):
+            return False
+        if any(part.endswith((' ', '.')) and part not in {'.', '..'} for part in raw.split('/')):
+            return False
+        path = Path(raw)
+        path = path if path.is_absolute() else directory / path
+        resolved = path.resolve()
+        if resolved.is_dir():
+            return False
+        for candidate in (path, resolved):
+            if any(fnmatch.fnmatchcase(candidate.name.lower(), public) for public in _DEGRADED_PUBLIC_NAMES):
+                continue
+            name = candidate.as_posix().lower()
+            if any(fnmatch.fnmatchcase(name, pattern.lower())
+                   or fnmatch.fnmatchcase(name, '*/' + pattern.lower()) for pattern in patterns):
+                return False
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
+    """Allow a small explicit grammar, not a second shell evaluator or approval system."""
+    if isinstance(command, list):
+        if not command or any(not isinstance(part, str) for part in command):
+            return False
+        command = shlex.join(command)
+    if (not isinstance(command, str) or not command.strip() or len(command) > 131072
+            or any(char in command for char in '$`;&|<>(){}\\\x00\r\n')):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    offset = 0
+    while offset < min(len(words), 16) and Path(words[offset]).name.lower() in {'command'}:
+        offset += 1
+    words = words[offset:]
+    if not words:
+        return False
+    name = Path(words[0]).name.lower().removesuffix('.exe')
+    operands = words[1:]
+    if name in {'ls', 'pwd', 'echo', 'printf'}:
+        return True
+    if name == 'git':
+        return bool(operands) and operands[0] == 'status' and all(word.startswith('-') for word in operands[1:])
+    if name not in {'cat', 'head', 'tail', 'wc', 'get-content', 'gc', 'type'}:
+        return False
+    paths = []
+    index = 0
+    options = True
+    while index < len(operands):
+        word = operands[index]
+        if options and word == '--':
+            options = False
+        elif options and word in {'-n', '-c', '--lines', '--bytes'} and name in {'head', 'tail'}:
+            index += 1
+            if index == len(operands) or not operands[index].isdigit():
+                return False
+        elif options and word.startswith('-'):
+            # Unknown options can load files or change interpretation. Keep the subset closed.
+            if word not in {'-n', '-b', '-s', '-E', '-T', '-v', '-l', '-w', '-c'}:
+                return False
+        else:
+            paths.append(word)
+        index += 1
+    return bool(paths) and len(paths) <= 128 and all(
+        _degraded_public_path(path, directory, patterns) for path in paths
+    )
+
+
+def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ...) -> str | None:
+    """Keep protected actions denied without trusting imports that just failed."""
+    if not tool or not isinstance(inputs, dict):
+        return _DEGRADED_REASON
+    lowered = tool.lower()
+    is_read = lowered in _DEGRADED_READ_TOOLS or (tool.startswith('mcp__') and 'read' in lowered)
+    if tool in _DEGRADED_SHELL_TOOLS or is_read:
+        try:
+            directory = Path.cwd() if execution_cwd is ... else Path(execution_cwd)
+            if not directory.is_absolute():
+                return _DEGRADED_REASON
+            for key in ('workdir', 'cwd'):
+                if key in inputs:
+                    candidate = inputs[key]
+                    if not isinstance(candidate, str) or not Path(candidate).is_absolute():
+                        return _DEGRADED_REASON
+                    directory = Path(candidate)
+            patterns = _degraded_patterns()
+            if patterns is None:
+                return _DEGRADED_REASON
+            if tool in _DEGRADED_SHELL_TOOLS:
+                command = inputs.get('command', inputs.get('cmd'))
+                return None if _degraded_shell_read(command, directory, patterns) else _DEGRADED_REASON
+            paths = []
+            pending = [inputs]
+            inspected = 0
+            while pending:
+                item = pending.pop()
+                inspected += 1
+                if inspected > 256:
+                    return _DEGRADED_REASON
+                if isinstance(item, dict):
+                    if len(item) > 128:
+                        return _DEGRADED_REASON
+                    for key, value in item.items():
+                        if key.lower() in _DEGRADED_PATH_KEYS:
+                            values = value if isinstance(value, list) else [value]
+                            if not values or len(values) > 128:
+                                return _DEGRADED_REASON
+                            paths.extend(values)
+                        elif isinstance(value, (dict, list)):
+                            pending.append(value)
+                elif isinstance(item, list):
+                    if len(item) > 128:
+                        return _DEGRADED_REASON
+                    pending.extend(item)
+            if not paths or len(paths) > 128 or not all(_degraded_public_path(path, directory, patterns) for path in paths):
+                return _DEGRADED_REASON
+            return None
+        except (OSError, TypeError, ValueError, RuntimeError):
+            return _DEGRADED_REASON
     if tool in _DEGRADED_WRITE_TOOLS:
         targets = [str(inputs.get(key)) for key in ('file_path', 'path', 'notebook_path', 'filePath') if inputs.get(key)]
         targets += [str(inputs.get(key)) for key in ('patch', 'input') if isinstance(inputs.get(key), str)]
         if any(_DEGRADED_CONTROL_PLANE.search(target.replace('\\', '/')) for target in targets):
-            return reason
+            return _DEGRADED_REASON
     return None
 
 
@@ -62,14 +215,17 @@ def _degraded_output(reason: str | None) -> str:
     })
 
 
-def _degraded_payload() -> tuple[str, Any]:
+def _degraded_payload() -> tuple[str, Any, Any]:
     try:
-        raw = sys.stdin.buffer.read().decode('utf-8-sig', errors='replace')
+        raw = sys.stdin.buffer.read(262145)
+        if len(raw) > 262144:
+            return '', None, None
+        raw = raw.decode('utf-8-sig', errors='replace')
         payload = json.loads(raw) if raw.strip() else {}
     except (OSError, ValueError):
-        return '', None
+        return '', None, None
     if not isinstance(payload, dict):
-        return '', None
+        return '', None, None
     tool = str(payload.get('tool_name') or payload.get('toolName') or '')
     inputs = payload.get('tool_input', payload.get('toolInput', payload.get('toolArgs')))
     if isinstance(inputs, str):
@@ -77,7 +233,7 @@ def _degraded_payload() -> tuple[str, Any]:
             inputs = json.loads(inputs)
         except ValueError:
             inputs = None
-    return tool, inputs
+    return tool, inputs, payload.get('cwd', Path.cwd())
 
 
 # Make stack importable even when cwd is project root
@@ -554,7 +710,7 @@ def main() -> None:
         except Exception as error:
             # Policy stack not importable: record it, refuse protected actions, allow the rest (#78).
             record_degraded('pre_tool_use', error, payload)
-            denial = _degraded_denial(current_tool, current_input)
+            denial = _degraded_denial(current_tool, current_input, context.execution_cwd)
             emit(permission_output(denial is None, denial))
             return
 
