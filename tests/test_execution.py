@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+import subprocess
 import os
 from pathlib import Path
 import tempfile
@@ -13,6 +15,24 @@ from unittest.mock import patch
 from getzilla import execution as execution, execution_store as store, state
 from getzilla.agent_lifecycle import start_agent
 from getzilla.router import build_route
+
+
+class FakeClock:
+    def __init__(self):
+        self.seconds = 100.0
+        self.now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.seconds
+
+    def utcnow(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.seconds += seconds
+        self.now += timedelta(seconds=seconds)
 
 
 class CountingBackend:
@@ -208,3 +228,128 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result['operation_outcome'], 'unknown')
         self.assertFalse(result['evidence_authority'])
         self.assertNotEqual(result['execution_status'], 'succeeded')
+
+
+    def test_wait_validates_cap_uses_monotonic_and_never_restarts_or_extends_deadline(self):
+        clock = FakeClock()
+        backend = CountingBackend(complete=False)
+        view = execution.submit(self.root, self.caller, self.request, backend=backend, clock=clock)
+        deadline = view['deadline'].copy()
+        for timeout in (0, -1, float('nan'), float('inf'), 30.01, True, '1'):
+            with self.subTest(timeout=timeout), self.assertRaises(execution.ExecutionError):
+                execution.wait(self.root, self.caller, view['execution_id'], timeout, clock=clock)
+        clock.now -= timedelta(days=365)
+        for _ in range(10):
+            observed = execution.wait(self.root, self.caller, view['execution_id'], .02, clock=clock)
+            self.assertEqual(observed['wait_status'], 'wait_expired')
+            self.assertEqual(observed['execution']['execution_status'], 'running')
+            self.assertEqual(observed['execution']['deadline'], deadline)
+        self.assertEqual(backend.calls, 1)
+        self.assertAlmostEqual(clock.monotonic(), 100.2, places=9)
+        self.assertTrue(all(0 < duration <= .02 for duration in clock.sleeps))
+        clock.seconds = 161
+        elapsed = execution.get(self.root, self.caller, view['execution_id'])
+        self.assertTrue(elapsed['deadline_elapsed'])
+        self.assertEqual(elapsed['execution_status'], 'running')
+        self.assertEqual(elapsed['cleanup_status'], 'not_required')
+        self.assertEqual(elapsed['deadline'], deadline)
+
+    def test_ready_wait_has_one_terminal_result_and_late_deadline_callback_is_fenced(self):
+        clock = FakeClock()
+        backend = CountingBackend()
+        view = execution.submit(self.root, self.caller, self.request, backend=backend, clock=clock)
+        for _ in range(10):
+            ready = execution.wait(self.root, self.caller, view['execution_id'], 30, clock=clock)
+            self.assertEqual(ready['wait_status'], 'ready')
+            self.assertEqual(ready['execution']['execution_id'], view['execution_id'])
+        self.assertEqual(clock.sleeps, [])
+        self.assertEqual(backend.calls, 1)
+        running = CountingBackend(complete=False)
+        request = replace(self.request, intent_key='second')
+        current = execution.submit(self.root, self.caller, request, backend=running, clock=clock)
+        admission = running.admissions[0]
+        clock.seconds += 60
+        with self.assertRaises(execution.ExecutionError):
+            execution.record_event(self.root, admission.token, current['execution_id'], current['revision'],
+                                   admission.execution_generation, 'too-late', {'execution_status': 'succeeded'})
+        self.assertEqual(execution.get(self.root, self.caller, current['execution_id'])['execution_status'], 'running')
+
+    def test_restore_without_live_continuity_orphans_without_relaunch_or_clock_budget(self):
+        clock = FakeClock()
+        backend = CountingBackend(complete=False)
+        request = replace(self.request, operation_id='stable-operation')
+        view = execution.submit(self.root, self.caller, request, backend=backend, clock=clock)
+        restarted = FakeClock()
+        restarted.now -= timedelta(days=30)
+        with patch.dict(execution._LIVE, {}, clear=True):
+            report = execution.restore(self.root, clock=restarted)
+        self.assertEqual(report['orphaned'], 1)
+        restored = execution.get(self.root, self.caller, view['execution_id'])
+        self.assertEqual(restored['execution_status'], 'orphaned')
+        self.assertEqual(restored['cleanup_status'], 'unconfirmed')
+        self.assertEqual(restored['operation_outcome'], 'unknown')
+        self.assertEqual(restored['terminal_reason'], 'recovery_uncertain')
+        self.assertEqual(restored['deadline'], view['deadline'])
+        self.assertEqual(backend.calls, 1)
+        replay = execution.submit(self.root, self.caller, request, backend=backend, clock=restarted)
+        self.assertEqual(replay['execution_id'], view['execution_id'])
+        self.assertEqual(backend.calls, 1)
+
+    def test_restore_compacts_expired_output_but_keeps_bounded_acl_tombstone_and_dedup(self):
+        clock = FakeClock()
+        backend = CountingBackend()
+        view = execution.submit(self.root, self.caller, self.request, backend=backend, clock=clock)
+        clock.now += timedelta(days=2)
+        report = execution.restore(self.root, clock=clock)
+        self.assertEqual(report['expired'], 1)
+        expired = execution.get(self.root, self.caller, view['execution_id'])
+        self.assertEqual(expired['observation_status'], 'expired')
+        self.assertEqual(expired['owner'], view['owner'])
+        self.assertEqual(expired['execution_status'], 'succeeded')
+        self.assertEqual(self.submit(backend)['execution_id'], view['execution_id'])
+        self.assertEqual(backend.calls, 1)
+        self.assertEqual(len(store.load_registry(self.root)['intents']), 1)
+        with self.assertRaises(execution.ExecutionError) as caught:
+            execution.get(self.root, self.caller, '0' * 32)
+        self.assertEqual(caught.exception.code, 'execution_not_found')
+
+    def test_completion_preserves_original_source_and_real_git_identity_on_changed_bytes(self):
+        source = self.root / 'source.txt'
+        source.write_text('before')
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.root)], check=True)
+        for args in (['config', 'user.email', 'execution@example.test'], ['config', 'user.name', 'Execution fixture'],
+                     ['add', 'source.txt'], ['commit', '-qm', 'before attempt']):
+            subprocess.run(['git', *args], cwd=self.root, check=True)
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+        class ChangingBackend(CountingBackend):
+            def dispatch(inner, root, admission, request):
+                super().dispatch(root, admission, request)
+                source.write_text('after')
+                return {'execution_status': 'succeeded', 'terminal_reason': 'exit_zero'}
+        result = self.submit(ChangingBackend())
+        self.assertEqual(result['execution_status'], 'succeeded')
+        self.assertTrue(result['source_changed'])
+        self.assertEqual(result['source']['git_head'], head)
+        self.assertNotEqual(result['source']['fingerprint'], result['source_final']['fingerprint'])
+        self.assertFalse(result['evidence_authority'])
+        self.assertEqual((self.root / '.getzilla/runtime/receipts').exists(), False)
+        self.assertEqual(execution.get(self.root, self.caller, result['execution_id'])['source'], result['source'])
+
+    def test_nested_non_git_workspace_never_inherits_parent_sha_and_secret_files_are_not_read(self):
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.root)], check=True)
+        child = self.root / 'nested'
+        child.mkdir()
+        owned_route(child)
+        caller = execution.trusted_caller(child)
+        view = execution.submit(child, caller, self.request, backend=CountingBackend())
+        self.assertIsNone(view['source']['git_head'])
+        self.assertEqual(len(view['source']['fingerprint']), 64)
+        (child / '.env').write_text('PRIVATE=must not be read')
+        real_read = execution.read_package_file
+        def guarded_read(root, relative, **kwargs):
+            self.assertNotEqual(relative, '.env')
+            return real_read(root, relative, **kwargs)
+        with patch.object(execution, 'read_package_file', side_effect=guarded_read):
+            with self.assertRaises(execution.ExecutionError) as caught:
+                execution.submit(child, caller, replace(self.request, intent_key='secret-root'), backend=CountingBackend())
+        self.assertEqual(caught.exception.code, 'source_inventory_unavailable')
