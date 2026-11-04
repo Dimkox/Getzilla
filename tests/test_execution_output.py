@@ -144,3 +144,29 @@ class OutputTests(unittest.TestCase):
             current = execution.get(root, caller, view['execution_id'])
             self.assertEqual(current['deadline'], view['deadline'])
             self.assertEqual(current['execution_status'], 'running')
+
+    def test_requested_partial_output_marks_view_loss_without_rewriting_capture_counters(self):
+        for text, cap in (('hello', 1), ('a€b', 2), ('password=synthetic-sensitive', 1)):
+            with self.subTest(text=text, cap=cap), tempfile.TemporaryDirectory() as name, \
+                 patch.dict(os.environ, {'GETZILLA_SESSION_ID': 'owner'}):
+                root = Path(name)
+                owned_route(root)
+                caller = execution.trusted_caller(root)
+                backend = CountingBackend(complete=False)
+                view = execution.submit(root, caller, execution.SubmitRequest('small-view', {}, 60), backend=backend)
+                admission = backend.admissions[0]
+                size = len(text.encode())
+                execution.record_event(root, admission.token, view['execution_id'], view['revision'],
+                                       admission.execution_generation, 'output',
+                                       {'execution_status': 'succeeded', 'output': {'stdout': text,
+                                        'observed_bytes': size, 'retained_bytes': size, 'dropped_bytes': 0}})
+                result = output.read_output(root, caller, view['execution_id'], max_bytes=cap)
+                self.assertFalse(result['complete_output'])
+                self.assertTrue(result['truncated'])
+                self.assertTrue(result['preview_truncated'])
+                self.assertEqual(result['observed_bytes'], size)
+                self.assertEqual(result['retained_bytes'], size)
+                self.assertEqual(result['dropped_bytes'], 0)
+                self.assertLessEqual(len(result['preview'].encode()), cap)
+                self.assertNotIn('\ufffd', result['preview'])
+                self.assertNotIn('synthetic-sensitive', str(result))

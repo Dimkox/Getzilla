@@ -39,8 +39,9 @@ def interrupted_submit(path, stage):
             os._exit(91)
     class MarkerBackend(CountingBackend):
         def dispatch(self, root, admission, request):
+            result = super().dispatch(root, admission, request)
             (root / 'must-not-dispatch').write_text('unexpected')
-            return super().dispatch(root, admission, request)
+            return result
     with patch.object(fsx, 'replace_at', side_effect=replace), \
          patch.object(store.state.os, 'fsync', side_effect=file_sync), \
          patch.object(fsx, 'fsync_dir', side_effect=directory_sync):

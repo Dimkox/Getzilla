@@ -41,6 +41,53 @@
             ],
             "type": "object"
           },
+          "cancel_claim": {
+            "additionalProperties": false,
+            "properties": {
+              "deadline_at": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "request_id": {
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "requested_at": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "reserved",
+                  "consumed",
+                  "accepted",
+                  "rejected",
+                  "unknown"
+                ]
+              },
+              "token_digest": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id",
+              "token_digest",
+              "state",
+              "requested_at",
+              "deadline_at"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "cleanup_status": {
             "enum": [
               "not_required",
@@ -75,6 +122,12 @@
               "duration_seconds"
             ],
             "type": "object"
+          },
+          "dispatch_claim": {
+            "enum": [
+              "pending",
+              "consumed"
+            ]
           },
           "event_receipts": {
             "maxProperties": 64,
@@ -473,7 +526,9 @@
           "output",
           "retention_until",
           "expired",
-          "event_receipts"
+          "event_receipts",
+          "dispatch_claim",
+          "cancel_claim"
         ],
         "type": "object"
       },

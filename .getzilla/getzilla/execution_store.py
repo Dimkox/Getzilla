@@ -56,6 +56,9 @@ _SOURCE = _object({
     'context_digest': {**_DIGEST, 'type': ['string', 'null']},
     'evidence_links': {'type': 'array', 'maxItems': 16, 'items': _string(256)},
 })
+_CANCEL = _object({'request_id': _string(32, pattern=r'^[0-9a-f]{32}$'), 'token_digest': _DIGEST,
+                    'state': {'enum': ['reserved', 'consumed', 'accepted', 'rejected', 'unknown']},
+                    'requested_at': _TIME, 'deadline_at': _TIME})
 RECORD_SCHEMA = _object({
     'schema_version': {'type': 'integer', 'const': 1}, 'execution_id': _string(32, pattern=r'^[0-9a-f]{32}$'),
     'revision': {'type': 'integer', 'minimum': 1}, 'execution_generation': _string(32, pattern=r'^[0-9a-f]{32}$'),
@@ -75,6 +78,8 @@ RECORD_SCHEMA = _object({
     'output': {'type': ['object', 'null'], 'maxProperties': 32},
     'retention_until': {**_TIME, 'type': ['string', 'null']}, 'expired': {'type': 'boolean'},
     'event_receipts': {'type': 'object', 'maxProperties': 64},
+    'dispatch_claim': {'enum': ['pending', 'consumed']},
+    'cancel_claim': {**_CANCEL, 'type': ['object', 'null']},
 })
 REGISTRY_SCHEMA = _object({'schema_version': {'type': 'integer', 'const': 1},
                            'revision': {'type': 'integer', 'minimum': 0},
@@ -115,6 +120,10 @@ def _validate(value: Any) -> None:
                 raise ValueError('inconsistent deadline')
             if record['retention_until'] is not None:
                 _timestamp(record['retention_until'])
+            if record['cancel_claim'] is not None:
+                claim = record['cancel_claim']
+                if (_timestamp(claim['deadline_at']) - _timestamp(claim['requested_at'])).total_seconds() != 30:
+                    raise ValueError('invalid cancellation admission deadline')
             if record['expired'] and record['execution_status'] not in TERMINAL:
                 raise ValueError('nonterminal tombstone')
             for event, digest in record['event_receipts'].items():
@@ -206,6 +215,16 @@ def _publish(root, previous, value):
                 raise RegistryError('registry_conflict')
             if after != before and after['revision'] != before['revision'] + 1:
                 raise RegistryError('registry_conflict')
+            if before['dispatch_claim'] == 'consumed' and after['dispatch_claim'] != 'consumed':
+                raise RegistryError('registry_conflict')
+            old_cancel, new_cancel = before['cancel_claim'], after['cancel_claim']
+            if old_cancel is not None:
+                transitions = {'reserved': {'reserved', 'consumed', 'rejected', 'unknown'},
+                               'consumed': {'consumed', 'accepted', 'rejected', 'unknown'},
+                               'accepted': {'accepted'}, 'rejected': {'rejected'}, 'unknown': {'unknown'}}
+                if (new_cancel is None or any(old_cancel[k] != new_cancel[k] for k in old_cancel if k != 'state')
+                        or new_cancel['state'] not in transitions[old_cancel['state']]):
+                    raise RegistryError('registry_conflict')
             if before['execution_status'] in TERMINAL and after != before:
                 allowed = {'revision', 'expired', 'output'}
                 normalized = after['output'] == normalize_output(before['output'])

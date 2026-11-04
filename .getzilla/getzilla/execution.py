@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -24,6 +24,8 @@ from .util import tree_fingerprint
 _ISSUER = object()
 _UNCERTAIN: set[tuple[str, str]] = set()
 _LIVE: dict[tuple[str, str], tuple[Any, float, str]] = {}
+_CANCEL_LIVE: dict[tuple[str, str], float] = {}
+_CANCEL_UNCERTAIN: set[tuple[str, str]] = set()
 _ID = re.compile(r'[A-Za-z0-9:._-]{1,128}')
 
 
@@ -70,19 +72,50 @@ class SubmitRequest:
 
 
 @dataclass(frozen=True)
+class AdmittedRequest:
+    intent_key: str = field(repr=False)
+    argument_bytes: bytes = field(repr=False)
+    hard_timeout_seconds: int
+    label: str
+    operation_id: str | None
+    mcp_request_id: str | None
+    remote_task_id: str | None
+
+    @property
+    def arguments(self):
+        # Every consumer owns its decoded payload; caller references cannot alter admission.
+        return json.loads(self.argument_bytes)
+
+
+@dataclass(frozen=True)
 class Admission:
     execution_id: str
     execution_generation: str
     revision: int
-    token: str
+    token: str = field(repr=False)
+
+    def consume(self, root: Path, request: AdmittedRequest):
+        return _consume_dispatch(root, self, request)
+
+
+@dataclass(frozen=True)
+class CancelAdmission:
+    execution_id: str
+    execution_generation: str
+    request_id: str
+    token: str = field(repr=False)
+
+    def consume(self, root: Path):
+        return _consume_cancel(root, self)
 
 
 class ExecutionBackend(Protocol):
     kind: str
     external_mutations: bool
+    cooperative_admission: bool
 
-    def dispatch(self, root: Path, admission: Admission, request: SubmitRequest) -> dict | None: ...
-    def cancel(self, root: Path, admission: Admission) -> bool: ...
+    def dispatch(self, root: Path, admission: Admission, request: AdmittedRequest) -> dict | None: ...
+    def cancel(self, root: Path, admission: CancelAdmission) -> bool: ...
 
 
 def _digest(value):
@@ -91,6 +124,26 @@ def _digest(value):
     if len(raw) > 65536:
         raise ExecutionError('request_too_large')
     return hashlib.sha256(raw).hexdigest()
+
+
+def _snapshot(request: SubmitRequest):
+    try:
+        _bounded_walk(request.arguments)
+        raw = json.dumps(request.arguments, sort_keys=True, ensure_ascii=False,
+                         separators=(',', ':'), allow_nan=False).encode()
+        if len(raw) > 65536:
+            raise ExecutionError('request_too_large')
+        # Validate the very bytes retained for dispatch, rather than retain mutable aliases.
+        _bounded_walk(json.loads(raw))
+        return AdmittedRequest(request.intent_key, raw, request.hard_timeout_seconds, request.label,
+                               request.operation_id, request.mcp_request_id, request.remote_task_id)
+    except (TypeError, ValueError, RuntimeError, UnicodeError, RecursionError) as error:
+        raise ExecutionError('invalid_submit') from error
+
+
+def _request_digest(request: AdmittedRequest, kind: str):
+    return _digest({'arguments': request.arguments, 'backend': kind, 'timeout': request.hard_timeout_seconds,
+                    'label': request.label, 'operation_id': request.operation_id, 'remote_task_id': request.remote_task_id})
 
 
 def _agent(root, agent_id):
@@ -254,6 +307,12 @@ def _view(root, record):
     result['output'] = normalize_output(None if record['expired'] else record['output'])
     result.pop('backend')  # backend token digests are never part of the observation surface
     result.pop('event_receipts')
+    if result['cancel_claim'] is not None:
+        result['cancel_claim'].pop('token_digest')
+    if (str(root.resolve()), record['execution_id']) in _CANCEL_UNCERTAIN:
+        result['cancel_claim']['state'] = 'unknown'
+        if record['execution_status'] not in store.TERMINAL:
+            result.update(cleanup_status='unconfirmed', operation_outcome='unknown')
     result['evidence_authority'] = False
     result['observation_status'] = 'expired' if record['expired'] else 'ready'
     live = _LIVE.get((str(root.resolve()), record['execution_id']))
@@ -296,11 +355,39 @@ def _backend(backend):
         raise ExecutionError('external_backend_unqualified')
     if not isinstance(backend.kind, str) or not _ID.fullmatch(backend.kind):
         raise ExecutionError('unsupported_backend')
+    if getattr(backend, 'cooperative_admission', None) is not True:
+        raise ExecutionError('unsupported_admission_fence')
+    return backend.kind
+
+
+def _dispatch_ready(root, record):
+    live = _LIVE.get((str(root.resolve()), record['execution_id']))
+    if (not live or live[2] != record['execution_generation'] or live[0].monotonic() >= live[1]
+            or record['execution_status'] != 'running' or record['dispatch_claim'] != 'pending'):
+        raise ExecutionError('admission_fenced')
+    _owner_current(root, record)
+
+
+@state.serialized_task
+def _consume_dispatch(root, admission, request):
+    if type(request) is not AdmittedRequest:
+        raise ExecutionError('unsupported_admission_fence')
+    def consume(registry):
+        record = _find(registry, admission.execution_id)
+        _dispatch_ready(root, record)
+        if (record['execution_generation'] != admission.execution_generation
+                or record['revision'] != admission.revision
+                or not secrets.compare_digest(record['backend']['token_digest'], hashlib.sha256(admission.token.encode()).hexdigest())
+                or _request_digest(request, record['backend']['kind']) != record['input']['request_digest']):
+            raise ExecutionError('admission_fenced')
+        record.update(dispatch_claim='consumed', revision=record['revision'] + 1)
+    registry, _ = store.mutate_registry(root, consume)
+    return _view(root, registry['records'][admission.execution_id])
 
 
 def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend: ExecutionBackend | None = None,
            clock: Clock = SYSTEM_CLOCK):
-    _backend(backend)
+    kind = _backend(backend)
     if (type(caller) is not CallerContext or getattr(caller, '_issuer', None) is not _ISSUER
             or caller._observation_id is not None):
         raise ExecutionError('execution_forbidden')
@@ -311,9 +398,8 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
             or any(value is not None and (not isinstance(value, str) or not _ID.fullmatch(value))
                    for value in (request.operation_id, request.mcp_request_id, request.remote_task_id))):
         raise ExecutionError('invalid_submit')
-    request_digest = _digest({'arguments': request.arguments, 'backend': backend.kind,
-                              'timeout': request.hard_timeout_seconds, 'label': request.label,
-                              'operation_id': request.operation_id, 'remote_task_id': request.remote_task_id})
+    request = _snapshot(request)
+    request_digest = _request_digest(request, kind)
     with state.task_transition(root):
         route = _caller(root, caller)
         owner = {'workspace': caller.workspace, 'project': hashlib.sha256(caller.workspace.encode()).hexdigest(),
@@ -348,13 +434,13 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
                 'deadline': {'submitted_at': now.isoformat(),
                              'hard_deadline_at': (now + timedelta(seconds=request.hard_timeout_seconds)).isoformat(),
                              'duration_seconds': request.hard_timeout_seconds},
-                'backend': {'kind': backend.kind, 'token_digest': hashlib.sha256(token.encode()).hexdigest(),
+                'backend': {'kind': kind, 'token_digest': hashlib.sha256(token.encode()).hexdigest(),
                             'claim': 'committed', 'external_mutations': False},
                 'operation_id': request.operation_id, 'mcp_request_id': request.mcp_request_id,
                 'remote_task_id': request.remote_task_id, 'execution_status': 'running',
                 'cleanup_status': 'not_required', 'operation_outcome': 'not_applicable', 'terminal_reason': None,
                 'source_final': None, 'source_changed': False, 'output': None, 'retention_until': None,
-                'expired': False, 'event_receipts': {},
+                'expired': False, 'event_receipts': {}, 'dispatch_claim': 'pending', 'cancel_claim': None,
             }
             registry['records'][execution_id] = record
             registry['intents'][intent] = execution_id
@@ -383,12 +469,23 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
             _UNCERTAIN.add((str(root.resolve()), execution_id))
             return _view(root, record)
     admission = Admission(execution_id, record['execution_generation'], record['revision'], token)
+    # Check the already-stale unlocked boundary before even entering the cooperative adapter.
+    # Its own consumption below remains the linearization point; no lock spans adapter work.
+    with state.task_transition(root):
+        _dispatch_ready(root, _find(store.load_registry(root), execution_id))
     try:
         result = backend.dispatch(root, admission, request)
     except Exception:
         # A dispatch claim is never repeated, even if the backend threw before returning.
         _UNCERTAIN.add((str(root.resolve()), execution_id))
+        try:
+            record = _find(store.load_registry(root), execution_id)
+        except store.RegistryError:
+            pass
         return _view(root, record)
+    record = _find(store.load_registry(root), execution_id)
+    if record['dispatch_claim'] != 'consumed':
+        raise ExecutionError('unsupported_admission_fence')
     if result is not None:
         try:
             return record_event(root, token, execution_id, record['revision'], record['execution_generation'],
@@ -431,7 +528,8 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
         if not live or live[2] != execution_generation or live[0].monotonic() >= live[1]:
             raise ExecutionError('event_fenced')
         if (type(expected_revision) is not int or record['revision'] != expected_revision
-                or record['execution_status'] in store.TERMINAL or len(record['event_receipts']) >= 64):
+                or record['execution_status'] in store.TERMINAL or len(record['event_receipts']) >= 64
+                or record['dispatch_claim'] != 'consumed'):
             raise ExecutionError('event_fenced')
         if record['execution_status'] == 'cancel_requested' and event['execution_status'] == 'running':
             raise ExecutionError('event_fenced')
@@ -520,23 +618,85 @@ def restore(root, *, clock: Clock = SYSTEM_CLOCK):
     return counts
 
 
+def _cancel_ready(root, record, admission):
+    claim = record['cancel_claim']
+    end = _CANCEL_LIVE.get((str(root.resolve()), admission.request_id))
+    if (record['execution_status'] in store.TERMINAL or record['execution_generation'] != admission.execution_generation
+            or claim is None or claim['request_id'] != admission.request_id or claim['state'] != 'reserved'
+            or not secrets.compare_digest(claim['token_digest'], hashlib.sha256(admission.token.encode()).hexdigest())
+            or end is None or SYSTEM_CLOCK.monotonic() >= end):
+        raise ExecutionError('admission_fenced')
+    _owner_current(root, record)
+
+
+@state.serialized_task
+def _consume_cancel(root, admission):
+    def consume(registry):
+        record = _find(registry, admission.execution_id)
+        _cancel_ready(root, record, admission)
+        record['cancel_claim']['state'] = 'consumed'
+        record['revision'] += 1
+    registry, _ = store.mutate_registry(root, consume)
+    return _view(root, registry['records'][admission.execution_id])
+
+
+@state.serialized_task
+def _cancel_receipt(root, admission, outcome):
+    def save(registry):
+        record = _find(registry, admission.execution_id)
+        claim = record['cancel_claim']
+        if (record['execution_status'] in store.TERMINAL or claim['state'] in {'accepted', 'rejected', 'unknown'}):
+            return
+        _owner_current(root, record)
+        if (record['execution_generation'] != admission.execution_generation or claim['request_id'] != admission.request_id
+                or not secrets.compare_digest(claim['token_digest'], hashlib.sha256(admission.token.encode()).hexdigest())):
+            raise ExecutionError('admission_fenced')
+        if outcome == 'accepted' and claim['state'] != 'consumed':
+            raise ExecutionError('unsupported_admission_fence')
+        claim['state'] = outcome
+        record['revision'] += 1
+        if outcome == 'accepted':
+            record.update(execution_status='cancel_requested', cleanup_status='pending')
+        elif outcome == 'unknown':
+            record.update(cleanup_status='unconfirmed', operation_outcome='unknown')
+    registry, _ = store.mutate_registry(root, save)
+    return _view(root, registry['records'][admission.execution_id])
+
+
 def cancel(root, caller, execution_id, *, backend=None):
-    _backend(backend)
-    record = _find(store.load_registry(root), execution_id)
-    _authorize(root, caller, record)
-    if record['execution_status'] in store.TERMINAL or record['execution_status'] == 'cancel_requested':
+    kind = _backend(backend)
+    token, request_id = secrets.token_hex(32), secrets.token_hex(16)
+    now, started = SYSTEM_CLOCK.utcnow(), SYSTEM_CLOCK.monotonic()
+    with state.task_transition(root):
+        def reserve(registry):
+            record = _find(registry, execution_id)
+            _authorize(root, caller, record)
+            if record['execution_status'] in store.TERMINAL or record['cancel_claim'] is not None:
+                return False
+            if record['backend']['kind'] != kind:
+                raise ExecutionError('unsupported_backend')
+            record['cancel_claim'] = {'request_id': request_id, 'token_digest': hashlib.sha256(token.encode()).hexdigest(),
+                                      'state': 'reserved', 'requested_at': now.isoformat(),
+                                      'deadline_at': (now + timedelta(seconds=30)).isoformat()}
+            record['revision'] += 1
+            return True
+        registry, reserved = store.mutate_registry(root, reserve)
+    record = registry['records'][execution_id]
+    if not reserved:
         return _view(root, record)
-    if record['backend']['kind'] != backend.kind:
-        raise ExecutionError('unsupported_backend')
-    # Contract backends accept the request; this is never a claim of process termination.
-    admission = Admission(execution_id, record['execution_generation'], record['revision'], '')
-    if backend.cancel(root, admission) is not True:
-        raise ExecutionError('cancel_not_accepted')
-    def accepted(registry):
-        current = _find(registry, execution_id)
-        _authorize(root, caller, current)
-        if current['revision'] != record['revision'] or current['execution_status'] in store.TERMINAL:
-            raise ExecutionError('event_fenced')
-        current.update(execution_status='cancel_requested', cleanup_status='pending', revision=current['revision'] + 1)
-    registry, _ = store.mutate_registry(root, accepted)
-    return _view(root, registry['records'][execution_id])
+    _CANCEL_LIVE[(str(root.resolve()), request_id)] = started + 30
+    admission = CancelAdmission(execution_id, record['execution_generation'], request_id, token)
+    with state.task_transition(root):
+        _cancel_ready(root, _find(store.load_registry(root), execution_id), admission)
+    try:
+        accepted = backend.cancel(root, admission)
+    except Exception:
+        accepted = None  # Lost response is uncertain; a reserved request is never resent.
+    try:
+        return _cancel_receipt(root, admission, 'accepted' if accepted is True else
+                               'rejected' if accepted is False else 'unknown')
+    except (store.RegistryError, ExecutionError) as error:
+        _CANCEL_UNCERTAIN.add((str(root.resolve()), execution_id))
+        if isinstance(error, ExecutionError) and error.code == 'unsupported_admission_fence':
+            raise
+        return _view(root, record)
