@@ -116,6 +116,9 @@ MANAGED_FILES = (
     "schemas/workflow-convergence-report-v1.schema.json",
     "schemas/skill-preflight.v1.schema.json",
     "docs/skill-preflight.md",
+    "engineering/verification-dispositions.json",
+    "engineering/vendor-custody/bmad-whitespace.json",
+    "engineering/vendor-custody/bmad-whitespace.md",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {

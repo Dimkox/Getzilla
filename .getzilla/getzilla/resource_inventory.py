@@ -23,7 +23,7 @@ PROTECTED = frozenset({
     'approvals.json', 'audit', 'changes', 'checkpoints', 'evidence', 'handoff.json', 'hook-events.jsonl',
     'last-fingerprint.json', 'last-session-end.json', 'metrics.jsonl', 'owner-autonomy', 'parallel-guard.json',
     'path-hints.json', 'receipts', 'reviews', 'routes', 'sessions', 'startup-capacity.json', 'stop-attempts.json',
-    'tool-denials.json', 'workflow-cas', 'baseline-assets', 'skill-staging',
+    'tool-denials.json', 'workflow-cas', 'baseline-assets', 'skill-staging', 'skill-intake', 'skill-publications',
     # Git safety checks for worktrees arrive with their own deletion story; until then they stay.
     'worktrees',
 })

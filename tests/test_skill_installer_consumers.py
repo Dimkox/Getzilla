@@ -45,3 +45,11 @@ class ShippedInventoryTests(unittest.TestCase):
             self.assertFalse((root / '.qwen').exists())
         finally:
             fixture.doCleanups()
+
+    def test_installed_payload_keeps_the_complete_whitespace_proof_closure(self):
+        payload = installer.build_payload(installer.ROOT)
+        paths = {entry.path for entry in payload}
+        self.assertTrue({'.getzilla/config/vendored-source-catalog.json',
+                         'engineering/verification-dispositions.json',
+                         'engineering/vendor-custody/bmad-whitespace.json',
+                         'engineering/vendor-custody/bmad-whitespace.md'} <= paths)

@@ -1,0 +1,519 @@
+{
+  "catalog_sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8",
+  "files": [
+    {
+      "diagnostics": [
+        {
+          "line": 118,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 126,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 128,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 141,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 147,
+          "rule": "trailing-whitespace"
+        }
+      ],
+      "mode": "100644",
+      "path": ".getzilla/templates/baseline/blobs/a659166845b1a4ed3f9aef942c5935537a97382b10303684fbb78ed86265870e.txt",
+      "sha256": "a659166845b1a4ed3f9aef942c5935537a97382b10303684fbb78ed86265870e"
+    },
+    {
+      "diagnostics": [
+        {
+          "line": 165,
+          "rule": "new-blank-line-at-eof"
+        }
+      ],
+      "mode": "100644",
+      "path": ".getzilla/templates/baseline/blobs/b6fe8fc1390b8e46961d5eb5e6f2fe6c65dca2f30623d492677672e02868f7ab.txt",
+      "sha256": "b6fe8fc1390b8e46961d5eb5e6f2fe6c65dca2f30623d492677672e02868f7ab"
+    },
+    {
+      "diagnostics": [
+        {
+          "line": 37,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 38,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 39,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 42,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 44,
+          "rule": "trailing-whitespace"
+        }
+      ],
+      "mode": "100644",
+      "path": ".getzilla/templates/baseline/blobs/e44d0008db0c0b30f3fa533e987efe66b2c852530b70fed03f0d4d9cbabe2b4b.txt",
+      "sha256": "e44d0008db0c0b30f3fa533e987efe66b2c852530b70fed03f0d4d9cbabe2b4b"
+    },
+    {
+      "diagnostics": [
+        {
+          "line": 1,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 2,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 3,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 4,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 5,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 6,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 7,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 8,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 9,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 10,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 11,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 12,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 13,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 14,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 15,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 16,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 17,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 18,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 19,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 20,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 21,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 22,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 23,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 24,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 25,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 26,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 27,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 28,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 29,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 30,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 31,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 32,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 33,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 34,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 35,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 36,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 37,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 38,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 39,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 40,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 41,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 42,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 43,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 44,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 45,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 46,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 47,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 48,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 49,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 50,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 51,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 52,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 53,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 54,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 55,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 56,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 57,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 58,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 59,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 60,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 61,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 62,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 63,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 64,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 65,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 66,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 67,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 68,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 69,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 70,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 71,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 72,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 73,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 74,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 75,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 76,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 77,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 78,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 79,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 80,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 81,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 82,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 83,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 84,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 85,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 86,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 87,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 88,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 89,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 90,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 91,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 92,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 93,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 94,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 95,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 96,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 97,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 98,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 99,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 100,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 101,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 102,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 103,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 104,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 105,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 106,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 107,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 108,
+          "rule": "trailing-whitespace"
+        },
+        {
+          "line": 109,
+          "rule": "trailing-whitespace"
+        }
+      ],
+      "mode": "100644",
+      "path": ".getzilla/templates/baseline/blobs/fff112eabca1a9cb8b190f8314bc47678becc5782a2372e11c83daa0e33b6dfd.txt",
+      "sha256": "fff112eabca1a9cb8b190f8314bc47678becc5782a2372e11c83daa0e33b6dfd"
+    }
+  ],
+  "kind": "immutable-vendored-whitespace-custody",
+  "review": {
+    "path": "engineering/vendor-custody/bmad-whitespace.md",
+    "sha256": "987e5ae7a8d4dd5ba08efbdf553f5aa874899baf26cd5a04835f39c2da145d28"
+  },
+  "schema_version": 1
+}

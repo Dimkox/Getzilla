@@ -184,3 +184,68 @@ class BaselineAssetTests(unittest.TestCase):
             steps = baseline.apply_project(project, 'claude', home, run=tools)
             self.assertTrue(any(step.status != 'ok' for step in steps))
             self.assertFalse(list(project.iterdir()))
+
+    def test_identical_superpowers_bytes_with_wrong_mode_refuse_without_chmod(self):
+        payload = baseline_assets.load('superpowers', 'codex')
+        cases = [next(item for item in payload.files if item[2] == mode) for mode in (0o644, 0o755)]
+        for name, content, mode in cases:
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                target = project / name
+                target.parent.mkdir(parents=True)
+                target.write_bytes(content)
+                wrong_mode = 0o777 if mode == 0o644 else 0o644
+                target.chmod(wrong_mode)
+                with self.assertRaisesRegex(ValueError, 'BASELINE_ASSET_CONFLICT'):
+                    baseline_assets.materialize(project, payload)
+                self.assertEqual(target.read_bytes(), content)
+                self.assertEqual(target.stat().st_mode & 0o777, wrong_mode)
+
+    def test_cross_agent_incomplete_component_refuses_in_actual_consumer(self):
+        from getzilla import baseline
+        from getzilla.component_state import ComponentTransaction
+        from tests.test_mandatory_baseline import FakeTools, which_all
+        for component in ('bmad', 'spec-kit'):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / 'project'
+                project.mkdir()
+                payload = baseline_assets.load(component, 'claude')
+                original = ComponentTransaction.write
+                copied = []
+
+                def interrupt(transaction, name, content, mode, *, expected):
+                    if name in {item[0] for item in payload.files}:
+                        if copied:
+                            raise OSError('fixture interruption after one target')
+                        copied.append(name)
+                    return original(transaction, name, content, mode, expected=expected)
+
+                with mock.patch.object(ComponentTransaction, 'write', interrupt), self.assertRaises(ValueError):
+                    baseline_assets.materialize(project, payload)
+                before = {p.relative_to(project).as_posix(): (p.read_bytes(), p.stat().st_mode & 0o777)
+                          for p in project.rglob('*') if p.is_file()}
+                with self.assertRaisesRegex(ValueError, 'INTERRUPTED_BASELINE_MATERIALIZATION'):
+                    baseline_assets.materialize(project, baseline_assets.load(component, 'codex'))
+                tools = FakeTools()
+                home = root / 'home'
+                baseline.install_user(home, run=tools, which=which_all)
+                steps = baseline.apply_project(project, 'codex', home, run=tools)
+                self.assertTrue(any(step.status == 'fail' for step in steps), steps)
+                self.assertEqual(before, {p.relative_to(project).as_posix(): (p.read_bytes(), p.stat().st_mode & 0o777)
+                                         for p in project.rglob('*') if p.is_file()})
+
+    def test_genuine_foreign_user_directories_stay_preserved_across_agents(self):
+        for component, marker in (('bmad', '_bmad'), ('spec-kit', '.specify')):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                target = project / marker / 'user.txt'
+                target.parent.mkdir()
+                target.write_bytes(b'owned user data\n')
+                target.chmod(0o777)
+                for agent in ('claude', 'codex'):
+                    result = baseline_assets.materialize(project, baseline_assets.load(component, agent))
+                    self.assertEqual(result['status'], 'preserved')
+                    self.assertNotIn('materialized_digest', result)
+                    self.assertEqual(target.read_bytes(), b'owned user data\n')
+                    self.assertEqual(target.stat().st_mode & 0o777, 0o777)

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import STACK_DIR, state
-from .component_state import BoundRoot, ComponentStateError, component_transaction, path_parts
+from .component_state import BoundRoot, ComponentStateError, component_transaction, mode_matches, path_parts
 from .policy import evaluate_pre_tool
 from .skill_preflight import canonical, digest, parse_json
 from .skill_sandbox import MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, OUTPUT_PREFIXES
@@ -112,11 +112,16 @@ def preflight_destination(project: Path, payload: AssetPayload) -> bool:
     marker = '_bmad' if payload.component == 'bmad' else '.specify'
     try:
         with BoundRoot(project) as binding:
-            intent = binding.read(_intent_path(payload), limit=4096)
-            if intent is not None:
+            # Every adapter shares the component's native destination markers.
+            # A failed owned copy is not an unrelated user's preserved directory.
+            for agent in sorted(_AGENTS):
+                intent = binding.read(_intent_path(payload, agent=agent), limit=4096)
+                if intent is None:
+                    continue
                 record = parse_json(intent.content, limit=4096)
                 if (type(record) is not dict or set(record) != {'schema_version', 'status', 'asset_digest'}
-                        or record['schema_version'] != 1 or record['status'] not in {'incomplete', 'complete'}
+                        or type(record['schema_version']) is not int or record['schema_version'] != 1
+                        or record['status'] not in {'incomplete', 'complete'}
                         or type(record['asset_digest']) is not str
                         or not re.fullmatch(r'[a-f0-9]{64}', record['asset_digest'])):
                     raise ValueError('INVALID_BASELINE_DIAGNOSTIC')
@@ -128,18 +133,18 @@ def preflight_destination(project: Path, payload: AssetPayload) -> bool:
                         return True
                 except FileNotFoundError:
                     pass
-            for name, content, _mode in payload.files:
+            for name, content, mode in payload.files:
                 current = binding.read(name)
-                if current is not None and (payload.component != 'superpowers' or current.content != content):
+                if current is not None and (payload.component != 'superpowers' or current.content != content or not mode_matches(current.mode, mode)):
                     raise ValueError('BASELINE_ASSET_CONFLICT')
         return False
     except (ComponentStateError, OSError) as exc:
         raise ValueError('UNSAFE_BASELINE_DESTINATION') from exc
 
 
-def _intent_path(payload):
+def _intent_path(payload, *, agent=None):
     # A finite denial-only diagnostic, never a permission/approval ledger.
-    return '.getzilla/runtime/baseline-assets/' + payload.component + '-' + payload.agent + '.json'
+    return '.getzilla/runtime/baseline-assets/' + payload.component + '-' + (agent or payload.agent) + '.json'
 
 
 def materialize(project: Path, payload: AssetPayload) -> dict:
@@ -183,9 +188,9 @@ def materialize(project: Path, payload: AssetPayload) -> dict:
             # Recheck the full preflight under the same writer guard before intent.
             if preflight_destination(project, payload):
                 return {'status': 'preserved', 'added': 0, 'marker': marker}
-            for name, content, _mode in prepared:
+            for name, content, mode in prepared:
                 current = transaction.read(name)
-                if current is not None and (payload.component != 'superpowers' or current.content != content):
+                if current is not None and (payload.component != 'superpowers' or current.content != content or not mode_matches(current.mode, mode)):
                     raise ValueError('BASELINE_ASSET_CONFLICT')
             intent_path = _intent_path(payload)
             diagnostic = transaction.read(intent_path, limit=4096)
@@ -200,17 +205,24 @@ def materialize(project: Path, payload: AssetPayload) -> dict:
                     authorize(name)
                     current = transaction.read(name)
                     if current is not None:
-                        if current.content != content:
+                        if current.content != content or not mode_matches(current.mode, mode):
                             raise ValueError('BASELINE_ASSET_CONFLICT')
                         continue
                     transaction.write(name, content, mode, expected=None)
                     added += 1
+            # Report custody only for freshly observed bytes and exact modes.
+            # An uncooperative writer is not fenced by this local transaction.
+            observed = {}
+            for name, content, mode in prepared:
+                current = transaction.read(name)
+                if current is None or current.content != content or not mode_matches(current.mode, mode):
+                    raise ValueError('BASELINE_ASSET_CONFLICT')
+                observed[name] = {'digest': current.sha256, 'mode': current.mode}
             record['status'] = 'complete'
             transaction.write(intent_path, canonical(record), 0o600, expected=pending)
         return {'status': 'ok', 'added': added, 'marker': marker,
                 'asset_digest': payload.asset_digest, 'semantic_safety': 'unqualified',
-                'materialized_digest': digest(canonical({name: {'digest': digest(content), 'mode': mode}
-                                                        for name, content, mode in prepared})),
+                'materialized_digest': digest(canonical(observed)),
                 'permissions_granted': False, 'native_execution': False}
     except (ComponentStateError, OSError) as exc:
         raise ValueError('UNSAFE_BASELINE_DESTINATION') from exc

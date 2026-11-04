@@ -67,7 +67,7 @@ getzilla baseline status [--project DIR] [--agent NAME]
   binary encoding. Blob hashes bind exact original bytes, including upstream CRLF. The scoped Git
   attribute disables newline conversion while keeping normal text diff detection.
 - Consumer installation validates complete manifest/blob/file custody before copying. It does not execute
-  upstream code, install dependencies, activate skills or grant network/secret/tool permissions.
+  upstream code, install dependencies or grant network/secret/tool permissions. The reviewed shipped instructions become discoverable in native skill paths; copying is not a semantic safety proof.
   Existing `_bmad/` and `.specify/` directories remain untouched; conflicting/unsafe new paths refuse.
   BMAD project-name rendering updates its file manifest and produces a separate materialized digest.
 - The entire asset path is code-bearing supply-chain data. Asset-only `.txt`/`.json` edits retain full
@@ -80,7 +80,7 @@ catalog is source custody, not a claim that arbitrary instructions are safe. Int
 materialization can leave copied files; it never reports success for an incomplete copy. Reconcile
 partial state explicitly before retrying. There is no automatic execution fallback.
 An incomplete bounded runtime diagnostic blocks a retry from treating its partial directory as existing
-user data. This record can only cause refusal; it grants no authority and is not a permission ledger.
+user data, including after changing agent adapters. Reused identical bytes must match the platform mode contract; incompatible modes refuse without chmod. Successful custody digests use actual observed bytes and modes. This record can only cause refusal; it grants no authority and is not a permission ledger.
 
 ## Verify
 
@@ -89,3 +89,5 @@ fails with `WORKFLOW_BASELINE_MISSING` / `PROJECT_BASELINE_MISSING` until the ba
 and connected; `fast` mode warns. CI runners skip this check (the baseline belongs to the agent's
 machine). Security tools were already mandatory in `pr`/`release`: a skipped OpenGrep or an
 unconfigured vulnerability check fails the quality gate there.
+
+Exact immutable upstream whitespace uses source-bound reviewed dispositions. Each finding binds its whole blob, line, rule, mode, pinned Git commit/tree path proof, consumer inventory and separate custody evidence. Worktree, index and HEAD proofs must agree. Raw error severity/output stay visible. Unlisted or changed findings and missing/stale/foreign proofs fail. This classifies exact preserved bytes; it grants no permission or safety/legal approval and skips no other check.

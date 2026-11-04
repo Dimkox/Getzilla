@@ -6,14 +6,14 @@ exists here. A successful copy does not activate or grant any tool capability.
 from __future__ import annotations
 
 from pathlib import Path
-import uuid
+import os
 
 from . import fsx, state
-from .component_state import BoundRoot, component_transaction, path_parts
+from .component_state import BoundRoot, component_transaction, mode_matches, path_parts
 from .continuity import has_task_context
 from .policy import evaluate_pre_tool
 from .skill_preflight import (CATALOG_PATH, DESCRIPTOR, MAX_DESCRIPTOR_BYTES, MAX_SKILLS,
-                              MAX_TOTAL_BYTES, SkillSnapshot, assess, digest, read_snapshot)
+                              MAX_TOTAL_BYTES, SkillSnapshot, assess, canonical, digest, parse_json, read_snapshot)
 from .skill_preflight import native_contract
 
 
@@ -72,9 +72,8 @@ def installation_context(root, catalog, candidate_id):
         raise ValueError('EXISTING_SKILL_LIMIT')
     results = []
     for identifier in identifiers:
-        # The same ID is never overwritten. Identical retry is handled separately.
-        if identifier == candidate_id:
-            continue
+        # Inert retries are outside native discovery. A matching native ID is
+        # still part of the real instruction context and cannot be skipped.
         relative = '.agents/skills/' + identifier
         with BoundRoot(root) as binding:
             metadata = binding.read(relative + '/' + DESCRIPTOR, limit=MAX_DESCRIPTOR_BYTES)
@@ -89,12 +88,12 @@ def installation_context(root, catalog, candidate_id):
 
 
 def install_external(root: Path, relative: str) -> dict:
-    """Install one explicit local intake, never acquiring or executing its dependencies.
+    """Stage one explicit local intake outside every native skill discovery tree.
 
     Read the host catalog only from its fixed protected path. Canonical grants bind
     that catalog and every exact destination. Refuse unmodeled semantics even when
     a write grant exists. Publication is per-file durable, not a batch transaction;
-    interrupted copies require explicit retry, and existing different bytes refuse.
+    interrupted copies require explicit inspection, and existing different bytes refuse.
     """
     path_parts(relative)
     if relative.startswith(('.agents/', '.getzilla/', '.grok/', '.claude/', '.qwen/', '.gemini/')):
@@ -121,7 +120,9 @@ def install_external(root: Path, relative: str) -> dict:
         allowed, _reason = evaluate_pre_tool(root, {'tool_name': 'Read', 'tool_input': {'file_path': resource}})
         if operation != 'read' or not allowed:
             raise ValueError('CURRENT_POLICY_DENIED')
-    destination = '.agents/skills/' + assessment.skill_id
+    native_destination = '.agents/skills/' + assessment.skill_id
+    destination = '.getzilla/runtime/skill-intake/' + assessment.skill_id
+    intent_path = '.getzilla/runtime/skill-publications/' + assessment.skill_id + '.json'
     payload = (*snapshot.files, (DESCRIPTOR, descriptor))
 
     def check_authority():
@@ -143,57 +144,107 @@ def install_external(root: Path, relative: str) -> dict:
                 raise ValueError('CURRENT_POLICY_DENIED')
         for name, _ in payload:
             if not state.has_valid_approval(root, 'protected-path', action='protected-path-write',
-                                            resource=destination + '/' + name):
+                                            resource=native_destination + '/' + name):
                 raise ValueError('APPROVAL_REQUIRED')
 
     with state.task_transition(root):
         check_authority()
     with component_transaction(root) as transaction:
+        diagnostic = transaction.read(intent_path, limit=4096)
+        expected_record = {'schema_version': 1, 'status': 'complete', 'snapshot_digest': snapshot.digest,
+                           'descriptor_digest': digest(descriptor)}
+        if diagnostic is not None:
+            if parse_json(diagnostic.content, limit=4096) != expected_record or not mode_matches(diagnostic.mode, 0o600):
+                raise ValueError('PUBLICATION_REQUIRES_INSPECTION')
         present = transaction.files(destination, recursive=True)
         allowed = {destination + '/' + name for name, _ in payload}
         if set(present) - allowed:
             raise ValueError('EXISTING_SKILL_CONFLICT')
-        for name, content in payload:
-            current = transaction.read(destination + '/' + name)
-            if current is not None and current.content != content:
-                raise ValueError('EXISTING_SKILL_CONFLICT')
+        previous = {}
         for name, content in payload:
             target = destination + '/' + name
-            if transaction.read(target) is not None:
-                with state.task_transition(root):
-                    check_authority()
-                continue
-            # Stage outside the grant's product-tree binding. An adjacent temporary
-            # file would invalidate the exact canonical grant during publication.
-            # Never relax grant binding to accommodate an internal temporary file.
-            staging_root = '.getzilla/runtime/skill-staging'
-            if len(transaction.files(staging_root)) >= 16:
-                raise ValueError('INTERRUPTED_STAGING_LIMIT')
-            staged = staging_root + '/' + uuid.uuid4().hex + '.tmp'
-            transaction.binding.write(staged, content, 0o644, expected=None, before_publish=transaction.check)
+            current = transaction.read(target)
+            if current is not None and (current.content != content or not mode_matches(current.mode, 0o644)):
+                raise ValueError('EXISTING_SKILL_CONFLICT')
+            previous[target] = current
+        if diagnostic is None and present:
+            # Unrecorded staged files do not establish a complete owned attempt.
+            raise ValueError('PUBLICATION_REQUIRES_INSPECTION')
+        pending = {**expected_record, 'status': 'incomplete'}
+        transaction.write(intent_path, canonical(pending), 0o600, expected=diagnostic)
+        pending_snapshot = transaction.read(intent_path, limit=4096)
+        if pending_snapshot is None or pending_snapshot.content != canonical(pending) or not mode_matches(pending_snapshot.mode, 0o600):
+            raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+        identities = {}
+        for name, content in payload:
+            target = destination + '/' + name
             with state.task_transition(root):
                 check_authority()
-                with transaction.binding.parent(staged) as (stage_parent, stage_name, stage_check):
-                    with transaction.binding.parent(target, create=True, before_write=check_authority) as (parent, basename, check):
-                        stage_check()
-                        check()
-                        transaction.check()
-                        if transaction.read(target) is not None:
-                            raise ValueError('EXISTING_SKILL_CONFLICT')
-                        staged_snapshot = transaction.read(staged)
-                        if staged_snapshot is None or staged_snapshot.content != content:
-                            raise ValueError('STAGING_CHANGED')
-                        check_authority()
-                        # Atomic no-replace publication; no execution or backend call
-                        # occurs while the short canonical owner lock is held.
-                        fsx.link_at(stage_parent, stage_name, parent, basename)
-                        fsx.unlink_at(stage_parent, stage_name)
-                        fsx.fsync_dir(stage_parent)
-                        fsx.fsync_dir(parent)
-                        stage_check()
-                        check()
-                        check_authority()
-    return {'schema_version': 1, 'status': 'installed', 'destination': destination,
+                current = transaction.read(target)
+                if current != previous[target]:
+                    raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                if current is not None:
+                    if current.content != content or not mode_matches(current.mode, 0o644):
+                        raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                    identities[target] = current.identity[:2]
+                    continue
+                with transaction.binding.parent(target, create=True, before_write=check_authority) as (parent, basename, check):
+                    # Create the inert target exclusively and write through its held
+                    # descriptor. Never link or delete a later staged basename.
+                    # A named replacement is retained and makes completion fail.
+                    descriptor_fd = fsx.open_at(parent, basename, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                                | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+                    try:
+                        identity = os.fstat(descriptor_fd)
+                        identities[target] = (identity.st_dev, identity.st_ino)
+                        remaining = memoryview(content)
+                        while remaining:
+                            written = os.write(descriptor_fd, remaining)
+                            if written <= 0:
+                                raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                            remaining = remaining[written:]
+                        fsx.fchmod(descriptor_fd, 0o644)
+                        os.fsync(descriptor_fd)
+                    finally:
+                        os.close(descriptor_fd)
+                    fsx.fsync_dir(parent)
+                    check()
+                    transaction.check()
+                    current = transaction.read(target)
+                    if (current is None or current.content != content or not mode_matches(current.mode, 0o644)
+                            or current.identity[:2] != identities[target]):
+                        raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                    check_authority()
+        with state.task_transition(root):
+            check_authority()
+            proof = {}
+            for name, content in payload:
+                target = destination + '/' + name
+                current = transaction.read(target)
+                if (current is None or current.content != content or not mode_matches(current.mode, 0o644)
+                        or current.identity[:2] != identities[target]):
+                    raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                proof[name] = {'sha256': current.sha256, 'mode': current.mode}
+            if set(transaction.files(destination, recursive=True)) != allowed:
+                raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+            transaction.write(intent_path, canonical(expected_record), 0o600, expected=pending_snapshot)
+            completed = transaction.read(intent_path, limit=4096)
+            try:
+                if completed is None or completed.content != canonical(expected_record) or not mode_matches(completed.mode, 0o600):
+                    raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+                for name, content in payload:
+                    current = transaction.read(destination + '/' + name)
+                    if (current is None or current.content != content or not mode_matches(current.mode, 0o644)
+                            or current.identity[:2] != identities[destination + '/' + name]):
+                        raise ValueError('PUBLICATION_CUSTODY_CHANGED')
+            except ValueError:
+                # Do not turn a detected uncertain completion into a reusable
+                # complete record. Never remove or overwrite foreign payloads.
+                if completed is not None and completed.content == canonical(expected_record):
+                    transaction.write(intent_path, canonical(pending), 0o600, expected=completed)
+                raise
+    return {'schema_version': 1, 'status': 'staged', 'destination': destination,
             'snapshot_digest': snapshot.digest, 'descriptor_digest': digest(descriptor),
+            'materialized_digest': digest(canonical(proof)), 'files': proof,
             'assessment': assessment.to_dict(), 'interview': trial,
-            'permissions_granted': False, 'activated': False, 'evidence_valid': False}
+            'permissions_granted': False, 'activated': False, 'activation': 'unsupported', 'evidence_valid': False}

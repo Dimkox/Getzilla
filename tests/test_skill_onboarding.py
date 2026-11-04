@@ -79,8 +79,8 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse((self.root / '.agents').exists())
         self.grant()
         result = self.install()
-        self.assertEqual(result['status'], 'installed')
-        self.assertEqual((self.root / '.agents/skills/example/SKILL.md').read_bytes(), dict(self.source.files)['SKILL.md'])
+        self.assertEqual(result['status'], 'staged')
+        self.assertEqual((self.root / result['destination'] / 'SKILL.md').read_bytes(), dict(self.source.files)['SKILL.md'])
         self.assertFalse(result['permissions_granted'])
 
     def test_wrong_session_and_handoff_refuse_before_publication(self):
@@ -147,4 +147,135 @@ class PublicationTests(unittest.TestCase):
         self.grant()
         with self.assertRaisesRegex(ValueError, 'CURRENT_POLICY_DENIED'):
             self.install()
+        self.assertFalse((self.root / '.agents').exists())
+
+    def test_staged_basename_replacement_cannot_report_staged(self):
+        from getzilla import fsx
+        self.grant()
+        original, fired = fsx.fchmod, []
+        foreign = b'inert foreign stage, never executed\n'
+        target = self.root / '.getzilla/runtime/skill-intake/example/SKILL.md'
+
+        def swap(descriptor, mode):
+            result = original(descriptor, mode)
+            if target.exists() and not fired:
+                fired.append(True)
+                target.unlink()
+                target.write_bytes(foreign)
+            return result
+
+        with mock.patch.object(fsx, 'fchmod', side_effect=swap), self.assertRaisesRegex(ValueError, 'CUSTODY'):
+            self.install()
+        self.assertTrue(fired)
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()
+        self.assertEqual(target.read_bytes(), foreign)
+        self.assertFalse((self.root / '.agents').exists())
+
+    def test_replaced_temporary_basename_has_no_payload_link_boundary(self):
+        from getzilla import fsx
+        self.grant()
+        original = fsx.link_at
+        def no_native_link(source_parent, source_name, target_parent, target_name):
+            self.assertNotIn(target_name, {'SKILL.md', 'getzilla-skill.json'})
+            return original(source_parent, source_name, target_parent, target_name)
+        with mock.patch.object(fsx, 'link_at', side_effect=no_native_link):
+            self.assertEqual(self.install()['status'], 'staged')
+        self.assertFalse((self.root / '.agents').exists())
+
+    def test_inert_stage_is_absent_from_native_and_on_demand_skill_consumers(self):
+        from getzilla import harnesses
+        from getzilla.component_state import BoundRoot
+        self.grant()
+        result = self.install()
+        self.assertEqual(result['activation'], 'unsupported')
+        with BoundRoot(self.root) as binding:
+            self.assertEqual(harnesses._skills(binding), {})
+        # Exercise the actual on-demand source payload with an inert intake in
+        # that source's runtime, rather than assuming a directory-name filter.
+        from getzilla import on_demand
+        stage_parent = ROOT / '.getzilla/runtime/skill-intake'
+        stage_parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=stage_parent) as temporary:
+            staged_source = Path(temporary) / 'SKILL.md'
+            staged_source.write_bytes(dict(self.source.files)['SKILL.md'])
+            payload = on_demand._installer(ROOT).build_payload(ROOT)
+            self.assertFalse(any(entry.path.startswith(('.getzilla/runtime/skill-intake/',
+                                                        '.getzilla/runtime/skill-publications/')) for entry in payload))
+        self.assertFalse((self.root / '.agents').exists())
+
+    def test_retry_second_read_checks_current_bytes_and_mode(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        self.install()
+        original, calls = ComponentTransaction.read, []
+        target = '.getzilla/runtime/skill-intake/example/SKILL.md'
+
+        def change(transaction, name, **kwargs):
+            if name == target:
+                calls.append(name)
+                if len(calls) == 2:
+                    (self.root / target).write_bytes(b'inert replaced existing bytes\n')
+            return original(transaction, name, **kwargs)
+
+        with mock.patch.object(ComponentTransaction, 'read', change), self.assertRaisesRegex(ValueError, 'CUSTODY|CONFLICT'):
+            self.install()
+        self.assertEqual((self.root / target).read_bytes(), b'inert replaced existing bytes\n')
+
+    def test_identical_retry_refuses_mode_change_without_chmod(self):
+        self.grant()
+        self.install()
+        target = self.root / '.getzilla/runtime/skill-intake/example/SKILL.md'
+        target.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, 'CUSTODY|CONFLICT'):
+            self.install()
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+
+    def test_late_target_change_at_completion_refuses_and_keeps_denial(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        original = ComponentTransaction.write
+        target = self.root / '.getzilla/runtime/skill-intake/example/SKILL.md'
+        fired = []
+
+        def replace_at_completion(transaction, name, content, mode, *, expected):
+            result = original(transaction, name, content, mode, expected=expected)
+            if name.endswith('/skill-publications/example.json') and json.loads(content)['status'] == 'complete':
+                fired.append(True)
+                target.write_bytes(b'inert late replacement\n')
+            return result
+
+        with mock.patch.object(ComponentTransaction, 'write', replace_at_completion), self.assertRaisesRegex(ValueError, 'CUSTODY'):
+            self.install()
+        self.assertTrue(fired)
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()
+        self.assertEqual(target.read_bytes(), b'inert late replacement\n')
+        self.assertFalse((self.root / '.agents').exists())
+
+    def test_same_id_native_context_is_not_hidden_by_an_inert_retry(self):
+        self.grant()
+        native = self.root / '.agents/skills/example'
+        native.mkdir(parents=True)
+        (native / 'SKILL.md').write_bytes(b'unqualified native instructions\n')
+        self.grant()
+        with self.assertRaisesRegex(ValueError, 'UNQUALIFIED_EXISTING_SKILL'):
+            self.install()
+        self.assertFalse((self.root / '.getzilla/runtime/skill-intake/example').exists())
+
+    def test_staged_positive_proves_observed_bytes_modes_and_repeat_identity(self):
+        from getzilla.skill_preflight import canonical, digest
+        self.grant()
+        result = self.install()
+        destination = self.root / result['destination']
+        before = {p.name: (p.read_bytes(), p.stat().st_mode & 0o777, p.stat().st_ino)
+                  for p in destination.iterdir()}
+        observed = {name: {'sha256': digest(content), 'mode': mode}
+                    for name, (content, mode, _inode) in before.items()}
+        self.assertEqual(result['files'], observed)
+        self.assertEqual(result['materialized_digest'], digest(canonical(observed)))
+        repeated = self.install()
+        self.assertEqual(repeated['status'], 'staged')
+        self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mode & 0o777, p.stat().st_ino)
+                                  for p in destination.iterdir()})
         self.assertFalse((self.root / '.agents').exists())

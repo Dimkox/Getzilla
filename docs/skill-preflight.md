@@ -1,9 +1,9 @@
 # Skill pre-install assessment
 
 `python3 scripts/getzilla_skill_preflight.py assess intake/example` reads an explicit local source.
-`interview` runs a bounded declarative trial. `install` publishes supported bytes only after current
-canonical owner/session/epoch and exact existing protected-path grants permit every destination.
-Assessment/interview exit 2 for `deny` or `needs_review`. Install does not issue a grant or activate a skill.
+`interview` runs a bounded declarative trial. `install` stages supported bytes outside native discovery only after current
+canonical owner/session/epoch and exact existing protected-path grants permit every eventual native destination. It returns `staged`, the actual inert runtime path and observed byte/mode proof. Native activation is unsupported; no automatic copy or adapter alias exists.
+Assessment/interview exit 2 for `deny` or `needs_review`. Install does not issue a grant or activate a skill. Native clients can discover files under `.agents/skills`; this operation never publishes there.
 
 The host selects source pins in `.getzilla/config/skill-catalog.json`. This is descriptive source data,
 not another permission registry. Candidate prose cannot edit its entry through this API, approve itself,
@@ -45,11 +45,10 @@ reads and denies unsupported actions. It has no process/network/provider/credent
 Its answers and `approved:false` result cannot authorize publication. Unsupported native trials have no
 execution fallback. API results retain `permissions_granted:false` and `semantic_safety:unqualified`.
 
-Publication snapshots canonical source bytes into owned immutable data. It writes the same bytes using
-the existing no-follow/CAS component primitives, bounded private staging and atomic no-replace publication.
+Staging snapshots canonical source bytes into owned immutable data. It writes the same bytes to `.getzilla/runtime/skill-intake/<id>` through exclusive held file descriptors and existing no-follow component primitives. It checks observed content, platform mode semantics and inode identity before successful completion; reported modes are actual observed modes.
 Canonical authority is rechecked before effects. Multi-file copying is not a transaction: uncertainty or
 partial publication refuses; existing different bytes and extra files cannot be silently overwritten.
-At most 16 interrupted staging files are tolerated; further attempts refuse pending explicit inspection.
+A destination-scoped incomplete diagnostic blocks every client and retry after a partial or uncertain attempt. There is no automatic recovery or overwrite of foreign files. The verified-result boundary does not physically fence an uncooperative same-user writer; it supplies no OS isolation.
 No imported raw prose or secret arguments enter bounded reason-coded reports.
 
 `skill_pinned_sources.read_pinned_tree` supports offline, capped Git-object input for artifact generation:

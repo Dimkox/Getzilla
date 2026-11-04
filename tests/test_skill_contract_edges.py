@@ -100,36 +100,40 @@ class EdgeContracts(unittest.TestCase):
 
     def test_two_real_native_retries_publish_each_file_only_once(self):
         fixture = self.fixture()
-        original = fsx.link_at
+        original = fsx.open_at
         calls = []
         lock = threading.Lock()
 
-        def count(source_parent, source_name, target_parent, target_name):
-            if target_name in ('SKILL.md', 'getzilla-skill.json'):
+        def count(parent, name, flags, *args, **kwargs):
+            if name in ('SKILL.md', 'getzilla-skill.json') and flags & os.O_EXCL:
                 with lock:
-                    calls.append(target_name)
-            return original(source_parent, source_name, target_parent, target_name)
+                    calls.append(name)
+            return original(parent, name, flags, *args, **kwargs)
 
-        with mock.patch.object(fsx, 'link_at', side_effect=count), ThreadPoolExecutor(max_workers=2) as pool:
+        with mock.patch.object(fsx, 'open_at', side_effect=count), ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: fixture.install(), range(2)))
-        self.assertTrue(all(result['status'] == 'installed' for result in results))
+        self.assertTrue(all(result['status'] == 'staged' for result in results))
         self.assertCountEqual(calls, ['SKILL.md', 'getzilla-skill.json'])
+        self.assertFalse((fixture.root / '.agents').exists())
 
-    def test_lost_second_publication_never_claims_success_and_explicit_retry_recovers(self):
+    def test_lost_second_publication_leaves_scoped_denial_until_inspection(self):
         fixture = self.fixture()
-        original = fsx.link_at
+        original = fsx.open_at
 
-        def fail_metadata(source_parent, source_name, target_parent, target_name):
-            if target_name == 'getzilla-skill.json':
+        def fail_metadata(parent, name, flags, *args, **kwargs):
+            if name == 'getzilla-skill.json' and flags & os.O_EXCL:
                 raise OSError('fixture publication uncertainty')
-            return original(source_parent, source_name, target_parent, target_name)
+            return original(parent, name, flags, *args, **kwargs)
 
-        with mock.patch.object(fsx, 'link_at', side_effect=fail_metadata), self.assertRaises(ValueError):
+        with mock.patch.object(fsx, 'open_at', side_effect=fail_metadata), self.assertRaises(ValueError):
             fixture.install()
-        self.assertTrue((fixture.root / '.agents/skills/example/SKILL.md').is_file())
-        self.assertFalse((fixture.root / '.agents/skills/example/getzilla-skill.json').exists())
-        self.assertEqual(fixture.install()['status'], 'installed')
-        self.assertEqual((fixture.root / '.agents/skills/example/SKILL.md').stat().st_nlink, 1)
+        target = fixture.root / '.getzilla/runtime/skill-intake/example/SKILL.md'
+        self.assertTrue(target.is_file())
+        before = target.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            fixture.install()
+        self.assertEqual(target.read_bytes(), before)
+        self.assertFalse((fixture.root / '.agents').exists())
 
     def test_hidden_credential_source_is_refused_before_its_bytes_are_read(self):
         fixture = self.fixture()
