@@ -195,6 +195,7 @@ def _owner_current(root, record):
         if owner['agent_id']:
             agent = _agent(root, owner['agent_id'])
             if (agent['generation'] != owner['agent_generation'] or agent['route_id'] != owner['route_id']
+                    or agent['task_id'] != owner['logical_task_id']
                     or agent.get('authority_epoch', 0) != owner['authority_epoch']):
                 raise ExecutionError('event_fenced')
     except (KeyError, OSError, ValueError) as error:

@@ -201,6 +201,14 @@ class ExecutionTests(unittest.TestCase):
                          lambda: execution.cancel(self.root, caller, view['execution_id'], backend=CountingBackend())):
             with self.assertRaises(execution.ExecutionError):
                 callback()
+        ledger['active']['worker-one']['generation'] = worker['generation']
+        ledger['active']['worker-one']['task_id'] = 'task:foreign'
+        state.durable_json(self.root, state.agent_state_path(self.root), ledger)
+        with self.assertRaises(execution.ExecutionError):
+            execution.trusted_caller(self.root, execution_id=view['execution_id'])
+        with self.assertRaises(execution.ExecutionError):
+            execution.record_event(self.root, admission.token, view['execution_id'], view['revision'],
+                                   admission.execution_generation, 'wrong-task', {'execution_status': 'succeeded'})
 
     def test_callback_revision_generation_terminal_and_event_replay_are_fenced(self):
         backend = CountingBackend(complete=False)
