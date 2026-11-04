@@ -212,6 +212,38 @@ class ModelContinuationTest(unittest.TestCase):
         self.assertEqual(status['startup_visibility'], 'unqualified')
         self.assertFalse(status['continuation_available'])
 
+    def test_six_startup_hooks_keep_policy_note_when_utf8_route_is_truncated(self):
+        from getzilla.continuity import submit
+        from getzilla.router import build_route
+        from tests._support import activate_owned_route, project_copy
+
+        with project_copy(git=True) as root:
+            route = build_route(root, 'Preserve original intake marker.', 'rotation-owner').to_dict()
+            activate_owned_route(root, route)
+            for index in range(5):
+                submit(root, f'Context {index}: ' + 'я' * 4000, 'rotation-owner')
+            (root / '.getzilla/config/model-continuation.json').write_text(
+                json.dumps(enabled_policy()), encoding='utf-8')
+            for harness in ('grok', 'qwen', 'claude', 'codex', 'gemini', 'copilot'):
+                with self.subTest(harness=harness):
+                    result = subprocess.run(
+                        [sys.executable, str(root / '.grok/hooks/session_start.py'), '--harness', harness],
+                        cwd=root, input=json.dumps({'cwd': str(root), 'session_id': 'rotation-owner'}).encode(),
+                        capture_output=True, timeout=15,
+                        env={**os.environ, 'HOME': str(root), 'PYTHONDONTWRITEBYTECODE': '1'})
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    output = json.loads(result.stdout)
+                    if harness != 'copilot':
+                        output = output['hookSpecificOutput']
+                    context = output['additionalContext']
+                    self.assertEqual(context.count('Model continuation:'), 1)
+                    self.assertIn('Model continuation: configured; unavailable', context)
+                    self.assertIn('harness=' + harness, context)
+                    self.assertIn('Preserve original intake marker.', context)
+                    self.assertIn('omitted', context)
+                    self.assertIn(route['route_id'] + '.json', context)
+                    self.assertLessEqual(len(context.encode('utf-8')), 16384)
+
 
     def test_selected_harness_archive_install_loads_its_own_policy(self):
         from scripts import install_into

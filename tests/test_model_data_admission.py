@@ -76,6 +76,34 @@ class ModelDataAdmissionTest(unittest.TestCase):
                 self.recheck(preview, binding=replace(self.binding, **{field: value}))
         self.assertEqual(self.recheck(preview)['state'], 'ready_for_review')
 
+    def test_malformed_binding_never_copies_during_preview_or_recheck(self):
+        copied = []
+
+        class CopyTrap:
+            def __deepcopy__(self, memo):
+                copied.append('copy')
+                raise AssertionError('preview binding must not be copied')
+
+        class StringCopyTrap(str, CopyTrap):
+            pass
+
+        cycle = []
+        cycle.append(cycle)
+        preview = self.prepare()
+        for field in self.binding.__dataclass_fields__:
+            for case, value in (('cycle', cycle), ('copy', CopyTrap()),
+                                ('string_subclass', StringCopyTrap(getattr(self.binding, field)))):
+                binding = replace(self.binding, **{field: value})
+                for operation, call in (('prepare', lambda: self.prepare(binding=binding)),
+                                        ('recheck', lambda: self.recheck(preview, binding=binding))):
+                    with self.subTest(field=field, case=case, operation=operation):
+                        copied.clear()
+                        with self.assertRaisesRegex(admission.AdmissionError, '^preflight_denied$'):
+                            call()
+                        self.assertEqual(copied, [])
+                        self.assertFalse((self.root / '.getzilla/runtime').exists())
+        self.assertFalse(self.recheck(preview)['dispatch_permitted'])
+
     def test_request_bytes_and_every_contract_field_are_bound(self):
         preview = self.prepare()
         with self.assertRaises(admission.AdmissionError):
