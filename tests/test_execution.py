@@ -112,7 +112,7 @@ class ExecutionTests(unittest.TestCase):
         for request in (replace(self.request, arguments={'command': 'different'}),
                         replace(self.request, hard_timeout_seconds=61),
                         replace(self.request, operation_id='separate-operation'),
-                        replace(self.request, mcp_request_id='request-2')):
+                        replace(self.request, remote_task_id='remote-2')):
             with self.subTest(request=request), self.assertRaises(execution.ExecutionError) as caught:
                 self.submit(request=request)
             self.assertEqual(caught.exception.code, 'intent_conflict')
@@ -143,6 +143,8 @@ class ExecutionTests(unittest.TestCase):
         new_route = owned_route(self.root, task='Fix a different README typo.')
         self.assertNotEqual(new_route['route_id'], view['owner']['route_id'])
         self.assertEqual(execution.get(self.root, self.caller, view['execution_id'])['owner'], view['owner'])
+        fresh_context = execution.trusted_caller(self.root)
+        self.assertEqual(execution.get(self.root, fresh_context, view['execution_id'])['owner'], view['owner'])
         cancelled = execution.cancel(self.root, self.caller, view['execution_id'], backend=backend)
         self.assertEqual(cancelled['execution_status'], 'cancel_requested')
         self.assertEqual(cancelled['cleanup_status'], 'pending')
@@ -330,6 +332,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result['execution_status'], 'succeeded')
         self.assertTrue(result['source_changed'])
         self.assertEqual(result['source']['git_head'], head)
+        self.assertEqual(len(result['source']['tree_fingerprint']), 64)
         self.assertNotEqual(result['source']['fingerprint'], result['source_final']['fingerprint'])
         self.assertFalse(result['evidence_authority'])
         self.assertEqual((self.root / '.getzilla/runtime/receipts').exists(), False)
@@ -343,6 +346,7 @@ class ExecutionTests(unittest.TestCase):
         caller = execution.trusted_caller(child)
         view = execution.submit(child, caller, self.request, backend=CountingBackend())
         self.assertIsNone(view['source']['git_head'])
+        self.assertIsNone(view['source']['tree_fingerprint'])
         self.assertEqual(len(view['source']['fingerprint']), 64)
         (child / '.env').write_text('PRIVATE=must not be read')
         real_read = execution.read_package_file
@@ -353,3 +357,83 @@ class ExecutionTests(unittest.TestCase):
             with self.assertRaises(execution.ExecutionError) as caught:
                 execution.submit(child, caller, replace(self.request, intent_key='secret-root'), backend=CountingBackend())
         self.assertEqual(caught.exception.code, 'source_inventory_unavailable')
+
+
+    def test_deadline_consumed_by_admission_never_dispatches_after_publication(self):
+        clock = FakeClock()
+        backend = CountingBackend()
+        real = store.state.durable_bytes
+        def slow_publication(root, path, raw):
+            result = real(root, path, raw)
+            if path.name == 'registry.json':
+                clock.seconds += 61
+            return result
+        with patch.object(store.state, 'durable_bytes', side_effect=slow_publication):
+            result = execution.submit(self.root, self.caller, self.request, backend=backend, clock=clock)
+        self.assertEqual(backend.calls, 0)
+        self.assertEqual(result['execution_status'], 'timed_out')
+        self.assertEqual(result['cleanup_status'], 'not_required')
+        self.assertFalse(result['evidence_authority'])
+        self.assertEqual(execution.submit(self.root, self.caller, self.request, backend=backend, clock=clock)['execution_id'],
+                         result['execution_id'])
+        self.assertEqual(backend.calls, 0)
+
+    def test_actor_discovery_without_a_route_is_read_only_and_does_not_create_authority(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            with self.assertRaises(execution.ExecutionError):
+                execution.trusted_caller(root)
+            self.assertFalse((root / '.getzilla').exists())
+
+
+    def test_terminal_backend_events_always_retain_an_explicit_completion_reason(self):
+        backend = CountingBackend(complete=False)
+        view = self.submit(backend)
+        admission = backend.admissions[0]
+        result = execution.record_event(self.root, admission.token, view['execution_id'], view['revision'],
+                                        admission.execution_generation, 'done-without-process-code',
+                                        {'execution_status': 'succeeded'})
+        self.assertEqual(result['terminal_reason'], 'backend_succeeded')
+        self.assertFalse(result['evidence_authority'])
+
+
+    def test_new_mcp_transport_request_id_replays_the_same_attempt_without_history_growth(self):
+        backend = CountingBackend()
+        first = execution.submit(self.root, self.caller, replace(self.request, mcp_request_id='mcp-first'), backend=backend)
+        original = (self.root / store.REGISTRY_PATH).read_bytes()
+        for number in range(10):
+            current = execution.submit(self.root, self.caller,
+                                       replace(self.request, mcp_request_id=f'mcp-retry-{number}'), backend=backend)
+            self.assertEqual(current['execution_id'], first['execution_id'])
+            self.assertEqual(current['deadline'], first['deadline'])
+            self.assertEqual(current['mcp_request_id'], 'mcp-first')
+        self.assertEqual(backend.calls, 1)
+        self.assertEqual((self.root / store.REGISTRY_PATH).read_bytes(), original)
+
+
+    def test_receipt_flush_failure_after_rename_keeps_observation_unknown(self):
+        backend = CountingBackend()
+        real_replace, real_flush = store.fsx.replace_at, store.fsx.fsync_dir
+        publications = 0
+        receipt_renamed = False
+        def replace(*args):
+            nonlocal publications, receipt_renamed
+            result = real_replace(*args)
+            if args[-1] == 'registry.json':
+                publications += 1
+                receipt_renamed = publications == 2
+            return result
+        def flush(handle):
+            if receipt_renamed:
+                raise OSError('receipt directory flush failure')
+            return real_flush(handle)
+        with patch.object(store.fsx, 'replace_at', side_effect=replace), \
+             patch.object(store.fsx, 'fsync_dir', side_effect=flush):
+            result = self.submit(backend)
+        self.assertEqual(backend.calls, 1)
+        self.assertEqual(result['observation_status'], 'persistence_unknown')
+        self.assertEqual(result['operation_outcome'], 'unknown')
+        observed = execution.get(self.root, self.caller, result['execution_id'])
+        self.assertEqual(observed['observation_status'], 'persistence_unknown')
+        self.assertNotEqual(observed['execution_status'], 'succeeded')
+        self.assertFalse(observed['evidence_authority'])

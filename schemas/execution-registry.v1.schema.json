@@ -347,6 +347,15 @@
                 "minLength": 1,
                 "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
+              },
+              "tree_fingerprint": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -354,6 +363,7 @@
               "fingerprint",
               "inventory_digest",
               "dirty",
+              "tree_fingerprint",
               "context_digest",
               "evidence_links"
             ],
@@ -406,6 +416,15 @@
                 "minLength": 1,
                 "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
+              },
+              "tree_fingerprint": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -413,6 +432,7 @@
               "fingerprint",
               "inventory_digest",
               "dirty",
+              "tree_fingerprint",
               "context_digest",
               "evidence_links"
             ],

@@ -16,8 +16,10 @@ from typing import Any, Protocol
 
 from . import continuity, state
 from . import execution_store as store
+from .execution_output import normalize_output, RESPONSE_BYTES, utf8_tail
 from .package_status import _git_read, read_package_file
 from .spec import _bounded_walk
+from .util import tree_fingerprint
 
 _ISSUER = object()
 _UNCERTAIN: set[tuple[str, str]] = set()
@@ -100,26 +102,28 @@ def _agent(root, agent_id):
 def trusted_caller(root: Path, *, agent_id: str | None = None) -> CallerContext:
     """Calling adapters bind the native session first; principal text is never an input."""
     root = root.resolve(strict=True)
-    with state.task_transition(root):
+    try:
         route = state.require_route_owner(root)
-        route = state.canonical_route(root, route['route_id'])
-        session = state.current_session()
-        if not session or session != route.get('session_id') or not continuity.has_task_context(route):
+    except ValueError as error:
+        raise ExecutionError('actor_unavailable') from error
+    route = state.canonical_route(root, route['route_id'])
+    session = state.current_session()
+    if not session or session != route.get('session_id') or not continuity.has_task_context(route):
+        raise ExecutionError('actor_unavailable')
+    generation = None
+    if agent_id is not None:
+        agent = _agent(root, agent_id)
+        if (agent['route_id'] != route['route_id'] or agent['task_id'] != continuity.task_identity(route)
+                or agent.get('authority_epoch', 0) != route['authority_epoch']):
             raise ExecutionError('actor_unavailable')
-        generation = None
-        if agent_id is not None:
-            agent = _agent(root, agent_id)
-            if (agent['route_id'] != route['route_id'] or agent['task_id'] != continuity.task_identity(route)
-                    or agent.get('authority_epoch', 0) != route['authority_epoch']):
-                raise ExecutionError('actor_unavailable')
-            generation = agent['generation']
-        value = object.__new__(CallerContext)
-        fields = dict(workspace=str(root), session_id=session, route_id=route['route_id'],
-                      logical_task_id=continuity.task_identity(route), authority_epoch=route['authority_epoch'],
-                      agent_id=agent_id, agent_generation=generation, _issuer=_ISSUER)
-        for key, item in fields.items():
-            object.__setattr__(value, key, item)
-        return value
+        generation = agent['generation']
+    value = object.__new__(CallerContext)
+    fields = dict(workspace=str(root), session_id=session, route_id=route['route_id'],
+                  logical_task_id=continuity.task_identity(route), authority_epoch=route['authority_epoch'],
+                  agent_id=agent_id, agent_generation=generation, _issuer=_ISSUER)
+    for key, item in fields.items():
+        object.__setattr__(value, key, item)
+    return value
 
 
 def _caller(root, caller):
@@ -148,21 +152,30 @@ def _authorize(root, caller, record):
     _caller(root, caller)
     owner = record['owner']
     if any(owner[key] != value for key, value in (
-        ('workspace', caller.workspace), ('session_id', caller.session_id), ('route_id', caller.route_id),
-        ('logical_task_id', caller.logical_task_id), ('authority_epoch', caller.authority_epoch),
+        ('workspace', caller.workspace), ('session_id', caller.session_id),
     )):
         raise ExecutionError('execution_forbidden')
+    # The observed attempt's canonical owner controls ACL, never the selected task pointer.
+    _owner_route(root, record)
     if caller.agent_id and (owner['agent_id'] != caller.agent_id or owner['agent_generation'] != caller.agent_generation):
         raise ExecutionError('execution_forbidden')
 
 
-def _owner_current(root, record):
+def _owner_route(root, record):
     owner = record['owner']
     try:
         route = state.canonical_route(root, owner['route_id'])
         if (route['session_id'] != owner['session_id'] or route['authority_epoch'] != owner['authority_epoch']
                 or continuity.task_identity(route) != owner['logical_task_id']):
             raise ExecutionError('event_fenced')
+    except (KeyError, OSError, ValueError) as error:
+        raise ExecutionError('execution_forbidden') from error
+
+
+def _owner_current(root, record):
+    _owner_route(root, record)
+    owner = record['owner']
+    try:
         if owner['agent_id']:
             agent = _agent(root, owner['agent_id'])
             if (agent['generation'] != owner['agent_generation'] or agent['route_id'] != owner['route_id']
@@ -213,12 +226,15 @@ def _source(root, route):
             raise ExecutionError('source_inventory_unavailable')
         dirty = bool(status)
     binding = continuity.context_binding(root, route, discovery=True)['digest']
-    return {'git_head': head, 'fingerprint': hashlib.sha256((str(head) + inventory).encode()).hexdigest(),
+    native = tree_fingerprint(root) if head is not None else None
+    return {'git_head': head, 'tree_fingerprint': native,
+            'fingerprint': hashlib.sha256((str(head) + str(native) + inventory).encode()).hexdigest(),
             'dirty': dirty, 'inventory_digest': inventory, 'context_digest': binding, 'evidence_links': []}
 
 
 def _view(root, record):
-    result = copy.deepcopy(record)
+    result = copy.deepcopy({key: value for key, value in record.items() if key != 'output'})
+    result['output'] = normalize_output(None if record['expired'] else record['output'])
     result.pop('backend')  # backend token digests are never part of the observation surface
     result.pop('event_receipts')
     result['evidence_authority'] = False
@@ -227,7 +243,13 @@ def _view(root, record):
     result['deadline_elapsed'] = bool(live and live[0].monotonic() >= live[1])
     if (str(root.resolve()), record['execution_id']) in _UNCERTAIN:
         result.update(observation_status='persistence_unknown', execution_status='orphaned',
-                      operation_outcome='unknown', cleanup_status='unconfirmed')
+                      operation_outcome='unknown', cleanup_status='unconfirmed', terminal_reason='persistence_unknown')
+    while len(json.dumps(result, ensure_ascii=False).encode()) > RESPONSE_BYTES:
+        preview = result['output']['preview'].encode()
+        if not preview:
+            raise ExecutionError('execution_view_too_large')
+        result['output'].update(preview=utf8_tail(preview, len(preview) // 2),
+                                preview_truncated=True, truncated=True, complete_output=False)
     return result
 
 
@@ -268,8 +290,7 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
         raise ExecutionError('invalid_submit')
     request_digest = _digest({'arguments': request.arguments, 'backend': backend.kind,
                               'timeout': request.hard_timeout_seconds, 'label': request.label,
-                              'operation_id': request.operation_id, 'mcp_request_id': request.mcp_request_id,
-                              'remote_task_id': request.remote_task_id})
+                              'operation_id': request.operation_id, 'remote_task_id': request.remote_task_id})
     with state.task_transition(root):
         route = _caller(root, caller)
         owner = {'workspace': caller.workspace, 'project': hashlib.sha256(caller.workspace.encode()).hexdigest(),
@@ -321,6 +342,23 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
         return _view(root, record)
     _LIVE[(str(root.resolve()), execution_id)] = (clock, started + request.hard_timeout_seconds,
                                                  record['execution_generation'])
+    if clock.monotonic() >= started + request.hard_timeout_seconds:
+        def expire_before_dispatch(registry):
+            current = _find(registry, execution_id)
+            _owner_current(root, current)
+            if current['revision'] != record['revision'] or current['execution_status'] != 'running':
+                raise ExecutionError('event_fenced')
+            current.update(execution_status='timed_out', cleanup_status='not_required',
+                           operation_outcome='unknown' if current['operation_id'] else 'not_applicable',
+                           terminal_reason='deadline_before_dispatch',
+                           retention_until=(clock.utcnow() + timedelta(days=1)).isoformat(),
+                           revision=current['revision'] + 1)
+        try:
+            expired, _ = store.mutate_registry(root, expire_before_dispatch)
+            return _view(root, expired['records'][execution_id])
+        except store.RegistryError:
+            _UNCERTAIN.add((str(root.resolve()), execution_id))
+            return _view(root, record)
     admission = Admission(execution_id, record['execution_generation'], record['revision'], token)
     try:
         result = backend.dispatch(root, admission, request)
@@ -345,7 +383,17 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
             or set(event) - {'execution_status', 'terminal_reason', 'cleanup_status', 'operation_outcome', 'output'}
             or event.get('execution_status') not in store.STATUSES):
         raise ExecutionError('invalid_event')
-    digest = _digest(event)
+    # The exact event digest precedes lossy normalization, so conflicting replays stay conflicts.
+    try:
+        raw_event = json.dumps(event, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
+        if len(raw_event) > store.MAX_REGISTRY_BYTES:
+            raise ExecutionError('invalid_event')
+        digest = hashlib.sha256(raw_event).hexdigest()
+    except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        raise ExecutionError('invalid_event') from error
+    event = copy.deepcopy(event)
+    if 'output' in event:
+        event['output'] = normalize_output(event['output'])
     def apply(registry):
         record = _find(registry, execution_id)
         _owner_current(root, record)
@@ -368,6 +416,8 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
         record['revision'] += 1
         record['event_receipts'][event_id] = digest
         if record['execution_status'] in store.TERMINAL:
+            if record['terminal_reason'] is None:
+                record['terminal_reason'] = 'backend_' + record['execution_status']
             record['retention_until'] = (live[0].utcnow() + timedelta(days=1)).isoformat()
             try:
                 route = state.canonical_route(root, record['owner']['route_id'])
@@ -404,7 +454,7 @@ def restore(root, *, clock: Clock = SYSTEM_CLOCK):
     now = clock.utcnow()
     if now.tzinfo is None:
         raise ExecutionError('invalid_clock')
-    counts = {'orphaned': 0, 'expired': 0, 'unchanged': 0, 'unavailable': 0}
+    counts = {'orphaned': 0, 'expired': 0, 'unchanged': 0, 'unavailable': 0, 'normalized_outputs': 0}
     def maintain(registry):
         for execution_id, record in registry['records'].items():
             if record['owner']['session_id'] != session:
@@ -415,23 +465,33 @@ def restore(root, *, clock: Clock = SYSTEM_CLOCK):
             except ExecutionError:
                 counts['unavailable'] += 1
                 continue
+            original_revision = record['revision']
+            normalized = normalize_output(record['output'])
+            output_changed = record['output'] is not None and record['output'] != normalized
+            if output_changed:
+                record.update(output=normalized, revision=original_revision + 1)
+                counts['normalized_outputs'] += 1
             if record['execution_status'] in store.TERMINAL:
                 if (not record['expired'] and record['retention_until'] is not None
                         and datetime.fromisoformat(record['retention_until']) <= now):
-                    record.update(expired=True, output=None, revision=record['revision'] + 1)
+                    record.update(expired=True, output=None, revision=original_revision + 1)
                     counts['expired'] += 1
                 else:
-                    counts['unchanged'] += 1
+                    if not output_changed:
+                        counts['unchanged'] += 1
                 continue
             live = _LIVE.get((str(root.resolve()), execution_id))
             if (live and live[0] is clock and live[0].monotonic() < live[1]
                     and (str(root.resolve()), execution_id) not in _UNCERTAIN):
-                counts['unchanged'] += 1
+                if not output_changed:
+                    counts['unchanged'] += 1
                 continue
             record.update(execution_status='orphaned', cleanup_status='unconfirmed',
                           operation_outcome='unknown' if record['operation_id'] else 'not_applicable',
                           terminal_reason='recovery_uncertain', retention_until=(now + timedelta(days=1)).isoformat(),
-                          revision=record['revision'] + 1)
+                          revision=original_revision + 1)
+            if record['output'] is not None:
+                record['output'] = normalize_output(record['output'])
             counts['orphaned'] += 1
     store.mutate_registry(root, maintain)
     return counts

@@ -24,7 +24,7 @@ def record(root, execution_id='a' * 32, intent='b' * 64):
                   'agent_id': None, 'agent_generation': None, 'run_id': None},
         'input': {'intent_digest': intent, 'request_digest': 'd' * 64, 'display': {'label': 'test'}},
         'source': {'git_head': None, 'fingerprint': 'e' * 64, 'dirty': False, 'context_digest': None,
-                   'inventory_digest': 'f' * 64, 'evidence_links': []},
+                   'inventory_digest': 'f' * 64, 'tree_fingerprint': None, 'evidence_links': []},
         'deadline': {'submitted_at': '2026-11-04T00:00:00+00:00', 'hard_deadline_at': '2026-11-04T00:00:10+00:00',
                      'duration_seconds': 10},
         'backend': {'kind': 'counting', 'token_digest': 'f' * 64, 'claim': 'committed', 'external_mutations': False},
@@ -173,3 +173,83 @@ class ExecutionStoreTests(unittest.TestCase):
         self.initial()
         self.assertEqual(classify(self.root, self.root / store.REGISTRY_PATH), 'protected')
         self.assertFalse(disposable(self.root, self.root / store.REGISTRY_PATH))
+
+    def test_hardlink_is_refused_before_any_content_read_and_failed_flush_closes_handles(self):
+        self.initial()
+        path = self.root / store.REGISTRY_PATH
+        os.link(path, self.root / 'alias')
+        with patch('getzilla.package_status.os.read', side_effect=AssertionError('must not read linked content')):
+            with self.assertRaises(store.RegistryError):
+                store.load_registry(self.root)
+        opened = []
+        closed = []
+        real_open = store.fsx.open_dir_at
+        real_close = store.fsx.close_dir
+        def tracked_open(*args, **kwargs):
+            handle = real_open(*args, **kwargs)
+            opened.append(handle)
+            return handle
+        def tracked_close(handle):
+            closed.append(handle)
+            return real_close(handle)
+        with tempfile.TemporaryDirectory() as name:
+            with patch.object(store.fsx, 'open_dir_at', side_effect=tracked_open), \
+                 patch.object(store.fsx, 'close_dir', side_effect=tracked_close), \
+                 patch.object(store.fsx, 'fsync_dir', side_effect=OSError('flush failure')):
+                with self.assertRaises(store.RegistryError):
+                    store.commit_registry(Path(name), None, store.empty_registry())
+        self.assertTrue(all(handle in closed for handle in opened))
+
+    def test_bool_cas_is_not_a_revision_and_full_capacity_can_hold_tombstones(self):
+        first = self.initial()
+        with self.assertRaises(store.RegistryError):
+            store.commit_registry(self.root, True, first)
+        value = store.empty_registry()
+        for i in range(store.MAX_RECORDS):
+            item = record(self.root, f'{i:032x}', f'{i:064x}')
+            item.update(execution_status='succeeded', expired=True, retention_until='2026-11-05T00:00:00+00:00')
+            value['records'][item['execution_id']] = item
+            value['intents'][item['input']['intent_digest']] = item['execution_id']
+        with tempfile.TemporaryDirectory() as name:
+            saved = store.commit_registry(Path(name), None, value)
+            self.assertEqual(len(saved['records']), 256)
+
+    def test_interrupted_temporary_publications_have_a_finite_storage_budget(self):
+        value = self.initial()
+        folder = self.root / store.REGISTRY_PATH
+        for number in range(17):
+            (folder.parent / f'.task-{number:032x}.tmp').write_bytes(b'interrupted')
+        with self.assertRaises(store.RegistryError) as caught:
+            store.commit_registry(self.root, 1, value)
+        self.assertEqual(caught.exception.code, 'registry_full')
+
+    def test_read_and_publication_refuse_a_replaced_execution_parent(self):
+        value = self.initial()
+        folder = (self.root / store.REGISTRY_PATH).parent
+        prior = folder.with_name('prior-executions')
+        real_read = os.read
+        moved = False
+        def replace_during_read(descriptor, count):
+            nonlocal moved
+            if not moved:
+                folder.rename(prior)
+                folder.mkdir()
+                moved = True
+            return real_read(descriptor, count)
+        with patch('getzilla.package_status.os.read', side_effect=replace_during_read):
+            with self.assertRaises(store.RegistryError):
+                store.load_registry(self.root)
+        folder.rmdir()
+        prior.rename(folder)
+        original = (folder / 'registry.json').read_bytes()
+        real_replace = store.fsx.replace_at
+        def replace_during_publication(*args):
+            if args[-1] == 'registry.json':
+                folder.rename(prior)
+                folder.mkdir()
+            return real_replace(*args)
+        with patch.object(store.fsx, 'replace_at', side_effect=replace_during_publication):
+            with self.assertRaises(store.RegistryError):
+                store.commit_registry(self.root, 1, value)
+        self.assertFalse((folder / 'registry.json').exists())
+        self.assertNotEqual((prior / 'registry.json').read_bytes(), original)

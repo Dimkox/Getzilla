@@ -11,6 +11,7 @@ from typing import Any, Callable
 from . import fsx, state
 from .package_status import InspectionError, read_package_file
 from .spec import SpecError, _bounded_walk, _pairs_object, _reject_constant, validate_schema
+from .execution_output import normalize_output
 
 REGISTRY_PATH = '.getzilla/runtime/executions/registry.json'
 MAX_REGISTRY_BYTES = 4 * 1024 * 1024
@@ -51,6 +52,7 @@ _OWNER = _object({
 _SOURCE = _object({
     'git_head': _string(64, nullable=True, pattern=r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$'),
     'fingerprint': _DIGEST, 'inventory_digest': _DIGEST, 'dirty': {'type': 'boolean'},
+    'tree_fingerprint': {**_DIGEST, 'type': ['string', 'null']},
     'context_digest': {**_DIGEST, 'type': ['string', 'null']},
     'evidence_links': {'type': 'array', 'maxItems': 16, 'items': _string(256)},
 })
@@ -98,8 +100,9 @@ def _validate(value: Any) -> None:
         validate_schema(value, REGISTRY_SCHEMA)
         expected = {}
         for key, record in value['records'].items():
-            _bounded_walk(record)
-            validate_schema(record, RECORD_SCHEMA)
+            safe = {**record, 'output': normalize_output(record.get('output'))}
+            _bounded_walk(safe)
+            validate_schema(safe, RECORD_SCHEMA)
             if key != record['execution_id'] or type(record['revision']) is not int:
                 raise ValueError('record identity')
             intent = record['input']['intent_digest']
@@ -130,17 +133,15 @@ def _prepare(root: Path) -> None:
     handles = [fsx.open_dir(root)]
     try:
         for part in ('.getzilla', 'runtime', 'executions'):
-            created = False
             try:
                 fsx.mkdir_at(handles[-1], part, 0o700)
-                created = True
             except FileExistsError:
                 pass
             child = fsx.open_dir_at(handles[-1], part)
-            if created:
-                fsx.fsync_dir(child)
-                fsx.fsync_dir(handles[-1])
             handles.append(child)
+            # Flush existing entries too: an earlier interrupted initialization is not proof.
+            fsx.fsync_dir(child)
+            fsx.fsync_dir(handles[-2])
     finally:
         for handle in reversed(handles):
             fsx.close_dir(handle)
@@ -149,7 +150,7 @@ def _prepare(root: Path) -> None:
 def load_registry(root: Path) -> dict:
     """Read-only; missing state never creates a runtime, lock, or record."""
     try:
-        raw = read_package_file(root, REGISTRY_PATH, limit=MAX_REGISTRY_BYTES)
+        raw = read_package_file(root, REGISTRY_PATH, limit=MAX_REGISTRY_BYTES, single_link=True)
         # The stable reader brackets inode identity. A multiply linked ledger is not authority.
         if (root / REGISTRY_PATH).lstat().st_nlink != 1:
             raise RegistryError('registry_unavailable')
@@ -164,7 +165,37 @@ def load_registry(root: Path) -> dict:
         raise RegistryError('registry_unavailable') from error
 
 
+def _namespace(root):
+    handles = [fsx.open_dir(root)]
+    identities = []
+    try:
+        for part in ('.getzilla', 'runtime', 'executions'):
+            handle = fsx.open_dir_at(handles[-1], part)
+            handles.append(handle)
+            info = fsx.fstat_dir(handle)
+            identities.append((info.st_dev, info.st_ino))
+        # Interrupted writes remain protected. Refuse saturation rather than deleting unknown state.
+        with fsx.scandir(handles[-1]) as listing:
+            count = 0
+            for entry in listing:
+                if entry.name == 'registry.json':
+                    continue
+                if not re.fullmatch(r'\.task-[0-9a-f]{32}\.tmp', entry.name):
+                    raise RegistryError('registry_unavailable')
+                count += 1
+                if count > 16:
+                    raise RegistryError('registry_full')
+        return identities
+    finally:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+
+
 def _publish(root, previous, value):
+    value = copy.deepcopy(value)
+    for record in value['records'].values():
+        if record['output'] is not None:
+            record['output'] = normalize_output(record['output'])
     _validate(value)
     if previous:
         if not previous['records'].keys() <= value['records'].keys():
@@ -177,20 +208,29 @@ def _publish(root, previous, value):
                 raise RegistryError('registry_conflict')
             if before['execution_status'] in TERMINAL and after != before:
                 allowed = {'revision', 'expired', 'output'}
-                if (not after['expired'] or any(before[k] != after[k] for k in before if k not in allowed)):
+                normalized = after['output'] == normalize_output(before['output'])
+                if ((not after['expired'] and not normalized) or before['expired'] and not after['expired']
+                        or any(before[k] != after[k] for k in before if k not in allowed)):
                     raise RegistryError('registry_conflict')
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
     if len(raw) > MAX_REGISTRY_BYTES:
         raise RegistryError('registry_full')
     try:
+        namespace = _namespace(root)
         state.durable_bytes(root, root / REGISTRY_PATH, raw)
+        if _namespace(root) != namespace or load_registry(root) != value:
+            raise RegistryError('registry_persistence_unknown')
     except (OSError, ValueError) as error:
+        if isinstance(error, RegistryError):
+            raise
         raise RegistryError('registry_persistence_unknown') from error
     return copy.deepcopy(value)
 
 
 def commit_registry(root: Path, expected_revision: int | None, value: dict) -> dict:
     """CAS one whole envelope; a failed publication never acknowledges intent durability."""
+    if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
+        raise RegistryError('registry_conflict')
     _validate(value)
     try:
         _prepare(root)
