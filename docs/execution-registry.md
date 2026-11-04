@@ -30,6 +30,16 @@ owner route controls this ACL. Handoff revokes the old epoch. Worker generation
 changes fence the old worker and its callbacks. This is cooperative local scope
 checking, not isolation from the same OS user editing runtime or Python objects.
 
+After restart or removal of active task pointers, use
+`trusted_caller(root, execution_id=execution_id)`. This observation-only context
+comes from that saved attempt and its canonical owner route. It checks the bound
+native session, epoch and worker generation without selecting or creating a task.
+It can observe or request supported cancellation of that one attempt; it cannot
+submit a new attempt or create grants. Missing/corrupt/foreign selectors never
+fall back to active-task discovery. `live_continuity` identifies the local
+registry adapter/clock context, not proof that a process is alive. A fresh process
+reports `recovery_unknown` until explicit qualified recovery; it never relaunches.
+
 Production `submit` and `cancel` have no backend and return `unsupported_backend`.
 Tests inject an actual counting adapter to exercise the contract. Any adapter
 marked as externally mutating is refused on every platform. No managed launch,
