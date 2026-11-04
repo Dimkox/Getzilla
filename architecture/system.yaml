@@ -2614,6 +2614,9 @@
       "repository_paths": [
         "trust-ci/src/adaptive_trust_ci/api.py",
         "trust-ci/src/adaptive_trust_ci/metrics.py",
+        "trust-ci/src/adaptive_trust_ci/public_admission.py",
+        "trust-ci/src/adaptive_trust_ci/public_merge.py",
+        "trust-ci/src/adaptive_trust_ci/public_publisher.py",
         "trust-ci/src/adaptive_trust_ci/webhooks.py"
       ],
       "runtime": {

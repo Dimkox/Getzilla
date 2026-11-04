@@ -162,11 +162,47 @@ def _environment(scratch: Path) -> dict:
     return result
 
 
-def _process(command: list[str], cwd: Path, scratch: Path, *, timeout=900):
+def _process_detail(result, failure: str) -> str:
+    """Emit closed diagnostic classes, never command/output/cleanup values.
+
+    Scanner stderr can contain credentials and candidate source. Inspect only a
+    bounded prefix and return fixed labels instead of attempting to redact an
+    arbitrary free-form tail. Stdout is report data and is never diagnostic text.
+    """
+    diagnostic = result.stderr[:8192].lower()
+    category = 'unclassified'
+    for label, markers in (
+        ('tls', ('x509:', 'certificate verify failed', 'tls handshake', 'unknown authority')),
+        ('authentication', ('unauthorized', 'authentication required', 'access denied', 'forbidden')),
+        ('network', ('proxyconnect', 'connection refused', 'network unreachable', 'no such host',
+                     'dial tcp', 'connection reset', 'i/o timeout')),
+        ('tool-unavailable', ('no such file or directory', 'executable file not found')),
+        ('resource-limit', ('output limit exceeded', 'out of memory', 'no space left')),
+    ):
+        if any(marker in diagnostic for marker in markers):
+            category = label
+            break
+    state = result.terminal_state if result.terminal_state in {'completed', 'timeout', 'cancelled'} else 'unknown'
+    code = result.returncode if type(result.returncode) is int and -255 <= result.returncode <= 255 else 'unknown'
+    cleanup = 'failed' if result.cleanup_error else 'complete'
+    return f'security {failure}: exit={code}, state={state}, cleanup={cleanup}, diagnostic={category}'
+
+
+def _process(command: list[str], cwd: Path, scratch: Path, *, timeout=900, finding_exit=False):
     result = execute(command, cwd, _environment(scratch), timeout=timeout)
-    if result.returncode not in {0, 1} or result.terminal_state != 'completed' or result.cleanup_error:
-        raise SecurityDataError(f'security process failed: exit={result.returncode}, state={result.terminal_state}, cleanup={result.cleanup_error or "complete"}')
+    allowed = {0, 1} if finding_exit else {0}
+    if result.returncode not in allowed or result.terminal_state != 'completed' or result.cleanup_error:
+        raise SecurityDataError(_process_detail(result, 'process-failed'))
     return result
+
+
+def _process_report(output: Path, result) -> dict:
+    try:
+        return _json(output)
+    except FileNotFoundError as exc:
+        raise SecurityDataError(_process_detail(result, 'report-missing')) from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise SecurityDataError(_process_detail(result, 'report-invalid')) from exc
 
 
 def image_report(report: dict, reference: str, *, expected_image_id: str | None = None) -> dict:
@@ -255,7 +291,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                 result = _process(command, scratch, scratch)
                 if result.returncode != 0:
                     raise SecurityDataError('Trivy image process did not complete successfully')
-                parsed = image_report(_json(report_path), reference, expected_image_id=item.get('image_id'))
+                parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'))
                 findings.extend(parsed['findings'])
                 results.append({'image': reference, **parsed})
         if trivy_database_source(tools, now=now) != source:
@@ -465,8 +501,10 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     command = [str(pinned_tool('trivy', tools)), 'config', '--config', '', '--ignorefile', '',
                                '--skip-check-update', '--skip-version-check', '--include-non-failures',
                                '--format', 'json', '--output', str(output), '.']
-                _process(command, source, scratch)
-                reports.append({'name': name, **validate_tool_report(name, _json(output), files)})
+                # Only these tools define exit 1 as findings. Trivy config has
+                # no --exit-code override and must complete with exit 0.
+                result = _process(command, source, scratch, finding_exit=name in {'bandit', 'opengrep'})
+                reports.append({'name': name, **validate_tool_report(name, _process_report(output, result), files)})
             except (OSError, ValueError, RuntimeError) as exc:
                 reports.append({'name': name, 'outcome': 'blocked', 'summary': str(exc),
                                 'gaps': [{'code': 'scanner-unavailable', 'message': str(exc)}]})

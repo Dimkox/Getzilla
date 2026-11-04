@@ -7,13 +7,17 @@ import copy
 import hashlib
 import json
 import struct
+import sys
 import tempfile
 import unittest
 import zlib
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from getzilla import security_tools
+from getzilla.python_test_runner import ProcessResult
 from getzilla.security_data import SecurityDataError
 from getzilla.security_tools import image_report, trivy_database_source, validate_tool_report, scan_secrets
 
@@ -41,6 +45,110 @@ class SecurityToolTests(unittest.TestCase):
                 'Results': [{'Target': IMAGE, 'Class': 'os-pkgs', 'Type': 'alpine',
                              'Packages': [{'Name': 'openssl', 'Version': '3.1.0'}],
                              'Vulnerabilities': []}]}
+
+    @contextmanager
+    def scanner(self, code):
+        path = self.root / 'scanner.py'
+        path.write_text(code, encoding='utf-8')
+        execute = security_tools.execute
+
+        def launch(command, *args, **kwargs):
+            return execute([sys.executable, *command], *args, **kwargs)
+
+        # Keep the real process runner, environment and scanner arguments while
+        # using Python's native executable instead of platform shebang support.
+        with mock.patch.object(security_tools, 'execute', side_effect=launch):
+            yield path
+
+    def source_scan(self, scanner):
+        (self.root / 'Dockerfile').write_text('FROM scratch\n')
+        with mock.patch.object(security_tools, 'pinned_tool', return_value=scanner):
+            reports = security_tools.scan_source(self.root, {'files': ['Dockerfile']})
+        return next(item for item in reports if item['name'] == 'trivy-config')
+
+    def test_exit_one_without_finding_policy_is_a_process_failure(self):
+        command = [sys.executable, '-c', 'import sys; sys.exit(1)']
+        with self.assertRaises(SecurityDataError):
+            security_tools._process(command, self.root, self.root)
+
+    def test_finding_exit_still_requires_a_report(self):
+        result = security_tools._process([sys.executable, '-c', 'import sys; sys.exit(1)'],
+                                         self.root, self.root, finding_exit=True)
+        self.assertEqual(result.returncode, 1)
+        with self.assertRaises(SecurityDataError):
+            security_tools._process_report(self.root / 'absent-report.json', result)
+
+    def test_timeout_and_cleanup_failures_block_without_raw_cleanup_details(self):
+        for state, cleanup in (('timeout', ''), ('completed', 'private-cleanup-canary')):
+            with self.subTest(state=state):
+                result = ProcessResult([], 0, terminal_state=state, cleanup_error=cleanup)
+                with mock.patch.object(security_tools, 'execute', return_value=result):
+                    with self.assertRaises(SecurityDataError) as caught:
+                        security_tools._process(['scanner'], self.root, self.root)
+                self.assertNotIn('private-cleanup-canary', str(caught.exception))
+                self.assertIn('state=' + state, str(caught.exception))
+
+    def test_process_failure_classifies_stderr_without_returning_output(self):
+        sentinel = 'private-process-canary'
+        code = 'import sys; sys.stderr.write(' + repr(
+            'proxyconnect tcp: connection refused https://user:' + sentinel + '@host\n') + '); sys.exit(2)'
+        with self.scanner(code) as scanner:
+            with self.assertRaises(SecurityDataError) as caught:
+                security_tools._process([str(scanner)], self.root, self.root)
+        detail = str(caught.exception)
+        self.assertIn('network', detail)
+        self.assertIn('exit=2', detail)
+        self.assertNotIn(sentinel, detail)
+        self.assertNotIn(str(scanner), detail)
+
+    def test_source_exit_one_keeps_scanner_error_instead_of_missing_filename(self):
+        with self.scanner('import sys; sys.stderr.write("x509: certificate signed by unknown authority"); sys.exit(1)') as scanner:
+            report = self.source_scan(scanner)
+        self.assertEqual(report['outcome'], 'blocked')
+        self.assertIn('tls', report['summary'])
+        self.assertIn('exit=1', report['summary'])
+        self.assertNotIn('No such file', report['summary'])
+
+    def test_source_missing_and_invalid_reports_keep_process_context(self):
+        for payload, category in ((None, 'report-missing'), ('{', 'report-invalid')):
+            with self.subTest(category=category):
+                code = ('import sys\n'
+                        'sys.stderr.write("network unreachable\\n")\n'
+                        'sys.stdout.write("private-stdout-canary" * 10000)\n')
+                if payload is not None:
+                    code += ('from pathlib import Path\n'
+                             'Path(sys.argv[sys.argv.index("--output") + 1]).write_text(' + repr(payload) + ')\n')
+                with self.scanner(code) as scanner:
+                    report = self.source_scan(scanner)
+                self.assertEqual(report['outcome'], 'blocked')
+                self.assertIn(category, report['summary'])
+                self.assertIn('exit=0', report['summary'])
+                self.assertIn('network', report['summary'])
+                self.assertNotIn('private-stdout-canary', json.dumps(report))
+                self.assertLess(len(report['summary']), 512)
+
+    def test_acquisition_failure_retains_classified_diagnostics_without_credentials(self):
+        sentinel = 'private-acquisition-canary'
+        diagnostic = 'UNAUTHORIZED Authorization: Bearer ' + sentinel + '\n' + 'x' * 10000
+        with self.scanner('import sys; sys.stderr.write(' + repr(diagnostic) + '); sys.exit(1)') as scanner:
+            with mock.patch.object(security_tools, 'pinned_tool', return_value=scanner):
+                reports = security_tools.refresh_images({'images': []}, self.root)
+        self.assertEqual(reports[0]['status'], 'fail')
+        self.assertIn('authentication', reports[0]['reason'])
+        self.assertIn('exit=1', reports[0]['reason'])
+        self.assertNotIn(sentinel, json.dumps(reports))
+        self.assertLess(len(reports[0]['reason']), 512)
+
+    def test_source_report_findings_remain_findings_and_partial_coverage_blocks(self):
+        for target, outcome in (('Dockerfile', 'finding'), ('other/Dockerfile', 'blocked')):
+            with self.subTest(target=target):
+                report = {'SchemaVersion': 2, 'Results': [{'Target': target, 'Class': 'config',
+                          'MisconfSummary': {'Successes': 0, 'Failures': 1, 'Exceptions': 0},
+                          'Misconfigurations': [{'ID': 'fixture-rule', 'Status': 'FAIL'}]}]}
+                code = ('import sys\nfrom pathlib import Path\n'
+                        'Path(sys.argv[sys.argv.index("--output") + 1]).write_text(' + repr(json.dumps(report)) + ')\n')
+                with self.scanner(code) as scanner:
+                    self.assertEqual(self.source_scan(scanner)['outcome'], outcome)
 
     def test_image_zero_exit_empty_or_foreign_report_is_not_a_scan(self):
         for value in ({}, {**self.report(), 'Results': []},
