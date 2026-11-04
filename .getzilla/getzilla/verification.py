@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .agent_evals import required_suites
 from .bitrix_checks import check_bitrix
 from .architecture import (
     ArchitectureError, architecture_inputs_present, load_architecture,
@@ -78,6 +79,11 @@ class CheckResult:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+def _agent_eval_checks(root: Path, mode: str) -> list[CheckResult]:
+    """Use the optional replay suites inside the existing verification gate."""
+    return [CheckResult(**item) for item in required_suites(root, mode)]
 
 
 class VerificationCancelled(SystemExit):
@@ -2870,6 +2876,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
         dispatch.add(workflow_check)
     report.update(governance=governance_metadata, workflow_artifacts=workflow_metadata)
+    cancellation.check()
+    if not dispatch.blocked_by:
+        for check in _agent_eval_checks(root, mode):
+            dispatch.add(check)
     cancellation.check()
 
     results = state.results
