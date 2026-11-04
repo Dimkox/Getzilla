@@ -179,7 +179,7 @@ _PUBLIC_MIGRATION_MIRRORS = {
 }
 _PUBLIC_WORKER_SOURCES = frozenset(
     f"trust-ci/src/adaptive_trust_ci/{filename}" for filename in (
-        "public_models.py", "public_admission.py", "public_policy.py", "source_safety.py",
+        "public_models.py", "public_policy.py", "source_safety.py",
         "public_storage.py", "public_checkout.py", "public_runner.py",
     )
 )
