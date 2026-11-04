@@ -315,8 +315,12 @@ class TaskIntentTests(unittest.TestCase):
             ):
                 self.assertTrue(evaluate_pre_tool(root, event)[0], event)
             from getzilla.task_intent import mutation_block_reason
-            self.assertIsNone(mutation_block_reason(root, {'tool_name': 'Write', 'tool_input': {
-                'file_path': '.getzilla/runtime/audit/inspection.md'}}))
+            report = {'tool_name': 'Write', 'tool_input': {'file_path': '.getzilla/runtime/audit/inspection.md'}}
+            self.assertIsNone(mutation_block_reason(root, report, execution_cwd=root))
+            self.assertIn('cannot establish independence', mutation_block_reason(root, report, execution_cwd=None))
+            self.assertIn('scope_sync_required', mutation_block_reason(root, report, execution_cwd=root / 'src'))
+            nested_report = {'tool_name': 'Write', 'tool_input': {'file_path': '../.getzilla/runtime/audit/inspection.md'}}
+            self.assertIsNone(mutation_block_reason(root, nested_report, execution_cwd=root / 'src'))
 
     def test_explicit_amendment_impact_preserves_independent_path_and_worker(self):
         with project_copy(git=True) as root:
@@ -467,6 +471,180 @@ class TaskIntentTests(unittest.TestCase):
             self._assert_intent_decision(root, event, execution_cwd=root, expected='Q-001')
             sibling = {'tool_name': 'Write', 'tool_input': {'file_path': 'src2/a.py', 'content': 'changed'}}
             self._assert_intent_decision(root, sibling, execution_cwd=root, expected=None)
+
+    def _patch_event(self, action, target, *, destination=None):
+        lines = ['*** Begin Patch', f'*** {action} File: {target}']
+        if destination is not None:
+            lines.append(f'*** Move to: {destination}')
+        if action == 'Add':
+            lines.append('+value = 2')
+        elif action == 'Update':
+            lines.extend(['@@', '-value = 1', '+value = 2'])
+        lines.append('*** End Patch')
+        return {'tool_name': 'apply_patch', 'tool_input': {'patch': '\n'.join(lines) + '\n'}}
+
+    def test_structured_targets_resolve_known_nested_cwd(self):
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root, paths=['src/a.py', 'src/new.py', 'src/locked/'])
+            (root / 'src/alias.py').symlink_to(root / 'src/a.py')
+            cases = []
+            for target in ('a.py', './a.py', 'nested/../a.py', str(root / 'src/a.py'),
+                           'alias.py', '.', 'locked', 'locked/', 'locked/nested.py'):
+                cases.append(({'tool_name': 'Write', 'tool_input': {'file_path': target}}, 'Q-001'))
+            for target in ('b.py', 'a.py.backup', '../src2/a.py', 'locked-extra/a.py'):
+                cases.append(({'tool_name': 'Write', 'tool_input': {'file_path': target}}, None))
+            cases.extend([
+                ({'tool_name': 'Edit', 'tool_input': {'file_path': 'a.py'}}, 'Q-001'),
+                ({'tool_name': 'MultiEdit', 'tool_input': {'edits': [{'file_path': 'b.py'}, {'file_path': 'a.py'}]}}, 'Q-001'),
+                ({'tool_name': 'MultiEdit', 'tool_input': {'edits': [{'file_path': 'b.py'}]}}, None),
+                (self._patch_event('Add', 'new.py'), 'Q-001'),
+                (self._patch_event('Update', 'a.py'), 'Q-001'),
+                (self._patch_event('Delete', 'a.py'), 'Q-001'),
+                (self._patch_event('Update', 'b.py', destination='a.py'), 'Q-001'),
+                (self._patch_event('Update', 'b.py', destination=str(root / 'src/new.py')), 'Q-001'),
+                (self._patch_event('Update', 'a.py', destination='renamed.py'), 'Q-001'),
+                (self._patch_event('Update', 'b.py', destination='renamed.py'), None),
+                ({'tool_name': 'Bash', 'tool_input': {'command': 'printf changed > a.py'}}, 'Q-001'),
+                ({'tool_name': 'Bash', 'tool_input': {'command': 'printf changed > b.py'}}, None),
+            ])
+            for event, expected in cases:
+                with self.subTest(event=event, expected=expected):
+                    self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected=expected)
+
+    def test_structured_relative_targets_require_trusted_execution_cwd(self):
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root)
+            for cwd in (None, root.parent, root / 'missing-cwd'):
+                for event in (
+                    {'tool_name': 'Write', 'tool_input': {'file_path': 'b.py'}},
+                    {'tool_name': 'Edit', 'tool_input': {'file_path': root.name + '/src/b.py'}},
+                    {'tool_name': 'MultiEdit', 'tool_input': {'edits': [{'file_path': 'b.py'}]}},
+                    self._patch_event('Add', 'unrelated.py'),
+                ):
+                    with self.subTest(cwd=cwd, event=event):
+                        self._assert_intent_decision(root, event, execution_cwd=cwd, expected='cannot establish independence')
+            for target, expected in ((root / 'src/a.py', 'Q-001'), (root / 'src/b.py', None),
+                                     (root.parent / 'outside.py', 'cannot establish independence')):
+                with self.subTest(absolute=target):
+                    event = {'tool_name': 'Write', 'tool_input': {'file_path': str(target)}}
+                    self._assert_intent_decision(root, event, execution_cwd=None, expected=expected)
+            # The ordinary policy must use the same cwd even after all intent is answered.
+            self.answer(root)
+            (root / 'src2').mkdir()
+            outside = root.parent / 'outside'
+            outside.mkdir()
+            (root / 'src/in-repo').symlink_to(root / 'src2', target_is_directory=True)
+            (root / 'src/outside-link').symlink_to(outside, target_is_directory=True)
+            (root / 'src/protected-link').symlink_to(root / '.grok', target_is_directory=True)
+            cases = [
+                (root / 'src', {'tool_name': 'Write', 'tool_input': {'file_path': '../src2/a.py'}}, True),
+                (root / 'src', {'tool_name': 'Edit', 'tool_input': {'file_path': 'in-repo/a.py'}}, True),
+                (root / 'src', {'tool_name': 'Write', 'tool_input': {'file_path': '../../outside/a.py'}}, False),
+                (root / 'src', {'tool_name': 'Write', 'tool_input': {'file_path': 'outside-link/a.py'}}, False),
+                (root / 'src', {'tool_name': 'Edit', 'tool_input': {'file_path': '../AGENTS.md'}}, False),
+                (root / '.grok', {'tool_name': 'Write', 'tool_input': {'file_path': 'hooks/pre_tool_use.py'}}, False),
+                (root / 'src', {'tool_name': 'Write', 'tool_input': {'file_path': 'protected-link/hooks/pre_tool_use.py'}}, False),
+                (root / 'src', {'tool_name': 'MultiEdit', 'tool_input': {'edits': [{'file_path': 'b.py'}, {'file_path': '../AGENTS.md'}]}}, False),
+                (root / 'src', self._patch_event('Update', 'b.py', destination='../AGENTS.md'), False),
+                (root / 'src', self._patch_event('Update', '../AGENTS.md', destination='b.py'), False),
+                (root / 'src', self._patch_event('Update', 'b.py', destination='../src2/a.py'), True),
+                (root / 'src', self._patch_event('Update', 'b.py', destination='../../outside/a.py'), False),
+                (None, {'tool_name': 'Write', 'tool_input': {'file_path': 'b.py'}}, False),
+                (root.parent, {'tool_name': 'Write', 'tool_input': {'file_path': root.name + '/src/b.py'}}, False),
+            ]
+            for cwd, event, expected in cases:
+                with self.subTest(cwd=cwd, event=event, allowed=expected):
+                    allowed, reason = evaluate_pre_tool(root, event, execution_cwd=cwd)
+                    self.assertEqual(allowed, expected, reason)
+
+    def test_nested_structured_targets_preserve_pending_and_answer_freshness(self):
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root)
+            event = {'tool_name': 'Edit', 'tool_input': {'file_path': 'a.py'}}
+            self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected='Q-001')
+            self.answer(root)
+            self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected=None)
+            spec_path = root / state.get_active_change(root)['path'] / 'change-spec.yaml'
+            spec = load_spec(spec_path)
+            spec['acceptance_criteria'][0]['statement'] = 'A now counts archived rows.'
+            spec_path.write_text(dump_canonical_spec(spec))
+            self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected='Q-001')
+            sibling = {'tool_name': 'Edit', 'tool_input': {'file_path': 'b.py'}}
+            self._assert_intent_decision(root, sibling, execution_cwd=root / 'src', expected=None)
+        with project_copy(git=True) as root:
+            from getzilla.task_intent import intent_gaps
+            self.task(root)
+            route = continuity.submit(root, 'Amendment: A changes while B remains independent.',
+                                      'intent-owner', event_id='nested-amendment')
+            pending = route['context']['pending'][0]['id']
+            self.ask(root, targets=[pending, 'AC-001'], paths=['src/a.py'])
+            self.answer(root)
+            self.assertEqual(intent_gaps(root, state.get_active_route(root)), [])
+            for event, expected in (
+                ({'tool_name': 'Write', 'tool_input': {'file_path': 'a.py'}}, 'scope_sync_required'),
+                (self._patch_event('Update', 'b.py', destination='a.py'), 'scope_sync_required'),
+                ({'tool_name': 'Write', 'tool_input': {'file_path': 'b.py'}}, None),
+                (self._patch_event('Update', 'b.py', destination='renamed.py'), None),
+            ):
+                with self.subTest(event=event):
+                    self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected=expected)
+
+    def test_native_nested_patch_checks_intent_and_pending_amendment(self):
+        from getzilla.hook_health import route_degraded_events
+        from tests._support import run_hook
+        with project_copy(git=True) as root:
+            self.task(root)
+            self.ask(root, paths=['src/a.py', 'src/new.py'])
+            (root / 'src2').mkdir()
+            original = {name: (root / 'src' / name).read_bytes() for name in ('a.py', 'b.py')}
+
+            def observe(event, expected):
+                inputs = event['tool_input']
+                if event['tool_name'] == 'apply_patch':
+                    inputs = {'input': inputs['patch']}
+                code, result, stderr = run_hook(root, 'pre_tool_use.py', {
+                    'cwd': str(root / 'src'), 'session_id': 'intent-owner',
+                    'tool_name': event['tool_name'], 'tool_input': inputs,
+                }, harness='codex')
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(stderr, '')
+                if expected is None:
+                    self.assertEqual(result, {})
+                else:
+                    decision = result.get('hookSpecificOutput', {})
+                    self.assertEqual(decision.get('permissionDecision'), 'deny', result)
+                    self.assertIn(expected, decision.get('permissionDecisionReason', ''))
+
+            self.assertEqual(route_degraded_events(root, state.get_active_route(root)), [])
+            for event in (
+                {'tool_name': 'Write', 'tool_input': {'file_path': 'a.py'}},
+                {'tool_name': 'Write', 'tool_input': {'file_path': str(root / 'src/a.py')}},
+                {'tool_name': 'Edit', 'tool_input': {'file_path': 'a.py'}},
+                {'tool_name': 'MultiEdit', 'tool_input': {'file_path': 'a.py', 'edits': []}},
+                {'tool_name': 'Bash', 'tool_input': {'command': 'printf changed > a.py'}},
+                self._patch_event('Add', 'new.py'),
+                self._patch_event('Update', 'b.py', destination='new.py'),
+            ):
+                with self.subTest(event=event):
+                    observe(event, 'Q-001')
+            observe({'tool_name': 'Write', 'tool_input': {'file_path': 'b.py'}}, None)
+            observe({'tool_name': 'Write', 'tool_input': {'file_path': '../src2/a.py'}}, None)
+            observe({'tool_name': 'Bash', 'tool_input': {'command': 'printf changed > b.py'}}, None)
+            self.answer(root)
+            route = continuity.submit(root, 'Amendment: define the new A endpoint; B is unchanged.',
+                                      'intent-owner', event_id='native-nested-amendment')
+            pending = route['context']['pending'][0]['id']
+            self.ask(root, targets=[pending, 'AC-001'], paths=['src/new.py'], identifier='Q-PENDING')
+            self.answer(root, identifier='Q-PENDING', operation_id='answer-pending')
+            observe(self._patch_event('Add', 'new.py'), 'scope_sync_required')
+            observe(self._patch_event('Update', 'b.py', destination='new.py'), 'scope_sync_required')
+            observe({'tool_name': 'Write', 'tool_input': {'file_path': 'b.py'}}, None)
+            self.assertEqual(route_degraded_events(root, state.get_active_route(root)), [])
+            self.assertEqual({name: (root / 'src' / name).read_bytes() for name in original}, original)
+            self.assertFalse((root / 'src/new.py').exists())
 
     def test_new_human_resolution_changes_completion_context_even_with_same_missing_receipt(self):
         from getzilla.completion import observe_remaining

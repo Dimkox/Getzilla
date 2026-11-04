@@ -6278,8 +6278,11 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
                     set(cursor.fetchone()[0]),
                     {connection.info.user, "factory_artifact_attestor"},
                 )
-                cursor.execute("SELECT max(version) FROM factory.schema_migrations")
-                self.assertEqual(cursor.fetchone()[0], 23)
+                cursor.execute("SELECT version,name,sha256 FROM factory.schema_migrations ORDER BY version")
+                self.assertEqual(
+                    cursor.fetchall(),
+                    [(migration.version, migration.name, migration.sha256) for migration in discover_migrations()],
+                )
 
 if __name__ == "__main__":
     unittest.main()

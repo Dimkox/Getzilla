@@ -26,11 +26,12 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
-                            osv_aliases, osv_coverage, publish_snapshot, read_snapshot)
+                            osv_aliases, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
 try:
     import tomllib
@@ -505,9 +506,17 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     fixed: list[str] = []
     for affected in record.get('affected') or []:
         package = affected.get('package') or {}
+        if (dependency.ecosystem == 'Packagist' and qualified_packagist(package.get('ecosystem'))
+                and normalize_name('Packagist', str(package.get('name', ''))) in
+                {'*', normalize_name('Packagist', dependency.name)}):
+            raise VulnerabilityError('Packagist dependency registry identity is required for a custom-repository match')
         if package.get('ecosystem') != dependency.ecosystem:
             continue
-        if normalize_name(dependency.ecosystem, str(package.get('name', ''))) != normalize_name(dependency.ecosystem, dependency.name):
+        name = normalize_name(dependency.ecosystem, str(package.get('name', '')))
+        if name == '*':
+            if not _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
+                continue
+        elif name != normalize_name(dependency.ecosystem, dependency.name):
             continue
         specific = affected.get('database_specific') or {}
         severity = severity or str(specific.get('severity') or '')
@@ -599,9 +608,15 @@ def query_offline(dependencies: list[Dependency], database: Path, *, now: dateti
                     continue
                 for affected in record.get('affected') or []:
                     package = affected.get('package') or {}
+                    if ecosystem == 'Packagist' and qualified_packagist(package.get('ecosystem')):
+                        name = normalize_name(ecosystem, str(package.get('name', '')))
+                        if name == '*' or name in by_name:
+                            raise VulnerabilityError('Packagist dependency registry identity is required for a custom-repository match')
                     if package.get('ecosystem') != ecosystem:
                         continue
-                    for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
+                    name = normalize_name(ecosystem, str(package.get('name', '')))
+                    candidates = chain.from_iterable(by_name.values()) if name == '*' else by_name.get(name, ())
+                    for dependency in candidates:
                         if _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
                             findings.append(_describe(record, dependency))
     unique = {(item.dependency, item.vuln_id): item for item in findings}

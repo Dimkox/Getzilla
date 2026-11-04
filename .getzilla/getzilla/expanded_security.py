@@ -341,4 +341,8 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             results.append(_result(name, 'blocked', str(exc), inventory, policy,
                                    sources=obligation['data_sources'], gaps=[{'code': 'required-input-unavailable', 'message': str(exc)}]))
+    from .security_licenses import attach_factory_offline_intent, factory_offline_intent, load_policy
+    for check in results:
+        if check.get('name') == 'security-licenses':
+            attach_factory_offline_intent(check, factory_offline_intent(root, load_policy(policy_root or root)))
     return results

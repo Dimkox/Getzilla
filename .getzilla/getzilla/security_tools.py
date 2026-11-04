@@ -7,13 +7,16 @@ These observations prove local integrity; the CI provider supplies authority.
 """
 from __future__ import annotations
 
+import codecs
 import hashlib
+import io
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+import tokenize
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -317,6 +320,54 @@ def validate_tool_report(name: str, report: dict, targets: list[str]) -> dict:
             'findings': findings, 'coverage': {'expected': sorted(expected), 'observed': sorted(observed)}}
 
 
+_COOKIE = re.compile(r'^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)')
+_SOURCE_CODECS = {'ascii', 'us-ascii', 'utf8', 'utf-8', 'utf-8-sig', 'latin1', 'latin-1',
+                  'iso8859-1', 'iso-8859-1', 'cp1251', 'windows-1251', 'cp1252', 'windows-1252'}
+
+
+def _opaque_asset(path: Path, raw: bytes) -> bool:
+    """Only recognized asset types may be disclosed as outside the text scan."""
+    suffix = path.suffix.lower()
+    return ((suffix == '.png' and raw.startswith(b'\x89PNG\r\n\x1a\n'))
+            or (suffix in {'.jpg', '.jpeg'} and raw.startswith(b'\xff\xd8\xff'))
+            or (suffix == '.gif' and raw.startswith((b'GIF87a', b'GIF89a')))
+            or (suffix == '.webp' and raw[:4] == b'RIFF' and raw[8:12] == b'WEBP')
+            or (suffix == '.avif' and raw[4:12] in {b'ftypavif', b'ftypavis'})
+            or (suffix == '.woff2' and raw.startswith(b'wOF2')))
+
+
+def _secret_text(relative: str, raw: bytes) -> str | None:
+    path = Path(relative)
+    if _opaque_asset(path, raw):
+        return None
+    first = raw[:512].split(b'\n', 1)[0]
+    python = path.suffix.lower() in {'.py', '.pyw', '.pyi'} or (
+        first.startswith(b'#!') and re.search(rb'[/ \t]python[0-9.]*(?:[ \t\r]|$)', first))
+    if python:
+        reader = io.BytesIO(raw)
+
+        def checked_line():
+            line = reader.readline()
+            cookie = _COOKIE.match(line.removeprefix(codecs.BOM_UTF8).decode('utf-8'))
+            if cookie and cookie[1].lower().replace('_', '-') not in _SOURCE_CODECS:
+                # detect_encoding normally looks up the declared codec itself.
+                # Bound that lookup to standard text codecs before giving it a line.
+                raise ValueError('unsupported source encoding')
+            return line
+
+        encoding, _ = tokenize.detect_encoding(checked_line)
+    elif raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        encoding = 'utf-32'
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encoding = 'utf-16'
+    else:
+        encoding = 'utf-8-sig'
+    text = raw.decode(encoding)
+    if '\0' in text:
+        raise ValueError('unqualified NUL-bearing text')
+    return text
+
+
 def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_ROOT) -> dict:
     findings, gaps, binary = [], [], []
     total = 0
@@ -328,9 +379,14 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
             if total > MAX_SOURCE_TOTAL:
                 raise SecurityDataError('secret input inventory exceeds the bounded total')
             try:
-                text = raw.decode('utf-8')
-            except UnicodeError:
-                binary.append({'path': relative, 'sha256': hashlib.sha256(raw).hexdigest(), 'reason': 'non-UTF8 binary; text-pattern scanner not applicable'})
+                text = _secret_text(relative, raw)
+            except (ValueError, SyntaxError, LookupError):
+                gaps.append({'code': 'secret-text-coverage', 'path': relative,
+                             'message': 'cannot establish supported text encoding or opaque asset type'})
+                continue
+            if text is None:
+                binary.append({'path': relative, 'sha256': hashlib.sha256(raw).hexdigest(),
+                               'reason': 'recognized opaque asset; text-pattern scanner not applicable'})
                 continue
             digest = hashlib.sha256(raw).hexdigest()
             for label, pattern in dispositions.SECRET_PATTERNS.items():

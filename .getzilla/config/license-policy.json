@@ -2,5 +2,15 @@
   "schema_version": 1,
   "project_repository": "github.com/Dimkox/Getzilla",
   "auto_allow": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD"],
-  "usage_distribution": {}
+  "usage_distribution": {
+    "build-ci": "internal",
+    "manifest:trust-ci/requirements-test.txt#runtime-and-development": "internal"
+  },
+  "factory_offline_profile": {
+    "profile": "ubuntu-24.04-x86_64-cpython312",
+    "distribution": "redistributed",
+    "lock_sha256": "e6d5f3f021055951d5273d323051953fb2314a2b2a011d01cf59fa33f08ac929",
+    "wheel_inventory_sha256": "a7070165bad608d32a640f40f9285d2ffe3dc030162ce28110421cdda501dcf5",
+    "builder_sha256": "39254ca4d904a615983019737b5f8075dc9d72e30ea5c2f48b2a2d48fa570e95"
+  }
 }

@@ -77,13 +77,21 @@ def _inspect(kind: str, key: str) -> dict:
     return items[0]
 
 
+def _canonical_mounts(mounts):
+    """Mount ordering is not identity; every entry and field remains significant."""
+    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
+        raise ValueError("Invalid container mount identity")
+    return sorted(mounts, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+
+
 def _identity(kind: str, value: dict) -> dict:
     if kind == "container":
         return {"id": value["Id"], "name": value["Name"].removeprefix("/"),
                 "image_id": value["Image"], "image": value["Config"]["Image"],
                 "labels": value["Config"].get("Labels") or {},
-                "mounts": [{key: item.get(key) for key in ("Type", "Name", "Source", "Destination")}
-                           for item in value.get("Mounts", [])]}
+                "mounts": _canonical_mounts([
+                    {key: item.get(key) for key in ("Type", "Name", "Source", "Destination")}
+                    for item in value.get("Mounts", [])])}
     result = {key: value.get(key) for key in ("Name", "Labels", "Driver", "Options")}
     if kind == "volume":
         result.update({key: value.get(key) for key in ("CreatedAt", "Mountpoint")})
@@ -395,10 +403,23 @@ class OwnedDocker:
                     self._bind(item, key)
                     key = item.get("id", item["name"])
                 identity = _identity(item["kind"], _inspect(item["kind"], key))
+                expected = item["identity"]
+                if item["kind"] == "container":
+                    # Existing v1 journals may retain Docker's original order.
+                    # Compare semantically without rewriting that observation.
+                    expected = {**expected, "mounts": _canonical_mounts(expected["mounts"])}
                 labels = identity.get("labels", identity.get("Labels")) or {}
-                if (identity != item["identity"]
+                if (identity != expected
                         or any(labels.get(key) != value for key, value in self.labels.items())):
-                    raise CleanupUnconfirmed("Live ownership identity changed")
+                    fields = ("id", "name", "image_id", "image", "labels", "mounts",
+                              "Name", "Labels", "Driver", "Options", "CreatedAt", "Mountpoint", "Id")
+                    changed = [field for field in fields if identity.get(field) != expected.get(field)]
+                    if set(identity) != set(expected):
+                        changed.append("structure")
+                    if any(labels.get(key) != value for key, value in self.labels.items()):
+                        changed.append("ownership_labels")
+                    item["cleanup_mismatch_fields"] = sorted(changed)
+                    raise CleanupUnconfirmed("Live ownership identity changed fields=" + ",".join(changed))
                 arguments = [item["kind"], "rm"]
                 if item["kind"] == "container":
                     arguments.append("--force")

@@ -160,7 +160,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                     outcome = 'blocked'
                 checks.append(_check(value['name'], outcome, value['summary'], inventory, policy,
                                      findings=value.get('findings', []), gaps=value.get('gaps', []),
-                                     extra={key: value[key] for key in ('coverage', 'binary_inputs') if key in value}))
+                                     extra={key: value[key] for key in ('coverage', 'binary_inputs', 'factory_offline_use') if key in value}))
             final_inventory = collect_inventory(root)
             final_plan = security_obligations(root, final_inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             if final_plan != initial_plan or final_inventory['digest'] != inventory['digest']:

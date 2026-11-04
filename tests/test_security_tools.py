@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+import base64
+import codecs
 import copy
 import hashlib
 import json
@@ -111,6 +114,66 @@ class SecurityToolTests(unittest.TestCase):
         self.assertNotIn('this-is-a-fixture-password', json.dumps(report))
         blocked = scan_secrets(self.root, ['missing.py'], trusted_root=self.root)
         self.assertEqual(blocked['outcome'], 'blocked')
+
+    def test_supported_source_encodings_keep_the_same_secret_finding(self):
+        sentinel = 'only-public-test-content'
+        assignment = 'pass' + 'word = ' + repr(sentinel) + '\n'
+        for name, data in (
+            ('app.py', ('# café\n' + assignment).encode()),
+            ('app.py', ('# coding: latin-1\n# café\n' + assignment).encode('latin-1')),
+            ('worker', ('#!/usr/bin/env python3\n# coding: latin-1\n# café\n' + assignment).encode('latin-1')),
+            ('config.ps1', codecs.BOM_UTF16_LE + assignment.encode('utf-16-le')),
+            ('config.ps1', codecs.BOM_UTF16_BE + assignment.encode('utf-16-be')),
+            ('config.txt', codecs.BOM_UTF32_LE + assignment.encode('utf-32-le')),
+        ):
+            with self.subTest(name=name, digest=hashlib.sha256(data).hexdigest()):
+                (self.root / name).write_bytes(data)
+                if name in {'app.py', 'worker'}:
+                    ast.parse(data)  # Parse the source bytes without executing the fixture.
+                result = scan_secrets(self.root, [name], trusted_root=self.root)
+                self.assertEqual(result['outcome'], 'finding')
+                self.assertEqual([item['rule'] for item in result['findings']], ['generic-secret'])
+                self.assertNotIn(sentinel, json.dumps(result))
+                self.assertEqual(result['binary_inputs'], [])
+
+    def test_unknown_or_corrupt_source_blocks_without_requesting_a_custom_codec(self):
+        requested = []
+
+        def observe(name):
+            requested.append(name)
+            return None
+
+        codecs.register(observe)
+        self.addCleanup(codecs.unregister, observe)
+        for name, data in (
+            ('job.py', b'# coding: getzilla-probe-unknown\nprint(1)\n'),
+            ('job.py', b'\x00# coding: latin-1\n\xff'),
+            ('config.yaml', b'name: a\xff'),
+            ('Dockerfile', b'\x00FROM scratch\n'),
+            ('script', b'#!/bin/sh\n# \xff\n'),
+            ('ambiguous.bin', b'\x00\xffdata'),
+            ('impostor.png', b'\xffnot a PNG'),
+            ('broken.ps1', codecs.BOM_UTF16_LE + b'\x00'),
+        ):
+            with self.subTest(name=name, digest=hashlib.sha256(data).hexdigest()):
+                (self.root / name).write_bytes(data)
+                result = scan_secrets(self.root, [name], trusted_root=self.root)
+                self.assertEqual(result['outcome'], 'blocked')
+                self.assertTrue(result['gaps'])
+                self.assertEqual(result['binary_inputs'], [])
+        self.assertNotIn('getzilla_probe_unknown', requested)
+
+    def test_binary_asset_is_disclosed_while_known_source_cannot_use_its_signature(self):
+        pixel = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+mGz8AAAAASUVORK5CYII=')
+        for name, expected in [('pixel.png', 'pass'), ('module.py', 'blocked')]:
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(pixel)
+                result = scan_secrets(self.root, [name], trusted_root=self.root)
+                self.assertEqual(result['outcome'], expected)
+                if name == 'pixel.png':
+                    self.assertEqual(result['binary_inputs'][0]['sha256'], hashlib.sha256(pixel).hexdigest())
+                else:
+                    self.assertFalse(result['binary_inputs'])
 
 
 if __name__ == '__main__':

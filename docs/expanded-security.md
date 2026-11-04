@@ -57,6 +57,12 @@ The isolated public Getzilla job requires these eleven results:
 | `bandit` | Checker-owned settings and actual Python coverage |
 | `trivy-config` | Pinned built-in checks and actual supported IaC target coverage |
 
+The text scan reads UTF-8, BOM-qualified UTF-16/UTF-32 text and a closed set
+of standard Python source encodings (ASCII, UTF-8, Latin-1 and Windows
+1251/1252). It does not load candidate codec names. Only recognized opaque
+image/font assets with matching filename and signature are disclosed as binary;
+unknown or undecodable inputs and NUL-bearing text produce a coverage gap.
+
 The wire statuses remain `pass`, `fail`, `skip` and `cancelled`. A permitted
 `skip` needs a versioned `security-result` with `outcome=not_applicable` and a
 complete inventory proof. Missing tools, unsupported formats, stale sources,
@@ -136,3 +142,47 @@ The first deployment is explicitly blocked when that selected commit lacks the
 checker. Selecting the first trusted commit requires a concrete independent
 review and operator decision. See [isolated acceptance](isolated-ci-acceptance.md)
 for the separate live jobs and the required fail-closed aggregate.
+
+## Getzilla acceptance: artifact use and distribution
+
+The public source and installer, the Factory package and the Factory offline
+archive are redistributed outputs. The approved CI tools, GitHub Actions,
+CI images and Trust CI components used for isolated public-repository checks
+are internal verification inputs. Third-party CI tools and images are not
+published as part of this scope. A future distribution of these objects needs
+a separate decision. This decision is specific to Getzilla; an installation in
+another repository does not inherit its license policy.
+
+`usage_distribution` accepts a usage default and an exact
+`manifest:<repository-relative path>#<usage>` key. The exact decision takes
+precedence. An incompatible observed use is a gap. The pinned CI requirements
+use the `build-ci` default. `trust-ci/requirements-test.txt` supplies the
+isolated Trust CI tests. No default is inferred for `runtime-and-development`:
+Factory's lock includes both production dependencies and test-only packages.
+
+A scope decision records intended use; it does not prove artifact contents.
+The Factory offline builder installs files extracted from wheels. Validation
+must bind the completed archive and its retained license/NOTICE files to the
+actual delivered bytes and approved target profile. Cached source wheels do
+not establish that link. Tools and images still require exact component and
+license evidence. The six approved licenses and per-artifact obligations are
+unchanged; uses outside those verified license alternatives and unresolved
+composition require review.
+
+For the approved Factory offline profile the project policy pins the exact lock,
+validated wheel inventory and builder bytes. Only a byte-identical input set in
+Getzilla yields its intended redistributed wheel identities. Changed inputs
+require mechanical validation with the trusted builder before publishing new
+pins. The checker reads data only; it does not import or run the candidate's
+builder. This output-level observation is separate from registry acquisition:
+the same package/version can target CPython 3.12 in Factory and a different ABI
+in Trust CI. Missing proof for the final extracted archive is a delivery gap,
+not an unanswered question about the 20 declared wheels. No cached original
+wheel can satisfy this gap. The separately installed ordinary Factory wheel
+has a distinct composition; its dependency declarations do not establish that
+it bundles these 20 wheels.
+
+This diagnostic field does not change existing license-check statuses, findings,
+gaps or flat-catalog semantics. It is not a new permanent gate, and a passing
+legacy package check is not acceptance of the extracted offline archive. A
+separate output-specific consumer remains required before such acceptance.

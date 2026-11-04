@@ -87,7 +87,14 @@ on-disk log contains bounded lifecycle signals only and is tail-truncated at 64 
 
 `build_offline_release.py` accepts an exact clean Git HEAD, a wheelhouse containing
 exactly `runtime-wheels-linux-x86_64-cpython312.json`, and an output stem. The
-inventory is checked against `uv.lock`; every wheel filename/SHA-256 must match,
+inventory is checked against the runtime dependency closure in `uv.lock`, including
+requested transitive extras and excluding development groups. The existing Linux
+CPython 3.12 profile supports the current single-resolution lock (revisions 3 and
+5), the observed `requires-python` contracts `>=3.11` and `>=3.12,<3.13`,
+and its three marker forms: `python_full_version < '3.13'`,
+`implementation_name != 'pypy'`, and `sys_platform == 'win32'`. Unknown markers,
+missing nodes, alternative resolutions, or unresolved extras refuse the build;
+they are never treated as absent dependencies. Every wheel filename/SHA-256 must match,
 with no extras, dependency resolver or network access. The builder safely expands
 wheels and tracked `factory/src/getzilla_factory` bytes, rejects unsafe entries and
 collisions, emits canonical sorted ZIP metadata plus detached manifest/digests,

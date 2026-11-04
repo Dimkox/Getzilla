@@ -1612,33 +1612,35 @@ class PostgresFactoryTests(unittest.TestCase):
         import sys
         import tempfile
         from getzilla_factory.result_broker import ResultBroker
+        from factory.tests import postgres_restart_probe
 
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", POSTGRES_CONTAINER):
             self.fail("invalid disposable PostgreSQL container name")
+        container_id = os.environ.get("FACTORY_TEST_POSTGRES_CONTAINER_ID", "")
+        nonce = os.environ.get("FACTORY_TEST_POSTGRES_NONCE", "")
+        if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            self.fail("disposable PostgreSQL requires its full owned container ID")
 
         def restartable_binding():
             inspected = subprocess.run(
-                ["docker", "inspect", POSTGRES_CONTAINER], check=True,
-                stdout=subprocess.PIPE, text=True, timeout=10,
+                ["docker", "inspect", container_id], check=True,
+                stdout=subprocess.PIPE, text=True, encoding="utf-8", timeout=10,
             )
             document = json.loads(inspected.stdout)
-            if len(document) != 1 or document[0]["HostConfig"].get("AutoRemove") is not False:
+            if (len(document) != 1 or document[0]["Id"] != container_id
+                    or document[0]["HostConfig"].get("AutoRemove") is not False):
                 self.fail("disposable PostgreSQL container must be restartable (AutoRemove=false)")
-            bindings = document[0]["NetworkSettings"]["Ports"].get("5432/tcp")
-            if not isinstance(bindings, list) or len(bindings) != 1:
-                self.fail("disposable PostgreSQL container must publish exactly one PostgreSQL port")
-            host, port = bindings[0].get("HostIp"), bindings[0].get("HostPort")
-            if host not in {"127.0.0.1", "::1"} or not isinstance(port, str) or not port.isdigit():
-                self.fail("disposable PostgreSQL binding must be numeric and loopback-only")
-            return document[0]["Id"], host, port
+            host, port = postgres_restart_probe._bound_endpoint(POSTGRES_CONTAINER, container_id, nonce)
+            return host, str(port)
 
-        container_id, initial_host, initial_port = restartable_binding()
+        initial_host, initial_port = restartable_binding()
         owner_parts = conninfo_to_dict(DATABASE_URL)
         if (
             owner_parts.get("host", "") != initial_host
             or str(owner_parts.get("port", "5432")) != initial_port
         ):
             self.fail("FACTORY_TEST_DATABASE_URL does not match the restartable container binding")
+        postgres_restart_probe._assert_disposable_target(DATABASE_URL, POSTGRES_CONTAINER, container_id, nonce)
         task = self.submit(source="v15-result-restart-e2e").task
         grant = self.service.claim(
             owner=WORKER.actor_id, role=RunRole.READER,
@@ -1746,14 +1748,18 @@ class PostgresFactoryTests(unittest.TestCase):
                         "WHERE request_digest=%s", (request_digest,),
                     )
                 release_post.set()
-                subprocess.run(["docker", "stop", POSTGRES_CONTAINER], check=True, timeout=30)
-                subprocess.run(["docker", "start", POSTGRES_CONTAINER], check=True, timeout=30)
-                restarted_id, restarted_host, restarted_port = restartable_binding()
-                if restarted_id != container_id:
-                    self.fail("disposable PostgreSQL container identity changed across restart")
-                DATABASE_URL = make_conninfo(
-                    **{**owner_parts, "host": restarted_host, "port": restarted_port}
+                # Reuse the live reader, full-ID restart and PG17 cluster checks.
+                # This fixture's larger capability set is rebuilt below without
+                # discarding its original libpq connection parameters.
+                DATABASE_URL, _, _ = postgres_restart_probe._restart_database(
+                    POSTGRES_CONTAINER, container_id, nonce, DATABASE_URL,
+                    postgres_restart_probe._database_url_for_login(
+                        DATABASE_URL, self.runtime_login, self.runtime_password),
+                    postgres_restart_probe._database_url_for_login(
+                        DATABASE_URL, self.result_dispatcher_login, self.result_dispatcher_password),
                 )
+                rebound = conninfo_to_dict(DATABASE_URL)
+                restarted_host, restarted_port = rebound["host"], rebound["port"]
                 for url_name in (
                     "runtime_url", "result_dispatcher_url", "semantic_coordinator_url",
                     "semantic_validator_url", "semantic_adjudicator_url",
@@ -1768,7 +1774,7 @@ class PostgresFactoryTests(unittest.TestCase):
                 os.environ["FACTORY_TEST_DATABASE_URL"] = DATABASE_URL
                 # unittest discovery imports this later-running module before this
                 # restart; keep its module-level disposable DSN bound to the same
-                # restarted container rather than the now-stale published port.
+                # restarted container rather than a potentially stale endpoint.
                 runtime_capability_module = sys.modules.get(
                     "factory.tests.test_runtime_capability_postgres"
                 )

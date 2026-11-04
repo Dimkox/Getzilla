@@ -201,6 +201,57 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(evidence['payload_validation'], 'source-evaluator-required')
 
 
+class OsvCompatibilityTests(unittest.TestCase):
+    @staticmethod
+    def archive(*records):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as archive:
+            for i, record in enumerate(records):
+                archive.writestr(f'record-{i}.json', json.dumps(record))
+        return output.getvalue()
+
+    def test_supplementary_git_row_needs_named_coverage_in_same_record(self):
+        named = {'package': {'ecosystem': 'npm', 'name': 'phoenix'}, 'versions': ['1.0.0']}
+        git = {'ranges': [{'type': 'GIT', 'repo': 'https://github.com/phoenixframework/phoenix',
+                           'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}], 'versions': ['v1.0.0']}
+        good = {'id': 'EEF-CVE-2026-56812', 'affected': [git, named]}
+        self.assertEqual(SD.osv_coverage(self.archive(good), 'npm')['record_count'], 1)
+        for bad in ([git], [git, {'package': {'name': 'phoenix', 'ecosystem': 'Hex'}, 'versions': ['1']}],
+                    [git, {**named, 'versions': [], 'ranges': [{}]}], [named, {}], [named, {'package': None, **git}],
+                    [named, {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}],
+                    [named, {**git, 'ranges': [{**git['ranges'][0], 'events': [{'introduced': 'bogus'}]}]}],
+                    [named, {**git, 'ranges': [{**git['ranges'][0], 'type': 'SEMVER'}]}],
+                    [named, {**git, 'ranges': [{**git['ranges'][0], 'repo': 'not a URL'}]}]):
+            with self.subTest(bad=bad), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(good, {'id': 'OTHER', 'affected': bad}), 'npm')
+
+    def test_registry_qualified_record_does_not_prove_default_registry_coverage(self):
+        def record(identifier, ecosystem):
+            return {'id': identifier, 'affected': [{'package': {'name': 'drupal/example', 'ecosystem': ecosystem},
+                                                     'versions': ['1.0.0']}]}
+        default = record('DEFAULT', 'Packagist')
+        custom = record('DRUPAL-CONTRIB-2017-082', 'Packagist:https://packages.drupal.org/8')
+        self.assertEqual(SD.osv_coverage(self.archive(default, custom), 'Packagist')['record_count'], 2)
+        with self.assertRaises(SD.SecurityDataError):
+            SD.osv_coverage(self.archive(custom), 'Packagist')
+        for suffix in ('', 'not-url', 'https://host/a/../b', 'https://host/path/', 'https://host/a?auth=secret'):
+            with self.subTest(suffix=suffix), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(default, record('OTHER', 'Packagist:' + suffix)), 'Packagist')
+
+    def test_invalid_member_has_bounded_non_disclosing_location(self):
+        private = 'private-example-value-' * 600
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as archive:
+            archive.writestr(private + '.json', json.dumps({'id': private, 'aliases': [',']}))
+        with self.assertRaisesRegex(SD.SecurityDataError, 'aliases') as exc:
+            SD.osv_coverage(out.getvalue(), 'npm')
+        message = str(exc.exception)
+        self.assertIn(hashlib.sha256((private + '.json').encode()).hexdigest(), message)
+        self.assertIn(hashlib.sha256(private.encode()).hexdigest(), message)
+        self.assertNotIn('private-example-value', message)
+        self.assertLess(len(message), 400)
+
+
 @unittest.skipUnless(SD.DESCRIPTOR_IO_AVAILABLE, 'descriptor-bound filesystem attack controls require qualified POSIX')
 class SnapshotBoundaryTests(unittest.TestCase):
     def setUp(self):

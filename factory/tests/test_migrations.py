@@ -182,6 +182,10 @@ class MigrationTests(unittest.TestCase):
             postgres_restart_probe, "_published_port", return_value=6543
         ) as published_port, patch.object(
             postgres_restart_probe, "_wait_for_database"
+        ), patch.dict(
+            os.environ, {key: value for key, value in os.environ.items()
+                         if key not in ("FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE")},
+            clear=True,
         ):
             moved = postgres_restart_probe._restart_database(
                 name, container_id, nonce, owner, runtime, attestor
@@ -222,6 +226,11 @@ class MigrationTests(unittest.TestCase):
                     nonce,
                 )
             self.assertEqual(run.call_count, 1)
+
+    def test_legacy_restart_unit_fixture_isolated_from_live_network_authority(self):
+        with patch.dict(os.environ, {"FACTORY_TEST_POSTGRES_NETWORK_ID": "d" * 64,
+                                     "FACTORY_TEST_POSTGRES_NAMESPACE": "gz-live-inherited"}):
+            self.test_restart_database_revalidates_binding_and_targets_only_full_id()
 
     def test_partial_internal_authority_never_falls_back_to_a_published_port(self):
         keys = ("FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE")

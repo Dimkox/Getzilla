@@ -34,7 +34,7 @@ _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 def _policy(policy: dict) -> dict:
     required = {'schema_version', 'project_repository', 'auto_allow', 'usage_distribution'}
-    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest'}:
+    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest', 'factory_offline_profile'}:
         raise ArtifactError('license-policy-missing', 'choose an explicit project-specific license policy')
     if type(policy['schema_version']) is not int or policy['schema_version'] != 1:
         raise ArtifactError('license-policy-review', 'unsupported project license policy version')
@@ -47,6 +47,15 @@ def _policy(policy: dict) -> dict:
     if not isinstance(scopes, dict) or not all(isinstance(key, str) and value in {'internal', 'redistributed'} for key, value in scopes.items()):
         raise ArtifactError('license-policy-review', 'project distribution scope must be explicit')
     raw = {key: policy[key] for key in sorted(required)}
+    if 'factory_offline_profile' in policy:
+        scope = policy['factory_offline_profile']
+        hashes = {'lock_sha256', 'wheel_inventory_sha256', 'builder_sha256'}
+        if (not isinstance(scope, dict) or set(scope) != hashes | {'profile', 'distribution'}
+                or policy['project_repository'].lower() != 'github.com/dimkox/getzilla'
+                or scope['profile'] != 'ubuntu-24.04-x86_64-cpython312' or scope['distribution'] != 'redistributed'
+                or any(not isinstance(scope[k], str) or not re.fullmatch(r'[0-9a-f]{64}', scope[k]) for k in hashes)):
+            raise ArtifactError('license-policy-review', 'invalid Getzilla offline profile decision')
+        raw['factory_offline_profile'] = dict(scope)
     digest = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if policy.get('digest', digest) != digest:
         raise ArtifactError('license-policy-review', 'policy digest does not match its actual contents')
@@ -77,6 +86,67 @@ def load_policy(root: Path) -> dict:
         return policy
     except (ArtifactError, OSError, ValueError, subprocess.SubprocessError) as exc:
         return {'error': str(exc), 'digest': None}
+
+
+def _distribution_for(dependency: dict, scopes: dict) -> str | None:
+    """An exact manifest/use decision overrides the project-wide use default."""
+    manifest, usage = dependency.get('manifest'), dependency.get('usage')
+    ordinary_usage = isinstance(usage, str) and re.fullmatch(r'[a-z][a-z0-9-]*', usage) is not None
+    distribution = scopes.get(usage) if ordinary_usage else None
+    if isinstance(manifest, str) and ordinary_usage:
+        distribution = scopes.get(f'manifest:{manifest}#{usage}', distribution)
+    observed = dependency.get('distribution')
+    if distribution is not None and observed is not None and distribution != observed:
+        raise ArtifactError('license-scope-conflict', 'observed distribution conflicts with project policy')
+    return distribution if distribution is not None else observed
+
+
+def factory_offline_intent(root: Path, policy: dict) -> dict | None:
+    """Recognize an independently pinned, previously builder-validated input set; never execute candidate code."""
+    if 'factory_offline_profile' not in policy:
+        return None
+    try:
+        scope = _policy(policy)['factory_offline_profile']
+        origin = subprocess.run(['git', '-C', str(root), 'remote', 'get-url', 'origin'], capture_output=True,
+                                text=True, encoding='utf-8', timeout=5, check=False)
+        identity = _repository_identity(origin.stdout.strip()) if origin.returncode == 0 else None
+        if (identity or '').lower() != policy['project_repository'].lower():
+            raise ArtifactError('license-factory-project-mismatch', 'offline decision is not owned by this project')
+        inputs = {'lock_sha256': ('factory/uv.lock', 4 * 1024 * 1024),
+                  'wheel_inventory_sha256': ('factory/runtime/runtime-wheels-linux-x86_64-cpython312.json', 1024 * 1024),
+                  'builder_sha256': ('factory/runtime/build_offline_release.py', 1024 * 1024)}
+        payload = {}
+        for field, (path, limit) in inputs.items():
+            payload[field] = read_file(root, path, limit)
+            if hashlib.sha256(payload[field]).hexdigest() != scope[field]:
+                raise ArtifactError('license-factory-profile-changed', 'revalidate the declared offline profile: ' + path)
+        record = _json(payload['wheel_inventory_sha256'])
+        if (record.get('schema_version') != 'factory-runtime-wheels/v1' or record.get('profile') != scope['profile']
+                or record.get('lock_sha256') != scope['lock_sha256'] or not isinstance(record.get('wheels'), list)
+                or not record['wheels'] or len(record['wheels']) > 10000):
+            raise ArtifactError('license-factory-profile-invalid', 'offline inventory does not describe the pinned profile')
+        components, names = [], set()
+        for wheel in record['wheels']:
+            if (not isinstance(wheel, dict) or set(wheel) != {'name','version','filename','sha256'}
+                    or not all(isinstance(value, str) and value for value in wheel.values())
+                    or wheel['name'] in names or not re.fullmatch(r'[0-9a-f]{64}', wheel['sha256'])
+                    or PurePosixPath(wheel['filename']).name != wheel['filename'] or not wheel['filename'].endswith('.whl')):
+                raise ArtifactError('license-factory-profile-invalid', 'malformed or duplicate offline wheel identity')
+            names.add(wheel['name'])
+            components.append(dict(wheel))
+        return {'code': 'license-factory-archive-delivery-unverified', 'distribution': 'redistributed',
+                'profile': scope['profile'], 'components': components,
+                'message': 'Offline archive use is decided; bind actual extracted LICENSE/NOTICE members to the final archive. '
+                           'Not evidence that the standalone Factory wheel bundles these dependencies.'}
+    except (ArtifactError, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
+        return {'code': getattr(exc, 'code', 'license-factory-profile-invalid'), 'message': str(exc), 'components': []}
+
+
+def attach_factory_offline_intent(check: dict, intent: dict | None) -> None:
+    """Report intended output use separately; this observation grants no license or delivery acceptance."""
+    if intent is not None:
+        check['details'][0]['factory_offline_use'] = {**intent, 'assurance': 'declared-output-scope-only',
+                                                       'final_archive_evidence': 'not_evaluated'}
 
 
 def _select_expression(expression: str, allowed: list[str]) -> tuple[list[str], set[str]]:
@@ -339,7 +409,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             try:
                 if dep.get('ecosystem') == 'PyPI':
                     _extras(dep.get('extras', []))
-                distribution = dep.get('distribution', policy['usage_distribution'].get(dep.get('usage')))
+                distribution = _distribution_for(dep, policy['usage_distribution'])
                 scope_known = isinstance(distribution, str) and distribution in {'internal', 'redistributed'}
                 if not scope_known:
                     gap('license-scope-unknown', 'use/distribution scope requires an observed project decision', dep)

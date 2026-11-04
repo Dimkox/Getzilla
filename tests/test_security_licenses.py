@@ -115,6 +115,44 @@ class ArtifactLicenseTests(unittest.TestCase):
         manifest(self.root, inv, [record], acquired=acquired)
         return licenses.evaluate_artifacts(inv, self.root, POLICY if policy is None else policy, now=NOW)
 
+    def test_exact_trust_ci_test_scope_does_not_classify_mixed_locks(self) -> None:
+        policy = json.loads((ROOT / '.getzilla/config/license-policy.json').read_text(encoding='utf-8'))
+        for path, usage, expected in (
+            ('trust-ci/requirements-test.txt', 'runtime-and-development', 'pass'),
+            ('trust-ci/requirements.txt', 'runtime-and-development', 'fail'),
+            ('factory/uv.lock', 'runtime-and-development', 'fail'),
+            ('factory/uv.lock', 'manifest:trust-ci/requirements-test.txt#runtime-and-development', 'fail'),
+            ('trust-ci/requirements-test.txt', 'other', 'fail'),
+            ('.getzilla/config/python-test-requirements.txt', 'build-ci', 'pass'),
+        ):
+            with self.subTest(path=path, usage=usage):
+                dep = dependency(manifest=path, usage=usage)
+                del dep['distribution']
+                result = self.evaluate(dep=dep, policy=policy)
+                self.assertEqual(result['status'], expected, result)
+                if expected == 'pass':
+                    self.assertEqual(result['details'][0]['distribution'], 'internal')
+                else:
+                    self.assertIn('license-scope-unknown', {item['code'] for item in result['gaps']})
+
+    def test_exact_redistributed_scope_requires_delivery_and_rejects_downgrade(self) -> None:
+        policy = {**POLICY, 'usage_distribution': {'runtime': 'internal',
+                  'manifest:fixture/requirements.txt#runtime': 'redistributed'}}
+        dep = dependency(manifest='fixture/requirements.txt')
+        conflict = self.evaluate(dep=dep, policy=policy)
+        self.assertIn('license-scope-conflict', {item['code'] for item in conflict['gaps']})
+        del dep['distribution']
+        missing = self.evaluate(dep=dep, policy=policy)
+        self.assertIn('license-obligation-missing', {item['code'] for item in missing['gaps']})
+
+    def test_ci_scope_is_not_approval_for_a_non_allowed_license(self) -> None:
+        policy = json.loads((ROOT / '.getzilla/config/license-policy.json').read_text(encoding='utf-8'))
+        dep = dependency(manifest='trust-ci/requirements-test.txt', usage='runtime-and-development')
+        del dep['distribution']
+        result = self.evaluate(dep=dep, policy=policy, payload=wheel(expression='MPL-2.0'))
+        self.assertEqual(result['status'], 'fail')
+        self.assertIn('license-policy-review', {gap['code'] for gap in result['gaps']})
+
     def test_known_license_with_exact_artifact_and_scope_has_local_integrity_pass(self) -> None:
         result = self.evaluate()
         self.assertEqual(result['status'], 'pass', result)
@@ -445,7 +483,7 @@ class PolicyTests(unittest.TestCase):
             subprocess.run(['git', '-C', str(root), 'remote', 'add', 'origin', 'https://github.com/customer/app.git'], check=True)
             target = root / '.getzilla/config/license-policy.json'
             target.parent.mkdir(parents=True)
-            target.write_text(json.dumps(POLICY))
+            target.write_bytes((ROOT / '.getzilla/config/license-policy.json').read_bytes())
             result = licenses.load_policy(root)
             self.assertIn('project', result.get('error', ''))
 

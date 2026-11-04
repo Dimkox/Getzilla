@@ -119,12 +119,59 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     return list(aliases)
 
 
+def _https_repository(value: Any) -> bool:
+    """Recognize a bounded repository identity without fetching or rewriting it."""
+    if not isinstance(value, str) or len(value) > 2048:
+        return False
+    match = re.fullmatch(
+        r'https://([a-zA-Z0-9.-]+)(?::([1-9][0-9]{0,4}))?((?:/[A-Za-z0-9._~-]+)*)', value)
+    if not match:
+        return False
+    host, port, path = match.groups()
+    return (len(host) <= 253 and all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+                                     for label in host.split('.'))
+            and (port is None or int(port) <= 65535)
+            and not any(segment in {'.', '..'} for segment in path.split('/')))
+
+
+def qualified_packagist(ecosystem: Any) -> bool:
+    """A custom repository is a member of the feed family, not the default registry."""
+    return (isinstance(ecosystem, str) and ecosystem.startswith('Packagist:')
+            and _https_repository(ecosystem.removeprefix('Packagist:')))
+
+
+def _git_supplement(item: dict) -> bool:
+    ranges, versions = item.get('ranges'), item.get('versions', [])
+    if (not isinstance(versions, list) or not all(isinstance(v, str) and v for v in versions)
+            or not isinstance(ranges, list) or not ranges):
+        return False
+    for span in ranges:
+        if not isinstance(span, dict) or span.get('type') != 'GIT' or not _https_repository(span.get('repo')):
+            return False
+        events = span.get('events')
+        if not isinstance(events, list) or not events:
+            return False
+        kinds = set()
+        for event in events:
+            if not isinstance(event, dict) or len(event) != 1:
+                return False
+            role, value = next(iter(event.items()))
+            if (role not in {'introduced', 'fixed', 'last_affected', 'limit'} or not isinstance(value, str)
+                    or not (role == 'introduced' and value == '0' or re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', value))):
+                return False
+            kinds.add(role)
+        if 'introduced' not in kinds or {'fixed', 'last_affected'} <= kinds:
+            return False
+    return True
+
+
 def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
     """Derive OSV archive coverage from every complete JSON member and CRC."""
     if ecosystem not in OSV_ECOSYSTEMS:
         raise SecurityDataError(f'unsupported OSV ecosystem: {ecosystem!r}')
     if not isinstance(payload, bytes) or not payload or len(payload) > MAX_PAYLOAD_BYTES:
         raise SecurityDataError('OSV snapshot payload is empty or exceeds the size limit')
+    current_member = current_id = None
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             members = archive.infolist()
@@ -134,6 +181,7 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
             record_ids = set()
             covered = False
             for member in members:
+                current_member, current_id = member.filename, None
                 name = PurePosixPath(member.filename)
                 if name.is_absolute() or '..' in name.parts or '\\' in member.filename or member.filename in names:
                     raise ValueError('unsafe or duplicate OSV archive member')
@@ -142,8 +190,13 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                     continue
                 if not member.filename.endswith('.json') or member.file_size > MAX_MEMBER_BYTES:
                     raise ValueError('OSV archive member is not bounded JSON')
-                record = _json(archive.read(member))
+                try:
+                    record = _json(archive.read(member))
+                except (OSError, ValueError, KeyError, UnicodeError, EOFError, RuntimeError,
+                        zipfile.BadZipFile, zlib.error):
+                    raise ValueError('cannot read complete valid OSV record JSON') from None
                 identifier = record.get('id')
+                current_id = identifier if isinstance(identifier, str) else None
                 if not isinstance(identifier, str) or not identifier.strip() or identifier in record_ids:
                     raise ValueError('OSV record requires a unique nonempty id')
                 record_ids.add(identifier)
@@ -158,8 +211,11 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                 affected = record.get('affected', [])
                 if not isinstance(affected, list) or (not affected and not record.get('withdrawn')):
                     raise ValueError('OSV record lacks affected package coverage')
-                matches = False
+                matches = default_match = named_evidence = supplement = False
                 for item in affected:
+                    if isinstance(item, dict) and 'package' not in item and _git_supplement(item):
+                        supplement = True
+                        continue
                     if not isinstance(item, dict) or not isinstance(item.get('package'), dict):
                         raise ValueError('malformed OSV affected package')
                     package = item['package']
@@ -172,14 +228,29 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('malformed OSV ranges')
                     if not versions and not ranges and not record.get('withdrawn'):
                         raise ValueError('OSV affected package has neither versions nor ranges')
-                    matches = matches or package['ecosystem'] == ecosystem
+                    exact = package['ecosystem'] == ecosystem
+                    family = exact or (ecosystem == 'Packagist' and qualified_packagist(package['ecosystem']))
+                    if package['ecosystem'].startswith('Packagist:') and not qualified_packagist(package['ecosystem']):
+                        raise ValueError('unsupported OSV Packagist registry identity')
+                    matches = matches or family
+                    default_match = default_match or exact
+                    if family and (versions or any(span.get('type') in ('ECOSYSTEM', 'SEMVER')
+                                                   and isinstance(span.get('events'), list)
+                                                   and any(isinstance(e, dict) and isinstance(e.get('introduced'), str)
+                                                           and e['introduced'] for e in span['events']) for span in ranges)):
+                        named_evidence = True
+                if supplement and not named_evidence:
+                    raise ValueError('supplementary Git row lacks named affected ecosystem coverage')
                 if not matches and not record.get('withdrawn'):
                     raise ValueError(f'OSV record has no {ecosystem} coverage')
-                covered = covered or matches
+                covered = covered or default_match
+            current_member = current_id = None
             if not record_ids or not covered:
                 raise ValueError(f'empty OSV archive or missing {ecosystem} coverage')
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, zlib.error, EOFError, RuntimeError) as exc:
-        raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}') from exc
+        location = ''.join(f' {label}_sha256={hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()}'
+                           for label, value in (('member', current_member), ('id', current_id)) if value is not None)
+        raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}{location}') from exc
     return {'scopes': [ecosystem], 'complete': True, 'record_count': len(record_ids), 'schema': 'osv-1'}
 
 

@@ -92,7 +92,7 @@ class DockerDouble:
             value = {"Id": identifier, "Name": "/" + name, "Image": IMAGE_ID,
                      "Config": {"Image": PIN, "Labels": labels}, "Mounts": mounts,
                      "State": {"Running": True}, "NetworkSettings": {"Networks": {}, "Ports": {}},
-                     "HostConfig": {"NetworkMode": "default", "PortBindings": {}}}
+                     "HostConfig": {"NetworkMode": "default", "PortBindings": {}, "AutoRemove": False}}
             if "--network" in args:
                 network_name = args[args.index("--network") + 1]
                 network = self.items["network"][network_name]
@@ -319,6 +319,61 @@ class IsolatedResourceTests(unittest.TestCase):
             with self.subTest(host=host, port=port):
                 self._preflight_case(host, port, expect_pass=False)
 
+    def test_result_dispatch_live_case_uses_the_real_bound_reader_before_mutation(self):
+        import inspect
+        from factory.tests import postgres_restart_probe as probe
+        from factory.tests import test_postgres_integration as live_case
+        module = self.module()
+
+        class BeforeMutation(RuntimeError):
+            pass
+
+        for valid_network in (True, False):
+            with self.subTest(valid_network=valid_network), tempfile.TemporaryDirectory() as raw:
+                docker = DockerDouble()
+                with patch.object(module.subprocess, "run", side_effect=docker):
+                    arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                if not valid_network:
+                    container["NetworkSettings"]["Networks"][network["Name"]]["NetworkID"] = "e" * 64
+
+                def boundary(command, **kwargs):
+                    if command[:2] == ["docker", "inspect"]:
+                        if "--format" in command:
+                            value = "\t".join((container["Id"], container["Name"], PIN, "true", arguments["nonce"], IMAGE_ID))
+                        else:
+                            value = json.dumps([container])
+                        return subprocess.CompletedProcess(command, 0, value, "")
+                    if command[:2] == ["docker", "exec"]:
+                        return subprocess.CompletedProcess(command, 0, "bound-cluster" if "psql" in command else "", "")
+                    return docker(command, **kwargs)
+
+                case = live_case.PostgresFactoryTests("test_result_dispatch_process_and_postgres_restart_observes_without_second_post")
+                case.submit = MagicMock(side_effect=BeforeMutation())
+                # This unit control executes only the actual live fixture's
+                # preflight; stop before submission, never bypass a live gate.
+                method = inspect.unwrap(type(case).test_result_dispatch_process_and_postgres_restart_observes_without_second_post)
+                environment = {"FACTORY_TEST_POSTGRES_CONTAINER_ID": arguments["container_id"],
+                               "FACTORY_TEST_POSTGRES_NONCE": arguments["nonce"],
+                               "FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                               "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"]}
+                connection = MagicMock()
+                connection.execute.return_value.fetchone.return_value = ("factory_exit", "factory_exit", 170_006, "bound-cluster")
+                with patch.object(module.subprocess, "run", side_effect=boundary), \
+                        patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                        patch.dict(os.environ, environment), \
+                        patch.object(live_case, "POSTGRES_CONTAINER", arguments["container_name"]), \
+                        patch.object(live_case, "DATABASE_URL", "postgresql://factory_exit:test-only@172.28.0.2:5432/factory_exit"), \
+                        patch("psycopg.connect") as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    with self.assertRaises(BeforeMutation if valid_network else ValueError):
+                        method(case)
+                    if valid_network:
+                        case.submit.assert_called_once()
+                        connect.assert_called_once()
+                    else:
+                        case.submit.assert_not_called()
+                        connect.assert_not_called()
+
     def test_restart_rechecks_live_network_and_container_before_waiting_for_database(self):
         from factory.tests import postgres_restart_probe as probe
         module = self.module()
@@ -420,6 +475,62 @@ class IsolatedResourceTests(unittest.TestCase):
                 with self.assertRaises(module.CleanupUnconfirmed):
                     owner.cleanup()
             self.assertEqual(docker.removed, [])
+
+    def test_reordered_identical_mounts_keep_ownership_and_allow_confirmed_cleanup(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                volume = owner.volume("deps")
+                item = owner.container("provision", PIN, volume=volume, volume_target="/deps",
+                                       bind={Path(raw): "/src"})
+                docker.items["container"][item["id"]]["Mounts"].reverse()
+                try:
+                    owner.cleanup()
+                except module.CleanupUnconfirmed as error:
+                    self.fail(f"the same mount set lost ownership solely through ordering: {error}")
+            self.assertEqual(owner.cleanup_status, "removed")
+            self.assertEqual(docker.items["container"], {})
+            self.assertEqual(docker.items["volume"], {})
+
+    def test_changed_mount_fields_and_duplicates_still_deny_removal_with_safe_diagnostics(self):
+        module = self.module()
+        sentinel = "private-mount-source-must-not-be-reported"
+        for field in ("Type", "Name", "Source", "Destination", "duplicate"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as raw:
+                owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+                docker = DockerDouble()
+                with patch.object(module.subprocess, "run", side_effect=docker):
+                    item = owner.container("provision", PIN, bind={Path(raw): "/src"})
+                    mounts = docker.items["container"][item["id"]]["Mounts"]
+                    if field == "duplicate":
+                        mounts.append(copy.deepcopy(mounts[0]))
+                    else:
+                        mounts[0][field] = sentinel
+                    with self.assertRaises(module.CleanupUnconfirmed):
+                        owner.cleanup()
+                self.assertNotIn(("container", item["id"]), docker.removed)
+                self.assertEqual(item.get("cleanup_mismatch_fields"), ["mounts"])
+                self.assertNotIn(sentinel, (Path(raw) / "owner.json").read_text(encoding="utf-8"))
+
+    def test_legacy_journal_mount_order_is_compared_without_mutating_its_binding(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+            docker = DockerDouble()
+            with patch.object(module.subprocess, "run", side_effect=docker):
+                volume = owner.volume("deps")
+                item = owner.container("provision", PIN, volume=volume, volume_target="/deps",
+                                       bind={Path(raw): "/src"})
+                item["identity"]["mounts"].reverse()
+                stored = copy.deepcopy(item["identity"])
+                try:
+                    owner.cleanup()
+                except module.CleanupUnconfirmed as error:
+                    self.fail(f"legacy journal ordering was treated as a changed mount: {error}")
+                self.assertEqual(item["identity"], stored)
+            self.assertEqual(owner.cleanup_status, "removed")
 
     def test_owned_container_volume_network_cleanup_is_idempotent_and_scoped(self):
         module = self.module()

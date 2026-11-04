@@ -149,6 +149,49 @@ class CollectTests(unittest.TestCase):
 
 
 class OfflineTests(unittest.TestCase):
+    def test_ecosystem_wildcard_evaluates_each_pinned_name_and_version(self):
+        def row(eco, package, introduced, fixed):
+            return {'package': {'name': package, 'ecosystem': eco}, 'ranges': [
+                {'type': 'SEMVER', 'events': [{'introduced': introduced}, {'fixed': fixed}]}]}
+
+        wildcard = {'id': 'OSV-WILDCARD', 'affected': [row('npm', '*', '0', '2.0.0')]}
+        foreign = {'id': 'OSV-OTHER', 'affected': [row('PyPI', '*', '0', '9.0.0'),
+                                                   row('npm', 'other', '0', '9.0.0')]}
+        deps = [KV.Dependency('npm', name, version, 'package-lock.json') for name, version in
+                [('first', '1.2.3'), ('second', '1.9.0'), ('first', '2.0.0')]]
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder)
+            _mirror(database, 'npm', [wildcard, foreign])
+            found = KV.query_offline(deps, database)
+            self.assertEqual([(f.dependency.name, f.dependency.version, f.vuln_id, f.fixed) for f in found],
+                             [('first', '1.2.3', 'OSV-WILDCARD', ['2.0.0']),
+                              ('second', '1.9.0', 'OSV-WILDCARD', ['2.0.0'])])
+            wildcard['affected'][0]['ranges'][0]['type'] = 'ECOSYSTEM'
+            _mirror(database, 'npm', [wildcard])
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range semantics'):
+                KV.query_offline(deps, database)
+
+    def test_qualified_registry_matching_needs_dependency_source_identity(self):
+        def record(identifier, ecosystem, name):
+            return {'id': identifier, 'affected': [{'package': {'name': name, 'ecosystem': ecosystem},
+                                                     'versions': ['1.0.0']}]}
+        default = record('DEFAULT', 'Packagist', 'other/package')
+        custom = record('CUSTOM', 'Packagist:https://packages.drupal.org/8', 'Drupal/Example')
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder)
+            _mirror(database, 'Packagist', [default, custom])
+            dep = KV.Dependency('Packagist', 'drupal/example', '1.0.0', 'composer.lock')
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
+                KV.query_offline([dep], database)
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
+                KV._describe(custom, dep)
+            dep = KV.Dependency('Packagist', 'other/package', '1.0.0', 'composer.lock')
+            self.assertEqual([finding.vuln_id for finding in KV.query_offline([dep], database)], ['DEFAULT'])
+            custom['affected'][0]['package']['name'] = '*'
+            _mirror(database, 'Packagist', [default, custom])
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
+                KV.query_offline([dep], database)
+
     def test_old_nonempty_legacy_archive_requires_refresh(self) -> None:
         tmp, root = _repo({'requirements.txt': 'safe-package==1.0\n'})
         with tmp, tempfile.TemporaryDirectory() as db:
@@ -322,6 +365,25 @@ class OfflineTests(unittest.TestCase):
 
 
 class OnlineTests(unittest.TestCase):
+    def test_online_batch_hit_describes_only_applicable_wildcard_rows(self):
+        def row(eco, introduced, fixed, severity):
+            return {'package': {'name': '*', 'ecosystem': eco}, 'ranges': [
+                {'type': 'SEMVER', 'events': [{'introduced': introduced}, {'fixed': fixed}]}],
+                'database_specific': {'severity': severity}}
+
+        record = {'id': 'OSV-WILDCARD', 'affected': [row('npm', '3.0.0', '4.0.0', 'LOW'),
+                  row('PyPI', '0', '6.0.0', 'LOW'), row('npm', '0', '2.0.0', 'HIGH')]}
+        def fetch(url, body):
+            value = {'results': [{'vulns': [{'id': record['id']}]}]} if body is not None else record
+            return json.dumps(value).encode()
+
+        dep = KV.Dependency('npm', 'first', '1.2.3', 'package-lock.json')
+        hit, = KV.query_online([dep], fetch=fetch)
+        self.assertEqual((hit.fixed, hit.severity), (['2.0.0'], 'HIGH'))
+        record['affected'][-1]['ranges'][0]['type'] = 'ECOSYSTEM'
+        with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range semantics'):
+            KV.query_online([dep], fetch=fetch)
+
     def test_online_batches_paginate_and_fetch_details(self) -> None:
         calls: list[tuple[str, dict | None]] = []
 

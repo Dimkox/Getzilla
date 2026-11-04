@@ -295,7 +295,8 @@ def mutation_block_reason(root: Path, event: dict[str, Any], *, execution_cwd: P
     if not gaps:
         return None
     # Clarification documents and report scratch remain editable through their ordinary guards.
-    normalized = [policy.safe_relative_path(root, target) for target in targets]
+    normalized = [policy.safe_relative_path(root, target) if tool == 'Bash' else
+                  policy._structured_relative_path(root, target, execution_cwd=execution_cwd) for target in targets]
     package = state.get_active_change(root) or {}
     clarification = {str(package.get('path', '')) + '/' + name for name in ('requirements.md', 'change-spec.yaml', 'test-plan.md', 'tasks.md')}
     technical = tuple('.getzilla/runtime/' + name + '/' for name in
