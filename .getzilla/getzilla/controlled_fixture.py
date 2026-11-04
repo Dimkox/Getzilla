@@ -21,6 +21,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from . import model_continuation_state as journal
+from . import fsx
 from .codex_continuation import TurnObserver
 from .model_continuation import load_policy
 
@@ -39,6 +40,95 @@ _ENV_KEYS = frozenset({'PATH', 'LANG', 'GPG_KEY', 'PYTHON_VERSION', 'PYTHON_SHA2
 
 class FixtureError(ValueError):
     """Fixed diagnostic; never include process output or filesystem paths."""
+
+    def __init__(self, reason, *, cleanup_context=None):
+        super().__init__(reason)
+        self.cleanup_context = cleanup_context
+
+
+def _directory_identity(path):
+    info = path.lstat()
+    if fsx.is_link(info) or not stat.S_ISDIR(info.st_mode):
+        raise OSError('private client directory identity is unavailable')
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid
+
+
+class _ClientContext:
+    """An in-memory ownership handle; losing it never deletes unknown resources."""
+
+    def __init__(self):
+        self.directory = Path(tempfile.mkdtemp(prefix='getzilla-docker-client-'))
+        self._identity = _directory_identity(self.directory)
+        self._parent_identity = _directory_identity(self.directory.parent)
+        self._clients = []
+        self._cleaned = False
+
+    @property
+    def processes(self):
+        return tuple(row['process'] for row in self._clients)
+
+    def register(self, process, argv):
+        self._clients.append({'process': process, 'pid': getattr(process, 'pid', None),
+                              'argv': tuple(argv), 'exit': None})
+
+    def _owned(self, process):
+        for row in self._clients:
+            try:
+                if (row['process'] is process and type(row['pid']) is int and row['pid'] > 0
+                        and process.pid == row['pid'] and tuple(process.args) == row['argv']):
+                    return row
+            except (AttributeError, TypeError):
+                return None
+        return None
+
+    def confirm_exit(self, process, *, stop=False):
+        row = self._owned(process)
+        if row is None:
+            return False
+        try:
+            if process.poll() is None:
+                if not stop:
+                    return False
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            code = process.wait(timeout=5 if stop else 0)
+            if (self._owned(process) is not row or type(code) is not int
+                    or process.returncode != code or process.poll() != code):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+        row['exit'] = code
+        return True
+
+    def _remove(self):
+        if any(row['exit'] is None or self._owned(row['process']) is not row for row in self._clients):
+            return False
+        if self._cleaned:
+            return not os.path.lexists(self.directory)
+        try:
+            if (_directory_identity(self.directory) != self._identity
+                    or _directory_identity(self.directory.parent) != self._parent_identity):
+                return False
+            shutil.rmtree(self.directory)
+            if os.path.lexists(self.directory):
+                return False
+        except OSError:
+            return False
+        self._cleaned = True
+        return True
+
+    def reconcile(self, processes):
+        """Release only this handle's exact reaped children and original directory."""
+        if (not isinstance(processes, tuple) or len(processes) != len(self._clients)
+                or any(process is not row['process'] for process, row in zip(processes, self._clients))):
+            return False
+        if self._cleaned:
+            return self._remove()
+        if not all(self.confirm_exit(process) for process in processes):
+            return False
+        return self._remove()
 
 
 def _pairs(pairs):
@@ -106,18 +196,21 @@ def _docker_client():
     if _DOCKER_CONFIG.get() is not None:
         yield
         return
-    with tempfile.TemporaryDirectory(prefix='getzilla-docker-client-') as directory:
-        token = _DOCKER_CONFIG.set(directory)
-        try:
-            yield
-        finally:
-            _DOCKER_CONFIG.reset(token)
+    context = _ClientContext()
+    token = _DOCKER_CONFIG.set(context)
+    try:
+        yield
+    finally:
+        _DOCKER_CONFIG.reset(token)
+        if not context._remove():
+            raise FixtureError('client_cleanup_unconfirmed', cleanup_context=context) from None
 
 
 def _docker_environment():
-    directory = _DOCKER_CONFIG.get()
-    if directory is None:
+    context = _DOCKER_CONFIG.get()
+    if context is None:
         raise FixtureError('container_unavailable')
+    directory = str(context.directory)
     return {'PATH': '/usr/bin:/bin', 'HOME': directory, 'DOCKER_CONFIG': directory}
 
 
@@ -142,10 +235,25 @@ def _command(args, timeout=60):
 
 def _docker_argv(args):
     # Ignore saved Docker contexts as well as endpoint environment selectors.
-    directory = _DOCKER_CONFIG.get()
-    if directory is None:
+    context = _DOCKER_CONFIG.get()
+    if context is None:
         raise FixtureError('container_unavailable')
-    return [args[0], '--config', directory, '--host', 'unix:///var/run/docker.sock', *args[1:]]
+    return [args[0], '--config', str(context.directory), '--host', 'unix:///var/run/docker.sock', *args[1:]]
+
+
+def _client_popen(args, **kwargs):
+    context = _DOCKER_CONFIG.get()
+    if context is None or len(context.processes) >= 2:
+        raise FixtureError('container_unavailable')
+    argv = _docker_argv(args)
+    process = subprocess.Popen(argv, env=_docker_environment(), **kwargs)
+    context.register(process, argv)
+    return process
+
+
+def _stop_client(process):
+    context = _DOCKER_CONFIG.get()
+    return context is not None and context.confirm_exit(process, stop=True)
 
 
 def _cpu_set():
@@ -503,9 +611,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         first = journal.consume_controlled_send(root, binding, 1, 1)
         if not first['claimed']:
             raise FixtureError('claim_denied')
-        process = subprocess.Popen(_docker_argv([docker, 'start', '-ai', container_id]), stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   env=_docker_environment(), bufsize=0)
+        process = _client_popen([docker, 'start', '-ai', container_id], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         lines = _Lines(process)
         if lines.read() != {'type': 'before_a', 'version': 1, 'nonce': nonce}:
             raise FixtureError('invalid_frame')
@@ -562,12 +669,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
     finally:
         if lines is not None:
             lines.close()
-        if process is not None and process.poll() is None:
-            process.kill()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                success = False
+        if process is not None and not _stop_client(process):
+            success = False
         if process is not None:
             for stream in (process.stdin, process.stdout):
                 if stream is not None:

@@ -359,8 +359,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             first = journal.consume_controlled_send(root, binding, 1, 1)
             if not first['claimed']:
                 raise fixture.FixtureError('claim_denied')
-            proc_a = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', a]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, env=fixture._docker_environment(), bufsize=0)
+            proc_a = fixture._client_popen([docker, 'start', '-ai', a], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, bufsize=0)
             processes.append(proc_a)
             preserve_volumes = True
             pipe_a = fixture._Lines(proc_a)
@@ -444,8 +444,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         second = journal.consume_controlled_send(root, binding, 2, reserved['revision'])
         if not second['claimed']:
             raise fixture.FixtureError('claim_denied')
-        proc_b = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', b]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, env=fixture._docker_environment(), bufsize=0)
+        proc_b = fixture._client_popen([docker, 'start', '-ai', b], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, bufsize=0)
         processes.append(proc_b)
         pipe_b = fixture._Lines(proc_b)
         lines.append(pipe_b)
@@ -488,15 +488,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             except OSError:
                 cleanup_failed = True
         for process in processes:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    cleanup_failed = True
+            if not fixture._stop_client(process):
+                cleanup_failed = True
             for stream in (process.stdin, process.stdout):
                 if stream is not None:
                     try:
