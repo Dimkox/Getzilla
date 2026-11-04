@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from getzilla.security_cli import REQUIRED_CHECKS, finalize_report
+from getzilla.security_licenses import ALLOWED, _select_expression
 from getzilla.expanded_security import CHECK_FAMILIES
 from getzilla.security_data import SOURCE_URLS
 
@@ -93,6 +94,69 @@ class SecurityCliTests(unittest.TestCase):
                     'notice_files':[],'obligations':'internal use; license evidence retained'}]
                 result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
                 self.assertEqual(result['status'],want,result['qualification_gaps'])
+
+    def test_not_applicable_accepted_requires_an_empty_list_or_absence(self):
+        for accepted in (False, True, None, 0, '', 'accepted', {}, {'id': 'OSV-example'},
+                         (), set(), [[]], [False], [self.accepted('2026-11-04')], []):
+            with self.subTest(accepted=accepted):
+                source, checks = self.report()
+                check = next(c for c in checks if c['name'] == 'known-vulnerabilities')
+                check['status'] = 'skip'
+                detail = check['details'][0]
+                detail.update(outcome='not_applicable', data_sources=[], accepted=accepted,
+                    applicability_evidence={'complete': True, 'inventory_sha256': 'e'*64,
+                                            'reason': 'complete-inventory-no-objects'})
+                result = finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)
+                self.assertEqual(result['status'], 'pass' if accepted == [] else 'fail')
+                if accepted != []:
+                    self.assertIsNone(result['valid_until_utc'])
+                    self.assertTrue(result['qualification_gaps'])
+        detail.pop('accepted')
+        self.assertEqual(finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)['status'], 'pass')
+
+    def test_selected_license_can_prove_overlapping_original_alternatives(self):
+        cases = [
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND BSD-2-Clause', 'pass'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0 AND MIT', 'pass'),
+            ('(MIT OR BSD-2-Clause) AND (MIT OR Apache-2.0)', 'BSD-2-Clause AND MIT', 'pass'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT', 'pass'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0 AND BSD-2-Clause', 'pass'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND Apache-2.0 AND BSD-2-Clause', 'fail'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0', 'fail'),
+            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND ISC', 'fail'),
+            ('(MIT OR Apache-2.0) AND (GPL-3.0-only OR BSD-2-Clause)', 'MIT AND BSD-2-Clause', 'pass'),
+            ('(MIT OR Apache-2.0) AND GPL-3.0-only', 'MIT', 'fail'),
+            ('(MIT OR Apache-2.0) AND (MIT OR LicenseRef-custom)', 'MIT', 'fail'),
+            ('(MIT OR Apache-2.0) AND (MIT OR unknown-license)', 'MIT', 'fail'),
+            ('(MIT OR Apache-2.0) AND (MIT OR Apache-2.0 WITH LLVM-exception)', 'MIT', 'fail'),
+        ]
+        for expression, selected, expected in cases:
+            with self.subTest(expression=expression, selected=selected):
+                source, checks = self.report()
+                detail = next(c['details'][0] for c in checks if c['name'] == 'security-licenses')
+                detail['findings'] = [{'ecosystem': 'PyPI', 'package': 'example', 'version': '1.0.0',
+                    'manifest': 'requirements.txt', 'status': 'pass', 'expression': expression,
+                    'selected_expression': selected, 'distribution': 'internal', 'artifact_sha256': 'a'*64,
+                    'origin': {}, 'license_files': [{'path': 'LICENSE', 'sha256': 'b'*64}],
+                    'notice_files': [], 'obligations': 'internal use; license evidence retained'}]
+                result = finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)
+                self.assertEqual(result['status'], expected, result['qualification_gaps'])
+
+    def test_exact_license_proof_remains_bounded_by_policy_and_parser_limits(self):
+        group = '(' + ' OR '.join(ALLOWED) + ')'
+        expression = ' AND '.join([group] * 18)  # 251 tokens, with exponentially many raw branches.
+        selected, identifiers = _select_expression(expression, list(ALLOWED), require_all=True)
+        self.assertEqual(selected, list(ALLOWED))
+        self.assertEqual(identifiers, set(ALLOWED))
+        for expression, allowed in (
+                (' AND '.join([group] * 19), list(ALLOWED)),
+                ('('*33 + 'MIT' + ')'*33, ['MIT']),
+                ('MIT' + ' '*4096, ['MIT']),
+                ('MIT', list(ALLOWED) + ['GPL-3.0-only']),
+                ('MIT', ['GPL-3.0-only']),
+                ('MIT', [])):
+            with self.subTest(expression=expression[:80], allowed=allowed), self.assertRaises(ValueError):
+                _select_expression(expression, allowed, require_all=True)
 
     def test_accepted_exception_validity_stops_at_the_inclusive_utc_date_boundary(self):
         source,checks=self.report()

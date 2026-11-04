@@ -151,7 +151,7 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
                 return False
             try:
                 selected, _ = _select_expression(finding['selected_expression'], list(ALLOWED))
-                chosen, _ = _select_expression(finding['expression'], selected)
+                chosen, _ = _select_expression(finding['expression'], selected, require_all=True)
                 if (finding['selected_expression'] != ' AND '.join(selected)
                         or set(chosen) != set(selected)):
                     return False
@@ -181,7 +181,8 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
             or detail['gaps']):
         return False
     if detail['outcome'] == 'not_applicable':
-        return not detail['findings'] and not detail['data_sources'] and not detail.get('accepted')
+        return (not detail['findings'] and not detail['data_sources']
+                and isinstance(detail.get('accepted', []), list) and not detail.get('accepted'))
     if ('applicability_evidence' in detail or detail['outcome'] != 'pass'
             or not _findings_consistent(name, detail, current)):
         return False

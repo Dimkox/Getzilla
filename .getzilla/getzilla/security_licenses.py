@@ -150,7 +150,7 @@ def attach_factory_offline_intent(check: dict, intent: dict | None) -> None:
                                                        'final_archive_evidence': 'not_evaluated'}
 
 
-def _select_expression(expression: str, allowed: list[str]) -> tuple[list[str], set[str]]:
+def _select_expression(expression: str, allowed: list[str], *, require_all: bool = False) -> tuple[list[str], set[str]]:
     if not isinstance(expression, str) or not expression.strip() or len(expression) > 4096 or '\n' in expression:
         raise ArtifactError('license-unknown', 'artifact lacks one exact SPDX expression')
     lexeme_pattern = r'[A-Za-z0-9][A-Za-z0-9.+:-]*|[()]'
@@ -201,6 +201,25 @@ def _select_expression(expression: str, allowed: list[str]) -> tuple[list[str], 
     tree = disjunction(0)
     if offset != len(lexemes):
         raise ArtifactError('license-unknown', 'malformed SPDX expression')
+
+    if require_all:
+        # Report selections contain at most the six policy-allowed identifiers.
+        # Each subtree has at most 2**6 union masks, regardless of OR branch count.
+        if not allowed or len(allowed) > len(ALLOWED) or not set(allowed) <= set(ALLOWED):
+            raise ArtifactError('license-policy-review', 'exact branch proof requires bounded allowed identifiers')
+        positions = {name: 1 << index for index, name in enumerate(dict.fromkeys(allowed))}
+
+        def masks(node):
+            if node[0] == 'id':
+                return {positions[node[1]]} if node[1] in positions else set()
+            left, right = masks(node[1]), masks(node[2])
+            if node[0] == 'OR':
+                return left | right
+            return {a | b for a in left for b in right}
+
+        if (1 << len(positions)) - 1 not in masks(tree):
+            raise ArtifactError('license-policy-review', 'selected licenses do not match one complete original branch')
+        return list(positions), identifiers
 
     def choose(node):
         if node[0] == 'id':
