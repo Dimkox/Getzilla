@@ -620,6 +620,8 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                                for path, content, mode in changes})
         for path, (content, mode) in expected_files.items():
             snapshot = transaction.read(path)
+            if path in retained_ignored and snapshot != observations[path]:
+                raise UpdateError(f'retained ignored file changed after checkout: {path}')
             if ((content is None and snapshot is not None)
                     or (content is not None and (snapshot is None or snapshot.content != content
                                                 or not mode_matches(snapshot.mode, mode)))):

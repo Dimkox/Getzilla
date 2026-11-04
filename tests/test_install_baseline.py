@@ -205,6 +205,78 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.assertEqual((self.project/anchors[0]).read_bytes(), b'# concurrent user edit\n')
         self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
 
+    def retained_anchor_replacement(self, phase):
+        anchors, sentinel = self.stock_ignored_runtime()
+        target = self.project/anchors[0]
+        original = target.stat()
+        content = target.read_bytes()
+        replacements = []
+
+        def replace():
+            incoming = target.with_name('foreign-replacement')
+            incoming.write_bytes(content)
+            incoming.chmod(original.st_mode & 0o777)
+            incoming.replace(target)
+            replacements.append(target.stat())
+
+        real_plan, real_commit, real_git = upgrade.planned_changes, upgrade.commit_changes, upgrade.git
+
+        def planned(*args, **kwargs):
+            result = real_plan(*args, **kwargs)
+            if phase == 'planning':
+                replace()
+            return result
+
+        def committed(*args, **kwargs):
+            result = real_commit(*args, **kwargs)
+            if phase == 'commit':
+                replace()
+            return result
+
+        def switched(project, *args, **kwargs):
+            result = real_git(project, *args, **kwargs)
+            if phase == 'checkout' and args[0] == 'switch' and result.returncode == 0:
+                replace()
+            return result
+
+        message = 'retained.*update incomplete after checkout' if phase == 'checkout' else 'changed during the update'
+        with mock.patch.object(upgrade, 'planned_changes', side_effect=planned), \
+                mock.patch.object(upgrade, 'commit_changes', side_effect=committed), \
+                mock.patch.object(upgrade, 'git', side_effect=switched):
+            with self.assertRaisesRegex(upgrade.UpdateError, message):
+                self.update()
+        self.assertEqual(len(replacements), 1)
+        replacement = replacements[0]
+        self.assertNotEqual((original.st_dev, original.st_ino), (replacement.st_dev, replacement.st_ino))
+        self.assertEqual((target.stat().st_dev, target.stat().st_ino), (replacement.st_dev, replacement.st_ino))
+        self.assertEqual(target.read_bytes(), content)
+        self.assertEqual(target.stat().st_mode, original.st_mode)
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+        self.assertEqual(self.git('rev-parse', 'main'), self.before)
+        if phase == 'checkout':
+            branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
+            recovery = self.git('rev-parse', branch)
+            self.assertEqual(self.git('branch', '--show-current'), branch)
+            self.assertEqual(self.git('rev-parse', 'HEAD'), recovery)
+            self.assertNotEqual(recovery, self.before)
+            self.assertEqual(self.git('status', '--porcelain'), '')
+            self.git('switch', '--quiet', 'main')
+            self.assertEqual(self.git('rev-parse', branch), recovery)
+            self.assertEqual((target.stat().st_dev, target.stat().st_ino), (replacement.st_dev, replacement.st_ino))
+            self.assertEqual(target.read_bytes(), content)
+            self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+        else:
+            self.assertEqual(self.git('branch', '--list'), '* main')
+
+    def test_retained_anchor_fresh_inode_after_planning_refuses_before_publication(self):
+        self.retained_anchor_replacement('planning')
+
+    def test_retained_anchor_fresh_inode_after_private_commit_refuses_before_publication(self):
+        self.retained_anchor_replacement('commit')
+
+    def test_retained_anchor_fresh_inode_during_checkout_reports_recovery_branch(self):
+        self.retained_anchor_replacement('checkout')
+
     @unittest.skipIf(os.name == 'nt', 'POSIX link and mode controls')
     def test_ignored_runtime_anchor_link_directory_and_mode_refuse(self):
         anchors, sentinel = self.stock_ignored_runtime()
@@ -422,4 +494,3 @@ class HistoricalUpgradeTests(unittest.TestCase):
                     upgrade.main(args)
                 self.assertEqual(caught.exception.code, 2)
             self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
-
