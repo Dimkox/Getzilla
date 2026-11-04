@@ -80,4 +80,3 @@ class FactorySourceHistoryTests(unittest.TestCase):
         self.assertEqual(published['artifact']['binding'], 'immutable_release_tag')
         self.assertEqual(published['merge_commit'], '8599d45f4f28285381b05a53feb3059de92eb2a8')
         self.assertEqual(published['tree'], '03e122a30fb2dbb59907f4c4c28e17f93cbf0751')
-

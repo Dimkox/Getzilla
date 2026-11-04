@@ -252,6 +252,10 @@ def _capture(job: Job, directory: fsx.DirHandle, cwd: Path, quota: int, timeout:
             try:
                 while not stop_reader.is_set():
                     chunk = process.stdout.read(CHUNK_BYTES)
+                    if type(chunk) is not bytes:
+                        raise OSError('output read returned non-byte payload')
+                    if len(chunk) > CHUNK_BYTES:
+                        raise OSError('output read exceeded chunk bound')
                     if not chunk:
                         return
                     while not stop_reader.is_set():

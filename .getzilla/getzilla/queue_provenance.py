@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import math
 from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
@@ -44,6 +45,309 @@ _CONTAINER_MUTATORS = {
     "update",
 }
 MAX_DOTTED_IMPORT_DEPTH = 256
+
+
+def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
+    """Remove only proven bounded, non-escaping stdlib byte-channel operations.
+
+    This is a source projection, not a path exception. Unknown constructors,
+    payloads, capacities, aliases, closures and operations retain queue policy.
+    Arguments stay in the tree so nested external dispatch is still analysed.
+    Repository-aware callers must first rule out a local ``queue`` module.
+    """
+    imports = [node for node in getattr(tree, 'body', ())
+               if isinstance(node, ast.ImportFrom) and node.module == 'queue' and not node.level]
+    if len(imports) != 1 or any(item.name not in {'Queue', 'Empty', 'Full'} for item in imports[0].names):
+        return tree
+    factories = {item.asname or item.name for item in imports[0].names if item.name == 'Queue'}
+    if not factories:
+        return tree
+    nodes = list(ast.walk(tree))
+    if len(nodes) > 16384:
+        return tree
+    instrumentation = {'unittest', 'mock', 'pytest', '_pytest'}
+    if any(isinstance(node, ast.Import) and any(item.name.split('.')[0] in instrumentation for item in node.names)
+           or isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] in instrumentation
+           for node in nodes):
+        return tree
+    if any(isinstance(node, ast.ImportFrom) and any(item.name == '*' for item in node.names) for node in nodes):
+        return tree
+    if any(isinstance(node, ast.ImportFrom) and node.module == 'sys'
+           and any(item.name == 'modules' for item in node.names) for node in nodes):
+        return tree
+    if any(isinstance(node, ast.Attribute) and node.attr in {
+            '__dict__', '__class__', '__bases__', '__globals__', '__code__',
+            '__import__', 'import_module', 'modules'}
+           or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+           and node.id in {'globals', 'locals', 'vars', 'exec', 'eval', '__builtins__', '__import__', 'setattr', 'delattr'}
+           or isinstance(node, ast.ImportFrom) and any(
+               item.name in {'__import__', 'import_module'} for item in node.names)
+           for node in nodes):
+        return tree
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    module_roots = {item.asname or item.name for node in nodes if isinstance(node, ast.Import)
+                    for item in node.names if item.name in {'queue', 'threading', 'builtins'}}
+    for node in nodes:
+        if not isinstance(node, ast.Name) or node.id not in module_roots or not isinstance(node.ctx, ast.Load):
+            continue
+        access = parents.get(node)
+        if not isinstance(access, ast.Attribute):
+            return tree
+        while isinstance(parents.get(access), ast.Attribute):
+            access = parents[access]
+        if (not isinstance(access.ctx, ast.Load) or not isinstance(parents.get(access), ast.Call)
+                or parents[access].func is not access):
+            return tree
+    rebound = {node.id for node in nodes if isinstance(node, ast.Name)
+               and isinstance(node.ctx, (ast.Store, ast.Del))}
+    rebound.update(node.arg for node in nodes if isinstance(node, ast.arg))
+    rebound.update(node.name for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    imported = []
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            imported.extend(item.asname or item.name.split('.')[0] for item in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.extend(item.asname or item.name for item in node.names)
+    rebound.update(name for name in imported if imported.count(name) != 1)
+    if factories & rebound:
+        return tree
+    constants = {target.id: node.value for node in getattr(tree, 'body', ()) if isinstance(node, ast.Assign)
+                 for target in node.targets if isinstance(target, ast.Name)}
+    constants = {name: value for name, value in constants.items()
+                 if sum(isinstance(node, ast.Name) and node.id == name
+                        and isinstance(node.ctx, (ast.Store, ast.Del)) for node in nodes) == 1
+                 and not any(isinstance(node, ast.arg) and node.arg == name for node in nodes)}
+    guard_builtins = {'type', 'bytes', 'len', 'OSError'}
+    guards_unshadowed = not (guard_builtins & (rebound | set(imported)))
+
+    def positive(node):
+        if isinstance(node, ast.Name):
+            node = constants.get(node.id)
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float) and 0 < node.value <= 1048576:
+            return node.value
+        return None
+
+    def enclosing(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                                 ast.Lambda, ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp)):
+                return node
+        return None
+
+    def stable_assignment(reference):
+        """Resolve one lexical assignment; unknown or replaced bytes stay governed."""
+        current = enclosing(reference)
+        while current is not None:
+            bindings = [item for item in nodes if isinstance(item, ast.Name) and item.id == reference.id
+                        and isinstance(item.ctx, (ast.Store, ast.Del)) and enclosing(item) is current]
+            if any((isinstance(item, ast.arg) and item.arg == reference.id
+                    or isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and item.name == reference.id) and enclosing(item) is current for item in nodes):
+                return None
+            if bindings:
+                assignment = parents.get(bindings[0])
+                return assignment.value if (len(bindings) == 1 and isinstance(assignment, ast.Assign)
+                                            and len(assignment.targets) == 1 and assignment.targets[0] is bindings[0]) else None
+            current = enclosing(current)
+        return None
+
+    def guarded_byte_size(reference, operation):
+        """Recognise only consecutive rejecting guards which dominate enqueue.
+
+        The producer is opaque. Only the exact immutable byte value admitted to
+        this local channel is bounded; no producer allocation bound is inferred.
+        """
+        if not guards_unshadowed:
+            return None
+        value = stable_assignment(reference)
+        assignment = parents.get(value)
+        if not isinstance(assignment, ast.Assign):
+            return None
+        block = parents.get(assignment)
+        statements = next((items for _field, items in ast.iter_fields(block)
+                           if isinstance(items, list) and assignment in items), ()) if block is not None else ()
+        index = statements.index(assignment) if assignment in statements else -1
+        if index < 0 or index + 2 >= len(statements):
+            return None
+        type_guard, size_guard = statements[index + 1:index + 3]
+
+        def rejects(statement):
+            if not isinstance(statement, ast.If) or statement.orelse or len(statement.body) != 1:
+                return False
+            refusal = statement.body[0]
+            error = refusal.exc if isinstance(refusal, ast.Raise) and refusal.cause is None else None
+            return (isinstance(error, ast.Call) and isinstance(error.func, ast.Name) and error.func.id == 'OSError'
+                    and len(error.args) == 1 and not error.keywords
+                    and isinstance(error.args[0], ast.Constant) and isinstance(error.args[0].value, str))
+
+        def checks(statement, builtin, comparison):
+            if not rejects(statement) or not isinstance(statement.test, ast.Compare):
+                return False
+            test = statement.test
+            return (len(test.ops) == len(test.comparators) == 1 and isinstance(test.ops[0], comparison)
+                    and isinstance(test.left, ast.Call) and isinstance(test.left.func, ast.Name)
+                    and test.left.func.id == builtin and not test.left.keywords and len(test.left.args) == 1
+                    and isinstance(test.left.args[0], ast.Name) and test.left.args[0].id == reference.id)
+
+        if (not checks(type_guard, 'type', ast.IsNot)
+                or not isinstance(type_guard.test.comparators[0], ast.Name)
+                or type_guard.test.comparators[0].id != 'bytes'
+                or not checks(size_guard, 'len', ast.Gt)):
+            return None
+        size = positive(size_guard.test.comparators[0])
+        if type(size) is not int:
+            return None
+        if any(isinstance(item, (ast.Global, ast.Nonlocal)) and reference.id in item.names for item in nodes):
+            return None
+        admitted = operation
+        while admitted in parents and parents[admitted] is not block:
+            admitted = parents[admitted]
+        if admitted not in statements[index + 3:]:
+            return None
+        return size
+
+    constructors, calls = set(), set()
+    for node in nodes:
+        if not isinstance(node, ast.Name) or node.id not in factories or not isinstance(node.ctx, ast.Load):
+            continue
+        call = parents.get(node)
+        if (isinstance(call, ast.Subscript) and call.value is node
+                and isinstance(parents.get(call), ast.AnnAssign) and parents[call].annotation is call):
+            continue
+        assignment = parents.get(call)
+        if (not isinstance(call, ast.Call) or call.func is not node or call.args
+                or len(call.keywords) != 1 or call.keywords[0].arg != 'maxsize'
+                or not isinstance(call.keywords[0].value, ast.Constant)
+                or type(call.keywords[0].value.value) is not int or not 1 <= call.keywords[0].value.value <= 65536):
+            return tree
+        targets = assignment.targets if isinstance(assignment, ast.Assign) else (
+            [assignment.target] if isinstance(assignment, ast.AnnAssign) else [])
+        owner = enclosing(assignment)
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name) or not isinstance(owner, ast.FunctionDef):
+            return tree
+        name = targets[0].id
+        scope = list(ast.walk(owner))
+        if (sum(isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, (ast.Store, ast.Del))
+                for item in scope) != 1 or any(isinstance(item, ast.arg) and item.arg == name for item in scope)
+                or any(isinstance(item, (ast.Global, ast.Nonlocal)) and name in item.names for item in scope)
+                or any(isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+                       and item.func.id in {'eval', 'exec', 'locals', 'globals', 'vars'} for item in scope)):
+            return tree
+        def byte_size(value, operation):
+            if isinstance(value, ast.Constant) and isinstance(value.value, bytes):
+                return max(1, len(value.value))
+            if isinstance(value, ast.Name):
+                return guarded_byte_size(value, operation)
+            return None
+
+        nested = set()
+        puts = 0
+        for use in scope:
+            if not isinstance(use, ast.Name) or use.id != name or not isinstance(use.ctx, ast.Load):
+                continue
+            attribute = parents.get(use)
+            operation = parents.get(attribute)
+            if (not isinstance(attribute, ast.Attribute) or not isinstance(operation, ast.Call)
+                    or operation.func is not attribute or attribute.attr not in {'put', 'get', 'empty', 'full', 'qsize'}):
+                return tree
+            if attribute.attr in {'put', 'get'}:
+                if (len(operation.args) != (1 if attribute.attr == 'put' else 0)
+                        or len(operation.keywords) != 1 or operation.keywords[0].arg != 'timeout'
+                        or positive(operation.keywords[0].value) is None):
+                    return tree
+                if attribute.attr == 'put':
+                    size = byte_size(operation.args[0], operation)
+                    if size is None or size * call.keywords[0].value.value > 64 * 1024 * 1024:
+                        return tree
+                    puts += 1
+            elif operation.args or operation.keywords:
+                return tree
+            calls.add(attribute)
+            function = enclosing(use)
+            while function is not owner:
+                if not isinstance(function, ast.FunctionDef):
+                    return tree
+                nested.add(function)
+                function = enclosing(function)
+        if not puts:
+            return tree
+        # Captured channels may reach a local thread, never an exported callback.
+        thread_names = {item.asname or item.name for statement in getattr(tree, 'body', ())
+                        if isinstance(statement, ast.ImportFrom) and statement.module == 'threading' and not statement.level
+                        for item in statement.names if item.name == 'Thread'}
+        thread_names -= rebound
+        for item in nodes:
+            if isinstance(item, ast.Name) and item.id in thread_names and isinstance(item.ctx, ast.Load):
+                parent = parents.get(item)
+                if not isinstance(parent, ast.Call) or parent.func is not item:
+                    return tree
+        for function in nested:
+            if any(isinstance(item, (ast.Global, ast.Nonlocal)) and function.name in item.names for item in scope):
+                return tree
+            for use in scope:
+                if not isinstance(use, ast.Name) or use.id != function.name or not isinstance(use.ctx, ast.Load):
+                    continue
+                parent = parents.get(use)
+                if isinstance(parent, ast.Call) and parent.func is use and enclosing(use) is owner:
+                    continue
+                thread = parents.get(parent)
+                if (isinstance(parent, ast.keyword) and parent.arg == 'target' and isinstance(thread, ast.Call)
+                        and isinstance(thread.func, ast.Name) and thread.func.id in thread_names
+                        and enclosing(thread) is owner):
+                    allocation = parents.get(thread)
+                    if (not isinstance(allocation, ast.Assign) or len(allocation.targets) != 1
+                            or not isinstance(allocation.targets[0], ast.Name)):
+                        return tree
+                    thread_name = allocation.targets[0].id
+                    if any(isinstance(item, (ast.Global, ast.Nonlocal)) and thread_name in item.names for item in scope):
+                        return tree
+                    if sum(isinstance(item, ast.Name) and item.id == thread_name
+                           and isinstance(item.ctx, (ast.Store, ast.Del)) for item in scope) != 1:
+                        return tree
+                    for item in scope:
+                        if not isinstance(item, ast.Name) or item.id != thread_name or not isinstance(item.ctx, ast.Load):
+                            continue
+                        if enclosing(item) is not owner:
+                            return tree
+                        access = parents.get(item)
+                        operation = parents.get(access)
+                        if (not isinstance(access, ast.Attribute) or not isinstance(access.ctx, ast.Load)
+                                or access.attr not in {'start', 'join', 'is_alive', 'ident'}):
+                            return tree
+                        if access.attr != 'ident' and (not isinstance(operation, ast.Call) or operation.func is not access):
+                            return tree
+                    continue
+                return tree
+        constructors.add(call)
+        if len(constructors) > 32:
+            return tree
+    if not constructors:
+        return tree
+    replaced = {id(node) for node in constructors | calls}
+
+    # The caller's AST and source inventory remain immutable.
+    return _project_channel_tree(tree, imports[0], replaced)
+
+
+def _project_channel_tree(tree: ast.AST, imported: ast.AST, replaced: set[int]) -> ast.AST:
+    memo = {}
+    result = copy.deepcopy(tree, memo)
+    selected = {id(memo[value]) for value in replaced}
+    selected_import = memo[id(imported)]
+
+    class Project(ast.NodeTransformer):
+        def visit_ImportFrom(self, node):
+            return ast.Pass() if node is selected_import else self.generic_visit(node)
+
+        def visit_Call(self, node):
+            replace = id(node) in selected or id(node.func) in selected
+            self.generic_visit(node)
+            if replace:
+                node.func = ast.Name(id='__getzilla_local_byte_channel', ctx=ast.Load())
+            return node
+
+    return Project().visit(result)
 
 
 def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
@@ -1218,5 +1522,8 @@ def analyze_queue_tree(
     statement_limit: int = 4096,
     value_limit: int = 4096,
     loop_limit: int = 8,
+    allow_local_ipc: bool = True,
 ) -> QueueTreeAnalysis:
+    if allow_local_ipc:
+        tree = local_byte_channel_projection(tree)
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
