@@ -279,3 +279,13 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mode & 0o777, p.stat().st_ino)
                                   for p in destination.iterdir()})
         self.assertFalse((self.root / '.agents').exists())
+
+    def test_malformed_completion_record_cannot_reuse_python_boolean_integer_equality(self):
+        self.grant()
+        self.install()
+        path = self.root / '.getzilla/runtime/skill-publications/example.json'
+        record = json.loads(path.read_bytes())
+        record['schema_version'] = True
+        path.write_bytes(encoded(record))
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()

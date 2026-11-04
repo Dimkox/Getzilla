@@ -13,7 +13,7 @@ from .component_state import BoundRoot, component_transaction, mode_matches, pat
 from .continuity import has_task_context
 from .policy import evaluate_pre_tool
 from .skill_preflight import (CATALOG_PATH, DESCRIPTOR, MAX_DESCRIPTOR_BYTES, MAX_SKILLS,
-                              MAX_TOTAL_BYTES, SkillSnapshot, assess, canonical, digest, parse_json, read_snapshot)
+                              MAX_TOTAL_BYTES, SkillSnapshot, assess, canonical, digest, read_snapshot)
 from .skill_preflight import native_contract
 
 
@@ -154,7 +154,7 @@ def install_external(root: Path, relative: str) -> dict:
         expected_record = {'schema_version': 1, 'status': 'complete', 'snapshot_digest': snapshot.digest,
                            'descriptor_digest': digest(descriptor)}
         if diagnostic is not None:
-            if parse_json(diagnostic.content, limit=4096) != expected_record or not mode_matches(diagnostic.mode, 0o600):
+            if diagnostic.content != canonical(expected_record) or not mode_matches(diagnostic.mode, 0o600):
                 raise ValueError('PUBLICATION_REQUIRES_INSPECTION')
         present = transaction.files(destination, recursive=True)
         allowed = {destination + '/' + name for name, _ in payload}

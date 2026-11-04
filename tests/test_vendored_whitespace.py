@@ -267,3 +267,13 @@ class VendoredWhitespaceTests(unittest.TestCase):
             Dispositions(self.root)
         self.git('update-index', '--no-assume-unchanged', '--', PROOF)
         self.assertIsNotNone(Dispositions(self.root))
+
+    def test_a_second_unlisted_finding_in_the_same_pinned_blob_stays_blocking(self):
+        self.vendor(b'reviewed upstream line \nsecond unlisted line \n')
+        self.commit()
+        result = self.range_check()
+        self.assertEqual(result.status, 'fail', result.to_dict())
+        summary = self.summary(result)
+        self.assertEqual((summary['observed'], summary['disposed']), (2, 1))
+        self.assertTrue(any(item.get('observation') and item.get('line') == 2
+                            and item['effective_severity'] == 'error' for item in result.details))
