@@ -110,6 +110,42 @@ or redistribution for each applicable usage group; an empty mapping blocks an
 automatic decision. Redistributed artifacts require evidence of retained terms
 and notices. Dev tools with other licenses are reviewed, not categorically banned.
 
+Artifact acquisition and receipt consumption preserve multiple targets for the
+same package version. An artifact identity binds ecosystem, name, version,
+filename (including platform and ABI), SHA-256, saved registry URLs/index digest,
+and its exact `context`. Acquisition copies `manifest`, `usage`, `distribution`,
+`delivery_context` and `delivery_kind` from the observed dependency into that
+context. Optional `artifact_filename`, `artifact_sha256` and `artifact_source`
+(the registry artifact URL) select one exact source. Ambiguous targets fail.
+Transitive coverage stays within the same named `delivery_context`.
+
+Use separate context names for the standalone Factory wheel, its offline
+archive and each Trust CI target. `delivery_kind=installed-package` describes
+internal installation. `unchanged-artifact` can qualify a named redistributed
+wheel only when its `redistributed_path` retains the exact original bytes.
+`factory-offline-archive` requires actual final output evidence; retaining an
+input wheel cannot qualify this output. Legacy unnamed wheel evidence remains
+limited to its original unchanged-artifact claim.
+
+The artifact manifest's optional `deliveries` list supplies offline evidence.
+Each record contains `context`, `kind=factory-offline-archive`,
+`profile=ubuntu-24.04-x86_64-cpython312`, archive `path` and `sha256`,
+`manifest_path` and `manifest_sha256`, `sidecar_path`, and `components`.
+Each component names the exact source `artifact_id` returned by
+`security_artifacts.artifact_identity(record)` and `prefix=site-packages/`.
+The verifier reads the actual ZIP, detached Factory member manifest and the
+builder's two-line checksum file. It compares every extracted wheel member
+against its source bytes, including all license and notice files. Missing,
+changed, extra, colliding or unlisted components fail even when an output's
+checksums were renewed. Native source wheels must use CPython 3.12 and the
+current profile's manylinux2014/manylinux_2_17 x86_64 tags; universal wheels
+remain supported. Final receipt consumption rechecks these output bytes.
+
+This adapter establishes local artifact integrity for the named archive only.
+It does not approve another installed package, tool, Action, image, production
+delivery or an unsupported license. Those classes retain their explicit gaps.
+It does not change the six-license policy or renew the catalog's 72-hour age.
+
 PyPI acquisition stores the registry JSON and selected exact archive without
 installing or executing it. Direct pins do not prove transitive completeness.
 Unknown conditional dependency markers and uncovered tools/images remain gaps.

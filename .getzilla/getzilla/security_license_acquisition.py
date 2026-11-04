@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .manifest import ManifestError, _open_root
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES,
-                                 allowed_download_url, archive_files, package_key,
+                                 allowed_download_url, archive_files, artifact_context, artifact_identity, package_key,
                                  package_metadata, pypi_index_url, read_file, safe_parts,
                                  verify_origin)
 from .security_data import SecurityDataError, _clock, _json
@@ -157,6 +157,8 @@ def _select(index: dict, dep: dict) -> dict:
         hashes = item.get('digests')
         if not isinstance(candidate, str) or not isinstance(hashes, dict):
             raise ArtifactError('artifact-origin', 'registry filename or digests are malformed')
+        if dep.get('artifact_source') is not None and dep['artifact_source'] != item.get('url'):
+            continue
         if filename is not None and filename != candidate or digest is not None and digest != hashes.get('sha256'):
             continue
         if filename is None and digest is None and re.search(r'-(?:py3|py2\.py3)-none-any\.whl$', candidate) is None:
@@ -203,11 +205,11 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                              'package': dep.get('name'), 'message': 'no qualified acquisition adapter for this ecosystem'})
                 continue
             key = package_key('PyPI', dep.get('name'), dep.get('version'))
-            observed = (key, dep.get('artifact_filename'), dep.get('artifact_sha256'))
+            context = artifact_context(dep)
+            observed = (key, dep.get('artifact_filename'), dep.get('artifact_sha256'),
+                        dep.get('artifact_source'), json.dumps(context, sort_keys=True))
             if observed in seen:
                 continue
-            if any(old[0] == key for old in seen):
-                raise ArtifactError('artifact-target-unknown', 'one package/version has conflicting observed artifact targets')
             seen.add(observed)
             index_url = pypi_index_url(dep['name'], dep['version'])
             index_bytes = _fetch(fetch, index_url, MAX_INDEX_BYTES)
@@ -225,13 +227,14 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                 raise ArtifactError('artifact-identity', 'artifact Name/Version differs from exact inventory')
             index_digest = hashlib.sha256(index_bytes).hexdigest()
             record = {'ecosystem': 'PyPI', 'name': dep['name'], 'version': dep['version'], 'filename': filename,
-                      'path': f'objects/{digest}', 'sha256': digest,
+                      'path': f'objects/{digest}', 'sha256': digest, 'context': context,
                       'origin': {'index_url': index_url, 'index_path': f'indexes/{index_digest}.json',
                                  'index_sha256': index_digest, 'artifact_url': selected['url']}}
             _write(descriptor, record['origin']['index_path'], index_bytes, immutable=True)
             verify_origin(destination, record, payload)
             _write(descriptor, record['path'], payload, immutable=True)
-            records.append(record)
+            if artifact_identity(record) not in {artifact_identity(old) for old in records}:
+                records.append(record)
         bundle = {'schema_version': 1, 'inventory_digest': inventory_digest,
                   'last_verified_sync_utc': (current if now is not None else _clock(None)).isoformat(),
                   'producer': 'getzilla-security-license-acquisition-v1', 'records': records, 'gaps': gaps,

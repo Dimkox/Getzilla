@@ -16,9 +16,10 @@ from urllib.parse import urlsplit
 
 from .known_vulns import VulnerabilityError, _pypi_key, _semver_key, normalize_name
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, archive_files,
-                                 package_key, package_metadata, read_file, verify_origin)
+                                 artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin)
 from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
 from .security_license_texts import recognized_license
+from .security_deliveries import verify_deliveries
 
 POLICY_PATH = '.getzilla/config/license-policy.json'
 ALLOWED = ('MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD')
@@ -345,7 +346,8 @@ def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: d
             name, extra, constraints = match.groups()
             extras = extra.split(',') if extra else []
         matches = [item for item in dependencies if item.get('ecosystem') == dep['ecosystem'] and
-                   normalize_name(dep['ecosystem'], item.get('name', '')) == normalize_name(dep['ecosystem'], name)]
+                   normalize_name(dep['ecosystem'], item.get('name', '')) == normalize_name(dep['ecosystem'], name)
+                   and item.get('delivery_context') == dep.get('delivery_context')]
         if len({item.get('version') for item in matches}) != 1 or not matches:
             raise ArtifactError('license-transitive-coverage', f'{name} requires an exact covered transitive version')
         if not _satisfies(matches[0]['version'], constraints, dep['ecosystem']):
@@ -398,10 +400,11 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             gap('artifact-acquisition-incomplete', 'artifact producer reported incomplete acquisition')
         indexed = {}
         for record in records:
-            key = package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
+            key = artifact_identity(record)
             if key in indexed:
-                raise ArtifactError('artifact-manifest', 'duplicate or conflicting artifacts for one package version')
+                raise ArtifactError('artifact-manifest', 'duplicate exact artifact/source/use identity')
             indexed[key] = record
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, dependencies)
         result['source_evidence'] = {'manifest_sha256': hashlib.sha256(raw).hexdigest(),
             'last_verified_sync_utc': bundle['last_verified_sync_utc'], 'age_seconds': age,
             'checked_at_utc': current.isoformat(), 'coverage': {'declared_packages': len(indexed)}}
@@ -414,9 +417,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if not scope_known:
                     gap('license-scope-unknown', 'use/distribution scope requires an observed project decision', dep)
                 key = package_key(dep.get('ecosystem'), dep.get('name'), dep.get('version'))
-                record = indexed.get(key)
-                if record is None:
-                    raise ArtifactError('license-artifact-missing', 'exact package artifact is missing')
+                record = select_artifact(dep, records)
                 payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
                 origin = verify_origin(artifacts, record, payload)
                 if dep.get('artifact_sha256') and dep['artifact_sha256'] != record['sha256']:
@@ -435,7 +436,20 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('artifact-identity', 'artifact metadata Name/Version differs from inventory')
                 chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
                 license_files, notice_files = _license_evidence(files, metadata, identifiers, chosen)
-                if distribution == 'redistributed':
+                custody = None
+                context = dep.get('delivery_context')
+                if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:
+                    raise ArtifactError('license-obligation-missing', 'offline archive requires actual final output and composition evidence')
+                if context in deliveries:
+                    if distribution != 'redistributed':
+                        raise ArtifactError('license-scope-conflict', 'named archive components must retain redistributed scope')
+                    output = deliveries[context]
+                    retained = sorted('site-packages/' + item['path'] for item in license_files + notice_files)
+                    custody = {field: value for field, value in output.items() if field != 'members'}
+                    custody['retained_members'] = retained
+                elif distribution == 'redistributed':
+                    if context and dep.get('delivery_kind') != 'unchanged-artifact':
+                        raise ArtifactError('license-obligation-missing', 'named output needs its actual final delivery and composition evidence')
                     delivery = record.get('redistributed_path')
                     if not delivery:
                         raise ArtifactError('license-obligation-missing', 'redistribution needs evidence of the unchanged delivered artifact retaining LICENSE/NOTICE')
@@ -448,8 +462,11 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 result['details'].append({'ecosystem': dep['ecosystem'], 'package': dep['name'], 'version': dep['version'],
                     'manifest': dep.get('manifest'), 'status': 'pass', 'expression': metadata['expression'],
                     'selected_expression': ' AND '.join(chosen), 'distribution': distribution,
-                    'artifact_sha256': record['sha256'], 'origin': origin, 'license_files': license_files,
-                    'notice_files': notice_files, 'obligations': 'retained in exact artifact' if distribution == 'redistributed' else 'internal use; license evidence retained'})
+                    'artifact_sha256': record['sha256'], 'artifact_id': artifact_identity(record),
+                    'context': record.get('context', {}), **({'delivery': custody} if custody else {}),
+                    'origin': origin, 'license_files': license_files,
+                    'notice_files': notice_files, 'obligations': ('retained in final extracted archive' if custody else 'retained in exact artifact')
+                    if distribution == 'redistributed' else 'internal use; license evidence retained'})
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
                 gap(getattr(exc, 'code', 'artifact-invalid'), str(exc), dep)
     except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
@@ -495,7 +512,7 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             raise ArtifactError('artifact-manifest', 'catalog has no bounded complete records')
         bindings, seen, total = [], set(), len(raw)
         for record in records:
-            key = package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
+            key = artifact_identity(record)
             if key in seen:
                 raise ArtifactError('artifact-manifest', 'catalog repeats a package artifact identity')
             seen.add(key)
@@ -507,6 +524,7 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             verified = verify_origin(artifacts, record, payload, index_bytes=index)
             bound = {'ecosystem': record['ecosystem'], 'name': record['name'], 'version': record['version'],
                      'path': record['path'], 'filename': record['filename'], 'artifact_size': len(payload),
+                     'artifact_id': key, 'context': record.get('context', {}),
                      'index_path': origin['index_path'], 'index_size': len(index), **verified}
             total += len(payload) + len(index)
             if record.get('redistributed_path') is not None:
@@ -519,6 +537,10 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             if total > 512 * 1024 * 1024:
                 raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
             bindings.append(bound)
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
+        total += sum(delivery['output_bytes'] for delivery in deliveries.values())
+        if total > 512 * 1024 * 1024:
+            raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')
         # Also bind the supplied input contents: a caller changing an input
         # while retaining its old digest must not obtain the same projection.
         inventory_body = json.dumps(inventory, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
@@ -527,7 +549,8 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
         binding = {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'inventory_digest': digest,
                    'inventory_content_sha256': hashlib.sha256(inventory_body).hexdigest(),
                    'policy_digest': selected_policy['digest'],
-                   'records': sorted(bindings, key=lambda item: (item['ecosystem'], item['name'], item['version']))}
+                   'records': sorted(bindings, key=lambda item: item['artifact_id']),
+                   'deliveries': deliveries}
         content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
                 'source_url': 'urn:getzilla:artifact-license-catalog:1',

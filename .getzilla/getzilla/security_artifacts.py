@@ -10,6 +10,7 @@ import bz2
 import gzip
 import hashlib
 import io
+import json
 import lzma
 import os
 import re
@@ -106,6 +107,85 @@ def package_key(ecosystem: str, name: str, version: str) -> tuple:
     except VulnerabilityError as exc:
         raise ArtifactError('artifact-identity', str(exc)) from exc
     raise ArtifactError('license-ecosystem-coverage', f'artifact license metadata is unsupported for {ecosystem}')
+
+
+def artifact_context(dependency: dict) -> dict:
+    """Keep installed uses and named outputs separate even for identical wheel bytes."""
+    result = {}
+    for field in ('manifest', 'usage', 'distribution', 'delivery_context', 'delivery_kind'):
+        if field in dependency:
+            value = dependency[field]
+            if not isinstance(value, str) or not value or len(value) > 1024 or any(ord(c) < 32 for c in value):
+                raise ArtifactError('artifact-context', 'artifact use context is malformed')
+            result[field] = value
+    if 'delivery_kind' in result and result['delivery_kind'] not in {
+            'installed-package', 'unchanged-artifact', 'factory-offline-archive'}:
+        raise ArtifactError('license-delivery-target', 'delivery kind has no qualified adapter')
+    if 'delivery_kind' in result and 'delivery_context' not in result:
+        raise ArtifactError('artifact-context', 'delivery kind requires a named use/output context')
+    return result
+
+
+def artifact_identity(record: dict) -> str:
+    """Exact artifact/source/context identity, independent of cache location."""
+    package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
+    if len(safe_parts(record.get('filename'))) != 1:
+        raise ArtifactError('artifact-identity', 'artifact filename must be a basename')
+    _digest(record.get('sha256'), 'artifact')
+    context = record.get('context', {})
+    if not isinstance(context, dict) or artifact_context(context) != context:
+        raise ArtifactError('artifact-context', 'artifact record context is malformed')
+    origin = record.get('origin')
+    if not isinstance(origin, dict):
+        raise ArtifactError('artifact-origin', 'artifact has no exact source')
+    _digest(origin.get('index_sha256'), 'index')
+    if not all(isinstance(origin.get(field), str) and origin[field] for field in ('index_url', 'artifact_url')):
+        raise ArtifactError('artifact-origin', 'artifact has no exact source URLs')
+    value = {field: record[field] for field in ('ecosystem', 'name', 'version', 'filename', 'sha256')}
+    value['context'] = context
+    value['origin'] = {field: origin[field] for field in ('index_url', 'index_sha256', 'artifact_url')}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def select_artifact(dependency: dict, records: list[dict]) -> dict:
+    key = package_key(dependency.get('ecosystem'), dependency.get('name'), dependency.get('version'))
+    context = artifact_context(dependency)
+    candidates = []
+    for record in records:
+        if package_key(record.get('ecosystem'), record.get('name'), record.get('version')) != key:
+            continue
+        if 'context' in record:
+            if record['context'] != context:
+                continue
+        elif dependency.get('delivery_context'):
+            continue  # Legacy wheel evidence cannot establish a named output/use.
+        if any(dependency.get(observed) is not None and dependency[observed] != record.get(field)
+               for observed, field in (('artifact_filename', 'filename'), ('artifact_sha256', 'sha256'))):
+            continue
+        if dependency.get('artifact_source') is not None and dependency['artifact_source'] != record.get('origin', {}).get('artifact_url'):
+            continue
+        candidates.append(record)
+    if len(candidates) != 1:
+        raise ArtifactError('license-artifact-missing', 'select exactly one artifact for this target, source and use context')
+    return candidates[0]
+
+
+def archive_inventory(payload: bytes, filename: str) -> dict[str, dict]:
+    """Hash all ZIP members after the shared bounded, link-free archive validation."""
+    if not filename.endswith(('.whl', '.zip')):
+        raise ArtifactError('artifact-archive', 'extracted delivery requires ZIP member evidence')
+    archive_files(payload, filename)
+    result = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            digest = hashlib.sha256()
+            with archive.open(member) as stream:
+                while chunk := stream.read(65536):
+                    digest.update(chunk)
+            result[member.filename] = {'sha256': digest.hexdigest(), 'size': member.file_size}
+    return result
 
 
 def pypi_index_url(name: str, version: str) -> str:
