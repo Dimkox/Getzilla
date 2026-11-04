@@ -227,9 +227,9 @@ def install_external(root: Path, relative: str) -> dict:
                 proof[name] = {'sha256': current.sha256, 'mode': current.mode}
             if set(transaction.files(destination, recursive=True)) != allowed:
                 raise ValueError('PUBLICATION_CUSTODY_CHANGED')
-            transaction.write(intent_path, canonical(expected_record), 0o600, expected=pending_snapshot)
-            completed = transaction.read(intent_path, limit=4096)
             try:
+                transaction.write(intent_path, canonical(expected_record), 0o600, expected=pending_snapshot)
+                completed = transaction.read(intent_path, limit=4096)
                 if completed is None or completed.content != canonical(expected_record) or not mode_matches(completed.mode, 0o600):
                     raise ValueError('PUBLICATION_CUSTODY_CHANGED')
                 for name, content in payload:
@@ -237,11 +237,12 @@ def install_external(root: Path, relative: str) -> dict:
                     if (current is None or current.content != content or not mode_matches(current.mode, 0o644)
                             or current.identity[:2] != identities[destination + '/' + name]):
                         raise ValueError('PUBLICATION_CUSTODY_CHANGED')
-            except ValueError:
+            except (ValueError, OSError):
                 # Do not turn a detected uncertain completion into a reusable
                 # complete record. Never remove or overwrite foreign payloads.
-                if completed is not None and completed.content == canonical(expected_record):
-                    transaction.write(intent_path, canonical(pending), 0o600, expected=completed)
+                current_record = transaction.read(intent_path, limit=4096)
+                if current_record is not None and current_record.content == canonical(expected_record):
+                    transaction.write(intent_path, canonical(pending), 0o600, expected=current_record)
                 raise
     return {'schema_version': 1, 'status': 'staged', 'destination': destination,
             'snapshot_digest': snapshot.digest, 'descriptor_digest': digest(descriptor),

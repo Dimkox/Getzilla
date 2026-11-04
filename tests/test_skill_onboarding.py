@@ -289,3 +289,20 @@ class PublicationTests(unittest.TestCase):
         path.write_bytes(encoded(record))
         with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
             self.install()
+
+    def test_uncertain_completion_record_publication_restores_scoped_denial(self):
+        from getzilla.component_state import ComponentTransaction
+        self.grant()
+        original = ComponentTransaction.write
+
+        def lose_completion(transaction, name, content, mode, *, expected):
+            result = original(transaction, name, content, mode, expected=expected)
+            if name.endswith('/skill-publications/example.json') and json.loads(content)['status'] == 'complete':
+                raise OSError('fixture lost completion response after publication')
+            return result
+
+        with mock.patch.object(ComponentTransaction, 'write', lose_completion), self.assertRaises((ValueError, OSError)):
+            self.install()
+        with self.assertRaisesRegex(ValueError, 'PUBLICATION_REQUIRES_INSPECTION'):
+            self.install()
+        self.assertFalse((self.root / '.agents').exists())
