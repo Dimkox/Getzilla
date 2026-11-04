@@ -383,7 +383,10 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         self.fake_bin = self.tmp / 'bin'
         self.fake_bin.mkdir()
         # The pinned uv, so the installer does not reach PyPI; Spec Kit's `uv tool install` succeeds.
-        (self.fake_bin / 'uv').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
+        (self.fake_bin / 'uv').write_text(
+            '#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\n'
+            'if [ "$1" = "tool" ] && [ "$2" = "dir" ] && [ "$3" = "--bin" ]; then dirname "$0"; fi\n'
+            'exit 0\n')
         (self.fake_bin / 'uv').chmod(0o755)
         self._offline: dict[str, str] = {}
 
