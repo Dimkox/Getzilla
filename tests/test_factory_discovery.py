@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import json
 import copy
+import importlib.util
+import py_compile
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -430,6 +432,69 @@ class FactoryDiscoveryTests(unittest.TestCase):
             self.assertEqual(result.status, 'fail', result)
             self.assertFalse(sentinel.exists())
             self.assertIn('size limit', result.summary)
+
+    def _assert_source_wins_over_bytecode(self, mode):
+        with tempfile.TemporaryDirectory() as raw, patch.dict(os.environ, {'PYTHONPYCACHEPREFIX': ''}):
+            root = Path(raw).resolve()
+            failing = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): self.fail('bound failing source ran')\n"
+            size = max(len(PASS), len(failing))
+            passing = PASS.rstrip('\n').ljust(size) + '\n'
+            failing = failing.rstrip('\n').ljust(size) + '\n'
+            self.assertEqual(len(passing), len(failing))
+            self.project(root, {'test_contracts.py': passing})
+            source = root / 'factory/tests/test_contracts.py'
+            original = source.stat()
+            with patch.object(sys, 'pycache_prefix', None):
+                cache = Path(importlib.util.cache_from_source(str(source)))
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            py_compile.compile(str(source), cfile=str(cache), doraise=True, invalidation_mode=mode)
+            retained_cache = cache.read_bytes()
+            positive = verification._factory_unit(root)[0]
+            self.assertEqual(positive.status, 'pass', positive)
+            self.assertEqual(cache.read_bytes(), retained_cache)
+            source.write_text(failing)
+            os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(cache.read_bytes(), retained_cache, 'existing candidate cache must stay untouched')
+            self.assertEqual(result.status, 'fail', result)
+            self.assertIn('bound failing source ran', result.stderr)
+            self.assertTrue(result.details[0]['source_stable'])
+            self.assertEqual(result.details[0]['failures'], 1)
+
+    def test_timestamp_valid_cache_cannot_replace_bound_failing_source(self):
+        self._assert_source_wins_over_bytecode(py_compile.PycInvalidationMode.TIMESTAMP)
+
+    def test_unchecked_hash_cache_cannot_replace_bound_failing_source(self):
+        self._assert_source_wins_over_bytecode(py_compile.PycInvalidationMode.UNCHECKED_HASH)
+
+    def test_factory_child_uses_fresh_private_cache_without_touching_ambient_cache(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {'test_contracts.py': PASS})
+            ambient = root / 'ambient-cache'
+            ambient.mkdir()
+            sentinel = ambient / 'retained.bin'
+            sentinel.write_bytes(b'pre-existing cache bytes')
+            observed = []
+            original = verification._command_check
+            def record(*args, **kwargs):
+                environment = kwargs['env']
+                self.assertIn('PYTHONPYCACHEPREFIX', environment)
+                cache = Path(environment['PYTHONPYCACHEPREFIX'])
+                self.assertNotEqual(cache, ambient)
+                self.assertTrue(cache.is_dir())
+                self.assertEqual(list(cache.iterdir()), [])
+                if os.name == 'posix':
+                    self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+                observed.append(cache)
+                return original(*args, **kwargs)
+            with patch.dict(os.environ, {'PYTHONPYCACHEPREFIX': str(ambient)}), \
+                    patch.object(verification, '_command_check', side_effect=record):
+                result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, 'pass', result)
+            self.assertEqual(len(observed), 1)
+            self.assertFalse(observed[0].exists(), 'only the owned cache namespace must be cleaned')
+            self.assertEqual(sentinel.read_bytes(), b'pre-existing cache bytes')
 
     def test_spawned_python_uses_the_same_candidate_package(self):
         source = (
