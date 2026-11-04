@@ -225,7 +225,8 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
                     command([sys.executable, home/'scripts/getzilla_components.py', 'adopt', '--agents', 'qwen'], cwd=project)
                     command(['git', 'add', '.getzilla/managed-components.json'], cwd=project)
                     command(['git', 'commit', '--quiet', '--allow-empty', '-m', 'Record complete adapter selection'], cwd=project)
-                    checks['update_exit'] = command(cli(home, 'update', '--no-self', '--no-tools', str(project)),
+                    checks['update_exit'] = command(cli(home, 'update', '--no-self', '--no-tools',
+                                                        '--baseline-release', stable['tag'], str(project)),
                                                     cwd=project, env={**environment, 'GETZILLA_HOME': str(home)})['exit']
                     checks['user_preserved'] = digest(project/'user-file.txt') == user_before
                     checks['settings_preserved'] = digest(settings) == settings_before

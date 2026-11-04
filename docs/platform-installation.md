@@ -45,13 +45,30 @@ choice, then review and commit the manifest before updating:
 python /path/to/updated/Getzilla/scripts/getzilla_components.py adopt --agents qwen
 git add .getzilla/managed-components.json
 git commit -m "Record complete adapter selection"
-/path/to/updated/Getzilla/bin/getzilla update --no-self --no-tools
+/path/to/updated/Getzilla/bin/getzilla update --no-self --no-tools --baseline-release v2.3.0
 ```
 
 Use `getzilla.cmd` on Windows. Adoption records membership; it does not grant
-ownership over unknown old files. An ownership conflict must remain a failed
-upgrade until the old baseline is reconciled through a reviewed migration.
-The acceptance runner does not force-copy candidate files into the old project.
+ownership over unknown old files. The explicit baseline option recognizes only
+selected paths whose bytes and modes match the qualified vendor catalog. It
+publishes current ownership and files together on the ordinary update branch;
+the original branch remains available for rollback. Unknown files, explicit
+keeps, custom settings and component selection retain their existing rules.
+Changed managed files require reconciliation; an old ownership ledger does not
+make a custom policy a vendor default. The option cannot combine with local
+acceptance, retirement, self-update or tool updates. Windows comparisons use
+the existing write-bit mode semantics rather than POSIX executable bits.
+
+The catalog pins the published ZIP SHA256
+`782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11`.
+During a private one-time qualification, every archive manifest entry matched
+the pinned Git source; both actual historical materializers produced the same
+695-file full-layout inventory. The runtime reads only the immutable catalog,
+whose complete digest is pinned in code; it executes no historical source and
+accepts no caller-supplied catalog or release path. Rendered historical files
+use their actual materialized bytes, not the source template hash. The full
+inventory is a superset: only the project's committed selection can authorize
+incoming files. This qualification does not replace native installer CI.
 
 The [observed macOS installer failure](https://github.com/Dimkox/Getzilla/actions/runs/41841095688/job/126612562552)
 on candidate `2f45b2c66f434f00373da85e481394bb2b8f44ed` followed successful clone,
