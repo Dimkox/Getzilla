@@ -5,9 +5,9 @@ RubyGems), then looks every exact package version up in the OSV database,
 which aggregates the GitHub Advisory Database, PyPA, RustSec, Go, npm and
 NVD-derived records. Two sources, never both, and never implicit network:
 
-* ``GETZILLA_OSV_DB=<dir>``: an offline mirror made by ``download_database``
-  (``<dir>/<Ecosystem>/all.zip`` from the public OSV bucket). This is what a
-  network-less sandbox such as Trust CI uses.
+* ``GETZILLA_OSV_DB=<dir>``: a validated snapshot made by ``download_database``.
+  Every ecosystem requires its manifest and exact content object, verified
+  within 72 hours. Legacy raw all.zip mirrors require an explicit refresh.
 * ``GETZILLA_OSV_ONLINE=1``: the OSV API (``api.osv.dev``).
 
 Without either the check is skipped and says so. Findings can be accepted
@@ -16,6 +16,7 @@ for a limited time in ``.getzilla/config/known-vulnerabilities.json``.
 from __future__ import annotations
 
 import fnmatch
+import io
 import json
 import os
 import re
@@ -24,9 +25,13 @@ import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
+
+from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
+                            osv_aliases, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
 try:
     import tomllib
@@ -34,8 +39,7 @@ except ModuleNotFoundError:
     tomllib = None  # type: ignore[assignment]
 
 OSV_API = 'https://api.osv.dev/v1'
-OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
-ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
+ECOSYSTEMS = OSV_ECOSYSTEMS
 CONFIG_PATH = '.getzilla/config/known-vulnerabilities.json'
 DEFAULT_EXCLUDE = ('tests/**', '**/tests/**', '**/fixtures/**', '**/node_modules/**', '**/vendor/**', '.getzilla/runtime/**')
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
@@ -349,51 +353,170 @@ def load_config(root: Path) -> dict[str, Any]:
     return {'exclude': exclude, 'accept': accept}
 
 
-def _version_key(version: str) -> tuple[Any, ...]:
-    parts = re.split(r'[.\-+_]', version.lstrip('vV'))
-    key: list[Any] = []
-    for part in parts:
-        match = re.match(r'^(\d+)(.*)$', part)
-        if match:
-            key.append((1, int(match.group(1)), match.group(2)))
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """SemVer 2.0.0 precedence; build metadata never changes precedence."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported SemVer version')
+    match = re.fullmatch(
+        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
+    if match is None:
+        raise VulnerabilityError(f'unsupported SemVer version: {version!r}')
+    pre = []
+    if match[4] is not None:
+        for part in match[4].split('.'):
+            if part.isdigit():
+                if len(part) > 1 and part[0] == '0':
+                    raise VulnerabilityError(f'unsupported SemVer prerelease: {version!r}')
+                pre.append((0, int(part)))
+            else:
+                pre.append((1, part))
+    return (int(match[1]), int(match[2]), int(match[3]),
+            (0, tuple(pre)) if match[4] is not None else (1, ()))
+
+
+def _pypi_key(version: str) -> tuple[Any, ...]:
+    """Qualified canonical PEP 440 subset, not a full PEP 440 normalizer.
+
+    Supports [epoch!]release[a|b|rcN][.postN][.devN][+local]. Alternative
+    suffix spellings/separators and leading v/whitespace are refused.
+    """
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP 440 subset)')
+    match = re.fullmatch(
+        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
+        r'(?:(?P<pre>a|b|rc)(?P<pre_n>[0-9]+))?'
+        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
+        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
+    if match is None:
+        raise VulnerabilityError(f'unsupported PyPI version (canonical PEP 440 subset): {version!r}')
+    release = [int(part) for part in match['release'].split('.')]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if match['pre']:
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2}[match['pre']], int(match['pre_n']))
+    elif match['dev'] is not None and match['post'] is None:
+        pre = (-1, 0, 0)
+    else:
+        pre = (1, 0, 0)
+    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
+    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
+    local = (0, ()) if match['local'] is None else (1, tuple(
+        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
+    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+
+
+def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'SEMVER':
+        return _semver_key(version)
+    if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
+        return _pypi_key(version)
+    raise VulnerabilityError(f'unsupported OSV range semantics: {kind!r} for {ecosystem or "unknown ecosystem"}')
+
+
+def _range_contains(version: str, item: dict[str, Any], *, ecosystem: str) -> bool:
+    if not isinstance(item, dict):
+        raise VulnerabilityError('malformed OSV range: expected object')
+    kind = item.get('type')
+    target = _range_key(version, kind=kind, ecosystem=ecosystem)
+    events = item.get('events')
+    if not isinstance(events, list) or not events:
+        raise VulnerabilityError('malformed OSV range: nonempty events required')
+    ordered = []
+    limits = []
+    kinds = set()
+    for event in events:
+        if not isinstance(event, dict) or len(event) != 1:
+            raise VulnerabilityError('malformed OSV event: exactly one field required')
+        role, value = next(iter(event.items()))
+        if role not in {'introduced', 'fixed', 'last_affected', 'limit'} or not isinstance(value, str) or not value:
+            raise VulnerabilityError('malformed OSV event: unsupported field or version')
+        kinds.add(role)
+        if role == 'limit':
+            limits.append(None if '*' in value else _range_key(value, kind=kind, ecosystem=ecosystem))
         else:
-            key.append((0, 0, part))
-    return tuple(key)
+            key = (0, ()) if role == 'introduced' and value == '0' else (
+                1, _range_key(value, kind=kind, ecosystem=ecosystem))
+            ordered.append((key, role))
+    if 'introduced' not in kinds or {'fixed', 'last_affected'} <= kinds:
+        raise VulnerabilityError('malformed OSV range: introduced required; fixed and last_affected cannot mix')
+    # OSV only recommends ordered input. Always sort, with introduced='0' first.
+    ordered.sort()
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous[0] == current[0] and previous[1] != current[1]:
+            raise VulnerabilityError('ambiguous OSV events at the same version')
+    affected = False
+    for key, role in ordered:
+        if role == 'introduced' and (key[0] == 0 or key[1] <= target):
+            affected = True
+        elif role == 'fixed' and key[1] <= target:
+            affected = False
+        elif role == 'last_affected' and key[1] < target:
+            affected = False
+    return affected and (not limits or any(limit is None or target < limit for limit in limits))
 
 
-def _in_ranges(version: str, affected: dict[str, Any]) -> bool:
-    if version in (affected.get('versions') or []):
+def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None = None) -> bool:
+    if not isinstance(affected, dict):
+        raise VulnerabilityError('malformed OSV affected entry')
+    versions = affected.get('versions', [])
+    if not isinstance(versions, list) or not all(isinstance(value, str) and value for value in versions):
+        raise VulnerabilityError('malformed OSV enumerated versions')
+    if version in versions:
         return True
-    target = _version_key(version)
-    for item in affected.get('ranges') or []:
-        if item.get('type') not in {'SEMVER', 'ECOSYSTEM'}:
-            continue
-        introduced = None
-        for event in item.get('events') or []:
-            if 'introduced' in event:
-                introduced = event['introduced']
-            elif introduced is not None and ('fixed' in event or 'last_affected' in event):
-                low = introduced == '0' or _version_key(str(introduced)) <= target
-                if 'fixed' in event:
-                    high = target < _version_key(str(event['fixed']))
-                else:
-                    high = target <= _version_key(str(event['last_affected']))
-                if low and high:
-                    return True
-                introduced = None
-        if introduced is not None and (introduced == '0' or _version_key(str(introduced)) <= target):
-            return True
+    package = affected.get('package', {})
+    if not isinstance(package, dict):
+        raise VulnerabilityError('malformed OSV package')
+    ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
+    ranges = affected.get('ranges', [])
+    if not isinstance(ranges, list) or (not ranges and not versions):
+        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    errors = []
+    if versions:
+        try:
+            if ecosystem == 'PyPI':
+                key = _pypi_key
+            elif ranges and all(isinstance(item, dict) and item.get('type') == 'SEMVER' for item in ranges):
+                key = _semver_key
+            else:
+                raise VulnerabilityError(f'unsupported enumerated-version normalization: {ecosystem}')
+            target = key(version)
+            if any(target == key(value) for value in versions):
+                return True
+        except VulnerabilityError as exc:
+            errors.append(exc)
+    for item in ranges:
+        try:
+            if _range_contains(version, item, ecosystem=ecosystem):
+                return True
+        except VulnerabilityError as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
     return False
 
 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
+    try:
+        aliases = osv_aliases(record)
+    except SecurityDataError as exc:
+        raise VulnerabilityError(str(exc)) from exc
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
         package = affected.get('package') or {}
+        if (dependency.ecosystem == 'Packagist' and qualified_packagist(package.get('ecosystem'))
+                and normalize_name('Packagist', str(package.get('name', ''))) in
+                {'*', normalize_name('Packagist', dependency.name)}):
+            raise VulnerabilityError('Packagist dependency registry identity is required for a custom-repository match')
         if package.get('ecosystem') != dependency.ecosystem:
             continue
-        if normalize_name(dependency.ecosystem, str(package.get('name', ''))) != normalize_name(dependency.ecosystem, dependency.name):
+        name = normalize_name(dependency.ecosystem, str(package.get('name', '')))
+        if name == '*':
+            if not _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
+                continue
+        elif name != normalize_name(dependency.ecosystem, dependency.name):
             continue
         specific = affected.get('database_specific') or {}
         severity = severity or str(specific.get('severity') or '')
@@ -411,7 +534,7 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(str(alias) for alias in record.get('aliases') or []),
+        aliases=sorted(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -463,16 +586,20 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
     return findings
 
 
-def query_offline(dependencies: list[Dependency], database: Path) -> list[Finding]:
+def query_offline(dependencies: list[Dependency], database: Path, *, now: datetime | None = None,
+                  source_evidence: list[dict[str, Any]] | None = None) -> list[Finding]:
     wanted: dict[str, dict[str, list[Dependency]]] = {}
     for item in dependencies:
         wanted.setdefault(item.ecosystem, {}).setdefault(normalize_name(item.ecosystem, item.name), []).append(item)
     findings: list[Finding] = []
     for ecosystem, by_name in sorted(wanted.items()):
-        archive = database / ecosystem / 'all.zip'
-        if not archive.is_file():
-            raise VulnerabilityError(f'offline OSV database has no {ecosystem}/all.zip under {database}')
-        with zipfile.ZipFile(archive) as bundle:
+        try:
+            payload, evidence = read_snapshot(database, f'osv:{ecosystem}', now=now, required_scope={ecosystem})
+        except SecurityDataError as exc:
+            raise VulnerabilityError(str(exc)) from exc
+        if source_evidence is not None:
+            source_evidence.append(evidence)
+        with zipfile.ZipFile(io.BytesIO(payload)) as bundle:
             for member in bundle.namelist():
                 if not member.endswith('.json'):
                     continue
@@ -481,48 +608,56 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                     continue
                 for affected in record.get('affected') or []:
                     package = affected.get('package') or {}
+                    if ecosystem == 'Packagist' and qualified_packagist(package.get('ecosystem')):
+                        name = normalize_name(ecosystem, str(package.get('name', '')))
+                        if name == '*' or name in by_name:
+                            raise VulnerabilityError('Packagist dependency registry identity is required for a custom-repository match')
                     if package.get('ecosystem') != ecosystem:
                         continue
-                    for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
-                        if _in_ranges(dependency.version, affected):
+                    name = normalize_name(ecosystem, str(package.get('name', '')))
+                    candidates = chain.from_iterable(by_name.values()) if name == '*' else by_name.get(name, ())
+                    for dependency in candidates:
+                        if _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
                             findings.append(_describe(record, dependency))
     unique = {(item.dependency, item.vuln_id): item for item in findings}
     return [unique[key] for key in sorted(unique)]
 
 
-def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS, *, fetch: Fetch = _default_fetch) -> list[str]:
-    """Refresh ``<destination>/<Ecosystem>/all.zip``; run on a host with network, never in the sandbox."""
+def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS, *, fetch: Fetch = _default_fetch,
+                      now: datetime | None = None) -> list[str]:
+    """Acquire and publish validated snapshots; run only on an explicit network-capable host."""
     written = []
     for ecosystem in ecosystems:
         if ecosystem not in ECOSYSTEMS:
             raise VulnerabilityError(f'unsupported ecosystem: {ecosystem}')
-        data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip', None)
-        target = destination / ecosystem / 'all.zip'
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix('.zip.partial')
-        temporary.write_bytes(data)
-        with zipfile.ZipFile(temporary) as bundle:
-            if bundle.testzip() is not None:
-                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
-        os.replace(temporary, target)
-        written.append(str(target))
+        try:
+            data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip', None)
+            current = now if now is not None else datetime.now(timezone.utc)
+            evidence = publish_snapshot(destination, f'osv:{ecosystem}', data,
+                                        acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download'},
+                                        coverage=osv_coverage(data, ecosystem), now=current)
+        except (OSError, SecurityDataError, ValueError) as exc:
+            raise VulnerabilityError(f'OSV refresh failed for {ecosystem}: {exc}') from exc
+        filename = 'snapshot.json' if evidence.get('compatibility_export_warning') else 'all.zip'
+        written.append(str(destination / ecosystem / filename))
     return written
 
 
 def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _default_fetch,
-         today: date | None = None) -> dict[str, Any]:
+         today: date | None = None, now: datetime | None = None) -> dict[str, Any]:
     env = os.environ if environ is None else environ
     config = load_config(root)
     dependencies, manifests = collect_dependencies(root, exclude=config['exclude'])
     database = env.get('GETZILLA_OSV_DB', '').strip()
     online = env.get('GETZILLA_OSV_ONLINE', '').strip() == '1'
-    report: dict[str, Any] = {'manifests': manifests, 'dependencies': len(dependencies), 'findings': [], 'accepted': []}
+    report: dict[str, Any] = {'manifests': manifests, 'dependencies': len(dependencies),
+                              'findings': [], 'accepted': [], 'source_evidence': []}
     if not dependencies:
         report.update(status='skip', source=None, summary='no pinned dependencies in lockfiles or requirements')
         return report
     if database:
         source = f'offline OSV mirror {database}'
-        findings = query_offline(dependencies, Path(database))
+        findings = query_offline(dependencies, Path(database), now=now, source_evidence=report['source_evidence'])
     elif online:
         source = 'OSV API'
         findings = query_online(dependencies, fetch=fetch)

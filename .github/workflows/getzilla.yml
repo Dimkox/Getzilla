@@ -25,15 +25,18 @@ permissions:
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
+  GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  GETZILLA_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  linux-core:
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Check out the exact commit with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python 3.13
@@ -49,7 +52,23 @@ jobs:
             python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           fi
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - name: Full Factory unit discovery without database authority
+        if: success() || failure()
+        timeout-minutes: 15
+        shell: bash
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/factory-unit-venv
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: |
+          set -euo pipefail
+          uv --version
+          uv run --locked --project factory python .getzilla/getzilla/factory_tests.py --root "$PWD" --report "$RUNNER_TEMP/factory-unit.json" 2>&1 | tee "$RUNNER_TEMP/factory-unit.log"
       - name: Known vulnerabilities in pinned dependencies (OSV)
         run: python scripts/getzilla_vulns.py --online
       - name: Static checks as the verifier runs them
@@ -107,15 +126,186 @@ jobs:
       - name: Export CI evidence
         id: export_evidence
         if: always()
-        run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job linux --status "${{ job.status }}"
+        run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job linux-core --status "${{ job.status }}"
       - name: Retain CI evidence for 30 days
         if: always() && steps.export_evidence.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: getzilla-linux-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: getzilla-linux-core-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/getzilla-evidence/
           retention-days: 30
           if-no-files-found: error
+
+  live-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.job_timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: factory
+            job_timeout: 40
+            main_timeout: 1500
+          - cell: trust-ci
+            job_timeout: 30
+            main_timeout: 1200
+          - cell: lifecycle
+            job_timeout: 25
+            main_timeout: 900
+    steps:
+      - name: Reserve cleanup and evidence time before any allocation
+        shell: python
+        env:
+          JOB_MINUTES: ${{ matrix.job_timeout }}
+        run: |
+          import os, time
+          deadline = int(time.time()) + int(os.environ['JOB_MINUTES']) * 60 - 300
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('GETZILLA_LIVE_DEADLINE=' + str(deadline) + '\n')
+      - name: Check out the exact candidate head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - name: Record capacity and load immutable component images
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/getzilla_startup_cpu.py --no-probe
+          python - <<'PYTHON'
+          import json, pathlib, subprocess, sys
+          sys.path.insert(0, '.getzilla')
+          from getzilla.disposable_resources import image_pins
+          for name, pin in image_pins(pathlib.Path('.')).items():
+              if not isinstance(pin, dict):
+                  continue
+              subprocess.run(['docker', 'pull', '--platform', 'linux/amd64', pin['reference']], check=True, timeout=120)
+              image = json.loads(subprocess.run(['docker', 'image', 'inspect', pin['reference']], check=True, capture_output=True, text=True, timeout=30).stdout)[0]
+              if image['Id'] != pin['image_id'] or pin['reference'] not in image.get('RepoDigests', []):
+                  raise SystemExit('pulled image does not match the approved manifest and configuration digests')
+          PYTHON
+      - name: Run bounded isolated acceptance with cleanup observer
+        shell: bash
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: python scripts/getzilla_live.py --cell "${{ matrix.cell }}" --output "$RUNNER_TEMP/live-observations" --timeout-seconds "${{ matrix.main_timeout }}"
+      - name: Export allowlisted live observations
+        if: always()
+        run: python scripts/getzilla_ci_evidence.py --live-source "${{ runner.temp }}/live-observations" --output "${{ runner.temp }}/live-evidence"
+      - name: Retain live evidence for 30 days
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-live-${{ matrix.cell }}-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+  security-expanded:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out candidate source as scan data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select an exact checker from operator configuration or the base commit
+        id: checker_ref
+        shell: python
+        env:
+          OPERATOR_CHECKER: ${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}
+          BASE_CHECKER: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          import os, re
+          override = os.environ['OPERATOR_CHECKER']
+          ref = override or os.environ['BASE_CHECKER']
+          if not re.fullmatch(r'[0-9a-f]{40}', ref) or ref == '0' * 40:
+              raise SystemExit('BLOCKED: exact trusted checker ref is not configured')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('sha=' + ref + '\n')
+              stream.write('selection=' + ('operator-variable' if override else 'base-commit') + '\n')
+      - name: Check out the selected checker separately
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Dimkox/Getzilla
+          ref: ${{ steps.checker_ref.outputs.sha }}
+          path: trusted-checker
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify checker identity and install trusted quality tools
+        shell: bash
+        env:
+          CHECKER_REF: ${{ steps.checker_ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-checker rev-parse HEAD)" = "$CHECKER_REF"
+          test -f trusted-checker/scripts/getzilla_security.py || { echo 'BLOCKED: reviewed checker bootstrap is incomplete'; exit 1; }
+          python -I -m pip install --disable-pip-version-check -r trusted-checker/.getzilla/config/python-quality-requirements.txt
+      - name: Run all expanded checks with trusted tools and fresh security data
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --refresh --provision-tools --json-out "$RUNNER_TEMP/security-expanded.json"
+      - name: Bind scanner observations to this workflow and source
+        if: always()
+        shell: bash
+        env:
+          CHECKER_REF: ${{ steps.checker_ref.outputs.sha }}
+          CHECKER_SELECTION: ${{ steps.checker_ref.outputs.selection }}
+        run: |
+          python candidate/scripts/getzilla_ci_admission.py --security-envelope --root "$GITHUB_WORKSPACE/candidate" --checker "$GITHUB_WORKSPACE/trusted-checker" --checker-ref "$CHECKER_REF" --checker-selection "$CHECKER_SELECTION" --report "$RUNNER_TEMP/security-expanded.json" --output "$RUNNER_TEMP/security-evidence"
+      - name: Retain expanded security evidence for 30 days
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-security-expanded-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+  linux:
+    needs: [linux-core, live-acceptance, security-expanded]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact source for evidence validation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Download only evidence from this run and attempt
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: getzilla-*-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/required-evidence
+      - name: Require all jobs and bound evidence before the existing linux check passes
+        if: always()
+        env:
+          GETZILLA_NEEDS: ${{ toJSON(needs) }}
+        run: python scripts/getzilla_ci_admission.py --artifacts "${{ runner.temp }}/required-evidence"
 
   windows:
     runs-on: windows-latest
@@ -131,6 +321,7 @@ jobs:
       - name: Check out the exact commit with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python 3.13
@@ -212,6 +403,7 @@ jobs:
       - name: Check out the exact commit with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python 3.13
@@ -261,7 +453,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
       - name: Core tests on macOS
         if: success() || failure()
         run: |

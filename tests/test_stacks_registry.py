@@ -124,11 +124,15 @@ class NotVerifiedTests(unittest.TestCase):
         self.assertEqual(results[0].status, 'skip')
         self.assertEqual(results[0].details[0]['severity'], 'warning')
 
-    def test_registered_runner_replaces_the_not_verified_line(self) -> None:
+    def test_registered_runner_with_declared_plan_replaces_the_not_verified_line(self) -> None:
         def runner(context):
             return [context.make('cobol-compile', 'pass', 'exit=0')]
+        def plan(_context):
+            return [{'check_id': 'cobol-compile', 'applicability': 'required',
+                     'reason': 'registered adapter contract', 'evidence': {}}]
         results, metadata = stack_checks(self.root, 'pr', ['pay.cbl'], make=CheckResult, command=_no_command,
-                                         registry=self.REGISTRY, runners={'cobol': runner})
+                                         registry=self.REGISTRY, runners={'cobol': runner},
+                                         planners={'cobol': (runner, plan)})
         self.assertEqual([check.name for check in results], ['cobol-compile'])
         self.assertEqual(metadata['checked'], ['cobol'])
 

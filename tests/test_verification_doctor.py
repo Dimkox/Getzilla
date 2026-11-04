@@ -47,10 +47,10 @@ from getzilla.verification import (
 from tests._support import project_copy as full_project_copy
 
 
-def project_copy(*, git: bool = False):
+def project_copy(*, git: bool = False, source_only_runtime: bool = False):
     # Verifier fixtures exercise synthetic projects, not another copy of the
     # complete runtime's scanner results. Full-source coverage stays explicit.
-    return full_project_copy(git=git, minimal_runtime=True)
+    return full_project_copy(git=git, minimal_runtime=True, source_only_runtime=source_only_runtime)
 
 
 @contextlib.contextmanager
@@ -1283,15 +1283,20 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(result.status, 'fail')
 
     def test_verify_records_receipt_for_active_route(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, source_only_runtime=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             synchronize_fixture_scope(root)
-            report = verify(root, mode='fast', record=True)
+            report = verify(root, mode='pr', record=True)
             self.assertEqual(report['status'], 'pass', report)
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
+            from getzilla.verification_plan import report_gaps
+            self.assertEqual(report_gaps(root, report), [])
+            fast = verify(root, mode='fast', record=False)
+            self.assertEqual(fast['status'], 'fail', 'a full task cannot qualify with fast evidence')
+            self.assertIn('required-qualifying-mode', {item['code'] for item in _check(fast, 'quality-gate')['details']})
 
     def test_governance_runs_after_spec_and_architecture_and_failure_is_not_receipted(self) -> None:
         with project_copy(git=True) as root:
@@ -1513,7 +1518,7 @@ class VerificationTests(unittest.TestCase):
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
     def test_abandoned_unmarked_model_draft_does_not_establish_adoption(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, source_only_runtime=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
@@ -1532,7 +1537,7 @@ class VerificationTests(unittest.TestCase):
             subprocess.run(['git', 'add', 'unrelated.txt'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'later descendant'], cwd=root, check=True)
 
-            report = verify(root, mode='fast', record=False)
+            report = verify(root, mode='pr', record=False)
             self.assertEqual(report['status'], 'pass')
             self.assertEqual(report['architecture']['status'], 'not_configured')
 
@@ -1821,9 +1826,16 @@ class VerificationTests(unittest.TestCase):
 
         outer = verification_module._FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS
         self.assertEqual(720, runner._FULL_SUITE_TIMEOUT_SECONDS)
-        self.assertEqual(900, outer)
-        self.assertGreater(outer, runner._FULL_SUITE_TIMEOUT_SECONDS)
-        self.assertLessEqual(outer, 15 * 60)
+        with patch.object(verification_module, '_command_check', return_value=CheckResult(
+                'factory-postgres-exit', 'fail', 'bounded command observation')) as command:
+            verification_module._live_cell(ROOT, 'factory', 1500)
+        actual_command = command.call_args
+        self.assertEqual(actual_command.args[3], outer)
+        self.assertEqual(actual_command.args[2][-2:], ['--timeout-seconds', '1500'])
+        self.assertEqual(actual_command.kwargs['termination_grace'], 180)
+        self.assertLess(runner._FULL_SUITE_TIMEOUT_SECONDS, 1500)
+        self.assertGreaterEqual(outer, 1500 + actual_command.kwargs['termination_grace'])
+        self.assertLessEqual(outer, 30 * 60)
 
     def test_python_pr_skips_factory_postgres_exit_only_in_repository_sandbox(self) -> None:
         with project_copy() as root:

@@ -20,7 +20,7 @@ from getzilla.router import build_route
 from getzilla.spec import SpecError, _parse_canonical_json
 from getzilla.state import get_active_change, get_active_route, set_active_change
 from tests._support import activate_owned_route
-from tests._support import observed_context, prepare_review_source, project_copy, run_hook
+from tests._support import observed_context, prepare_review_source, project_copy, run_hook, write_current_verification
 
 
 class PackageStatusTests(unittest.TestCase):
@@ -137,12 +137,14 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIn('no_active_package', self.codes(value['package_completeness']))
 
     def test_populated_status_is_additive_and_nonmutating_even_with_receipts(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, source_only_runtime=True) as root:
             self.install_cli(root)
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)
             for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
+                if kind != 'verification':
+                    write_receipt(root, kind, 'pass', **review)
+            write_current_verification(root)
             before = self.inventory(root)
             for _ in range(2):
                 proc = self.cli(root)

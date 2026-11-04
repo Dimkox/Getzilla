@@ -42,9 +42,7 @@ def _host_supported() -> bool:
         return False
 
 
-def _selected_wheel(package: dict) -> dict | None:
-    if package["name"] == "tzdata":  # locked only for psycopg's Windows marker
-        return None
+def _selected_wheel(package: dict) -> dict:
     matches = []
     for wheel in package.get("wheels", []):
         filename = wheel["url"].rsplit("/", 1)[-1]
@@ -61,17 +59,82 @@ def _selected_wheel(package: dict) -> dict | None:
     return {"name": package["name"], "version": package["version"], "filename": filename, "sha256": digest}
 
 
+def _runtime_packages(data: dict) -> list[dict]:
+    """Traverse the locked runtime graph for the one supported release profile.
+
+    This is not a dependency resolver or a general marker evaluator. The three
+    marker forms below are the complete current Linux/CPython-3.12 contract;
+    unknown conditions and alternative resolutions require an explicit update.
+    Development groups and unrequested extras never become release contents.
+    """
+    markers = {"python_full_version < '3.13'": True,
+               "implementation_name != 'pypy'": True, "sys_platform == 'win32'": False}
+    if (not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1
+            or type(data.get("revision")) is not int or data["revision"] not in {3, 5}
+            or not isinstance(data.get("requires-python"), str)
+            or data["requires-python"].replace(" ", "") not in {">=3.11", ">=3.12,<3.13"}
+            or "resolution-markers" in data or not isinstance(data.get("package"), list)
+            or not 1 <= len(data["package"]) <= 10_000):
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    packages = {}
+    for package in data["package"]:
+        if (not isinstance(package, dict) or not isinstance(package.get("name"), str)
+                or not isinstance(package.get("version"), str) or not package["version"]
+                or package["name"] in packages or "resolution-markers" in package):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        packages[package["name"]] = package
+    project = "getzilla-factory"
+    if project not in packages or "dependencies" not in packages[project]:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    selected: dict[str, set[str]] = {}
+    pending = [(project, set())]
+    while pending:
+        name, extras = pending.pop()
+        if name not in packages:
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        first = name not in selected
+        new_extras = extras - selected.get(name, set())
+        if not first and not new_extras:
+            continue
+        package = packages[name]
+        dependencies = package.get("dependencies", []) if first else []
+        optional = package.get("optional-dependencies", {})
+        if not isinstance(dependencies, list) or not isinstance(optional, dict):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        dependencies = list(dependencies)
+        for extra in new_extras:
+            if extra not in optional or not isinstance(optional[extra], list):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+            dependencies.extend(optional[extra])
+        selected.setdefault(name, set()).update(extras)
+        for edge in dependencies:
+            if (not isinstance(edge, dict) or set(edge) - {"name", "extra", "marker", "version", "source"}
+                    or not isinstance(edge.get("name"), str)):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+            if "marker" in edge:
+                marker = edge["marker"]
+                if not isinstance(marker, str) or marker not in markers:
+                    raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+                if not markers[marker]:
+                    continue
+            target = packages.get(edge["name"])
+            requested = edge.get("extra", [])
+            if (target is None or not isinstance(requested, list)
+                    or any(not isinstance(extra, str) or not extra for extra in requested)
+                    or ("version" in edge and edge["version"] != target["version"])
+                    or ("source" in edge and edge["source"] != target.get("source"))):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+            pending.append((edge["name"], set(requested)))
+    return [packages[name] for name in sorted(selected) if name != project]
+
+
 def derive_inventory(lock: Path) -> dict:
     content = Path(lock).read_bytes()
     try:
         data = tomllib.loads(content.decode())
         packages = []
-        for package in data["package"]:
-            if package["name"] == "getzilla-factory":
-                continue
-            selected = _selected_wheel(package)
-            if selected is not None:
-                packages.append(selected)
+        for package in _runtime_packages(data):
+            packages.append(_selected_wheel(package))
     except (KeyError, TypeError, ValueError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise InstallerError("INVALID_LOCK") from exc
     return {"schema_version": "factory-runtime-wheels/v1", "profile": PROFILE,

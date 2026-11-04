@@ -270,7 +270,7 @@ class BBContractTests(unittest.TestCase):
                 ):
                     first.validate_replay(forged)
 
-    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed in this test environment")
     def test_structural_schemas_accept_canonical_records_but_parser_is_semantic_gate(self):
         module = self.module()
         for name, value in (

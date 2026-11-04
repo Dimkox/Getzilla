@@ -2,10 +2,11 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
 from pathlib import Path
 from .util import dump_json, git_head, git_output, now_utc
 
-_LOGS = ('core-tests.log', 'trust-ci-tests.log', 'smoke.log', 'install.log')
+_LOGS = ('core-tests.log', 'trust-ci-tests.log', 'factory-unit.log', 'factory-unit.json', 'smoke.log', 'install.log')
 
 
 def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: str, run_id: str) -> None:
@@ -15,11 +16,16 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
     head = git_head(root)
     if not head:
         raise ValueError('CI evidence requires an exact Git HEAD')
+    if job == 'linux-core' and status == 'success':
+        if head != os.environ.get('GETZILLA_EXPECTED_HEAD') or git_output(root, 'status', '--porcelain'):
+            raise ValueError('successful core evidence requires a clean exact expected source')
     inventory = []
     for name in _LOGS:
         path = logs / name
         if path.is_file() and not path.is_symlink():
             content = path.read_bytes()
+            if len(content) > 16 * 1024 * 1024:
+                raise ValueError('CI log exceeds artifact bound')
             (output / name).write_bytes(content)
             inventory.append({'path': name, 'sha256': hashlib.sha256(content).hexdigest()})
     for name, source in (
@@ -39,7 +45,27 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
         'authority': 'CI run observations only; local approval grants are never exported'})
     dump_json(output / 'provenance.json', {'schema_version': 1, 'source': 'github-actions',
         'head': head, 'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'job': job,
-        'run_id': run_id, 'observed_at': now_utc(), 'files': inventory})
+        'run_id': run_id, 'attempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''),
+        'event_sha': os.environ.get('GITHUB_SHA'), 'base_sha': os.environ.get('GETZILLA_BASE_SHA'),
+        'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'), 'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
+        'observed_at': now_utc(), 'files': inventory})
+
+
+def export_live_evidence(source: Path, output: Path) -> None:
+    from .ci_admission import _bytes, _read, _verify_files
+    from .live_acceptance import evidence_name
+    if not (source / 'manifest.json').is_file():
+        raise ValueError('live acceptance manifest is missing')
+    manifest = _read(source / 'manifest.json')
+    if manifest.get('schema') != 'getzilla-live-acceptance-v1':
+        raise ValueError('unknown live evidence schema')
+    _verify_files(source, manifest)
+    names = [entry['path'] for entry in manifest['files']]
+    if not all(evidence_name(name) for name in names):
+        raise ValueError('unselected file in live evidence inventory')
+    output.mkdir(parents=True, exist_ok=False)
+    for name in ['manifest.json', *names]:
+        (output / name).write_bytes(_bytes(source / name))
 
 
 def export_local_evidence(root: Path, output: Path) -> None:

@@ -77,6 +77,90 @@ Runner = Callable[[StackContext], list[Any]]
 RUNNERS: dict[str, Runner] = {}
 
 
+@dataclass(frozen=True)
+class StackPlanContext:
+    """Source-only selection: planning cannot install a toolchain or run a command."""
+    root: Path
+    mode: str
+    stack: Stack
+    files: list[str]
+
+
+Planner = Callable[[StackPlanContext], list[dict[str, Any]]]
+# Bind a declaration to the actual adapter, so replacing RUNNERS cannot inherit an unrelated plan.
+PLANNERS: dict[str, tuple[Runner, Planner]] = {}
+
+
+def _planned(context: StackPlanContext, runners, planners) -> list[dict[str, Any]]:
+    registered = planners.get(context.stack.id)
+    if registered is None or registered[0] is not runners.get(context.stack.id):
+        raise ValueError(f'required-plan-incomplete: no planned-check contract for stack:{context.stack.id}')
+    declarations = registered[1](context)
+    if not isinstance(declarations, list) or not 0 < len(declarations) <= 4096:
+        raise ValueError('required-plan-incomplete: empty or excessive stack declaration')
+    names = set()
+    for item in declarations:
+        if (not isinstance(item, dict) or set(item) != {'check_id', 'applicability', 'reason', 'evidence'} or
+                not isinstance(item['check_id'], str) or not 0 < len(item['check_id']) <= 2048 or
+                item['check_id'] in names or item['applicability'] not in {'required', 'not_applicable'} or
+                not isinstance(item['reason'], str) or not item['reason'] or
+                not isinstance(item['evidence'], dict) or
+                item['applicability'] == 'not_applicable' and not item['evidence']):
+            raise ValueError('required-plan-incomplete: invalid stack declaration')
+        names.add(item['check_id'])
+    return declarations
+
+
+def planned_stack_checks(root: Path, mode: str, changed: list[str], *,
+                         registry=None, runners=None, planners=None, files=None) -> list[dict[str, Any]]:
+    """The same detected stacks and source selectors as dispatch, before tool availability is known."""
+    registry = load_registry(root) if registry is None else registry
+    runners = RUNNERS if runners is None else runners
+    planners = PLANNERS if planners is None else planners
+    declarations = []
+    for stack in detect_stacks(root, registry, files):
+        touched = [path for path in changed if stack.owns(path)]
+        if stack.verified_by:
+            if stack.id not in {'python', 'node', 'php'} or stack.verified_by != 'builtin:' + stack.id:
+                raise ValueError(f'required-plan-incomplete: unknown builtin adapter {stack.verified_by}')
+            continue
+        if not touched:
+            declarations.append({'check_id': f'stack:{stack.id}', 'applicability': 'not_applicable',
+                'reason': UNTOUCHED_SUMMARY, 'evidence': {'stack': stack.id, 'touched': [],
+                    'markers': list(stack.markers), 'extensions': list(stack.extensions)}})
+            continue
+        declarations.extend(_planned(StackPlanContext(root, mode, stack, touched), runners, planners))
+    return declarations
+
+
+def _enforce_plan(declarations, observed, make, notes) -> list[Any]:
+    """An early tool failure or a buggy adapter leaves every planned check explicitly unexecuted."""
+    names = {item['check_id'] for item in declarations}
+    unexpected = [check for check in observed if check.name not in names]
+    notes['unplanned_results'] = [{'name': check.name, 'status': check.status, 'summary': check.summary,
+                                  'details': check.details} for check in unexpected]
+    results = []
+    for item in declarations:
+        matches = [check for check in observed if check.name == item['check_id']]
+        if len(matches) != 1:
+            reason = 'planned check did not run' if not matches else 'adapter returned duplicate planned checks'
+            results.append(make(item['check_id'], 'fail', reason, details=[{
+                'severity': 'error', 'code': 'stack-check-not-run' if not matches else 'stack-check-duplicate',
+                'path': item['check_id'], 'message': reason,
+                'causes': notes['unplanned_results'],
+            }]))
+        else:
+            results.append(matches[0])
+    if unexpected and not any(check.status == 'fail' for check in results):
+        # Extra failures must not disappear when all declared checks happened to complete.
+        results[0].status = 'fail'
+        results[0].summary = 'adapter returned results outside its declared plan'
+        results[0].details.append({'severity': 'error', 'code': 'stack-plan-mismatch',
+                                  'path': results[0].name, 'message': results[0].summary,
+                                  'causes': notes['unplanned_results']})
+    return results
+
+
 def load_registry(root: Path | None = None) -> dict[str, Stack]:
     candidates = [root / REGISTRY] if root else []
     candidates.append(STACK_DIR / 'config' / 'stacks.json')
@@ -127,11 +211,13 @@ def default_ensure(stack: Stack, version: str) -> Toolchain | Blocker:
 
 def stack_checks(root: Path, mode: str, changed: list[str], *, make: Callable[..., Any], command: Callable[..., Any],
                  registry: Mapping[str, Stack] | None = None, runners: Mapping[str, Runner] | None = None,
+                 planners: Mapping[str, tuple[Runner, Planner]] | None = None,
                  ensure: Callable[[Stack, str], Toolchain | Blocker] | None = None,
                  files: list[str] | None = None) -> tuple[list[Any], dict[str, Any]]:
     """Checks for every stack the change touches, plus an honest line for every other detected stack."""
     registry = load_registry(root) if registry is None else registry
     runners = RUNNERS if runners is None else runners
+    planners = PLANNERS if planners is None else planners
     ensure = ensure or default_ensure
     detected = detect_stacks(root, registry, files)
     metadata: dict[str, Any] = {'detected': [stack.id for stack in detected], 'checked': [], 'builtin': [],
@@ -159,8 +245,16 @@ def stack_checks(root: Path, mode: str, changed: list[str], *, make: Callable[..
                 'message': f'Getzilla has no checks for {stack.id} yet; {len(touched)} changed file(s) are not verified',
             }]))
             continue
+        try:
+            declarations = _planned(StackPlanContext(root, mode, stack, touched), runners, planners)
+        except ValueError as exc:
+            results.append(make(f'stack:{stack.id}', 'fail', str(exc), details=[{
+                'severity': 'error', 'code': 'required-plan-incomplete', 'path': stack.id, 'message': str(exc)}]))
+            metadata['not_verified'].append(stack.id)
+            continue
         context = StackContext(root, mode, stack, touched, make, command, ensure)
-        results.extend(runners[stack.id](context))
+        observed = runners[stack.id](context)
+        results.extend(_enforce_plan(declarations, observed, make, context.notes))
         metadata['checked'].append(stack.id)
         metadata['details'][stack.id] = context.notes
     return results, metadata

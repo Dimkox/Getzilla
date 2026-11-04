@@ -44,6 +44,8 @@ def observe_remaining(route: dict[str, Any], package: dict[str, Any] | None,
     remaining = list(dict.fromkeys(remaining))
     identity = {'task': route.get('logical_task_id', route['route_id']), 'epoch': route.get('authority_epoch'),
                 'context': route.get('context'), 'remaining': remaining}
+    if 'intent_state' in route:
+        identity['intent_state'] = route['intent_state']
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=True).encode('utf-8')).hexdigest()
     return {'remaining': remaining, 'blocked_reason': blocked, 'fingerprint': fingerprint}
 

@@ -22,20 +22,35 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import python_test_runner as runner
 from getzilla import receipts
+from getzilla import state
 from getzilla import util
 from getzilla import verification as verifier
 from getzilla.router import build_route
 from tests._support import activate_owned_route
-from tests._support import prepare_review_source, observed_context, synchronize_fixture_scope, project_copy as full_project_copy
+from tests._support import (prepare_review_source, observed_context, synchronize_fixture_scope,
+                           write_current_verification, project_copy as full_project_copy)
 
 
 def project_copy(*, git: bool = False):
-    return full_project_copy(git=git, minimal_runtime=True)
+    return full_project_copy(git=git, minimal_runtime=True, source_only_runtime=True)
 
 
 @contextlib.contextmanager
-def routed_fixture(*, legacy=False):
+def routed_fixture(*, legacy=False, test_result=None):
     with project_copy(git=True) as root:
+        if test_result is not None:
+            tests = root / 'tests'
+            tests.mkdir()
+            (tests / '__init__.py').write_text('', encoding='utf-8')
+            (tests / 'test_recovery_result.py').write_text(
+                'import unittest\n\n\nclass Result(unittest.TestCase):\n'
+                '    def test_result(self):\n        print("retained", end="")\n'
+                f'        self.assertTrue({test_result == "pass"!r})\n', encoding='utf-8')
+            # Measure this fixture's actual suite; the real repository keeps its own threshold.
+            (root / '.coveragerc').write_text('[run]\nbranch = True\nsource = tests\n\n[report]\nfail_under = 100\n', encoding='utf-8')
+            (root / '.gitignore').write_text('.getzilla/runtime/\n__pycache__/\n.coverage\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'tests', '.coveragerc', '.gitignore'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'actual recovery test suite'], cwd=root, check=True)
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
         route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
         if legacy:
@@ -44,7 +59,29 @@ def routed_fixture(*, legacy=False):
                 route.pop(name, None)
         activate_owned_route(root, route)
         from getzilla.review_plan import reconcile_route
-        if not legacy:
+        if legacy:
+            from getzilla.spec import dump_canonical_spec, generate_spec
+            change_id = '20261004-recovery-fixture'
+            relative = 'engineering/changes/' + change_id
+            package = root / relative
+            package.mkdir(parents=True)
+            spec = generate_spec({**route, 'change_id': change_id})
+            spec['objective'].update(success_metric='receipt boundary', target='retain current verified evidence')
+            spec['acceptance_criteria'] = [{'id': 'AC-001', 'statement': 'Preserve the verified report through storage.',
+                                           'evidence': [{'receipt': 'verification'}]}]
+            if spec['risk']['tier'] == 'red':
+                spec['forbidden_outcomes'] = [{'id': 'FORBID-001', 'statement': 'No stale evidence admitted.',
+                                               'evidence': [{'receipt': 'verification'}]}]
+                spec['approvals']['required_scopes'] = ['scope_and_design_approval']
+            (package / 'change-spec.yaml').write_text(dump_canonical_spec(spec), encoding='utf-8')
+            state.set_active_change(root, {'change_id': change_id, 'path': relative})
+            subprocess.run(['git', 'add', relative], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'legacy typed recovery fixture'], cwd=root, check=True)
+        else:
+            from getzilla.change import start_change
+            # This full-route fixture needs a real selected package even when its
+            # small seed task would otherwise be eligible for a micro change.
+            start_change(root)
             synchronize_fixture_scope(root)
             route = reconcile_route(root)
         # Tool availability is unrelated to these deterministic boundary faults.
@@ -61,15 +98,16 @@ def routed_fixture(*, legacy=False):
 
 
 def verification_only_legacy_route(root, route):
-    """Exercise legacy receipt envelopes without claiming a modern review plan.
+    """Qualify actual checks, then inspect the legacy one-receipt envelope view.
 
-    Modern plan bindings are covered by test_review_plan and real verifier runs.
-    These synthetic publication tests intentionally request one receipt only.
+    Reconcile the active route before verification; do not reduce its review
+    obligations. Only the assertion's legacy view requests one stored receipt.
     """
+    from getzilla.review_plan import reconcile_route
+    reconcile_route(root)
     route.pop('risk_assessment', None)
     route.pop('review_plan', None)
     route['required_evidence'] = ['verification']
-    activate_owned_route(root, route)
 
 
 @contextlib.contextmanager
@@ -130,8 +168,8 @@ class VerifierRecoveryTests(unittest.TestCase):
     def test_cli_publication_failure_does_not_rebind_observed_context(self):
         from getzilla.continuity import submit
         from getzilla.review_plan import reconcile_route
-        with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
-            report = verifier.verify(root, mode='fast')
+        with routed_fixture() as (root, route):
+            report = write_current_verification(root)
             observed = report['continuity']
 
             class ChangedOutput(io.StringIO):
@@ -154,8 +192,8 @@ class VerifierRecoveryTests(unittest.TestCase):
             def write(self, text):
                 raise OSError('publication failed')
 
-        with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
-            report = verifier.verify(root, mode='fast')
+        with routed_fixture() as (root, route):
+            report = write_current_verification(root)
             self.assertEqual(receipts.get_receipt(root, route['route_id'], 'verification')['status'], 'pass')
             with patch.object(verifier, 'verify', return_value=report), patch.object(util, 'find_root', return_value=root), \
                  patch.object(sys, 'argv', ['getzilla_verify.py', '--json']), \
@@ -174,8 +212,8 @@ class VerifierRecoveryTests(unittest.TestCase):
                 os.kill(os.getpid(), signal.SIGTERM)
                 return super().write(text)
 
-        with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
-            report = verifier.verify(root, mode='fast')
+        with routed_fixture() as (root, route):
+            report = write_current_verification(root)
             with patch.object(verifier, 'verify', return_value=report), patch.object(util, 'find_root', return_value=root), \
                  patch.object(sys, 'argv', ['getzilla_verify.py', '--json']), \
                  contextlib.redirect_stdout(InterruptedOutput()), contextlib.redirect_stderr(io.StringIO()):
@@ -245,16 +283,22 @@ class VerifierRecoveryTests(unittest.TestCase):
         for error in (OSError('disk full'), RuntimeError('invalid receipt binding'),
                       ValueError('malformed report'), TypeError('invalid report field')):
             for verdict in ('pass', 'fail'):
-                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture() as (root, _):
-                    completed = verifier.CheckResult('python-unittest', verdict, 'original verdict', stdout='retained')
-                    with patch.object(verifier, '_python', return_value=[completed]), \
-                         patch.object(verifier, 'write_receipt', side_effect=error):
-                        report = verifier.verify(root, mode='fast')
+                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict) as (root, _):
+                    observed_checks = []
+
+                    def publication_fault(*args, **kwargs):
+                        observed_checks.extend(json.loads(json.dumps(kwargs['details']['checks'])))
+                        raise error
+
+                    with patch.object(verifier, 'write_receipt', side_effect=publication_fault):
+                        report = verifier.verify(root, mode='pr')
                     self.assertEqual(report['status'], 'fail')
                     self.assertEqual(report['check_status'], verdict)
                     self.assertEqual(report['checks'][-1]['name'], 'receipt-recording')
                     original = next(check for check in report['checks'] if check['name'] == 'python-unittest')
-                    self.assertEqual((original['status'], original['stdout']), (verdict, 'retained'))
+                    self.assertEqual(original['status'], verdict)
+                    self.assertTrue(original['stdout'])
+                    self.assertEqual(report['checks'][:-1], observed_checks)
                     json.dumps(report, ensure_ascii=True)
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
@@ -305,7 +349,7 @@ class VerifierRecoveryTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX signal cancellation; Windows terminates without a handler')
     def test_cancellation_during_publication_records_terminal_failure(self):
-        with routed_fixture() as (root, route):
+        with routed_fixture(test_result='pass') as (root, route):
             original_replace = receipts.os.replace
             interrupted = False
 
@@ -316,10 +360,9 @@ class VerifierRecoveryTests(unittest.TestCase):
                     os.kill(os.getpid(), signal.SIGTERM)
                 return original_replace(source, target, *args, **kwargs)
 
-            with patch.object(verifier, '_python', return_value=[verifier.CheckResult('python-unittest', 'pass', 'complete')]), \
-                 patch.object(receipts.os, 'replace', side_effect=cancel_on_replace):
+            with patch.object(receipts.os, 'replace', side_effect=cancel_on_replace):
                 with self.assertRaises(SystemExit) as caught:
-                    verifier.verify(root, mode='fast')
+                    verifier.verify(root, mode='pr')
             report = caught.exception.report
             self.assertEqual(report['check_status'], 'pass')
             self.assertEqual(report['terminal_state'], 'cancelled')
@@ -807,11 +850,14 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
     def test_large_scope_metadata_roundtrips_through_bounded_report(self):
         with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
-            fingerprint = util.tree_fingerprint(root)
+            report = write_current_verification(root)
+            fingerprint = report['tree_fingerprint']
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/20260918-historical-delivery-provenance-and-acceptance-123abc/evidence/historical-{index:05d}-source-contract.md' for index in range(1442)]
             scope = {'profile': 'full-pr-suite', 'eligible': False, 'evidence_kind': 'verification:full-pr', 'reason_code': 'unsafe-file-status', 'reason': 'renamed historical inventory requires full verification', 'changed_paths_digest': 'a' * 64, 'checked_files': paths, 'rejected_files': paths[:488], 'skipped_checks': [], 'status_channels': {'comparison': 'trusted', 'staged': 'trusted', 'unstaged': 'trusted', 'untracked': 'trusted'}}
-            report = {'status': 'pass', 'mode': 'pr', 'route_id': route['route_id'], 'tree_fingerprint': fingerprint, 'changed_files': paths, 'changed_file_inventory': {'bases': [{'base': head, 'target': head}], 'union_count': len(paths), 'status_channels': scope['status_channels']}, 'docs_state_scope': scope, 'checks': [verifier._docs_state_scope_check(scope).to_dict()]}
+            # Expand diagnostic transport fields only. The current required plan
+            # and all actually executed mandatory results stay intact.
+            report.update(changed_files=paths, changed_file_inventory={'bases': [{'base': head, 'target': head}], 'union_count': len(paths), 'status_channels': scope['status_channels']}, docs_state_scope=scope)
             self.assertEqual(len(scope['checked_files']), 1442)
             self.assertEqual(len(scope['rejected_files']), 488)
             self.assertGreater(len(json.dumps(report, ensure_ascii=True, separators=(',', ':')).encode()), receipts.MAX_RECEIPT_BYTES)
@@ -820,19 +866,26 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(receipt['details'], report)
             self.assertEqual(receipts.validate_evidence(root, route), [])
+            report['checks'] = [item for item in report['checks'] if item['name'] != 'security-inventory']
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
+            self.assertTrue(any('required-check-missing' in gap for gap in receipts.validate_evidence(root, route)))
 
     def test_large_verification_report_preserves_complete_logs_and_scope(self):
         with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
-            fingerprint = util.tree_fingerprint(root)
+            report = write_current_verification(root)
+            fingerprint = report['tree_fingerprint']
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/example/evidence/checked-{index:05d}.md' for index in range(1500)]
             captured = 'captured output\n' * 750  # Each log respects the actual 12,000-character capture bound.
-            scope = {'profile': 'full-pr', 'eligible': False, 'evidence_kind': 'verification:full-pr', 'reason_code': 'unsafe-file-status', 'changed_paths_digest': 'a' * 64, 'checked_files': paths, 'skipped_checks': ['historical-only-check']}
-            checks = [verifier.CheckResult('python-unittest', 'pass', 'exit=0', command=['python3', '-m', 'unittest'], stdout=captured).to_dict()]
-            checks.extend(verifier.CheckResult(f'captured-check-{index}', 'pass', 'exit=0', stdout=captured).to_dict() for index in range(8))
-            checks.append(verifier.CheckResult('historical-only-check', 'skip', 'historical evidence is not current execution').to_dict())
-            report = {'status': 'pass', 'mode': 'pr', 'route_id': route['route_id'], 'tree_fingerprint': fingerprint, 'changed_files': paths, 'changed_file_inventory': {'bases': [{'base': head, 'target': head}], 'union_count': len(paths)}, 'docs_state_scope': scope, 'checks': checks}
+            skipped_checks = [check['name'] for check in report['checks'] if check['status'] == 'skip']
+            self.assertTrue(skipped_checks, 'retain actual source-derived exclusions in the transport fixture')
+            scope = {'profile': 'full-pr', 'eligible': False, 'evidence_kind': 'verification:full-pr', 'reason_code': 'unsafe-file-status', 'changed_paths_digest': 'a' * 64, 'checked_files': paths, 'skipped_checks': skipped_checks}
+            # Inject bounded log payloads at the storage seam without inventing
+            # checker verdicts or replacing the executed obligation bindings.
+            for check in report['checks'][:9]:
+                check['stdout'] = captured
+            report.update(changed_files=paths, changed_file_inventory={'bases': [{'base': head, 'target': head}], 'union_count': len(paths)}, docs_state_scope=scope)
             self.assertGreater(len(json.dumps(report).encode()), receipts.MAX_RECEIPT_BYTES)
             verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
             self.assertEqual(report['status'], 'pass', report['checks'][-1])
@@ -992,7 +1045,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
         for failure, error in (('circular', ValueError), ('unserializable', TypeError)):
             with self.subTest(failure=failure), routed_fixture(legacy=True) as (root, route):
                 verification_only_legacy_route(root, route)
-                receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
+                write_current_verification(root)
                 self.assertEqual(receipts.validate_evidence(root, route), [])
                 details = {}
                 details['bad'] = details if failure == 'circular' else object()
@@ -1047,7 +1100,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
         with routed_fixture(legacy=True) as (root, route):
             verification_only_legacy_route(root, route)
             receipt_route = route
-            receipts.write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
+            write_current_verification(root)
             self.assertEqual(receipts.validate_evidence(root, receipt_route), [])
             subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'new exact head'], cwd=root, check=True)
             self.assertTrue(any('head' in gap for gap in receipts.validate_evidence(root, receipt_route)))
@@ -1077,8 +1130,8 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
                 self.assertFalse(list(target.parent.glob('.verification.json.*')))
 
     def test_receipt_binds_head_scope_inventory_and_terminal_state(self):
-        with routed_fixture() as (root, route), patch.object(verifier, '_python', return_value=[]):
-            report = verifier.verify(root, mode='fast')
+        with routed_fixture() as (root, route):
+            report = write_current_verification(root)
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             expected_head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             self.assertEqual(receipt['git_head'], expected_head)

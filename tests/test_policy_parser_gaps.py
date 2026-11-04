@@ -27,6 +27,8 @@ def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'checkout', '-q', '-b', 'policy-parser-fixture'], cwd=root, check=True)
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
+        # These assertions exercise quoted/inert command text, not the independent protected-branch gate.
+        subprocess.run(['git', 'checkout', '-qb', 'parser-fixture'], cwd=root, check=True, capture_output=True)
         activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)

@@ -15,7 +15,9 @@ re-attached to the node that owns the hooks/policy.
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 from tests import test_architecture_fitness as fixture
 
@@ -91,6 +93,21 @@ class UpdaterNetworkBoundaryTests(unittest.TestCase):
                 rule["require_declared_edge"],
                 "the boundary must be declared, not loosened by dropping require_declared_edge",
             )
+
+    def test_snapshot_reader_and_copy_work_with_network_denied(self) -> None:
+        from getzilla import security_data
+        from tests.test_security_data import NOW, publish
+
+        with tempfile.TemporaryDirectory() as temporary:
+            source, destination = Path(temporary) / 'source', Path(temporary) / 'destination'
+            publish(source)
+            with mock.patch('urllib.request.urlopen', side_effect=AssertionError('network forbidden')), \
+                    mock.patch('socket.create_connection', side_effect=AssertionError('network forbidden')):
+                original, _ = security_data.read_snapshot(source, 'osv:PyPI', now=NOW)
+                security_data.copy_snapshot(source, destination, 'osv:PyPI', now=NOW)
+                copied, evidence = security_data.read_snapshot(destination, 'osv:PyPI', now=NOW)
+            self.assertEqual(copied, original)
+            self.assertEqual(evidence['coverage']['record_count'], 1)
 
 
 if __name__ == "__main__":

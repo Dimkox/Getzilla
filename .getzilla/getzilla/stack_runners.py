@@ -17,11 +17,11 @@ from .stack_toolchains import (
     INSTALLERS, Blocker, Fetch, Run, Toolchain, ToolchainError, Which, _publish, cache_root, download_verified,
     unpack,
 )
-from .stacks import RUNNERS, StackContext
+from .stacks import PLANNERS, RUNNERS, StackContext, StackPlanContext
 
 # -- shared ---------------------------------------------------------------------------------------
 
-def _project_dirs(context: StackContext, patterns: tuple[str, ...]) -> list[Path]:
+def _project_dirs(context: StackContext | StackPlanContext, patterns: tuple[str, ...]) -> list[Path]:
     """Shallowest directories holding a build file for the touched files (one per independent project)."""
     from .stacks import tree_files
 
@@ -37,7 +37,7 @@ def _project_dirs(context: StackContext, patterns: tuple[str, ...]) -> list[Path
     return [context.root / str(root) for root in (chosen or roots)]
 
 
-def _label(context: StackContext, directory: Path) -> str:
+def _label(context: StackContext | StackPlanContext, directory: Path) -> str:
     relative = directory.relative_to(context.root).as_posix()
     return '' if relative == '.' else f':{relative}'
 
@@ -373,3 +373,61 @@ def java_checks(context: StackContext) -> list[Any]:
 
 
 RUNNERS['java'] = java_checks
+
+
+def planned_checks(context: StackPlanContext) -> list[dict[str, Any]]:
+    """Declare the existing runners' checks from the same directory, mode and source selectors."""
+    names: list[str] = []
+    full = context.mode in {'pr', 'release'}
+    stack = context.stack.id
+    if stack == 'java' and not full:
+        return [{'check_id': 'java', 'applicability': 'not_applicable',
+                 'reason': 'Java builds run in pr and release mode',
+                 'evidence': {'stack': stack, 'mode': context.mode, 'touched': context.files}}]
+    if stack == 'powershell':
+        from .stacks import tree_files
+        names.append('psscriptanalyzer')
+        if full and any(path.endswith('.Tests.ps1') and context.stack.owns(path) for path in tree_files(context.root)):
+            names.append('pester')
+    elif stack in {'rust', 'dotnet', 'go', 'java'}:
+        patterns = {'rust': ('Cargo.toml',), 'dotnet': DOTNET_PROJECTS, 'go': ('go.mod',), 'java': JAVA_BUILDS}[stack]
+        for directory in _project_dirs(context, patterns):
+            label = _label(context, directory)
+            if stack == 'rust':
+                if not (directory / 'Cargo.lock').is_file():
+                    names.append('cargo-lockfile' + label)
+                names.extend(name + label for name in ('cargo-fmt', 'cargo-clippy'))
+                if full:
+                    names.extend(name + label for name in ('cargo-build', 'cargo-test'))
+            elif stack == 'go':
+                names.extend(name + label for name in ('gofmt', 'go-vet'))
+                if full:
+                    names.extend(name + label for name in ('go-build', 'go-test'))
+            elif stack == 'dotnet':
+                for project in sorted(directory.rglob('*.*proj')):
+                    if DOTNET_WORKLOAD.search(project.read_text(encoding='utf-8', errors='replace')):
+                        names.append('dotnet-workload:' + project.relative_to(context.root).as_posix())
+                if _dotnet_target(directory) is None:
+                    continue
+                names.extend(name + label for name in (
+                    ('dotnet-restore', 'dotnet-build', 'dotnet-test', 'dotnet-format', 'nuget-vulnerabilities')
+                    if full else ('dotnet-format',)))
+                if not full and not any(directory.rglob('packages.lock.json')):
+                    names.append('nuget-dependencies' + label)
+            else:
+                wrapper = _wrapper(directory)
+                if wrapper is None:
+                    names.append('java-wrapper' + label)
+                if (directory / 'pom.xml').is_file() and not (directory / 'gradle.lockfile').is_file():
+                    names.append('maven-dependencies' + label)
+                if wrapper:
+                    names.append(wrapper[0] + '-build' + label)
+    else:
+        raise ValueError('required-plan-incomplete: unknown native stack adapter ' + stack)
+    evidence = {'stack': stack, 'mode': context.mode, 'touched': context.files}
+    return [{'check_id': name, 'applicability': 'required', 'reason': 'existing stack runner selection',
+             'evidence': evidence} for name in names]
+
+
+for _stack in ('rust', 'dotnet', 'powershell', 'go', 'java'):
+    PLANNERS[_stack] = (RUNNERS[_stack], planned_checks)

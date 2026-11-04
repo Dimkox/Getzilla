@@ -120,9 +120,14 @@ def activate_owned_route(root: Path, route: dict) -> None:
 
 
 @contextlib.contextmanager
-def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
-    with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
+def project_copy(*, git: bool = False, minimal_runtime: bool = False,
+                 source_only_runtime: bool = False) -> Iterator[Path]:
+    """Copy the runtime; an explicit source-only fixture has no bundled dependency/image inputs.
+
+    Unlike minimal_runtime, source_only_runtime keeps the real engine for subprocess hooks.
+    Its complete empty external-object inventory is measured by the verifier, never waived.
+    """
+    with _test_directory() as tmp, _scanner_environment(minimal_runtime or source_only_runtime), _session_environment():
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -137,9 +142,11 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                     omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
                     omitted.update(name for name in names if name != '__init__.py')
-                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/sast':
+                if (minimal_runtime or source_only_runtime) and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore)
         runtime = root / '.getzilla/runtime'
@@ -170,14 +177,17 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
         yield root
 
 
-def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
+def run_hook(root: Path, name: str, payload: dict, *, harness: str | None = None) -> tuple[int, dict, str]:
     script = root / '.grok/hooks' / name
     # Use the fixture even when the parent runner exposes the intact source package.
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
     # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
+    command = [sys.executable, str(script)]
+    if harness is not None:
+        command.extend(['--harness', harness])
     proc = subprocess.run(
-        [sys.executable, str(script)],
+        command,
         cwd=root,
         env=env,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
@@ -239,6 +249,28 @@ def observed_context(root: Path):
     return None if legacy_evidence_allowed(route) else context_binding(root, route)
 
 
+def write_current_verification(root: Path) -> dict:
+    """Record real current native verification for positive receipt/Stop fixtures.
+
+    Review receipts remain an explicit test seam; this helper never substitutes assertions
+    for executed checks or manufactures database evidence.
+    """
+    from getzilla.security_inventory import collect_inventory
+    from getzilla.verification import verify
+    from getzilla.verification_plan import report_gaps
+    inventory = collect_inventory(root)
+    if not inventory['complete'] or any(inventory[key] for key in ('dependencies', 'images', 'tools')):
+        raise AssertionError('current-verification fixture must have a complete source-only inventory')
+    report = verify(root, mode='pr', record=True)
+    if report['status'] != 'pass':
+        failed = [item for item in report['checks'] if item['status'] == 'fail']
+        raise AssertionError(report.get('required_plan_error') or failed)
+    gaps = report_gaps(root, report)
+    if gaps:
+        raise AssertionError(gaps)
+    return report
+
+
 def prepare_review_source(root: Path) -> dict[str, str]:
     """Freeze a real Git candidate and return explicit independent-review inputs."""
     from getzilla.state import get_active_change, get_active_route, set_active_change
@@ -276,20 +308,30 @@ def prepare_review_source(root: Path) -> dict[str, str]:
 def offline_mirror(base: Path) -> Path:
     """A small stand-in for every download host of getzilla_update.py (``GETZILLA_UPDATE_MIRROR``).
 
-    Each OSV archive is a valid zip with one record, each OpenGrep asset is a short script and each
+    Each OSV snapshot has one ecosystem-specific record and verified acquisition metadata.
+    Each OpenGrep asset is a short script and each
     pinned workflow source is a one-commit repository with its upstream tag. getzilla-mirror.json
     pins these stand-ins, so the updater's zip, SHA-256 and commit checks run as they do for real.
     """
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
-    from getzilla import baseline, updater
+    import io
+    from datetime import datetime, timezone
+    from getzilla import baseline, security_data, updater
 
     mirror = base / 'update-mirror'
+    acquired = datetime.now(timezone.utc)
     for ecosystem in updater.OSV_ECOSYSTEMS:
-        archive = mirror / 'osv' / ecosystem / 'all.zip'
-        archive.parent.mkdir(parents=True)
-        with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as bundle:
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'getzilla-fixture-package'},
+                'versions': ['1.0.0'],
+            }]}))
+        security_data.publish_snapshot(
+            mirror / 'osv', f'osv:{ecosystem}', output.getvalue(),
+            acquisition={'last_verified_sync_utc': acquired.isoformat(), 'retrieval_kind': 'download'},
+            coverage={'scopes': [ecosystem], 'complete': True, 'record_count': 1, 'schema': 'osv-1'}, now=acquired)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

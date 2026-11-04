@@ -98,6 +98,7 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertEqual(result.status, 'pass')
         self.assertTrue((self.bin / 'ran').exists())
         self.assertEqual(Path(result.command[0]), self.bin / FAKE_NAME)
+        self.assertIn('--strict', result.command)
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
@@ -121,7 +122,12 @@ class OpengrepCheckTests(unittest.TestCase):
         errored = self._run({'results': [], 'errors': [{'level': 'error', 'message': 'rule parse error'}]})
         self.assertEqual(errored.status, 'fail')
         warned = self._run({'results': [], 'errors': [{'level': 'warn', 'message': 'partial parse'}]})
-        self.assertEqual(warned.status, 'pass')
+        self.assertEqual(warned.status, 'fail')
+        for diagnostics in ([{'level': 'warn', 'type': 'PartialParsing'}],
+                            [{'level': 'warn', 'type': 'Syntax error'}],
+                            [None]):
+            with self.subTest(diagnostics=diagnostics):
+                self.assertEqual(self._run({'results': [], 'errors': diagnostics}).status, 'fail')
 
     def test_missing_binary_is_refused_and_opengrep_is_mandatory_in_pr_and_release(self) -> None:
         # A machine without OpenGrep must not pass a PR/release gate with SAST silently skipped (#40).

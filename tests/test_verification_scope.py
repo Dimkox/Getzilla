@@ -1093,6 +1093,11 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
     def _checks(self, report: dict[str, object]) -> dict[str, str]:
         return {str(item['name']): str(item['status']) for item in report['checks']}
 
+    def _assert_qualified(self, report: dict[str, object]) -> None:
+        self.assertEqual(report['status'], 'pass', report.get('required_plan_error') or
+                         [item for item in report['checks'] if item['status'] == 'fail'])
+        self.assertTrue(report['required_plan']['obligations'])
+
     def test_verify_selects_and_runs_the_focused_profile_for_a_docs_only_successor(self) -> None:
         with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:
             root = Path(tmp)
@@ -1109,6 +1114,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             self.assertEqual(scope['profile'], DOCS_STATE_PROFILE)
             self.assertEqual(scope['evidence_kind'], f'verification:{DOCS_STATE_PROFILE}')
             checks = self._checks(report)
+            self._assert_qualified(report)
             self.assertEqual(checks.get('python-focused-unittest'), 'pass')
             focused = next(item for item in report['checks'] if item['name'] == 'python-focused-unittest')
             self.assertIn('Ran 5 tests', focused['stderr'])
@@ -1142,6 +1148,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             checks = self._checks(report)
             self.assertNotIn('python-focused-unittest', checks)
             self.assertIn('python-unittest', checks)
+            self._assert_qualified(report)
             self.assertTrue(
                 (root / 'full-suite-executed.marker').exists(),
                 'a source change did not put full discovery back on the critical path',
@@ -1164,6 +1171,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             scope = report['docs_state_scope']
             self.assertFalse(scope['eligible'])
             self.assertEqual(scope['reason_code'], 'file-status-inventory-unavailable')
+            self._assert_qualified(report)
             self.assertTrue(
                 (root / 'full-suite-executed.marker').exists(),
                 'an untrusted status channel did not put the full suite back',
@@ -1191,6 +1199,8 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             self.assertEqual(scope['reason_code'], 'file-status-inventory-unavailable')
             self.assertEqual(scope['profile'], FULL_PROFILE)
 
+            self._assert_qualified(report)
+
     def test_verify_refuses_the_lane_when_an_admitted_module_is_absent_from_the_checkout(self) -> None:
         with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:
             root = Path(tmp)
@@ -1206,6 +1216,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             self.assertFalse(scope['eligible'])
             self.assertEqual(scope['reason_code'], 'lockstep-target-unavailable')
             self.assertIn(absent, scope['rejected_files'])
+            self._assert_qualified(report)
             self.assertTrue(
                 (root / 'full-suite-executed.marker').exists(),
                 'an absent admitted module did not put the full suite back',
