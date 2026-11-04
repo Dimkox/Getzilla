@@ -2026,7 +2026,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
             binding = invocation(root, path=environment['PATH'])
         except (OSError, ValueError, RuntimeError, SyntaxError) as exc:
             return [CheckResult('factory-unit', 'fail', 'Factory invocation unavailable: ' + str(exc))]
-        request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8')
+        request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8', newline='\n')
         result = _command_check(
             root, 'factory-unit', [sys.executable, '-P', '-m', 'getzilla.factory_tests',
                                   '--root', str(root), '--request', str(request), '--report', str(report)],

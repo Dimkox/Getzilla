@@ -253,15 +253,15 @@ def observed_context(path: str | None = None) -> dict:
              "import importlib.metadata as m,importlib.util as u; "
              "print(m.version('pypdf')) if u.find_spec('pypdf') else None"],
             cwd="/", env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-            capture_output=True, text=True, timeout=30, check=True,
+            capture_output=True, text=True, encoding="utf-8", timeout=30, check=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError("Isolated parser context unavailable") from exc
     supported = False
     try:
-        distro = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+        distro = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines() if "=" in line)
         python = subprocess.run(["/usr/bin/python3.12", "--version"], capture_output=True,
-                                text=True, timeout=5, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+                                text=True, encoding="utf-8", timeout=5, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
         supported = (platform.system() == "Linux" and platform.machine() == "x86_64"
                      and distro.get("ID", "").strip('"') == "ubuntu"
                      and distro.get("VERSION_ID", "").strip('"') == "24.04"
