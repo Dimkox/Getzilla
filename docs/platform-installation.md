@@ -30,6 +30,16 @@ hashes, selection, user files, CLI help and doctor. Reports bind head/tree, run 
 attempt, native OS/architecture, stable tag/object/commit, log hashes and duration.
 The installed user CLI wrapper runs from the project on each platform.
 
+The aggregate consumes the downloaded log artifacts. A completeness flag alone
+cannot pass: each command needs a successful exit, confirmed cleanup, consistent
+byte counts and a retained regular log with matching SHA256 and size. Both
+scenarios need distinct, nonempty command references and some retained output.
+Empty logs from quiet individual commands are allowed. Missing, changed, linked,
+unreferenced, nested or unsafe log paths fail. Checked filesystem readers bound
+each log to 8 MiB, each cell to 64 MiB and each cell's command list to 128 entries.
+The runner uses the same limits and continues draining before reporting loss.
+These are consistency checks on Actions observations, not execution attestation.
+
 The pinned previous stable is **v2.3.0**, tag object
 `815aeabc5d215d65e72651692a6457920de9fa71`, commit
 `2bb417431f1e4b9494e4af71ebf27adb1d04d898`. This is an observed publication,

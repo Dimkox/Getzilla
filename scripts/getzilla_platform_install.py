@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'.getzilla'))
-from getzilla.platform_install import decode_result, load_contract, native_platform, validate_results  # noqa: E402
+from getzilla.platform_install import load_artifacts, load_contract, native_platform, validate_results  # noqa: E402
 
 
 def main(argv=None):
@@ -52,13 +52,7 @@ def main(argv=None):
                               'seconds': record['seconds'], 'authority': record['authority'],
                               'error': record.get('error')}))
             return 0 if not record.get('error') and all(s.get('status') == 'pass' for s in record['scenarios'].values()) else 1
-        from getzilla.architecture import _read_regular_bytes
-        records = []
-        for path in args.aggregate.rglob('result.json'):
-            if len(records) >= len(required):
-                raise ValueError('unexpected or duplicate platform result artifacts')
-            records.append(decode_result(_read_regular_bytes(args.aggregate, path.relative_to(args.aggregate).as_posix(),
-                                                            label='platform observation')))
+        records = load_artifacts(args.aggregate, maximum=len(required))
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, timeout=20).strip()
         tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True, timeout=20).strip()
         if head != args.head:

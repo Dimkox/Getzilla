@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -60,7 +62,7 @@ class PlatformContractTests(unittest.TestCase):
                 acceptance.load_matrix(root)
 
     def record(self):
-        return {'schema': 'getzilla-platform-install-v1', 'cell': 'linux-x64',
+        record = {'schema': 'getzilla-platform-install-v1', 'cell': 'linux-x64',
                 'repository': 'example-owner/example-repo',
                 'os': 'linux', 'arch': 'x64', 'head': 'a' * 40, 'tree': 'b' * 40,
                 'head_after': 'a' * 40, 'tree_after': 'b' * 40, 'source_clean': True,
@@ -75,6 +77,14 @@ class PlatformContractTests(unittest.TestCase):
                                     'user_preserved': True, 'settings_preserved': True,
                                     'agents': ['qwen'], 'update_exit': 0, 'logs_complete': True}
                               for name in ('clean', 'upgrade')}}
+        record['commands'] = []
+        for index, checks in enumerate(record['scenarios'].values(), 1):
+            log = f'{index:03d}.log'
+            checks['logs'] = [log]
+            record['commands'].append({'exit': 0, 'logs_complete': True, 'cleanup_confirmed': True,
+                'log': log, 'observed_bytes': 1, 'retained_bytes': 1, 'dropped_bytes': 0,
+                'seconds': 0.01, 'sha256': hashlib.sha256(b'x').hexdigest()})
+        return record
 
     def validate(self, records, job_result='success'):
         return acceptance.validate_results(records, matrix=acceptance.load_matrix(ROOT),
@@ -157,3 +167,153 @@ class ActualCommandTests(unittest.TestCase):
                                  cwd=root, log=root/'output.log', timeout=0.1)
             self.assertEqual(result['exit'], 124)
             self.assertLess(time.monotonic()-started, 1.5)
+
+
+class CollectedArtifactTests(unittest.TestCase):
+    """Synthetic artifact controls exercise the real CLI; they are not native results."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.root.chmod(0o700)
+        self.head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        self.environment = {**os.environ, 'GITHUB_REPOSITORY': 'example-owner/example-repo',
+                            'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2'}
+        for cell in (c for c in acceptance.load_matrix(ROOT) if c['required']):
+            record = PlatformContractTests().record()
+            record.update(cell=cell['id'], os=cell['os'], arch=cell['arch'], head=self.head,
+                          tree=tree, head_after=self.head, tree_after=tree, commands=[])
+            folder = self.root / cell['id']
+            folder.mkdir()
+            for index, (name, scenario) in enumerate(record['scenarios'].items(), 1):
+                log = f'{index:03}.log'
+                content = f'synthetic {name} artifact control\n'.encode()
+                (folder / log).write_bytes(content)
+                record['commands'].append({'log': log, 'exit': 0, 'logs_complete': True,
+                    'cleanup_confirmed': True, 'observed_bytes': len(content), 'retained_bytes': len(content),
+                    'dropped_bytes': 0, 'seconds': 0.01, 'sha256': hashlib.sha256(content).hexdigest()})
+                scenario.update(installed_head=self.head, version=(ROOT/'VERSION').read_text().strip(),
+                    cli_sha256=hashlib.sha256((ROOT/'scripts/getzilla_cli.py').read_bytes()).hexdigest(),
+                    managed_sha256=hashlib.sha256((ROOT/'scripts/getzilla_doctor.py').read_bytes()).hexdigest(),
+                    logs=[log])
+            (folder/'result.json').write_text(json.dumps(record))
+        self.folder = self.root/'linux-x64'
+
+    def run_aggregate(self):
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/getzilla_platform_install.py'),
+                    '--aggregate', str(self.root), '--head', self.head, '--job-result', 'success'],
+                    cwd=ROOT, env=self.environment, capture_output=True, text=True, timeout=10)
+        self.assertNotIn('Traceback', result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)['authority'], 'observations-only')
+        return result
+
+    def change_record(self, mutate):
+        path = self.folder/'result.json'
+        record = json.loads(path.read_text())
+        mutate(record)
+        path.write_text(json.dumps(record))
+
+    def test_matching_bounded_regular_logs_pass_structural_control(self):
+        result = self.run_aggregate()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_missing_or_changed_log_refuses_despite_complete_claim(self):
+        log = self.folder/'001.log'
+        content = log.read_bytes()
+        log.unlink()
+        self.assertEqual(self.run_aggregate().returncode, 1)
+        log.write_bytes(content + b'tampered')
+        self.assertEqual(self.run_aggregate().returncode, 1)
+        log.write_bytes(b'x' * len(content))
+        self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_empty_duplicate_unbound_or_incomplete_commands_refuse(self):
+        path = self.folder/'result.json'
+        original = path.read_bytes()
+        mutations = [lambda r: r.update(commands=[]),
+                     lambda r: r.update(cell=[]),
+                     lambda r: r['commands'].append(r['commands'][0]),
+                     lambda r: r['commands'][0].update(cleanup_confirmed=False),
+                     lambda r: r['commands'][0].update(observed_bytes=True),
+                     lambda r: r['commands'][0].update(seconds=10**1000),
+                     lambda r: r['commands'][0].update(dropped_bytes=1),
+                     lambda r: r['commands'][0].pop('sha256'),
+                     lambda r: r['scenarios']['clean'].update(logs=[]),
+                     lambda r: r['scenarios']['clean'].update(logs=['099.log']),
+                     lambda r: r['scenarios']['upgrade'].update(logs=['001.log'])]
+        for mutate in mutations:
+            path.write_bytes(original)
+            self.change_record(mutate)
+            with self.subTest(mutation=mutate):
+                self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_traversal_absolute_and_outside_log_paths_refuse(self):
+        path = self.folder/'result.json'
+        original = path.read_bytes()
+        for name in ('../001.log', '/tmp/001.log', 'nested/001.log', r'C:\outside.log', r'..\001.log'):
+            path.write_bytes(original)
+            self.change_record(lambda r: r['commands'][0].update(log=name))
+            with self.subTest(path=name):
+                self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_linked_log_and_linked_artifact_directory_refuse(self):
+        log = self.folder/'001.log'
+        other = self.root.parent/(self.root.name+'-outside.log')
+        self.addCleanup(lambda: other.unlink(missing_ok=True))
+        other.write_bytes(log.read_bytes())
+        log.unlink()
+        try:
+            log.symlink_to(other)
+        except (OSError, NotImplementedError):
+            self.skipTest('symbolic link fixture unavailable')
+        self.assertEqual(self.run_aggregate().returncode, 1)
+        log.unlink()
+        log.write_bytes(other.read_bytes())
+        other.unlink()
+        moved = self.root.parent/(self.root.name+'-outside')
+        self.folder.rename(moved)
+        self.addCleanup(shutil.rmtree, moved)
+        self.folder.symlink_to(moved, target_is_directory=True)
+        self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_hard_linked_log_refuses_even_with_matching_bytes(self):
+        log = self.folder/'001.log'
+        other = self.root.parent/(self.root.name+'-hardlink.log')
+        self.addCleanup(lambda: other.unlink(missing_ok=True))
+        log.rename(other)
+        try:
+            os.link(other, log)
+        except (OSError, NotImplementedError):
+            self.skipTest('hard link fixture unavailable')
+        self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_oversized_log_and_extra_artifacts_refuse_with_bounded_output(self):
+        content = (self.folder/'001.log').read_bytes()
+        with (self.folder/'001.log').open('r+b') as handle:
+            handle.truncate(8*1024*1024+1)
+        result = self.run_aggregate()
+        self.assertEqual(result.returncode, 1)
+        self.assertLess(len(result.stdout), 1024)
+        (self.folder/'001.log').write_bytes(content)
+        (self.root/'unexpected').mkdir()
+        self.assertEqual(self.run_aggregate().returncode, 1)
+
+    def test_empty_required_output_and_command_resource_budgets_refuse(self):
+        path = self.folder/'result.json'
+        original = path.read_bytes()
+        self.change_record(lambda r: r['commands'][0].update(
+            observed_bytes=0, retained_bytes=0, sha256=hashlib.sha256(b'').hexdigest()))
+        (self.folder/'001.log').write_bytes(b'')
+        self.assertEqual(self.run_aggregate().returncode, 1)
+        for count, size, message in ((129, 1, 'command evidence'), (9, 8*1024*1024, 'byte budget')):
+            path.write_bytes(original)
+            def enlarge(record):
+                template = record['commands'][0]
+                record['commands'] = [{**template, 'log': f'{i:03d}.log', 'observed_bytes': size,
+                                       'retained_bytes': size} for i in range(1, count+1)]
+            self.change_record(enlarge)
+            result = self.run_aggregate()
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(message, result.stdout)

@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Thread
 
 from . import fsx
-from .platform_install import load_contract, native_platform
+from .platform_install import MAX_CELL_LOG_BYTES, MAX_COMMANDS, MAX_LOG_BYTES, load_contract, native_platform
 
 
 def digest(path: Path) -> str:
@@ -25,7 +25,7 @@ def digest(path: Path) -> str:
 
 
 def run_command(arguments: list[str], *, cwd: Path, log: Path, timeout: float,
-                quota: int = 8 * 1024 * 1024, env: dict | None = None) -> dict:
+                quota: int = MAX_LOG_BYTES, env: dict | None = None) -> dict:
     """Bounded report retention with a live drain and a total process/pipe deadline."""
     started = time.monotonic()
     observed = retained = 0
@@ -133,9 +133,12 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
     started = time.monotonic()
 
     def command(argv, *, cwd=source, env=None, timeout=900):
+        if len(record['commands']) >= MAX_COMMANDS:
+            raise ScenarioFailed('command evidence count budget exceeded')
         label = f'{len(record["commands"])+1:03d}.log'
+        remaining = MAX_CELL_LOG_BYTES - sum(command['retained_bytes'] for command in record['commands'])
         outcome = run_command([str(a) for a in argv], cwd=cwd, log=workspace/label,
-                              timeout=timeout, env=env or environment)
+                              timeout=timeout, quota=min(MAX_LOG_BYTES, remaining), env=env or environment)
         record['commands'].append(outcome)
         if outcome['exit'] != 0 or not outcome['logs_complete'] or not outcome['cleanup_confirmed']:
             raise ScenarioFailed(f'command {label} failed or its full report is unavailable')

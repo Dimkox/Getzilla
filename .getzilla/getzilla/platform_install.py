@@ -8,6 +8,9 @@ from pathlib import Path
 
 MATRIX_PATH = '.getzilla/config/platform-support.json'
 MAX_RESULT_BYTES = 65536
+MAX_COMMANDS = 128
+MAX_LOG_BYTES = 8 * 1024 * 1024
+MAX_CELL_LOG_BYTES = 64 * 1024 * 1024
 PAIRS = {(system, arch) for system in ('linux', 'macos', 'windows') for arch in ('x64', 'arm64')}
 
 
@@ -89,6 +92,85 @@ def select_platforms(matrix: list[dict], requested: list[str] | None) -> list[di
     return [known[name] for name in names]
 
 
+def command_evidence(record: dict) -> dict[str, dict]:
+    """Validate bounded command structure; completeness flags alone prove nothing."""
+    commands = record.get('commands')
+    if not isinstance(commands, list) or not 2 <= len(commands) <= MAX_COMMANDS:
+        raise ValueError('missing or oversized command evidence')
+    by_log = {}
+    fields = {'exit', 'logs_complete', 'cleanup_confirmed', 'log', 'observed_bytes',
+              'retained_bytes', 'dropped_bytes', 'seconds', 'sha256'}
+    for index, command in enumerate(commands, 1):
+        if (not isinstance(command, dict) or set(command) != fields
+                or command['log'] != f'{index:03d}.log'
+                or type(command['exit']) is not int or command['exit'] != 0
+                or command['logs_complete'] is not True or command['cleanup_confirmed'] is not True
+                or any(type(command[key]) is not int for key in ('observed_bytes', 'retained_bytes', 'dropped_bytes'))
+                or not 0 <= command['retained_bytes'] <= MAX_LOG_BYTES
+                or command['observed_bytes'] != command['retained_bytes'] or command['dropped_bytes'] != 0
+                or type(command['seconds']) not in (int, float)
+                or not 0 <= command['seconds'] <= 86400
+                or not isinstance(command['sha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', command['sha256'])):
+            raise ValueError('invalid, duplicate or incomplete command evidence')
+        by_log[command['log']] = command
+    if sum(command['retained_bytes'] for command in commands) > MAX_CELL_LOG_BYTES:
+        raise ValueError('platform command log byte budget exceeded')
+    scenarios = record.get('scenarios')
+    if not isinstance(scenarios, dict) or set(scenarios) != {'clean', 'upgrade'}:
+        raise ValueError('missing scenario command evidence')
+    seen = set()
+    for checks in scenarios.values():
+        logs = checks.get('logs') if isinstance(checks, dict) else None
+        if (not isinstance(logs, list) or not 1 <= len(logs) <= MAX_COMMANDS
+                or any(not isinstance(log, str) or log not in by_log or log in seen for log in logs)
+                or len(set(logs)) != len(logs)
+                or not sum(by_log[log]['retained_bytes'] for log in logs)):
+            raise ValueError('empty, duplicate or unbound scenario log evidence')
+        seen.update(logs)
+    return by_log
+
+
+def load_artifacts(root: Path, *, maximum: int) -> list[dict]:
+    """Consume one bounded artifact directory per cell through checked no-follow IO."""
+    from . import fsx
+    from .component_state import BoundRoot
+    records = []
+    with BoundRoot(root) as binding:
+        with fsx.scandir(binding.handle) as entries:
+            for entry in entries:
+                if len(records) >= maximum:
+                    raise ValueError('unexpected or duplicate platform result artifacts')
+                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', entry.name):
+                    raise ValueError('unsafe platform artifact directory')
+                relative = f'{entry.name}/result.json'
+                result = binding.read(relative, limit=MAX_RESULT_BYTES)
+                if result is None:
+                    raise ValueError('missing platform observation')
+                record = decode_result(result.content)
+                commands = command_evidence(record)
+                # Downloaded Actions artifacts contain only result.json and flat log files.
+                with binding.parent(relative) as (directory, _, check):
+                    names = set()
+                    with fsx.scandir(directory) as files:
+                        for child in files:
+                            if len(names) >= MAX_COMMANDS + 1:
+                                raise ValueError('platform artifact entry budget exceeded')
+                            names.add(child.name)
+                    if names != {'result.json', *commands}:
+                        raise ValueError('missing, unexpected or nested platform log artifact')
+                    check()
+                for name, command in commands.items():
+                    snapshot = binding.read(f'{entry.name}/{name}', limit=MAX_LOG_BYTES)
+                    if (snapshot is None or len(snapshot.content) != command['retained_bytes']
+                            or snapshot.sha256 != command['sha256']):
+                        raise ValueError('missing or corrupt platform command log artifact')
+                if binding.read(relative, limit=MAX_RESULT_BYTES) != result:
+                    raise ValueError('platform observation changed during log validation')
+                binding.check()
+                records.append(record)
+    return records
+
+
 def validate_results(records: list[dict], *, matrix: list[dict], required: list[str], head: str, tree: str,
                      repository: str, run_id: str, run_attempt: str, version: str, cli_sha256: str,
                      managed_sha256: str, stable: dict, job_result: str = 'success') -> list[str]:
@@ -104,7 +186,8 @@ def validate_results(records: list[dict], *, matrix: list[dict], required: list[
         problems.append('required platform job did not succeed')
     by_cell = {}
     for record in records:
-        if not isinstance(record, dict) or record.get('cell') not in selected:
+        if (not isinstance(record, dict) or not isinstance(record.get('cell'), str)
+                or record['cell'] not in selected):
             problems.append('unexpected platform record')
             continue
         name = record['cell']
@@ -127,6 +210,10 @@ def validate_results(records: list[dict], *, matrix: list[dict], required: list[
             problems.append(f'{name}: source, native platform, run or authority mismatch')
         if record.get('stable') != stable:
             problems.append(f'{name}: previous stable identity mismatch')
+        try:
+            command_evidence(record)
+        except ValueError as error:
+            problems.append(f'{name}: {error}')
         scenarios = record.get('scenarios')
         if not isinstance(scenarios, dict) or set(scenarios) != {'clean', 'upgrade'}:
             problems.append(f'{name}: missing clean installation or upgrade')
