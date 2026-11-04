@@ -160,7 +160,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla gate status`, `gate decide <gate> approved\|rejected` | Shows or records a human-gate decision |
 | | `getzilla vulns [--online]` | Checks pinned dependencies against known vulnerabilities (OSV) |
 | | `getzilla duplicates` | Finds duplicated source code (read-only; jscpd is optional) |
-| | `getzilla graph build\|status\|impact\|export --root <dir>` | Builds a Python code graph and shows the impact of a change (read-only) |
+| | `getzilla graph build\|status\|impact\|export\|history --root <dir>` | Builds a Python code graph, shows change impact, or reports bounded committed-history metrics ([contract](docs/code-graph.md)) |
 | | `getzilla architecture validate\|summary\|drift\|diagram\|diff\|fitness` | Checks the architecture model and draws its diagrams |
 | | `getzilla governance validate\|summary\|handoff\|project\|check-projections` | Checks governance rules and evidence |
 | | `getzilla artifacts import\|compile\|converge\|validate\|export` | Reads Spec Kit, BMAD and Superpowers files as advisory input |
