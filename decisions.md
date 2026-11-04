@@ -1198,3 +1198,7 @@ The child interpreter check does not establish controller pidfd support. Check b
 ## 2026-10-29 — Keep model IDs separate from account references
 
 Model IDs are opaque provider identifiers, not filesystem paths; existing OpenRouter entries use `:free`. Validate model IDs separately from provider/account references so safe variant suffixes remain valid without accepting URLs. The regression uses an existing repository model ID.
+
+## 2026-11-04 — Separate eval cohorts from experiment variables
+
+Pin cases and grading rules in one contract digest, and declare model, prompt, tool, index, config or source identity changes in a protocol. This permits paired comparisons while refusing hidden assertion or grader changes. Keep baseline acceptance separate from replay so a failing output cannot replace its control (#305).
