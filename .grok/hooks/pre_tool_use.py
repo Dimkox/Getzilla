@@ -5,8 +5,10 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shlex
+import stat
 import sys
 import time
 from pathlib import Path
@@ -48,12 +50,29 @@ _DEGRADED_REASON = (
 
 
 def _degraded_patterns() -> tuple[str, ...] | None:
-    """Read only bounded non-secret policy configuration; never import the failed stack."""
+    """Admit bounded regular config before reading; special files never wait for a writer."""
+    path = Path(__file__).resolve().parents[2] / '.getzilla/config/policy.json'
     try:
-        path = Path(__file__).resolve().parents[2] / '.getzilla/config/policy.json'
-        with path.open('rb') as handle:
+        before = path.lstat()
+    except FileNotFoundError:
+        return _DEGRADED_SECRET_PATHS
+    except OSError:
+        return None
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 65536 or not before.st_mode & 0o444:
+        return None
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, 'rb') as handle:
+            descriptor = None
+            observed = os.fstat(handle.fileno())
+            if (not stat.S_ISREG(observed.st_mode) or observed.st_size > 65536
+                    or (before.st_dev, before.st_ino) != (observed.st_dev, observed.st_ino)):
+                return None
             raw = handle.read(65537)
-        if len(raw) > 65536:
+            after = os.fstat(handle.fileno())
+        if len(raw) > 65536 or (observed.st_size, observed.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             return None
         config = json.loads(raw)
         extra = config.get('secret_read_paths', []) if isinstance(config, dict) else None
@@ -61,10 +80,11 @@ def _degraded_patterns() -> tuple[str, ...] | None:
                 or any(not isinstance(item, str) or not item or len(item) > 4096 for item in extra)):
             return None
         return (*_DEGRADED_SECRET_PATHS, *extra)
-    except FileNotFoundError:
-        return _DEGRADED_SECRET_PATHS
     except (OSError, ValueError, RuntimeError):
         return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
@@ -85,15 +105,34 @@ def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]
         if resolved.is_dir():
             return False
         for candidate in (path, resolved):
-            if any(fnmatch.fnmatchcase(candidate.name.lower(), public) for public in _DEGRADED_PUBLIC_NAMES):
-                continue
             name = candidate.as_posix().lower()
+            if any(fnmatch.fnmatchcase(candidate.name.lower(), public) for public in _DEGRADED_PUBLIC_NAMES):
+                enclosing = candidate.parent.as_posix().lower().rstrip('/') + '/'
+                stronger = [pattern for pattern in patterns if pattern != '**/.ssh/**']
+                if not any(fnmatch.fnmatchcase(enclosing, pattern.lower())
+                           or fnmatch.fnmatchcase(enclosing, '*/' + pattern.lower()) for pattern in stronger):
+                    continue
             if any(fnmatch.fnmatchcase(name, pattern.lower())
                    or fnmatch.fnmatchcase(name, '*/' + pattern.lower()) for pattern in patterns):
                 return False
         return True
     except (OSError, ValueError, RuntimeError):
         return False
+
+
+def _degraded_executable(word: str) -> str | None:
+    """Known native names or exact standard POSIX paths; arbitrary basenames prove nothing."""
+    system = {'cat', 'head', 'tail', 'wc', 'ls', 'pwd', 'echo', 'printf', 'git'}
+    bare = system | {'get-content', 'Get-Content', 'gc', 'type'}
+    if word in bare:
+        return word.lower()
+    if sys.platform == 'win32' and word.lower() in {name.lower() for name in bare}:
+        return word.lower()
+    prefixes = ('/usr/bin/', '/bin/') if sys.platform != 'win32' else ()
+    for prefix in prefixes:
+        if word.startswith(prefix) and word[len(prefix):] in system:
+            return word[len(prefix):]
+    return None
 
 
 def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
@@ -110,12 +149,12 @@ def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...
     except ValueError:
         return False
     offset = 0
-    while offset < min(len(words), 16) and Path(words[offset]).name.lower() in {'command'}:
+    while offset < min(len(words), 16) and words[offset] == 'command':
         offset += 1
     words = words[offset:]
     if not words:
         return False
-    name = Path(words[0]).name.lower().removesuffix('.exe')
+    name = _degraded_executable(words[0])
     operands = words[1:]
     if name in {'ls', 'pwd', 'echo', 'printf'}:
         return True
@@ -157,12 +196,6 @@ def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ...) -> str | 
             directory = Path.cwd() if execution_cwd is ... else Path(execution_cwd)
             if not directory.is_absolute():
                 return _DEGRADED_REASON
-            for key in ('workdir', 'cwd'):
-                if key in inputs:
-                    candidate = inputs[key]
-                    if not isinstance(candidate, str) or not Path(candidate).is_absolute():
-                        return _DEGRADED_REASON
-                    directory = Path(candidate)
             patterns = _degraded_patterns()
             if patterns is None:
                 return _DEGRADED_REASON
@@ -215,25 +248,92 @@ def _degraded_output(reason: str | None) -> str:
     })
 
 
+def _degraded_tool(value: Any) -> str | None:
+    if not isinstance(value, str) or not value or len(value) > 128:
+        return None
+    if value.lower() in {name.lower() for name in _DEGRADED_SHELL_TOOLS}:
+        return 'Bash'
+    if value.lower() in _DEGRADED_READ_TOOLS or (value.startswith('mcp__') and 'read' in value.lower()):
+        return 'Read'
+    if value.lower() in {name.lower() for name in _DEGRADED_WRITE_TOOLS} | {'write', 'create', 'str_replace', 'search_replace'}:
+        return 'Write'
+    return value
+
+
+def _degraded_request(payload: Any) -> tuple[str, Any, Any]:
+    """Normalize the native aliases once; conflicting evidence never selects a permissive value."""
+    try:
+        if not isinstance(payload, dict):
+            return '', None, None
+        names = [_degraded_tool(payload[key]) for key in ('tool_name', 'toolName') if key in payload]
+        if not names or names[0] is None or any(name != names[0] for name in names):
+            return '', None, None
+        candidates = []
+        for key in ('tool_input', 'toolInput', 'toolArgs'):
+            if key in payload:
+                value = payload[key]
+                if isinstance(value, str) and len(value) <= 262144:
+                    try:
+                        value = json.loads(value)
+                    except ValueError:
+                        if key != 'toolArgs' or names[0] != 'Bash':
+                            return '', None, None
+                        value = {'command': value}
+                if not isinstance(value, dict):
+                    return '', None, None
+                candidates.append(value)
+        if not candidates or any(value != candidates[0] for value in candidates):
+            return '', None, None
+        inputs = dict(candidates[0])
+        origin = payload.get('cwd', str(Path.cwd()))
+        if (not isinstance(origin, str) or len(origin) > 4096 or not Path(origin).is_absolute()
+                or any(char in origin for char in '$`*?[]{}~\x00\r\n')):
+            return '', None, None
+        directory = Path(origin).resolve(strict=True)
+        if not directory.is_dir():
+            return '', None, None
+        declared = []
+        for key in ('workdir', 'cwd', 'working_directory', 'workingDirectory', 'directory'):
+            if key in inputs:
+                value = inputs[key]
+                if (not isinstance(value, str) or not value or len(value) > 4096
+                        or any(char in value for char in '$`*?[]{}~\x00\r\n')):
+                    return '', None, None
+                path = Path(value)
+                path = (path if path.is_absolute() else directory / path).resolve(strict=True)
+                if not path.is_dir():
+                    return '', None, None
+                declared.append(path)
+        if declared:
+            if any(path != declared[0] for path in declared):
+                return '', None, None
+            directory = declared[0]
+        if names[0] == 'Bash':
+            commands = []
+            for key in ('command', 'cmd'):
+                if key in inputs:
+                    value = inputs[key]
+                    if key == 'command' and isinstance(value, list) and value and all(isinstance(part, str) for part in value):
+                        value = shlex.join(value)
+                    if not isinstance(value, str) or not value.strip() or len(value) > 131072:
+                        return '', None, None
+                    commands.append(value)
+            if not commands or any(value != commands[0] for value in commands):
+                return '', None, None
+            inputs['command'] = commands[0]
+        return names[0], inputs, directory
+    except (OSError, TypeError, ValueError, RuntimeError):
+        return '', None, None
+
+
 def _degraded_payload() -> tuple[str, Any, Any]:
     try:
         raw = sys.stdin.buffer.read(262145)
         if len(raw) > 262144:
             return '', None, None
-        raw = raw.decode('utf-8-sig', errors='replace')
-        payload = json.loads(raw) if raw.strip() else {}
-    except (OSError, ValueError):
+        return _degraded_request(json.loads(raw.decode('utf-8-sig')))
+    except (OSError, UnicodeError, ValueError, RuntimeError):
         return '', None, None
-    if not isinstance(payload, dict):
-        return '', None, None
-    tool = str(payload.get('tool_name') or payload.get('toolName') or '')
-    inputs = payload.get('tool_input', payload.get('toolInput', payload.get('toolArgs')))
-    if isinstance(inputs, str):
-        try:
-            inputs = json.loads(inputs)
-        except ValueError:
-            inputs = None
-    return tool, inputs, payload.get('cwd', Path.cwd())
 
 
 # Make stack importable even when cwd is project root
@@ -710,7 +810,10 @@ def main() -> None:
         except Exception as error:
             # Policy stack not importable: record it, refuse protected actions, allow the rest (#78).
             record_degraded('pre_tool_use', error, payload)
-            denial = _degraded_denial(current_tool, current_input, context.execution_cwd)
+            degraded_tool, degraded_input, degraded_cwd = _degraded_request(payload)
+            denial = _DEGRADED_REASON
+            if context.execution_cwd is not None and degraded_cwd == context.execution_cwd:
+                denial = _degraded_denial(degraded_tool, degraded_input, degraded_cwd)
             emit(permission_output(denial is None, denial))
             return
 

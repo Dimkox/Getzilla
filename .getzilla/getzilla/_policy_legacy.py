@@ -2783,6 +2783,7 @@ def _bounded_glob(start: str, pattern: str, budget: _Budget) -> list[str]:
 
 def _secret_reference(
     root: Path, raw: str, patterns: list[str], *, expand: bool = True, budget: _Budget | None = None,
+    execution_cwd: Path | None = None,
 ) -> bool:
     """Whether ``raw`` names secret material, inside the repository or outside it."""
     if budget is not None:
@@ -2791,6 +2792,8 @@ def _secret_reference(
         budget.tick()
     if not raw or '\x00' in raw:
         return False
+    if execution_cwd is not None and not Path(raw).is_absolute() and not raw.startswith('~'):
+        raw = str(execution_cwd / raw)
     rel = safe_relative_path(root, raw)
     if _secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns)):
         return False
@@ -2806,9 +2809,11 @@ def _secret_reference(
     return False
 
 
-def _resolve_under_root(root: Path, word: str) -> str | None:
+def _resolve_under_root(root: Path, word: str, *, execution_cwd: Path | None = None) -> str | None:
     if not word or _GLOB_META.search(word):
         return None
+    if execution_cwd is not None and not Path(word).is_absolute() and not word.startswith('~'):
+        word = str(execution_cwd / word)
     rel = safe_relative_path(root, word)
     if rel is None:
         return None
@@ -3170,6 +3175,7 @@ def _is_recursive_reader(argv: list[str]) -> bool:
 def _argv_secret_reference(
     root: Path, argv: list[str], patterns: list[str], budget: _Budget,
     handoffs: dict[tuple[str, ...], frozenset[str]] | None = None,
+    *, execution_cwd: Path | None = None,
 ) -> str | None:
     if not argv:
         return None
@@ -3184,23 +3190,25 @@ def _argv_secret_reference(
     for word in words:
         for variant in _brace_expand(word):
             if recursive:
-                full = _resolve_under_root(root, variant)
+                full = _resolve_under_root(root, variant, execution_cwd=execution_cwd)
                 if full is None and _GLOB_META.search(variant):
                     # `findstr /s PAT deploy\*` / `grep -r PAT deploy/*`: walk the literal prefix dir.
                     prefix = _literal_pattern_prefix(variant)
-                    full = _resolve_under_root(root, prefix) if prefix else None
+                    full = _resolve_under_root(root, prefix, execution_cwd=execution_cwd) if prefix else None
                 if full and os.path.isdir(full):
                     hit = _walk_for_secret(root, full, patterns, budget)
                     if hit is not None:
                         rel = safe_relative_path(root, hit)
                         return rel if rel is not None else hit
             for piece in _SECRET_PIECE_SPLIT.split(_HTTP_URL.sub(' ', variant)):
-                if piece and _secret_reference(root, piece, patterns, budget=budget):
+                if piece and _secret_reference(root, piece, patterns, budget=budget, execution_cwd=execution_cwd):
                     return piece
     return None
 
 
-def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget: _Budget) -> str | None:
+def _raw_secret_reference(
+    root: Path, command: str, patterns: list[str], budget: _Budget, *, execution_cwd: Path | None = None,
+) -> str | None:
     """Fallback for untokenizable text: scan every quoted/fragmented piece."""
     unquoted = command.replace('"', '').replace("'", '')
     seen: set[str] = set()
@@ -3209,17 +3217,19 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
             if not piece or piece in seen:
                 continue
             seen.add(piece)
-            if _secret_reference(root, piece, patterns, budget=budget):
+            if _secret_reference(root, piece, patterns, budget=budget, execution_cwd=execution_cwd):
                 return piece
     return None
 
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
-_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | None] = {}
+_SECRET_SCAN_CACHE: dict[tuple[str, str, str, tuple[str, ...], bool, bytes], str | None] = {}
 _GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
 
 
-def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
+def shell_secret_reference(
+    root: Path, command: str, patterns: list[str], *, execution_cwd: Path | None = None,
+) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
     The command is tokenized (never executed); per-command path operands are checked,
@@ -3236,7 +3246,8 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
         owner = (root / PROJECT_POLICY).read_bytes()
     except OSError:
         owner = b''
-    key = (str(root), command, tuple(patterns), _windows_reading(), owner)
+    directory = execution_cwd if execution_cwd is not None else root
+    key = (str(root), str(directory), command, tuple(patterns), _windows_reading(), owner)
     if key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
@@ -3248,12 +3259,14 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     budget = _Budget()
     result: str | None = None
     try:
-        handoffs = _consumer_handoffs(root, command)
+        # Relative consumer identity is established at the policy root. A different
+        # native cwd must not borrow that identity for another script or secret.
+        handoffs = _consumer_handoffs(root, command) if directory == root else {}
         for argv in _simple_commands(command):
             hit = (
-                _raw_secret_reference(root, command, patterns, budget)
+                _raw_secret_reference(root, command, patterns, budget, execution_cwd=directory)
                 if argv is None
-                else _argv_secret_reference(root, argv, patterns, budget, handoffs)
+                else _argv_secret_reference(root, argv, patterns, budget, handoffs, execution_cwd=directory)
             )
             if hit is not None:
                 result = hit
@@ -3280,6 +3293,7 @@ def evaluate_pre_tool(
     event: dict[str, Any],
     *,
     _skip_substring_control_plane_guard: bool = False,
+    _execution_cwd: Path | None = None,
 ) -> tuple[bool, str | None]:
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
@@ -3304,7 +3318,7 @@ def evaluate_pre_tool(
         )
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
-        secret = shell_secret_reference(root, command, secret_read)
+        secret = shell_secret_reference(root, command, secret_read, execution_cwd=_execution_cwd)
         if secret == _GH_OPAQUE_MARKER:
             return False, 'GitHub CLI arguments must be literal; quote or escape data and use explicit option values.'
         if secret is not None:

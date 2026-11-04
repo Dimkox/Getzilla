@@ -507,9 +507,24 @@ class Review2PosixTests(_Case):
         legacy._SECRET_SCAN_CACHE.clear()
         command = 'cat deploy/tls/server.key'
         patterns = legacy.DEFAULT_SECRET_READ
-        legacy.shell_secret_reference(self.root, command, patterns)
-        key = (str(self.root), command, tuple(patterns), legacy._windows_reading(), b'')  # no project policy in this fixture
-        self.assertIn(key, legacy._SECRET_SCAN_CACHE)
+        with mock.patch.object(legacy, '_argv_secret_reference', wraps=legacy._argv_secret_reference) as scan:
+            self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), 'deploy/tls/server.key')
+            self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), 'deploy/tls/server.key')
+            self.assertEqual(scan.call_count, 1)
+
+    def test_secret_scan_memo_never_crosses_execution_directories(self) -> None:
+        with project_copy() as root:
+            (root / 'README.md').write_text('synthetic public text\n', encoding='utf-8')
+            (root / '.env').write_text('synthetic no-secret marker\n', encoding='utf-8')
+            (root / 'sub').mkdir()
+            (root / 'sub/README.md').symlink_to('../.env')
+            legacy._SECRET_SCAN_CACHE.clear()
+            self.assertIsNone(legacy.shell_secret_reference(
+                root, 'cat README.md', legacy.DEFAULT_SECRET_READ, execution_cwd=root,
+            ))
+            self.assertEqual(legacy.shell_secret_reference(
+                root, 'cat README.md', legacy.DEFAULT_SECRET_READ, execution_cwd=root / 'sub',
+            ), 'README.md')
 
     def test_secret_scan_memo_never_crosses_readings(self) -> None:
         legacy._SECRET_SCAN_CACHE.clear()

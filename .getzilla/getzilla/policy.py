@@ -84,7 +84,7 @@ def _bash_sensitive_action(root: Path, command: str, *, execution_cwd: Path | No
         'secret_read_paths',
         _LEGACY_SECRET_READ,
     )
-    if _legacy_shell_secret_reference(root, command, secret_read) is not None:
+    if _legacy_shell_secret_reference(root, command, secret_read, execution_cwd=execution_cwd) is not None:
         return 'secret-read'
     if execution_cwd is None:
         control_plane = _legacy_configured_patterns(
@@ -169,12 +169,18 @@ def evaluate_pre_tool(
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.
     # The structured target parser above supersedes only its old substring-based shell guard.
-    verdict = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+    verdict = _legacy_evaluate_pre_tool(
+        root, event, _skip_substring_control_plane_guard=True,
+        _execution_cwd=_execution_directory(root, execution_cwd),
+    )
     if verdict[0] and _readings_differ(command):
         # Claude Code runs Git Bash on Windows, where `cat .e\nv` reads .env: the union of
         # both readings is enforced, never the more permissive one.
         with _legacy.posix_reading():
-            posix = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+            posix = _legacy_evaluate_pre_tool(
+                root, event, _skip_substring_control_plane_guard=True,
+                _execution_cwd=_execution_directory(root, execution_cwd),
+            )
         if not posix[0]:
             return posix
     return verdict
