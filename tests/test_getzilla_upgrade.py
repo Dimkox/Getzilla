@@ -219,7 +219,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
         self.assertIn('.getzilla/hooks/pre_tool_use.py', (self.project / '.codex/hooks.json').read_text())
 
-    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None):
+    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None, command_path=None):
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
         manifest = self.select((agent,))
         relative = '.grok/hooks/pre_tool_use.py'
@@ -231,7 +231,7 @@ class ProjectSyncTests(unittest.TestCase):
         record_owned(manifest, relative, content, 0o644)
         config = self.project / config_path
         config.parent.mkdir(exist_ok=True, parents=True)
-        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + relative}]}]}}).encode()
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + (command_path or relative)}]}]}}).encode()
         config.write_bytes(custom)
         record_path = '.grok-stack/AGBP_SYNC.json' if legacy_record else '.getzilla/AGBP_SYNC.json'
         record = self.project / record_path
@@ -282,6 +282,23 @@ class ProjectSyncTests(unittest.TestCase):
                             stack.enter_context(mock.patch.object(upgrade, 'match_kept_local', side_effect=windows_match))
                             stack.enter_context(mock.patch.object(installer, 'match_kept_local', side_effect=windows_match))
                         self._selected_kept_legacy_dependency(agent, path, legacy_record=legacy, keep_alias=alias)
+            finally:
+                self.project = original_project
+
+    def test_legacy_guard_command_aliases_retain_dependencies(self) -> None:
+        # Keep-file spelling stays canonical: these are command-path aliases.
+        commands = ('.GROK/HOOKS/pre_tool_use.py', '.gRoK/hOoKs/pre_tool_use.py',
+                    r'.GROK\HOOKS\pre_tool_use.py', r'.GrOk\HoOkS/pre_tool_use.py',
+                    r'.grok/hooks\pre_tool_use.py')
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, command in enumerate(commands):
+                    with self.subTest(command=command):
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        self._selected_kept_legacy_dependency('claude', '.claude/settings.json', command_path=command)
             finally:
                 self.project = original_project
 

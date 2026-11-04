@@ -394,7 +394,9 @@ def planned_changes(installer, home: Path, project: Path,
                 and matches_owned(current, owned_proof(state.manifest, config_path))):
             continue  # This declaration retires in the same commit.
         content = planned_contents.get(config_path, current.content if current else None)
-        if content is not None and b'.grok' in content and b'hooks' in content:
+        # Windows command paths can use different letter case. Retain safely on every platform.
+        normalized = content.lower() if content is not None else b''
+        if b'.grok' in normalized and b'hooks' in normalized:
             legacy_dependencies = True
     # Publish neutral replacements and retire old sources in the same Git commit.
     # A path alone never proves ownership; changed, kept and unknown files stay.
