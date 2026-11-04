@@ -2012,7 +2012,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
         return [CheckResult('factory-unit', 'fail',
                             'Factory units require Python >=3.11; Core source checks support Python >=3.10')]
     from . import STACK_DIR
-    from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_inventory, validate_report
+    from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_matches, validate_report
     environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
                    'PYTHONPATH': os.pathsep.join((str(STACK_DIR), str(root), str(root / 'factory/src')))}
     with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
@@ -2033,7 +2033,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
                 raise ValueError('Factory result exceeds evidence bound')
             evidence = decode_document(report.read_text(encoding='utf-8'))
             validate_report(evidence, binding)
-            if evidence['status'] != result.status or source_inventory(root) != binding['source_inventory']:
+            if evidence['status'] != result.status or not source_matches(root, binding):
                 raise ValueError('Factory result does not match subprocess outcome or current source')
             result.details.append(evidence)
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:

@@ -234,6 +234,17 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
         self.assertTrue(expected <= set(names), sorted(expected - set(names)))
         self.assertEqual(len(names), len(set(names)), 'a managed file must be published only once')
 
+    def test_factory_payload_contains_every_bound_regular_input(self):
+        from getzilla.factory_tests import source_inventory
+        selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+        payload = {entry.path: entry for entry in MODULE.build_payload(ROOT, selection=selection)}
+        inventory = source_inventory(ROOT)
+        self.assertIn('factory/tests/fixtures/codex-0.152.1/success.jsonl', inventory)
+        for name, digest in inventory.items():
+            with self.subTest(path=name):
+                self.assertIn(name, payload)
+                self.assertEqual(hashlib.sha256(payload[name].content).hexdigest(), digest)
+
     def test_runtime_state_is_never_walked_or_counted(self) -> None:
         # A Getzilla checkout used as a workspace fills .getzilla/runtime with worktrees and receipts.
         # They are not payload and must not hit the managed-source entry limit (install plans failed with

@@ -4,18 +4,39 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import unittest
 import uuid
 
+if not __package__:  # Preserve the source-file entrypoint as well as the archived module.
+    sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
+from getzilla import fsx
+from getzilla.component_state import BoundRoot, _file_identity
+
 MAX_REPORT_BYTES = 4 * 1024 * 1024
+MAX_INPUT_BYTES = 4 * 1024 * 1024
+MAX_TOTAL_INPUT_BYTES = 32 * 1024 * 1024
+MAX_INPUT_ENTRIES = 10000
+MAX_INPUT_DEPTH = 64
+_INPUT_DIRECTORIES = ("factory/tests", "factory/src", "factory/runtime", "factory/contracts")
+_INPUT_FILES = (
+    "factory/pyproject.toml", "factory/uv.lock", "scripts/getzilla_m8.py",
+    "scripts/getzilla_landing_publish.py", "engineering/contracts/openapi/factory-result-admission.v2.json",
+    "delivery/src/getzilla_delivery/landing_filesystem.py",
+    "delivery/src/getzilla_delivery/landing_publication.py",
+    "delivery/src/getzilla_delivery/landing_publication_contracts.py",
+)
+_GENERATED_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+_GENERATED_SUFFIXES = frozenset({".pyc", ".pyo"})
 _DATABASE_BINDINGS = (
     "FACTORY_TEST_DATABASE_URL", "FACTORY_FRESH_CLUSTER_DATABASE_URL",
     "FACTORY_TEST_POSTGRES_CONTAINER", "FACTORY_TEST_POSTGRES_CONTAINER_ID",
@@ -59,43 +80,159 @@ _REPORT_KEYS = frozenset({
 })
 
 
+def _directory_identity(info) -> list[int]:
+    identity = (info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode))
+    return list(fsx.directory_identity(info, identity))
+
+
+def _ancestry(root: Path) -> dict[str, list[int]]:
+    """Check lexical components before any canonicalization can hide a link."""
+    if ".." in root.parts:
+        raise ValueError("Factory source root must not contain parent traversal")
+    result = {}
+    current = Path(root.anchor)
+    for component in (None, *root.parts[1:]):
+        if component is not None:
+            current /= component
+        info = os.lstat(current)
+        if fsx.is_link(info) or not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Factory source ancestry contains a linked or non-directory input")
+        result[str(current)] = _directory_identity(info)
+    return result
+
+
+@contextmanager
+def _source_root(root: Path):
+    root = Path(root).absolute()
+    ancestry = _ancestry(root)
+    with BoundRoot(root) as bound:
+        # BoundRoot accepts trusted system aliases for other callers. This
+        # inventory has a stricter lexical contract and never admits an alias.
+        if bound.path != root or _ancestry(root) != ancestry:
+            raise ValueError("Factory source root changed during binding")
+        yield bound, ancestry
+        bound.check()
+        if _ancestry(root) != ancestry:
+            raise ValueError("Factory source ancestry changed during reading")
+
+
+def _input_layout(bound: BoundRoot):
+    files, directories = {}, {}
+    entries = 0
+
+    def directory(relative):
+        try:
+            with bound.parent(relative + "/.inventory") as (parent, _name, check):
+                check()
+                identity = _directory_identity(fsx.fstat_dir(parent))
+                check()
+                return identity
+        except FileNotFoundError:
+            return None
+
+    def walk(relative):
+        nonlocal entries
+        if len(relative.split("/")) > MAX_INPUT_DEPTH:
+            raise ValueError("Factory source directory depth exceeds bound")
+        opened = False
+        try:
+            with bound.parent(relative + "/.inventory") as (parent, _name, check):
+                opened = True
+                before = _directory_identity(fsx.fstat_dir(parent))
+                directories[relative] = before
+                names = []
+                with fsx.scandir(parent) as listing:
+                    for entry in listing:
+                        entries += 1
+                        if entries > MAX_INPUT_ENTRIES:
+                            raise ValueError("Factory source inventory exceeds entry bound")
+                        names.append(entry.name)
+                check()
+                for name in sorted(names):
+                    metadata = fsx.lstat_at(parent, name)
+                    path = relative + "/" + name
+                    if fsx.is_link(metadata):
+                        raise ValueError("Factory source inventory contains a linked input")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        if name not in _GENERATED_DIRECTORIES:
+                            walk(path)
+                    elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                        if Path(name).suffix not in _GENERATED_SUFFIXES:
+                            files[path] = list(_file_identity(metadata))
+                    else:
+                        raise ValueError("Factory input is not a regular single-link file")
+                    check()
+                if before != _directory_identity(fsx.fstat_dir(parent)):
+                    raise ValueError("Factory source directory changed during inventory")
+                check()
+        except FileNotFoundError:
+            if opened:
+                raise ValueError("Factory source disappeared during inventory") from None
+
+    for relative in (*_INPUT_DIRECTORIES, *_INPUT_FILES):
+        parts = relative.split("/")
+        for index in range(1, len(parts)):
+            name = "/".join(parts[:index])
+            if name not in directories:
+                identity = directory(name)
+                if identity is not None:
+                    directories[name] = identity
+    for relative in _INPUT_DIRECTORIES:
+        walk(relative)
+    for relative in _INPUT_FILES:
+        try:
+            with bound.parent(relative) as (parent, name, check):
+                metadata = fsx.lstat_at(parent, name)
+                if fsx.is_link(metadata) or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise ValueError("Factory input is not a regular single-link file")
+                files[relative] = list(_file_identity(metadata))
+                check()
+        except FileNotFoundError:
+            continue
+    return dict(sorted(files.items())), dict(sorted(directories.items()))
+
+
+def _source_snapshot(root: Path):
+    """Read a bounded closed inventory through checked directory identities."""
+    with _source_root(root) as (bound, ancestry):
+        files, directories = _input_layout(bound)
+        contents = {}
+        total = 0
+        for name, identity in files.items():
+            snapshot = bound.read(name, limit=min(MAX_INPUT_BYTES, MAX_TOTAL_INPUT_BYTES - total))
+            if snapshot is None or list(snapshot.identity) != identity:
+                raise ValueError("Factory input changed after inventory")
+            contents[name] = snapshot.content
+            total += len(snapshot.content)
+        if _input_layout(bound) != (files, directories):
+            raise ValueError("Factory source bindings changed during reading")
+        bound.check()
+    return contents, {"ancestry": ancestry, "directories": directories, "files": files}
+
+
 def source_inventory(root: Path) -> dict[str, str]:
-    """Bind the test modules and their published Factory inputs, without caches."""
-    paths = {root / name for name in (
-        "factory/pyproject.toml", "factory/uv.lock", "scripts/getzilla_m8.py",
-        "scripts/getzilla_landing_publish.py", "engineering/contracts/openapi/factory-result-admission.v2.json",
-        "delivery/src/getzilla_delivery/landing_filesystem.py",
-        "delivery/src/getzilla_delivery/landing_publication.py",
-        "delivery/src/getzilla_delivery/landing_publication_contracts.py",
-    )}
-    for directory in ("factory/tests", "factory/src", "factory/runtime", "factory/contracts"):
-        for path in (root / directory).rglob("*"):
-            if "__pycache__" in path.parts:
-                continue
-            if path.is_symlink():
-                raise ValueError("Factory source inventory contains a linked input")
-            if path.suffix in {".py", ".json", ".sql", ".toml"}:
-                paths.add(path)
-    inventory = {}
-    for path in sorted(paths):
-        if not path.exists():
-            continue
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_REPORT_BYTES:
-            raise ValueError("Factory input is not a bounded regular file")
-        inventory[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-        if len(inventory) > 10000:
-            raise ValueError("Factory source inventory exceeds bound")
-    return inventory
+    contents, _bindings = _source_snapshot(root)
+    return {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
 
 
-def declared_ids(root: Path) -> list[str]:
-    """Read the mandatory source cases without importing candidate test code."""
+def source_matches(root: Path, binding: dict) -> bool:
+    contents, identities = _source_snapshot(root)
+    return (identities == binding["source_bindings"]
+            and {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
+            == binding["source_inventory"])
+
+
+def declared_ids(root: Path, *, contents: dict[str, bytes] | None = None) -> list[str]:
+    """Parse the same checked bytes whose hashes bind the mandatory cases."""
+    if contents is None:
+        contents, _bindings = _source_snapshot(root)
     identifiers = []
-    for path in sorted((root / "factory/tests").rglob("*.py")):
-        if "__pycache__" in path.parts:
+    for name, content in contents.items():
+        path = Path(name)
+        if not name.startswith("factory/tests/") or path.suffix != ".py":
             continue
-        module = ".".join(path.relative_to(root).with_suffix("").parts)
-        tree = ast.parse(path.read_bytes(), filename=str(path))
+        module = ".".join(path.with_suffix("").parts)
+        tree = ast.parse(content, filename=name)
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 identifiers.extend(module + "." + node.name + "." + method.name for method in node.body
@@ -139,10 +276,12 @@ def observed_context(path: str | None = None) -> dict:
 
 
 def invocation(root: Path, *, path: str | None = None) -> dict:
-    return {"root": str(root.resolve()), "python": str(Path(sys.executable).absolute()),
+    contents, identities = _source_snapshot(root)
+    return {"root": str(root.absolute()), "python": str(Path(sys.executable).absolute()),
             "invocation_id": uuid.uuid4().hex,
             "engine_sha256": hashlib.sha256(__loader__.get_data(__file__)).hexdigest(),
-            "source_inventory": source_inventory(root), "declared_ids": declared_ids(root),
+            "source_inventory": {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()},
+            "source_bindings": identities, "declared_ids": declared_ids(root, contents=contents),
             "context": observed_context(path)}
 
 
@@ -299,7 +438,7 @@ def run(root: Path, *, report: Path | None = None, request: dict | None = None) 
         "errors": len(result.errors), "loader_errors": len(loader.errors), "skipped": skipped,
         "unqualified_skips": sorted(item["id"] for item in skipped if item["applicability"] is None),
         "missing_required": sorted(set(required) - set(result.executed)),
-        "source_stable": source_inventory(root) == binding["source_inventory"],
+        "source_stable": source_matches(root, binding),
         "database_obligations": "not_run_in_unit_mode",
     }
     passed = (bool(result.executed) and result.wasSuccessful() and not result.expectedFailures
@@ -330,7 +469,7 @@ def main(argv=None) -> int:
         if args.request.stat().st_size > MAX_REPORT_BYTES:
             raise ValueError("Factory request exceeds bound")
         request = decode_document(args.request.read_text(encoding="utf-8"))
-    return run(args.root.resolve(strict=True), report=args.report, request=request)
+    return run(args.root.absolute(), report=args.report, request=request)
 
 
 if __name__ == "__main__":
