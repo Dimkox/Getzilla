@@ -290,6 +290,7 @@ def _admit_model_request(root, binding, pipe, nonce, generation, revision, model
     return claim['revision']
 
 
+@fixture._docker_client()
 def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dict:
     docker = shutil.which('docker', path='/usr/bin:/bin')
     codex = shutil.which('codex')
@@ -299,12 +300,9 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             or len(policy.candidates) != 2 or [x.model for x in policy.candidates] != ['fixture-a', 'fixture-b']
             or any(x.provider != 'local_fixture' or x.account_ref != 'synthetic' for x in policy.candidates)):
         raise fixture.FixtureError('fixture_unavailable')
-    codex = str(Path(codex).resolve())
     recovery = None
     try:
-        with open(codex, 'rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != fixture.CODEX_SHA256:
-                raise fixture.FixtureError('codex_unqualified')
+        fixture._read_input(codex, fixture.CODEX_SHA256, 'codex_unqualified')
         try:
             journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
         except journal.JournalError as error:
@@ -362,7 +360,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             if not first['claimed']:
                 raise fixture.FixtureError('claim_denied')
             proc_a = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', a]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
+                                      stderr=subprocess.DEVNULL, env=fixture._docker_environment(), bufsize=0)
             processes.append(proc_a)
             preserve_volumes = True
             pipe_a = fixture._Lines(proc_a)
@@ -447,7 +445,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         if not second['claimed']:
             raise fixture.FixtureError('claim_denied')
         proc_b = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', b]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
+                                  stderr=subprocess.DEVNULL, env=fixture._docker_environment(), bufsize=0)
         processes.append(proc_b)
         pipe_b = fixture._Lines(proc_b)
         lines.append(pipe_b)

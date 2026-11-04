@@ -569,11 +569,12 @@ class ControlledFixtureTest(unittest.TestCase):
                                       'fixture-session', 'a'*64, 'b'*64, 'c'*64)
             budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120)
             journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
-            with patch.object(controlled_fixture.shutil, 'which', return_value=sys.executable), \
-                 patch.object(controlled_fixture.hashlib, 'file_digest') as digest, \
+            binary = root/'unit-codex'
+            binary.write_bytes(b'unit native admission')
+            with patch.object(controlled_fixture.shutil, 'which', return_value=str(binary)), \
+                 patch.object(controlled_fixture, 'CODEX_SHA256', hashlib.sha256(b'unit native admission').hexdigest()), \
                  patch.object(controlled_fixture, '_command') as command:
-                digest.return_value.hexdigest.return_value = controlled_fixture.CODEX_SHA256
-                with self.assertRaises(controlled_fixture.FixtureError):
+                with self.assertRaisesRegex(controlled_fixture.FixtureError, 'fixture_failed'):
                     controlled_fixture.run(root, binding, budget)
                 command.assert_not_called()
 

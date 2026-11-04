@@ -16,6 +16,8 @@ import stat
 import subprocess
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager, nullcontext
+from contextvars import ContextVar
 from pathlib import Path
 
 from . import model_continuation_state as journal
@@ -27,6 +29,8 @@ CONTRACT_SHA256 = 'd08934d1aa8e857c34e21b3c7ac8fb89c822a9c35f224876678c1ca5a7ce4
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
 FIXTURE_SHA256 = '5fba526ae5fc2f899db04961029b0c632ebc928630a959ca9568b1e135c38080'
 MAX_FRAME = 65536
+MAX_INPUT_BYTES = 512*1024*1024
+_DOCKER_CONFIG = ContextVar('fixture_docker_config', default=None)
 # This is a private tmpfs inside the verified isolated container, not a host path.
 CONTAINER_TMP = '/tmp'  # nosec B108
 _ENV_KEYS = frozenset({'PATH', 'LANG', 'GPG_KEY', 'PYTHON_VERSION', 'PYTHON_SHA256',
@@ -96,11 +100,32 @@ def _validate_container(info, image, mounts, nonce):
         return False
 
 
+@contextmanager
+def _docker_client():
+    """Keep one private empty Docker configuration alive for its client processes."""
+    if _DOCKER_CONFIG.get() is not None:
+        yield
+        return
+    with tempfile.TemporaryDirectory(prefix='getzilla-docker-client-') as directory:
+        token = _DOCKER_CONFIG.set(directory)
+        try:
+            yield
+        finally:
+            _DOCKER_CONFIG.reset(token)
+
+
+def _docker_environment():
+    directory = _DOCKER_CONFIG.get()
+    if directory is None:
+        raise FixtureError('container_unavailable')
+    return {'PATH': '/usr/bin:/bin', 'HOME': directory, 'DOCKER_CONFIG': directory}
+
+
 def _command(args, timeout=60):
     try:
-        with tempfile.TemporaryFile() as output:
+        with _docker_client(), tempfile.TemporaryFile() as output:
             subprocess.run(_docker_argv(args), stdin=subprocess.DEVNULL, stdout=output,
-                           stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'},
+                           stderr=subprocess.DEVNULL, env=_docker_environment(),
                            timeout=timeout, check=True)
             output.seek(0)
             data = output.read(MAX_FRAME + 1)
@@ -117,7 +142,10 @@ def _command(args, timeout=60):
 
 def _docker_argv(args):
     # Ignore saved Docker contexts as well as endpoint environment selectors.
-    return [args[0], '--host', 'unix:///var/run/docker.sock', *args[1:]]
+    directory = _DOCKER_CONFIG.get()
+    if directory is None:
+        raise FixtureError('container_unavailable')
+    return [args[0], '--config', directory, '--host', 'unix:///var/run/docker.sock', *args[1:]]
 
 
 def _cpu_set():
@@ -185,23 +213,48 @@ def _owned_image(docker, image, owner):
         return False
 
 
-def _copy_input(source, destination, expected, error):
+def _input_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _read_input(source, expected, error, destination=None):
+    """Admit, hash and optionally copy one stable bounded regular input."""
     try:
-        descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-        with os.fdopen(descriptor, 'rb') as handle, destination.open('xb') as output:
+        before = os.stat(source, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_INPUT_BYTES:
+            raise FixtureError(error)
+        with ExitStack() as resources:
+            descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+            resources.callback(os.close, descriptor)
+            handle = resources.enter_context(os.fdopen(descriptor, 'rb', buffering=0, closefd=False))
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 512*1024*1024:
+            if not stat.S_ISREG(info.st_mode) or _input_identity(info) != _input_identity(before):
                 raise FixtureError(error)
             digest = hashlib.sha256()
             count = 0
-            while data := handle.read(65536):
-                count += len(data)
-                if count > 512*1024*1024:
+            with destination.open('xb') if destination is not None else nullcontext() as output:
+                while count < info.st_size:
+                    data = handle.read(min(65536, info.st_size-count))
+                    if not data:
+                        raise FixtureError(error)
+                    count += len(data)
+                    digest.update(data)
+                    if output is not None:
+                        output.write(data)
+                if handle.read(1):
                     raise FixtureError(error)
-                digest.update(data)
-                output.write(data)
-            if count != info.st_size or digest.hexdigest() != expected:
+            if (count != info.st_size or digest.hexdigest() != expected
+                    or _input_identity(os.fstat(handle.fileno())) != _input_identity(info)
+                    or _input_identity(os.stat(source, follow_symlinks=False)) != _input_identity(info)):
                 raise FixtureError(error)
+    except OSError:
+        raise FixtureError(error) from None
+
+
+def _copy_input(source, destination, expected, error):
+    _read_input(source, expected, error, destination)
+    try:
         destination.chmod(0o555 if error == 'codex_unqualified' else 0o444)
         os.utime(destination, (0, 0))
     except OSError:
@@ -404,6 +457,7 @@ def _second_valid(events, thread, turn):
     return complete
 
 
+@_docker_client()
 def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dict:
     """Run the fixed local fixture once. No input or credentials enter the container."""
     docker = shutil.which('docker', path='/usr/bin:/bin')
@@ -416,13 +470,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             or [candidate.model for candidate in policy.candidates] != ['fixture-a', 'fixture-b']
             or any(candidate.provider != 'local_fixture' or candidate.account_ref != 'synthetic' for candidate in policy.candidates)):
         raise FixtureError('fixture_policy_invalid')
-    codex = str(Path(codex).resolve())
-    try:
-        with open(codex, 'rb') as executable:
-            if hashlib.file_digest(executable, 'sha256').hexdigest() != CODEX_SHA256:
-                raise FixtureError('codex_unqualified')
-    except OSError:
-        raise FixtureError('fixture_unavailable') from None
+    _read_input(codex, CODEX_SHA256, 'codex_unqualified')
     nonce = secrets.token_hex(16)
     try:
         journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
@@ -457,7 +505,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             raise FixtureError('claim_denied')
         process = subprocess.Popen(_docker_argv([docker, 'start', '-ai', container_id]), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   env={'PATH': '/usr/bin:/bin'}, bufsize=0)
+                                   env=_docker_environment(), bufsize=0)
         lines = _Lines(process)
         if lines.read() != {'type': 'before_a', 'version': 1, 'nonce': nonce}:
             raise FixtureError('invalid_frame')

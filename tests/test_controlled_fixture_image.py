@@ -31,8 +31,11 @@ class FixtureImageContractTests(unittest.TestCase):
                 patch.object(fixture.subprocess, 'run') as run:
             self.assertEqual(fixture._command(['/usr/bin/docker', 'version']), '')
             args = run.call_args.args[0]
-            self.assertEqual(args[:3], ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock'])
-            self.assertEqual(run.call_args.kwargs['env'], {'PATH': '/usr/bin:/bin'})
+            self.assertEqual(args[:2], ['/usr/bin/docker', '--config'])
+            self.assertEqual(args[3:5], ['--host', 'unix:///var/run/docker.sock'])
+            self.assertEqual(run.call_args.kwargs['env'],
+                             {'PATH': '/usr/bin:/bin', 'HOME': args[2], 'DOCKER_CONFIG': args[2]})
+            self.assertFalse(Path(args[2]).exists())
 
     def test_contract_names_immutable_official_base_and_exact_inputs(self):
         contract, recipe = fixture._image_contract()

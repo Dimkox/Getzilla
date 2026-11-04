@@ -48,8 +48,15 @@ binary through that test invocation's PATH; do not change the normal Codex
 installation. Other versions are unqualified by this fixture.
 
 With the base cached, the fixture uses the explicit local Docker socket and
-default local builder with `--pull=false --network=none`. The private build
-context contains only the declared binary, fixed script, Dockerfile and contract;
+the default local builder with `--pull=false --network=none`.
+It uses an empty private Docker config and HOME for each invocation. It keeps that
+directory alive until its Docker clients exit, then removes it. Saved host
+contexts and credential configuration do not enter the client environment.
+All three executable-input readers share nonblocking, no-follow regular-file
+admission, a 512 MiB limit, bounded streaming hashes and source-identity checks
+before and after reading. FIFOs, links, empty or oversized files and changes
+during a read refuse before Docker allocation.
+The private build context contains only the declared binary, fixed script, Dockerfile and contract;
 the Dockerfile has no RUN instruction or package installation. A fresh owner
 label changes each ephemeral image's identity. The real observed ID, owner,
 base and contract binding are checked, followed by actual in-image Python
