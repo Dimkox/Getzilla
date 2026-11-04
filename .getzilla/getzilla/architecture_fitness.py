@@ -2193,7 +2193,10 @@ def _queue_export_slice(tree: ast.Module, requested: frozenset[str]) -> ast.Modu
 
 
 def _queue_export_slice_closed(tree: ast.Module, requested: frozenset[str]) -> ast.Module:
+    return _queue_export_slice_prepared(_queue_scalar_projection(tree), requested)
 
+
+def _queue_scalar_projection(tree: ast.Module) -> ast.Module:
     shadowed = {event.name for event in binding_events(tree)}
 
     class Scalars(ast.NodeTransformer):
@@ -2210,7 +2213,12 @@ def _queue_export_slice_closed(tree: ast.Module, requested: frozenset[str]) -> a
             return self.generic_visit(node)
 
     import copy
-    tree = Scalars().visit(copy.deepcopy(tree))
+    return Scalars().visit(copy.deepcopy(tree))
+
+
+def _queue_export_slice_prepared(tree: ast.Module, requested: frozenset[str]) -> ast.Module:
+    """Read an owned scalar tree; copy selected declarations before rewriting."""
+    import copy
 
     @lru_cache(maxsize=None)
     def names(node: ast.AST) -> set[str]:
@@ -2950,7 +2958,13 @@ def _queue_source_preparation(path: str, source: bytes) -> _QueueSourcePreparati
 @lru_cache(maxsize=256)
 def _queue_owned_export_slice(path: str, source: bytes, requested: frozenset[str]) -> ast.Module:
     prepared = _queue_source_preparation(path, source)
-    return _queue_export_slice_closed(prepared.tree, requested) if prepared.namespace_closed else prepared.tree
+    return (_queue_export_slice_prepared(_queue_owned_scalar_source(path, source), requested)
+            if prepared.namespace_closed else prepared.tree)
+
+
+@lru_cache(maxsize=128)
+def _queue_owned_scalar_source(path: str, source: bytes) -> ast.Module:
+    return _queue_scalar_projection(_queue_source_preparation(path, source).tree)
 
 
 @lru_cache(maxsize=128)

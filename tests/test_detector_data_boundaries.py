@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import sys
 import textwrap
 import unittest
@@ -79,6 +80,56 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_scalar_source_preparation_clones_once_across_member_requests(self):
+        source = b'def first(): return str(1)\ndef second(): return str(2)\n'
+        FIT._queue_owned_export_slice.cache_clear()
+        FIT._queue_source_preparation.cache_clear()
+        FIT._queue_owned_scalar_source.cache_clear()
+        owned = FIT._queue_source_preparation('scalar-once.py', source)
+        with patch('copy.deepcopy', wraps=copy.deepcopy) as cloned:
+            first = FIT._queue_owned_export_slice('scalar-once.py', source, frozenset({'first'}))
+            second = FIT._queue_owned_export_slice('scalar-once.py', source, frozenset({'second'}))
+        self.assertEqual(sum(call.args[0] is owned.tree for call in cloned.call_args_list), 1)
+        self.assertEqual([node.name for node in first.body if isinstance(node, ast.FunctionDef)], ['first'])
+        self.assertEqual([node.name for node in second.body if isinstance(node, ast.FunctionDef)], ['second'])
+        changed = b'from rq import Queue\nstr = Queue\n' + source
+        rebound = FIT._queue_owned_export_slice('scalar-once.py', changed, frozenset({'first'}))
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'str'
+                            for node in ast.walk(rebound)))
+        caller = ast.parse(source)
+        baseline = FIT._queue_export_slice(caller, frozenset({'first'}))
+        self.assertFalse(any(isinstance(node, ast.Call) for node in ast.walk(baseline)))
+        caller.body.insert(0, ast.parse('str = Queue\n').body[0])
+        refreshed = FIT._queue_export_slice(caller, frozenset({'first'}))
+        self.assertTrue(any(isinstance(node, ast.Call) for node in ast.walk(refreshed)))
+
+    def test_owned_scalar_tree_stays_unchanged_across_slice_analysis_and_order(self):
+        source = (b'from rq import Queue\ndef make(): return Queue()\n'
+                  b'def ordinary(): return str(1)\n')
+        results = []
+        for order in (('make', 'ordinary'), ('ordinary', 'make')):
+            FIT._queue_owned_export_slice.cache_clear()
+            FIT._queue_owned_scalar_source.cache_clear()
+            scalar = FIT._queue_owned_scalar_source('scalar-order.py', source)
+            original = ast.dump(scalar, include_attributes=True)
+            observed = {}
+            for name in order:
+                requested = frozenset({name})
+                view = FIT._queue_owned_export_slice('scalar-order.py', source, requested)
+                before = ast.dump(view, include_attributes=True)
+                factories = FIT._queue_return_exports(view, frozenset())
+                analyzed = analyze_queue_tree(view)
+                FIT._queue_import_equivalent_tree(view)
+                FIT._queue_export_slice(view, requested)
+                self.assertEqual(ast.dump(view, include_attributes=True), before)
+                self.assertEqual(ast.dump(scalar, include_attributes=True), original)
+                observed[name] = (factories, analyzed.signals)
+                self.assertIs(FIT._queue_owned_export_slice('scalar-order.py', source, requested), view)
+            results.append(observed)
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0]['make'][0], {'make'})
+        self.assertEqual(results[0]['ordinary'], (set(), ()))
+
     def test_unproved_callable_carriers_and_selections_retain_source_governance(self):
         consume = 'def consume(factory): return factory()\n'
         literal = "__import__('bridge', fromlist=['helper']).helper"
