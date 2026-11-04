@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import subprocess
 import os
 import multiprocessing
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -39,6 +40,7 @@ class FakeClock:
 class CountingBackend:
     kind = 'contract-test'
     external_mutations = False
+    cooperative_admission = True
 
     def __init__(self, complete=True):
         self.calls = 0
@@ -48,6 +50,7 @@ class CountingBackend:
         self.lock = threading.Lock()
 
     def dispatch(self, root, admission, request):
+        admission.consume(root, request)
         persisted = store.load_registry(root)['records'][admission.execution_id]
         assert persisted['backend']['claim'] == 'committed'
         with self.lock:
@@ -56,6 +59,7 @@ class CountingBackend:
         return {'execution_status': 'succeeded', 'terminal_reason': 'exit_zero'} if self.complete else None
 
     def cancel(self, root, admission):
+        admission.consume(root)
         self.cancels += 1
         return True
 
@@ -243,7 +247,7 @@ class ExecutionTests(unittest.TestCase):
             nonlocal writes
             if path.name == 'registry.json':
                 writes += 1
-                if writes > 1:
+                if any(item['execution_status'] in store.TERMINAL for item in json.loads(raw)['records'].values()):
                     raise OSError('injected receipt failure')
             return real(root, path, raw)
         with patch.object(store.state, 'durable_bytes', side_effect=fail_receipt):
@@ -444,7 +448,8 @@ class ExecutionTests(unittest.TestCase):
             result = real_replace(*args)
             if args[-1] == 'registry.json':
                 publications += 1
-                receipt_renamed = publications == 2
+                receipt_renamed = any(item['execution_status'] in store.TERMINAL
+                                      for item in store.load_registry(self.root)['records'].values())
             return result
         def flush(handle):
             if receipt_renamed:

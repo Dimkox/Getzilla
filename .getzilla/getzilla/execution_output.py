@@ -206,5 +206,8 @@ def read_output(root: Path, caller, execution_id: str, max_bytes: int = PREVIEW_
             result['artifact_available'] = False
             result['complete_output'] = False
             result['unavailable_reason'] = 'artifact_unavailable'
-    result['preview'] = utf8_tail(result['preview'].encode(), max_bytes)
+    preview = result['preview'].encode()
+    result['preview'] = utf8_tail(preview, max_bytes)
+    if len(preview) > max_bytes:
+        result.update(preview_truncated=True, truncated=True, complete_output=False)
     return result

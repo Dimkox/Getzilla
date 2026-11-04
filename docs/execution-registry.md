@@ -44,12 +44,27 @@ Production `submit` and `cancel` have no backend and return `unsupported_backend
 Tests inject an actual counting adapter to exercise the contract. Any adapter
 marked as externally mutating is refused on every platform. No managed launch,
 process cancellation, remote retry or external exactly-once guarantee is supplied.
-An injected adapter receives one admission token after durable intent publication.
+The registry canonicalizes arguments once into ephemeral immutable bytes. Both
+the semantic digest and the adapter's fresh owned payload use that snapshot;
+mutating the caller's original dict/list after intent cannot change dispatch.
+Raw arguments are not persisted. An injected adapter must explicitly implement
+`cooperative_admission` and call the supplied token's `consume` before counted
+work. A short owner/epoch/generation/deadline check and durable CAS consumes that
+token once. Already-revoked admission is refused before the adapter call;
+revocation before its consumption prevents counted cooperative work. No task lock
+spans arbitrary dispatch/cancel code. After valid consumption, an in-flight
+revocation can still leave work running: this supplies no physical or external
+fence. EX-03 must qualify any such backend before production use.
+
 An interrupted claim is never dispatched again on replay. Different arguments,
-backend kind, hard duration or operation/request binding under one intent conflict.
-A cancellation request is recorded only after an injected adapter accepts it;
-that acceptance does not mean `cancelled`. Terminal confirmation needs a fenced
-backend event. No live cancellation implementation or qualification is claimed.
+backend kind, hard duration or operation/remote binding under one intent conflict.
+Cancellation first saves one durable reservation with a fixed 30-second admission
+budget. The cooperative adapter consumes it before its request effect. Concurrent
+or uncertain retries never resend it. Only actual accepted consumption can record
+`cancel_requested`; it never means `cancelled`. Lost responses and receipt failures
+remain unknown. A terminal completion that wins a cancellation race stays
+immutable; work may also finish successfully after cancellation was accepted.
+No live cancellation implementation or qualification is claimed.
 
 The registry uses existing kernel locks, safe descriptor reads, atomic writes,
 file flushes and directory-entry flushes. It keeps at most 256 attempt/tombstone
@@ -87,6 +102,9 @@ never opened. Optional artifacts use a bounded reference in the existing `par`
 namespace, content digest, size and inode/time identity; missing, linked, oversized
 or replaced artifacts are unavailable. The API exposes no cursor or full-log
 retrieval channel. Truncated diagnostic output never proves full-report retention.
+A requested smaller output view also marks preview/view truncation and clears
+`complete_output`, including a UTF-8 slice. Whole-stream observed/retained/dropped
+counters continue to describe capture; cropping a view does not rewrite them.
 
 Linux tests cover local filesystem fault injection and real child interruption
 around file flush, rename and directory flush. They do not simulate hardware

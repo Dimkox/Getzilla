@@ -32,6 +32,7 @@ def record(root, execution_id='a' * 32, intent='b' * 64):
         'execution_status': 'running', 'cleanup_status': 'not_required', 'operation_outcome': 'not_applicable',
         'terminal_reason': None, 'source_final': None, 'source_changed': False, 'output': None,
         'retention_until': None, 'expired': False, 'event_receipts': {},
+        'dispatch_claim': 'pending', 'cancel_claim': None,
     }
 
 
