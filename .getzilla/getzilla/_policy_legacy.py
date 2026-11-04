@@ -2795,12 +2795,16 @@ def _secret_reference(
     if execution_cwd is not None and not Path(raw).is_absolute() and not raw.startswith('~'):
         raw = str(execution_cwd / raw)
     rel = safe_relative_path(root, raw)
-    if _secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns)):
-        return False
-    if rel is not None and _secret_path_match(rel, patterns):
-        return True
-    if _secret_path_match(raw, patterns):
-        return True
+    resolved = os.path.realpath(os.path.join(str(root), os.path.expanduser(raw)))
+    public = (_secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns))
+              and _secret_exception(resolved, patterns))
+    if not public:
+        if rel is not None and _secret_path_match(rel, patterns):
+            return True
+        if _secret_path_match(raw, patterns) or _secret_path_match(resolved, patterns):
+            return True
+    # Public-looking globs still need bounded expansion: a matched public name
+    # can be a symlink to protected material outside this policy root.
     if expand and _GLOB_META.search(raw):
         budget = budget or _Budget()
         for match in _bounded_glob(str(root), raw, budget):
@@ -3022,7 +3026,9 @@ def consumer_secret_paths(consumers: object, *, script_matches: Callable[[str], 
     return frozenset(allowed)
 
 
-def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozenset[str]]:
+def _consumer_handoffs(
+    root: Path, command: str, *, execution_cwd: Path | None = None,
+) -> dict[tuple[str, ...], frozenset[str]]:
     """Secret paths the owner lets an exact script receive (project policy ``secret_consumers``).
 
     The exception belongs to one top-level simple command: a real Python interpreter (or the script
@@ -3030,6 +3036,7 @@ def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozen
     no directory change anywhere in the command (#100). A redirection or ``tee`` aimed at a handed
     secret voids the exception: reading it is allowed, writing it never is (#101).
     """
+    directory = execution_cwd if execution_cwd is not None else root
     consumers = project_policy(root).get('secret_consumers')
     if not isinstance(consumers, list):
         return {}
@@ -3065,11 +3072,15 @@ def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozen
         first = _executable_name(raw[0])
         interpreter = _CONSUMER_INTERPRETER.fullmatch(first) is not None
         script = raw[1] if interpreter and len(raw) > 1 else raw[0]
-        allowed = consumer_secret_paths(consumers, script_matches=lambda listed: _same_file(root, script, listed))
+        if (interpreter and len(raw) < 2) or not script or script.startswith('-'):
+            continue
+        actual_script = str(directory / script) if directory != root and not Path(script).is_absolute() else script
+        allowed = consumer_secret_paths(consumers, script_matches=lambda listed: _same_file(root, actual_script, listed))
         if not allowed:
             continue
         sinks = {*redirected, *written}
-        if any(os.path.realpath(sink) == os.path.realpath(secret) or sink == secret for sink in sinks for secret in allowed):
+        if any(os.path.realpath(os.path.join(str(directory), sink))
+               == os.path.realpath(os.path.join(str(root), secret)) for sink in sinks for secret in allowed):
             continue
         argv = ['git', first[4:], *raw[1:]] if first.startswith('git-') and len(first) > 4 else [first, *raw[1:]]
         handoffs[tuple(argv)] = frozenset(allowed)
@@ -3185,7 +3196,15 @@ def _argv_secret_reference(
     handed = (handoffs or {}).get(tuple(argv), frozenset())
     if handed:
         # The owner lets this script read these secrets itself; the agent still never names them elsewhere.
-        words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
+        if execution_cwd is None or execution_cwd == root:
+            words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
+        else:
+            # Registration paths belong to the policy root, argv paths to native cwd.
+            # Do not let a relative resource spelling borrow another root's identity.
+            registered = {os.path.normcase(os.path.abspath(os.path.join(str(root), secret))) for secret in handed}
+            words = [word for word in words if os.path.normcase(os.path.abspath(
+                os.path.join(str(execution_cwd), word.split('=', 1)[-1]),
+            )) not in registered]
     recursive = _is_recursive_reader(argv)
     for word in words:
         for variant in _brace_expand(word):
@@ -3223,12 +3242,66 @@ def _raw_secret_reference(
 
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
+_UNSPECIFIED_READ_CWD = object()
+_UNKNOWN_READ_CWD = 'unresolved native execution directory for a read'
+
+
+def _read_directory(root: Path, value: object) -> Path | None:
+    if value is _UNSPECIFIED_READ_CWD:
+        return root
+    return value if isinstance(value, Path) and value.is_absolute() else None
+
+
+def is_read_tool(tool: str) -> bool:
+    lowered = tool.lower()
+    return lowered in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'} or (
+        tool.startswith('mcp__') and 'read' in lowered
+    )
+
+
+def read_secret_reference(
+    root: Path, tool: str, inputs: Any, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
+) -> str | None:
+    """Existing structured-read protection with execution cwd separate from policy root."""
+    directory = _read_directory(root, execution_cwd)
+    is_grep = tool.lower() == 'grep'
+    glob_filter = inputs.get('glob') if is_grep and isinstance(inputs, dict) else None
+    glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
+    search_inputs = _extract_paths(inputs)
+    if is_grep and not search_inputs:
+        if directory is None:
+            return _UNKNOWN_READ_CWD
+        search_inputs = [str(directory)]
+    if directory is None and any(
+        isinstance(raw, str) and raw and not Path(raw).is_absolute() for raw in search_inputs
+    ):
+        return _UNKNOWN_READ_CWD
+    budget = _Budget()
+    try:
+        if is_grep and glob_filter:
+            search_inputs.extend(_brace_expand(glob_filter))
+        for raw in search_inputs:
+            if not isinstance(raw, str) or not raw:
+                continue
+            if _secret_reference(root, raw, patterns, budget=budget, execution_cwd=directory):
+                return raw
+            folder = _resolve_under_root(root, raw, execution_cwd=directory)
+            if folder and os.path.isdir(folder):
+                hit = _walk_for_secret(root, folder, patterns, budget, glob_filter,
+                                       skip_hidden=is_grep and glob_filter is None)
+                if hit is not None:
+                    return hit
+    except _BudgetExceeded:
+        return _BUDGET_MARKER
+    return None
+
+
 _SECRET_SCAN_CACHE: dict[tuple[str, str, str, tuple[str, ...], bool, bytes], str | None] = {}
 _GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
 
 
 def shell_secret_reference(
-    root: Path, command: str, patterns: list[str], *, execution_cwd: Path | None = None,
+    root: Path, command: str, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
 ) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
@@ -3240,13 +3313,20 @@ def shell_secret_reference(
     PreToolUse timeout (review S59-1). The result is memoized for the life of the process
     so the hook never pays for the same scan twice (sensitive_action + evaluate_pre_tool).
     """
+    directory = _read_directory(root, execution_cwd)
+    if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
+        return _BUDGET_MARKER
+    if directory is None:
+        # Explicit unknown native cwd must never become a public root-relative read.
+        return _UNKNOWN_READ_CWD if any(
+            argv is None or bool(_secret_path_words(argv)) for argv in _simple_commands(command)
+        ) else None
     # The reading is part of the key: Windows and Git Bash read the same text differently.
     # Owner opt-ins change the verdict, so the project policy is part of the key too.
     try:
         owner = (root / PROJECT_POLICY).read_bytes()
     except OSError:
         owner = b''
-    directory = execution_cwd if execution_cwd is not None else root
     key = (str(root), str(directory), command, tuple(patterns), _windows_reading(), owner)
     if key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
@@ -3259,9 +3339,7 @@ def shell_secret_reference(
     budget = _Budget()
     result: str | None = None
     try:
-        # Relative consumer identity is established at the policy root. A different
-        # native cwd must not borrow that identity for another script or secret.
-        handoffs = _consumer_handoffs(root, command) if directory == root else {}
+        handoffs = _consumer_handoffs(root, command, execution_cwd=directory)
         for argv in _simple_commands(command):
             hit = (
                 _raw_secret_reference(root, command, patterns, budget, execution_cwd=directory)
@@ -3293,7 +3371,7 @@ def evaluate_pre_tool(
     event: dict[str, Any],
     *,
     _skip_substring_control_plane_guard: bool = False,
-    _execution_cwd: Path | None = None,
+    _execution_cwd: object = _UNSPECIFIED_READ_CWD,
 ) -> tuple[bool, str | None]:
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
@@ -3390,10 +3468,7 @@ def evaluate_pre_tool(
         candidate_paths.extend(_extract_patch_paths(str(tool_input.get('command', ''))))
 
     lowered_tool = tool.lower()
-    is_read = (
-        lowered_tool in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'}
-        or ('read' in lowered_tool and tool.startswith('mcp__'))
-    )
+    is_read = is_read_tool(tool)
     is_write = tool in {'apply_patch', 'Edit', 'Write'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
 
     normalized: list[str] = []
@@ -3406,34 +3481,9 @@ def evaluate_pre_tool(
         normalized.append(rel)
 
     if is_read:
-        budget = _Budget()
-        is_grep = isinstance(tool_input, dict) and lowered_tool == 'grep'
-        glob_filter = tool_input.get('glob') if is_grep else None
-        glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
-        search_inputs = list(candidate_paths)
-        try:
-            if is_grep and glob_filter:
-                # A grep glob names the files ripgrep opens even with no path given; a glob that
-                # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
-                # ripgrep globs take `{a,b}` alternatives: check every alternative (#64).
-                search_inputs.extend(_brace_expand(glob_filter))
-            for raw in search_inputs:
-                if not isinstance(raw, str) or not raw:
-                    continue
-                if _secret_reference(root, raw, secret_read, budget=budget):
-                    rel = safe_relative_path(root, raw)
-                    return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
-                directory = _resolve_under_root(root, raw)
-                if directory and os.path.isdir(directory):
-                    hit = _walk_for_secret(
-                        root, directory, secret_read, budget, glob_filter,
-                        skip_hidden=is_grep and glob_filter is None,
-                    )
-                    if hit is not None:
-                        rel = safe_relative_path(root, hit)
-                        return False, f'Reading secret material is blocked: {rel if rel is not None else hit}'
-        except _BudgetExceeded:
-            return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
+        secret = read_secret_reference(root, tool, tool_input, secret_read, execution_cwd=_execution_cwd)
+        if secret is not None:
+            return False, f'Reading secret material is blocked: {secret}'
 
     if is_write:
         for rel in normalized:

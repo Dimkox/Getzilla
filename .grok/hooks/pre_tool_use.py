@@ -806,7 +806,7 @@ def main() -> None:
             return
         context = root_context(payload, current_input, current_tool)
         try:
-            from getzilla.policy import evaluate_pre_tool, sensitive_action
+            from getzilla.policy import evaluate_pre_tool, read_protection_reason, sensitive_action
         except Exception as error:
             # Policy stack not importable: record it, refuse protected actions, allow the rest (#78).
             record_degraded('pre_tool_use', error, payload)
@@ -816,6 +816,22 @@ def main() -> None:
                 denial = _degraded_denial(degraded_tool, degraded_input, degraded_cwd)
             emit(permission_output(denial is None, denial))
             return
+
+        # Selecting a workdir chooses operation authority; it cannot erase the
+        # session project's independent read protections, including nested roots.
+        if context.session_root is not None and context.session_root != context.effective_root:
+            try:
+                read_reason = read_protection_reason(context.session_root, {
+                    'tool_name': current_tool, 'tool_input': current_input,
+                }, execution_cwd=context.execution_cwd)
+            except Exception:
+                read_reason = 'Session project read protection is unavailable; this operation is refused.'
+            if read_reason:
+                if context.execution_cwd is None:
+                    read_reason = (f'Sensitive read denied: root resolution status is {context.resolution_status}.'
+                                   + _root_hint(context))
+                _deny(payload, current_tool, current_input, read_reason, context=context, action='secret-read')
+                return
 
         classification_root = context.effective_root or context.session_root or Path.cwd()
         action = sensitive_action(classification_root, {

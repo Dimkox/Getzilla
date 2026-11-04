@@ -395,7 +395,14 @@ class Review2PosixTests(_Case):
 
     def test_grep_without_a_secret_target_stays_allowed(self) -> None:
         self.assertTrue(self.tool('Grep', {'pattern': 'TODO', 'glob': '*.py'})[0])
-        self.assertTrue(self.tool('Grep', {'pattern': 'TODO'})[0])
+        self.assertTrue(evaluate_pre_tool(self.root, {'tool_name': 'Grep', 'tool_input': {'pattern': 'TODO'}},
+                                          execution_cwd=self.root / 'src')[0])
+
+    def test_implicit_grep_cannot_read_a_protected_tree(self) -> None:
+        # Omitting path still searches cwd, including this fixture's visible server.key.
+        allowed, reason = self.tool('Grep', {'pattern': 'TODO'})
+        self.assertFalse(allowed)
+        self.assertIn('secret', reason or '')
 
     def test_package_publish_clients_need_a_grant(self) -> None:
         # S59-7: deny-by-default for known publish verbs.

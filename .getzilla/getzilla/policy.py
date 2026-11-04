@@ -39,6 +39,29 @@ def _readings_differ(command: str) -> bool:
     return fsx.WINDOWS and '\\' in command
 
 
+def read_protection_reason(
+    root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
+) -> str | None:
+    """A read obligation for this policy root, independent of operation/grant routing."""
+    tool = str(event.get('tool_name', ''))
+    if tool != 'Bash' and not _legacy.is_read_tool(tool):
+        return None
+    inputs = event.get('tool_input') or {}
+    config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
+    patterns = _legacy_configured_patterns(config if isinstance(config, dict) else {},
+                                           'secret_read_paths', _LEGACY_SECRET_READ)
+    directory = _execution_directory(root, execution_cwd)
+    if tool == 'Bash':
+        command = str(inputs.get('command', '')) if isinstance(inputs, dict) else str(inputs)
+        hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+        if hit is None and _readings_differ(command):
+            with _legacy.posix_reading():
+                hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+    else:
+        hit = _legacy.read_secret_reference(root, tool, inputs, patterns, execution_cwd=directory)
+    return 'Read refused by the session project secret policy or unresolved execution directory.' if hit is not None else None
+
+
 def sensitive_action(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> str | None:
@@ -122,7 +145,7 @@ def evaluate_pre_tool(
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':
-        return _legacy_evaluate_pre_tool(root, event)
+        return _legacy_evaluate_pre_tool(root, event, _execution_cwd=_execution_directory(root, execution_cwd))
 
     config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
     if not isinstance(config, dict):
