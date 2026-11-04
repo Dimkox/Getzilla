@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -10,7 +11,6 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
-import tempfile
 import time
 import uuid
 
@@ -91,6 +91,40 @@ def _parts(relative):
     return parts
 
 
+def _file_identity(info):
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _inode(info):
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
+
+
+def _read_at(directory, name, limit, check=lambda: None):
+    """Read one selected name using its held parent; never reopen that parent."""
+    try:
+        check()
+        named = fsx.lstat_at(directory, name)
+        _require(not fsx.is_link(named) and stat.S_ISREG(named.st_mode), 'input_size_or_type')
+        fd = fsx.open_at(directory, name, os.O_RDONLY | fsx.O_NONBLOCK | fsx.O_NOFOLLOW | fsx.O_BINARY | fsx.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as handle:
+            before = os.fstat(handle.fileno())
+            _require(_file_identity(before) == _file_identity(named) and before.st_size <= limit, 'input_size_or_type')
+            raw = handle.read(limit + 1)
+            _require(len(raw) <= limit and len(raw) == before.st_size
+                     and _file_identity(before) == _file_identity(os.fstat(handle.fileno()))
+                     and _file_identity(before) == _file_identity(fsx.lstat_at(directory, name)), 'input_changed_or_large')
+        check()
+        value = json.loads(raw.decode('utf-8'), object_pairs_hook=_unique, parse_constant=_invalid_constant, parse_float=_finite_float)
+        _json_depth(value)
+        return value, hashlib.sha256(raw).hexdigest(), _file_identity(before)
+    except FileNotFoundError as exc:
+        raise EvalError('input_missing') from exc
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        if isinstance(exc, EvalError):
+            raise
+        raise EvalError('input_unreadable_or_invalid_json') from exc
+
+
 def _read(root, relative, limit=MAX_BYTES):
     """Read regular files through directory handles; never follow links or wait on FIFOs."""
     parts = _parts(relative)
@@ -101,25 +135,74 @@ def _read(root, relative, limit=MAX_BYTES):
             child = fsx.open_dir_at(directory, part)
             fsx.close_dir(directory)
             directory = child
-        fd = fsx.open_at(directory, parts[-1], os.O_RDONLY | fsx.O_NONBLOCK | fsx.O_NOFOLLOW | fsx.O_BINARY)
-        with os.fdopen(fd, 'rb') as handle:
-            before = os.fstat(handle.fileno())
-            _require(stat.S_ISREG(before.st_mode) and before.st_size <= limit, 'input_size_or_type')
-            raw = handle.read(limit + 1)
-            after = os.fstat(handle.fileno())
-            _require(len(raw) <= limit and (before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
-                     (after.st_size, after.st_mtime_ns, after.st_ctime_ns), 'input_changed_or_large')
-        value = json.loads(raw.decode('utf-8'), object_pairs_hook=_unique, parse_constant=_invalid_constant, parse_float=_finite_float)
-        _json_depth(value)
-        return value, hashlib.sha256(raw).hexdigest()
+        value, sha, _identity = _read_at(directory, parts[-1], limit)
+        return value, sha
     except FileNotFoundError as exc:
         raise EvalError('input_missing') from exc
-    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
-        if isinstance(exc, EvalError):
-            raise
+    except OSError as exc:
         raise EvalError('input_unreadable_or_invalid_json') from exc
     finally:
         fsx.close_dir(directory)
+
+
+@contextmanager
+def _baseline_parent(path):
+    """Hold every ancestor, and revalidate its name against the held inode.
+
+    fsx's Windows path adapter is insufficient for race-safe baseline transactions.
+    Refuse that operation rather than simulate descriptor-relative authority.
+    Parents must already exist; this operation never creates directories.
+    """
+    _require(os.name == 'posix' and not fsx.WINDOWS, 'baseline_descriptor_unsupported')
+    path = Path(path)
+    _require('..' not in path.parts, 'invalid_path')
+    path = path.absolute()
+    _parts(path.name)
+    handles = []
+    chain = []
+    try:
+        anchor = fsx.open_dir(path.anchor, flags=fsx.O_CLOEXEC)
+        handles.append(anchor)
+        expected_anchor = _inode(fsx.fstat_dir(anchor))
+        directory = anchor
+
+        def check():
+            _require(_inode(fsx.fstat_dir(anchor)) == expected_anchor, 'baseline_namespace_changed')
+            for parent, name, child, expected in chain:
+                named = fsx.lstat_at(parent, name)
+                _require(not fsx.is_link(named) and _inode(named) == expected
+                         and _inode(fsx.fstat_dir(child)) == expected, 'baseline_namespace_changed')
+
+        for name in path.parts[1:-1]:
+            check()
+            named = fsx.lstat_at(directory, name)
+            _require(not fsx.is_link(named) and stat.S_ISDIR(named.st_mode), 'baseline_parent')
+            child = fsx.open_dir_at(directory, name, flags=fsx.O_CLOEXEC)
+            handles.append(child)
+            _require(_inode(fsx.fstat_dir(child)) == _inode(named), 'baseline_namespace_changed')
+            chain.append((directory, name, child, _inode(named)))
+            directory = child
+        check()
+        _require(fsx.fstat_dir(directory).st_uid == os.geteuid(), 'baseline_parent_owner')
+        yield directory, path.name, check
+        check()
+    except FileNotFoundError as exc:
+        raise EvalError('input_missing') from exc
+    except OSError as exc:
+        raise EvalError('baseline_namespace_or_io') from exc
+    finally:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+
+
+def _remove_owned(directory, name, identity):
+    if identity is None:
+        return
+    try:
+        _require(_inode(fsx.lstat_at(directory, name)) == identity, 'baseline_file_replaced')
+        fsx.unlink_at(directory, name)
+    except FileNotFoundError:
+        pass
 
 
 def _fields(value, required, optional=(), reason='schema'):
@@ -213,8 +296,7 @@ def _outputs(value, cases):
         _require(item['case_id'] not in result, 'duplicate_output_id')
         result[item['case_id']] = item
         if 'latency_ms' in item:
-            _require(type(item['latency_ms']) in {int, float} and math.isfinite(item['latency_ms'])
-                     and 0 <= item['latency_ms'] <= 86400000, 'latency_schema')
+            _require(_bounded_number(item['latency_ms'], 0, 86400000), 'latency_schema')
         if 'usage' in item:
             _fields(item['usage'], {'input_tokens', 'output_tokens'}, reason='usage_schema')
             _require(all(type(v) is int and 0 <= v <= 10**12 for v in item['usage'].values()), 'usage_schema')
@@ -255,10 +337,17 @@ def _aggregate(statuses):
     return next((s for s in ('invalid', 'unsupported', 'timeout', 'not_run', 'fail') if s in statuses), 'pass')
 
 
+def _bounded_number(value, minimum, maximum):
+    # Check integer bounds before math.isfinite, which coerces integers to floats.
+    return type(value) in {int, float} and minimum <= value <= maximum and math.isfinite(value)
+
+
 def _signal(signal, output):
     exists, value = _lookup(output, signal['path'])
+    if exists and signal['kind'] == 'reported_confidence' and type(value) in {int, float}:
+        _require(_bounded_number(value, 0, 1), 'signal_numeric_range')
     valid = exists and (isinstance(value, (str, list, dict)) if signal['kind'] == 'length'
-                       else type(value) in {int, float} and math.isfinite(value) and 0 <= value <= 1)
+                       else _bounded_number(value, 0, 1))
     result = {'id': signal['id'], 'kind': signal['kind'], 'status': 'observed' if valid else 'unavailable'}
     if valid:
         result['value'] = len(value) if signal['kind'] == 'length' else value
@@ -271,7 +360,7 @@ def replay(root: Path, manifest_path: str, outputs_path: str, *, timeout_seconds
     canonical = {'schema_version': 1, 'kind': 'offline-recorded-replay', 'status': 'invalid', 'cases': []}
     telemetry = {'latency_observed': 0, 'usage_observed': 0, 'case_count': 0}
     try:
-        _require(type(timeout_seconds) in {int, float} and math.isfinite(timeout_seconds) and 0 <= timeout_seconds <= 60, 'timeout_budget')
+        _require(_bounded_number(timeout_seconds, 0, 60), 'timeout_budget')
         manifest, manifest_sha = _read(root, manifest_path)
         manifest = _manifest(manifest)
         canonical['identity'] = {'manifest_sha256': manifest_sha, 'experiment': manifest['identities'],
@@ -320,7 +409,7 @@ def replay(root: Path, manifest_path: str, outputs_path: str, *, timeout_seconds
         canonical['status'] = _aggregate({c['status'] for c in canonical['cases']})
     except EvalError as exc:
         canonical.update(status='invalid', reason=str(exc))
-    except (TypeError, ValueError, RecursionError, OSError):
+    except (TypeError, ValueError, OverflowError, RecursionError, OSError):
         canonical.update(status='invalid', reason='invalid_input')
     telemetry['case_count'] = len(canonical['cases'])
     telemetry['seconds'] = round(time.monotonic() - started, 6)
@@ -329,11 +418,25 @@ def replay(root: Path, manifest_path: str, outputs_path: str, *, timeout_seconds
               'run': {'id': str(uuid.uuid4()), 'timestamp': datetime.now(timezone.utc).isoformat()},
               'telemetry': telemetry, 'qualification': 'recorded-output-only', 'release_authority': False,
               'references': ['https://github.com/Dimkox/Getzilla/issues/152', 'https://github.com/Dimkox/Getzilla/issues/200']}
-    if len(_bytes(report)) + 1 > MAX_REPORT_BYTES:
-        report['canonical'] = {'schema_version': 1, 'kind': 'offline-recorded-replay', 'status': 'invalid',
-                               'reason': 'report_size_limit', 'cases': []}
-        report['result_digest'] = digest(report['canonical'])
-    return report
+    return _bounded_report(report)
+
+
+def _bounded_report(report):
+    """Cap the complete export, including comparison, with an explicit refusal."""
+    if len(_bytes(report)) + 1 <= MAX_REPORT_BYTES:
+        return report
+    original_digest = report['result_digest']
+    canonical = {'schema_version': 1, 'kind': 'offline-recorded-replay', 'status': 'invalid',
+                 'reason': 'report_size_limit', 'cases': [], 'omitted_result_digest': original_digest}
+    result = {**report, 'canonical': canonical, 'result_digest': digest(canonical)}
+    if 'comparison' in result:
+        result['comparison'] = {'status': 'inconclusive', 'reason': 'report_size_limit',
+                                'candidate_digest': original_digest, 'release_authority': False}
+    return result
+
+
+def attach_comparison(report, baseline_path):
+    return _bounded_report({**report, 'comparison': compare(report, baseline_path)})
 
 
 def _report(report, *, passing=False):
@@ -375,8 +478,8 @@ def _report(report, *, passing=False):
     return value
 
 
-def _baseline(path):
-    value, _ = _read(path.parent, path.name, MAX_BASELINE_BYTES)
+def _baseline_at(directory, name, check):
+    value, _sha, identity = _read_at(directory, name, MAX_BASELINE_BYTES, check)
     _fields(value, {'schema_version', 'history'}, reason='baseline_schema')
     _require(type(value['schema_version']) is int and value['schema_version'] == 1 and isinstance(value['history'], list) and 1 <= len(value['history']) <= MAX_HISTORY, 'baseline_schema')
     previous = None
@@ -385,6 +488,13 @@ def _baseline(path):
         _report(item, passing=True)
         _require(item['previous_digest'] == previous and item['acceptance_digest'] == digest({k: v for k, v in item.items() if k != 'acceptance_digest'}), 'baseline_history_digest')
         previous = item['acceptance_digest']
+    check()
+    return value, identity
+
+
+def _baseline(path):
+    with _baseline_parent(path) as (directory, name, check):
+        value, _identity = _baseline_at(directory, name, check)
     return value
 
 
@@ -425,48 +535,67 @@ def compare(report: dict, baseline_path: Path) -> dict:
 
 
 def accept_baseline(path: Path, report: dict, *, reason: str, scope: str) -> dict:
-    """Explicit local acceptance only. Preserve every predecessor; never accept a red run."""
+    """Explicit local acceptance only. Every mutation uses the held parent."""
     canonical = _report(report, passing=True)
     _require(all(isinstance(v, str) and 1 <= len(v) <= 512 and '\0' not in v for v in (reason, scope)), 'acceptance_reason_and_scope_required')
-    # Baseline parents must already exist and must not contain links.
-    _parts(path.name)
-    _require(path.parent.is_dir() and not any(p.is_symlink() for p in (path.parent, *path.parent.parents)), 'baseline_parent')
-    lock = path.with_name(path.name + '.lock')
-    descriptor = None
-    temporary = None
-    try:
-        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+    with _baseline_parent(path) as (directory, name, check):
+        lock_name = name + '.lock'
+        lock_fd = None
+        lock_identity = None
+        temporary_name = '.eval-baseline-' + uuid.uuid4().hex
+        temporary_identity = None
         try:
-            stored = _baseline(path)
-        except EvalError as exc:
-            if str(exc) != 'input_missing':
-                raise
-            stored = {'schema_version': 1, 'history': []}
-        _require(len(stored['history']) < MAX_HISTORY, 'baseline_history_limit')
-        previous = stored['history'][-1]['acceptance_digest'] if stored['history'] else None
-        entry = {'canonical': canonical, 'result_digest': report['result_digest'], 'reason': reason, 'scope': scope,
-                 'accepted_at': datetime.now(timezone.utc).isoformat(), 'previous_digest': previous}
-        entry['acceptance_digest'] = digest(entry)
-        stored['history'].append(entry)
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.eval-baseline-', delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(_bytes(stored) + b'\n')
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        return {'status': 'accepted', 'baseline_id': entry['acceptance_digest'], 'result_digest': report['result_digest'],
-                'previous_digest': previous, 'release_authority': False}
-    except FileExistsError as exc:
-        raise EvalError('baseline_acceptance_busy') from exc
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        if descriptor is not None:
-            os.close(descriptor)
-            lock.unlink(missing_ok=True)
+            check()
+            lock_fd = fsx.open_at(directory, lock_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+            lock_identity = _inode(os.fstat(lock_fd))
+            check()
+            try:
+                stored, previous_identity = _baseline_at(directory, name, check)
+            except EvalError as exc:
+                if str(exc) != 'input_missing':
+                    raise
+                stored, previous_identity = {'schema_version': 1, 'history': []}, None
+            _require(len(stored['history']) < MAX_HISTORY, 'baseline_history_limit')
+            previous = stored['history'][-1]['acceptance_digest'] if stored['history'] else None
+            entry = {'canonical': canonical, 'result_digest': report['result_digest'], 'reason': reason, 'scope': scope,
+                     'accepted_at': datetime.now(timezone.utc).isoformat(), 'previous_digest': previous}
+            entry['acceptance_digest'] = digest(entry)
+            stored['history'].append(entry)
+            raw = _bytes(stored) + b'\n'
+            _require(len(raw) <= MAX_BASELINE_BYTES, 'baseline_history_limit')
+            check()
+            descriptor = fsx.open_at(directory, temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
+            with os.fdopen(descriptor, 'wb') as handle:
+                temporary_identity = _inode(os.fstat(handle.fileno()))
+                check()
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            check()
+            _require(_inode(fsx.lstat_at(directory, lock_name)) == lock_identity
+                     and _inode(fsx.lstat_at(directory, temporary_name)) == temporary_identity, 'baseline_file_replaced')
+            try:
+                current_identity = _file_identity(fsx.lstat_at(directory, name))
+            except FileNotFoundError:
+                current_identity = None
+            _require(current_identity == previous_identity, 'baseline_file_replaced')
+            fsx.replace_at(directory, temporary_name, directory, name)
+            temporary_identity = None
+            os.fsync(directory)
+            check()
+            return {'status': 'accepted', 'baseline_id': entry['acceptance_digest'], 'result_digest': report['result_digest'],
+                    'previous_digest': previous, 'release_authority': False}
+        except FileExistsError as exc:
+            raise EvalError('baseline_acceptance_busy') from exc
+        finally:
+            _remove_owned(directory, temporary_name, temporary_identity)
+            if lock_fd is not None:
+                os.close(lock_fd)
+                _remove_owned(directory, lock_name, lock_identity)
 
 
 def render_text(report: dict) -> str:
+    report = _bounded_report(report)
     value = report['canonical']
     lines = [f"{value['status'].upper()} offline recorded replay {report['result_digest']}"]
     for case in value['cases']:
@@ -505,13 +634,7 @@ def required_suites(root: Path, mode: str) -> list[dict]:
             if mode not in suite['modes']:
                 continue
             report = replay(root, suite['manifest'], suite['outputs'])
-            # Resolve the baseline parent safely even though comparison itself uses a Path.
-            baseline_parts = _parts(suite['baseline'])
-            parent = root
-            for part in baseline_parts[:-1]:
-                parent = parent / part
-                _require(not parent.is_symlink(), 'invalid_path')
-            report['comparison'] = compare(report, root / suite['baseline'])
+            report = attach_comparison(report, root / suite['baseline'])
             checks.append({'name': 'agent-eval:' + suite['id'], 'status': 'pass' if report['canonical']['status'] == 'pass'
                            and report['comparison']['status'] == 'pass' else 'fail',
                            'summary': 'offline replay ' + report['canonical']['status'] + '; baseline ' + report['comparison']['status'],

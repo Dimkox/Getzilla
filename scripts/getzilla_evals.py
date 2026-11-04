@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
-from getzilla.agent_evals import EvalError, _parts, accept_baseline, compare, render_text, replay  # noqa: E402
+from getzilla.agent_evals import EvalError, _parts, accept_baseline, attach_comparison, render_text, replay  # noqa: E402
 
 
 def main(argv=None):
@@ -31,12 +31,7 @@ def main(argv=None):
         root = args.root.resolve(strict=True)
         baseline = None
         if args.baseline:
-            parts = _parts(args.baseline)
-            parent = root
-            for part in parts[:-1]:
-                parent = parent / part
-                if parent.is_symlink():
-                    raise EvalError('invalid_path')
+            _parts(args.baseline)
             baseline = root / args.baseline
         report = replay(root, args.manifest, args.outputs, timeout_seconds=args.timeout)
         if args.operation == 'accept':
@@ -44,7 +39,7 @@ def main(argv=None):
             print(json.dumps(result, sort_keys=True) if args.json else f"ACCEPTED {result['baseline_id']}")
             return 0
         if baseline is not None:
-            report['comparison'] = compare(report, baseline)
+            report = attach_comparison(report, baseline)
         print(json.dumps(report, sort_keys=True, ensure_ascii=True, separators=(',', ':')) if args.json else render_text(report))
         return 0 if report['canonical']['status'] == 'pass' and (baseline is None or report['comparison']['status'] == 'pass') else 1
     except (EvalError, OSError) as exc:
