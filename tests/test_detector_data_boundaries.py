@@ -78,6 +78,68 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_comprehension_walrus_rebinding_after_guards_retains_queue_signals(self):
+        for expression in ("[(chunk := work) for _ in (0,)]",
+                           "{(chunk := work) for _ in (0,)}",
+                           "{0: (chunk := work) for _ in (0,)}",
+                           "tuple((chunk := work) for _ in (0,))",
+                           "[[(chunk := work) for _ in (0,)] for _ in (0,)]"):
+            source = PIPE_CHANNEL.replace('        chunks.put(chunk, timeout=0.05)',
+                                          '        ' + expression + '\n        chunks.put(chunk, timeout=0.05)')
+            self.assert_governed(source, expression)
+
+    def test_ordinary_comprehension_and_lambda_bindings_leave_guarded_payload_stable(self):
+        for expression in ('[chunk for chunk in (0,)]', '(lambda chunk: chunk)(0)',
+                           '(lambda: [(chunk := 0) for _ in (0,)])()'):
+            with self.subTest(expression=expression):
+                source = PIPE_CHANNEL.replace('        chunks.put(chunk, timeout=0.05)',
+                                              '        ' + expression + '\n        chunks.put(chunk, timeout=0.05)')
+                self.assertEqual(analyze_queue_tree(ast.parse(source)).signals, ())
+
+    def test_literal_import_reads_keep_local_reexport_provenance(self):
+        providers = (
+            ('object', 'from rq import Queue\nhelper = Queue()\n', 'helper.enqueue(work)', True),
+            ('factory', 'from rq import Queue\ndef helper(): return Queue()\n', 'helper().enqueue(work)', True),
+            ('ordinary', 'def helper(): return None\n', 'helper()', False),
+        )
+        for label, provider, operation, governed in providers:
+            for imported in ('from bridge import helper',
+                             "helper = __import__('bridge', fromlist=['helper']).helper",
+                             'import bridge\nhelper = bridge.helper'):
+                with self.subTest(provider=label, imported=imported):
+                    repo = GitArchitectureRepo(self)
+                    system = _system()
+                    system['nodes'][0]['repository_paths'] = ['src']
+                    repo.model(system, _rules())
+                    repo.write_text('src/adapter.py', 'from rq import Queue\njobs = Queue()\ndef ordinary(): return None\n')
+                    repo.write_text('src/provider.py', provider)
+                    repo.write_text('src/bridge.py', 'from provider import helper\n')
+                    base = repo.commit('local member reexports')
+                    repo.write_text('src/consumer.py', 'import adapter\n' + imported + '\n' + operation
+                                    + "\nselected = getattr(adapter, 'ordinary', None)\nselected()\n")
+                    head = repo.commit('literal or ordinary import consumer')
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
+                    self.assertEqual('new_queue' in report.triggers, governed)
+
+    def test_import_normalization_is_analysis_only_and_cannot_capture_source_names(self):
+        source = ("__getzilla_literal_import_0 = original\n"
+                  "helper = __import__('bridge', fromlist=['helper']).helper\nhelper.enqueue(work)\n")
+        tree = ast.parse(source)
+        original = ast.dump(tree, include_attributes=True)
+        projected = FIT._queue_import_equivalent_tree(tree)
+        self.assertEqual(ast.dump(tree, include_attributes=True), original)
+        self.assertIsNot(projected, tree)
+        imports = [node for node in projected.body if isinstance(node, ast.ImportFrom)]
+        self.assertEqual(len(imports), 1)
+        self.assertEqual((imports[0].module, imports[0].names[0].name), ('bridge', 'helper'))
+        self.assertNotEqual(imports[0].names[0].asname, '__getzilla_literal_import_0')
+        self.assertFalse(any(isinstance(node, ast.Name) and node.id == '__import__' for node in ast.walk(projected)))
+        self.assertIs(FIT._queue_import_equivalent_tree(projected), projected)
+
     def test_string_field_bindings_keep_all_channel_dependencies_governed(self):
         for kind in ('except', 'as', 'star', 'mapping'):
             for name in ('type', 'bytes', 'len', 'OSError', 'Queue', 'Thread', 'CHUNK_BYTES'):

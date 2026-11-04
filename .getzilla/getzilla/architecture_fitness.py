@@ -38,7 +38,7 @@ from .architecture_diff import (
     read_diff_files,
 )
 from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members, _CONTAINER_MUTATORS
-from .python_source_proof import binding_events, namespace_is_closed
+from .python_source_proof import binding_events, literal_import_reads, namespace_is_closed
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -2660,10 +2660,51 @@ def _queue_source_node_count(path: str, source: bytes) -> int:
     return sum(1 for _ in ast.walk(_queue_source_tree(path, source)))
 
 
+@lru_cache(maxsize=128)
+def _queue_import_equivalent_tree(tree: ast.Module) -> ast.Module:
+    """Route closed literal member reads through the existing import machinery.
+
+    This analysis-only copy never executes an import. Synthetic from-imports
+    retain local reexport/member provenance, source costs and ordinary fallback.
+    The input tree remains unchanged, and aliases cannot capture source names.
+    """
+    if not literal_import_reads(tree, forbidden_imports=_QUEUE_IMPORTS):
+        return tree
+    import copy
+    projected = copy.deepcopy(tree)
+    reads = literal_import_reads(projected, forbidden_imports=_QUEUE_IMPORTS)
+    occupied = {event.name for event in binding_events(projected)}
+    occupied.update(node.id for node in ast.walk(projected) if isinstance(node, ast.Name))
+    aliases = {}
+    imports = []
+    index = 0
+    for read, (module, member) in reads.items():
+        while (alias := f'__getzilla_literal_import_{index}') in occupied:
+            index += 1
+        occupied.add(alias)
+        aliases[read] = alias
+        imports.append(ast.copy_location(ast.ImportFrom(module=module,
+            names=[ast.alias(name=member, asname=alias)], level=0), read))
+
+    class Reads(ast.NodeTransformer):
+        def visit_Attribute(self, node):
+            if node in aliases:
+                return ast.copy_location(ast.Name(id=aliases[node], ctx=ast.Load()), node)
+            return self.generic_visit(node)
+
+    projected = Reads().visit(projected)
+    projected.body = [*imports, *projected.body]
+    if sum(1 for _ in ast.walk(projected)) > MAX_ANALYZED_AST_NODES:
+        raise ArchitectureError('literal import projection AST node limit exceeded', code='limit')
+    return projected
+
+
 def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.Module:
     budget.source(path, source)
     tree = _queue_source_tree(path, source)
     budget.source(path, source, _queue_source_node_count(path, source))
+    tree = _queue_import_equivalent_tree(tree)
+    budget.source(path, source, sum(1 for _ in ast.walk(tree)))
     return tree
 
 
@@ -3035,6 +3076,8 @@ def _queue_signals(
     budget = budget if budget is not None else _QueueBudget(side)
     source = source if source is not None else ast.unparse(tree).encode('utf-8')
     budget.source(source_path, source)
+    budget.source(source_path, source, sum(1 for _ in ast.walk(tree)))
+    tree = _queue_import_equivalent_tree(tree)
     budget.source(source_path, source, sum(1 for _ in ast.walk(tree)))
     budget.step(request=True)
     adapters = _queue_adapter_names(

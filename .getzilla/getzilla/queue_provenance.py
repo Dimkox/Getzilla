@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
 
-from .python_source_proof import binding_events, namespace_is_closed
+from .python_source_proof import binding_events, binding_owner, namespace_is_closed
 
 LiteralKey: TypeAlias = tuple[str, object]
 QueueState = Literal[
@@ -122,7 +122,7 @@ def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
         """Resolve one lexical assignment; unknown or replaced bytes stay governed."""
         current = enclosing(reference)
         while current is not None:
-            local = [event.node for event in bindings if event.name == reference.id and enclosing(event.node) is current]
+            local = [event.node for event in bindings if event.name == reference.id and binding_owner(event.node, parents) is current]
             if local:
                 assignment = parents.get(local[0])
                 return assignment.value if (len(local) == 1 and isinstance(local[0], ast.Name)
