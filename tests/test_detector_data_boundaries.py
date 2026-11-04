@@ -6,6 +6,7 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -78,6 +79,57 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_namespace_without_importer_never_expands_literal_import_proof(self):
+        for source, closed in (("import adapter\nselected = getattr(adapter, 'ordinary')\n", True),
+                               ('from builtins import __dict__ as namespace\n', False)):
+            with self.subTest(source=source):
+                with patch('getzilla.python_source_proof.literal_import_reads',
+                           side_effect=AssertionError('absent importer proof expanded')):
+                    self.assertEqual(FIT.namespace_is_closed(ast.parse(source), allow_instrumentation=True,
+                                                            static_import_reads=True), closed)
+
+    def test_absent_literal_importer_never_expands_binding_or_parent_inventory(self):
+        with patch('getzilla.python_source_proof.binding_events',
+                   side_effect=AssertionError('absent importer binding inventory expanded')):
+            self.assertEqual(FIT.literal_import_reads(ast.parse('def ordinary(): return 1\n')), {})
+
+    def test_one_importer_analysis_prepares_namespace_proof_once_for_all_module_aliases(self):
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        repo.write_text('left.py', 'def ordinary(): return None\n')
+        repo.write_text('right.py', 'def ordinary(): return None\n')
+        base = repo.commit('ordinary modules')
+        source = 'import left\nimport right\nleft.ordinary()\nright.ordinary()\n'
+        repo.write_text('consumer.py', source)
+        head = repo.commit('ordinary alias consumers')
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        tree = ast.parse(source)
+        cache = FIT._queue_module_inventory(repo.root, diff, 'head', ('',))
+        with patch.object(FIT, 'namespace_is_closed', wraps=FIT.namespace_is_closed) as proof:
+            result = FIT._queue_adapter_names(repo.root, diff, tree, 'head', cache, source_roots=('',))
+        self.assertEqual(result.names, frozenset())
+        self.assertEqual(sum(call.args[0] is tree for call in proof.call_args_list), 1)
+
+    def test_exact_source_preparation_shares_proof_across_member_requests(self):
+        for namespace_prefix in ('', "marker = '__dict__'\n"):
+            with self.subTest(namespace_prefix=namespace_prefix):
+                repo = GitArchitectureRepo(self)
+                repo.model(_system(), _rules())
+                provider = namespace_prefix + 'def first(): return None\ndef second(): return None\n'
+                repo.write_text('library.py', provider)
+                base = repo.commit('stable or full-fallback source')
+                source = 'import library\nlibrary.first()\nlibrary.second()\n'
+                repo.write_text('consumer.py', source)
+                head = repo.commit('two source member demands')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', ('',))
+                declaration = FIT._queue_source_tree('library.py', provider.encode())
+                FIT._queue_source_preparation.cache_clear()
+                with patch.object(FIT, 'namespace_is_closed', wraps=FIT.namespace_is_closed) as proof:
+                    result = FIT._queue_adapter_names(repo.root, diff, ast.parse(source), 'head', cache, source_roots=('',))
+                self.assertEqual(result.names, frozenset())
+                self.assertEqual(sum(call.args[0] is declaration for call in proof.call_args_list), 1)
+
     def test_comprehension_walrus_rebinding_after_guards_retains_queue_signals(self):
         for expression in ("[(chunk := work) for _ in (0,)]",
                            "{(chunk := work) for _ in (0,)}",
@@ -103,9 +155,11 @@ class CompleteSourceProofTests(unittest.TestCase):
             ('ordinary', 'def helper(): return None\n', 'helper()', False),
         )
         for label, provider, operation, governed in providers:
-            for imported in ('from bridge import helper',
-                             "helper = __import__('bridge', fromlist=['helper']).helper",
-                             'import bridge\nhelper = bridge.helper'):
+            literal = "__import__('bridge', fromlist=['helper']).helper"
+            for imported, action in (('from bridge import helper', operation),
+                                     ('helper = ' + literal, operation),
+                                     ('import bridge\nhelper = bridge.helper', operation),
+                                     ('', operation.replace('helper', literal))):
                 with self.subTest(provider=label, imported=imported):
                     repo = GitArchitectureRepo(self)
                     system = _system()
@@ -115,7 +169,7 @@ class CompleteSourceProofTests(unittest.TestCase):
                     repo.write_text('src/provider.py', provider)
                     repo.write_text('src/bridge.py', 'from provider import helper\n')
                     base = repo.commit('local member reexports')
-                    repo.write_text('src/consumer.py', 'import adapter\n' + imported + '\n' + operation
+                    repo.write_text('src/consumer.py', 'import adapter\n' + imported + '\n' + action
                                     + "\nselected = getattr(adapter, 'ordinary', None)\nselected()\n")
                     head = repo.commit('literal or ordinary import consumer')
                     snapshot = ARCHITECTURE.load_architecture(repo.root)
@@ -124,6 +178,64 @@ class CompleteSourceProofTests(unittest.TestCase):
                     result = next(item for item in report.results if item.category == 'background_job')
                     self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
                     self.assertEqual('new_queue' in report.triggers, governed)
+
+    def test_owned_preparation_binds_each_source_version_and_caller_wrappers_stay_fresh(self):
+        original = b'def helper(): return None\n'
+        first = FIT._queue_source_preparation('versioned.py', original)
+        self.assertTrue(first.namespace_closed)
+        self.assertIn('helper', first.plain_callables)
+        self.assertIs(FIT._queue_source_preparation('versioned.py', original), first)
+        changed = FIT._queue_source_preparation('versioned.py', b'from builtins import __dict__\n' + original)
+        self.assertFalse(changed.namespace_closed)
+        self.assertEqual(changed.plain_callables, frozenset())
+        rebound = FIT._queue_source_preparation('versioned.py', original + b'helper = replacement\n')
+        self.assertNotIn('helper', rebound.plain_callables)
+        caller = ast.parse(original)
+        self.assertTrue(FIT._plain_callable_declaration(caller, frozenset({'helper'})))
+        caller.body.extend(ast.parse(binding_statement('helper', 'except')).body)
+        self.assertFalse(FIT._plain_callable_declaration(caller, frozenset({'helper'})))
+
+    def test_reexport_demands_distinguish_callable_identity_from_queue_returns_and_escapes(self):
+        factory = 'from rq import Queue\ndef helper(): return Queue()\n'
+        for label, provider, operation, governed in (
+                ('ordinary-call', 'def helper(): return None\n', 'bridge.helper()', False),
+                ('ordinary-higher-order', 'def helper(): return None\n',
+                 'def consume(factory): return factory()\nconsume(bridge.helper).ordinary()', False),
+                ('queue-return', factory, 'bridge.helper().enqueue(work)', True),
+                ('alias-return', factory, 'selected = bridge.helper\nselected().enqueue(work)', True),
+                ('higher-order', factory, 'def consume(factory): return factory()\nconsume(bridge.helper).enqueue(work)', True),
+                ('escaped-callback', factory, 'export(bridge.helper).enqueue(work)', True)):
+            with self.subTest(label=label):
+                repo = GitArchitectureRepo(self)
+                repo.model(_system(), _rules())
+                repo.write_text('provider.py', provider)
+                repo.write_text('bridge.py', 'from provider import helper\n')
+                base = repo.commit('callable reexport')
+                source = 'import bridge\n' + operation + '\n'
+                repo.write_text('consumer.py', source)
+                head = repo.commit('callable or returned queue demand')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', ('',))
+                with patch.object(FIT, '_local_queue_resolution_impl', wraps=FIT._local_queue_resolution_impl) as resolution:
+                    if label in ('higher-order', 'escaped-callback'):
+                        with self.assertRaises(ARCHITECTURE.ArchitectureError) as caught:
+                            FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', ('',),
+                                               source_path='consumer.py', source=source.encode())
+                        self.assertEqual(caught.exception.code, 'fitness')
+                        self.assertIn('queue-bearing callback return', str(caught.exception))
+                    else:
+                        result = FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', ('',),
+                                                   source_path='consumer.py', source=source.encode())
+                        self.assertEqual(bool(result.signals), governed)
+                provider_calls = [call for call in resolution.call_args_list if call.args[2] == 'provider']
+                self.assertTrue(provider_calls)
+                self.assertTrue(all(call.args[9] is (label == 'ordinary-call') for call in provider_calls))
+                if label in ('higher-order', 'escaped-callback'):
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'unsupported')
+                    self.assertIn('new_queue', report.triggers)
 
     def test_import_normalization_is_analysis_only_and_cannot_capture_source_names(self):
         source = ("__getzilla_literal_import_0 = original\n"
@@ -139,6 +251,35 @@ class CompleteSourceProofTests(unittest.TestCase):
         self.assertNotEqual(imports[0].names[0].asname, '__getzilla_literal_import_0')
         self.assertFalse(any(isinstance(node, ast.Name) and node.id == '__import__' for node in ast.walk(projected)))
         self.assertIs(FIT._queue_import_equivalent_tree(projected), projected)
+
+    def test_import_normalization_rechecks_mutated_caller_ast(self):
+        for replacement in ('module', 'assignment', 'except', 'as', 'star', 'mapping'):
+            with self.subTest(replacement=replacement):
+                tree = ast.parse("helper = __import__('bridge', fromlist=['helper']).helper\n")
+                self.assertIsNot(FIT._queue_import_equivalent_tree(tree), tree)
+                if replacement == 'module':
+                    tree.body[0].value.value.args[0] = ast.Constant(value='rq')
+                else:
+                    statement = ('__import__ = replacement' if replacement == 'assignment'
+                                 else binding_statement('__import__', replacement))
+                    tree.body.extend(ast.parse(statement).body)
+                self.assertIs(FIT._queue_import_equivalent_tree(tree), tree)
+
+    def test_simple_literal_assignment_normalizes_in_its_original_scope_and_order(self):
+        source = ("import adapter\nclass Fixture:\n    def prepare(self):\n        before()\n"
+                  "        selected = __import__('bridge', fromlist=['helper']).helper\n        return selected\n")
+        tree = ast.parse(source)
+        original = ast.dump(tree, include_attributes=True)
+        projected = FIT._queue_import_equivalent_tree(tree)
+        self.assertEqual(ast.dump(tree, include_attributes=True), original)
+        self.assertEqual(len(projected.body), 2)
+        self.assertIsInstance(projected.body[0], ast.Import)
+        statements = projected.body[1].body[0].body
+        self.assertIsInstance(statements[0], ast.Expr)
+        imported = statements[1]
+        self.assertIsInstance(imported, ast.ImportFrom)
+        self.assertEqual((imported.module, imported.names[0].name, imported.names[0].asname),
+                         ('bridge', 'helper', 'selected'))
 
     def test_string_field_bindings_keep_all_channel_dependencies_governed(self):
         for kind in ('except', 'as', 'star', 'mapping'):

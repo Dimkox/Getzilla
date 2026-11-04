@@ -41,15 +41,16 @@ def literal_import_reads(tree: ast.AST, *, forbidden_imports: AbstractSet[str] =
     Recognition is syntax proof, not provenance proof. Consumers must resolve
     each returned module/member through their normal bounded import resolver.
     """
-    if any(event.name == '__import__' for event in binding_events(tree)):
+    candidates = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                  and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Name) and node.value.func.id == '__import__']
+    if not candidates or any(event.name == '__import__' for event in binding_events(tree)):
         return {}
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     capabilities = {'builtins', '__builtin__', 'sys', 'importlib', 'queue', 'threading',
                     'unittest', 'mock', 'pytest', '_pytest'} | set(forbidden_imports)
     reads = {}
-    for member in ast.walk(tree):
-        if not isinstance(member, ast.Attribute) or not isinstance(member.ctx, ast.Load):
-            continue
+    for member in candidates:
         call = member.value
         if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name) or call.func.id != '__import__'
                 or len(call.args) != 1 or not isinstance(call.args[0], ast.Constant)
@@ -120,7 +121,7 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False,
         roots |= {'unittest', 'mock', 'pytest', '_pytest'}
     reflective = _REFLECTIVE
     functions = _NAMESPACE_FUNCTIONS
-    permitted_importers = {member.value.func for member in literal_import_reads(tree, forbidden_imports=forbidden_imports)} if static_import_reads else set()
+    permitted_importers = None
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import) and any(alias.name.split('.')[0] in roots for alias in node.names):
@@ -133,8 +134,11 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False,
                 node.attr in {'type', 'bytes', 'len', 'OSError', 'getattr'} and isinstance(node.ctx, (ast.Store, ast.Del)))):
             return False
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in functions:
-            if node in permitted_importers:
-                continue
+            if node.id == '__import__' and static_import_reads:
+                if permitted_importers is None:
+                    permitted_importers = {member.value.func for member in literal_import_reads(tree, forbidden_imports=forbidden_imports)}
+                if node in permitted_importers:
+                    continue
             return False
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
                 node.value in reflective or node.value.startswith(('builtins.', '__builtin__.', '__builtins__.'))):
