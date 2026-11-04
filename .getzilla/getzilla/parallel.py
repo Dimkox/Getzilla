@@ -23,21 +23,20 @@ import importlib.util
 import json
 import os
 import re
-import selectors
-import signal
 import uuid
 from collections import deque
 from contextlib import contextmanager
 import shlex
 import subprocess
 import time
-from threading import Event
+from threading import Event, Thread
+from queue import Empty, Full, Queue
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from . import STACK_DIR
+from . import STACK_DIR, fsx
 
 CONFIG = '.getzilla/config/parallel.json'
 SNAPSHOT = '.getzilla/runtime/startup-capacity.json'
@@ -141,38 +140,71 @@ def _preview(data: bytes) -> str:
 
 @contextmanager
 def _log_folder(root: Path):
-    """Hold no-follow directory descriptors through creation and every write (#168)."""
+    """Use fsx directory handles through creation and every output write (#168)."""
     from .resource_inventory import classify
 
     root = root.resolve()
-    descriptors = [os.open(root, os.O_RDONLY | os.O_DIRECTORY)]
+    descriptors = [fsx.open_dir(root)]
     try:
         for name in ('.getzilla', 'runtime', 'par'):
             try:
-                os.mkdir(name, mode=0o700, dir_fd=descriptors[-1])
+                _check_directory(descriptors[-1])
+                fsx.mkdir_at(descriptors[-1], name, 0o700)
             except FileExistsError:
                 pass
-            descriptors.append(os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                       dir_fd=descriptors[-1]))
+            descriptors.append(fsx.open_dir_at(descriptors[-1], name))
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + f'-{os.getpid()}-{uuid.uuid4().hex}'
         folder = root / LOGS / stamp
         if classify(root, folder) != 'ephemeral':
             raise OSError('unsafe parallel log ownership')
-        os.mkdir(stamp, mode=0o700, dir_fd=descriptors[-1])
-        descriptors.append(os.open(stamp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                   dir_fd=descriptors[-1]))
+        _check_directory(descriptors[-1])
+        fsx.mkdir_at(descriptors[-1], stamp, 0o700)
+        descriptors.append(fsx.open_dir_at(descriptors[-1], stamp))
         yield folder, descriptors[-1]
     finally:
         for descriptor in reversed(descriptors):
-            os.close(descriptor)
+            fsx.close_dir(descriptor)
 
 
-def _create_log(directory: int, name: str):
-    return os.fdopen(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600, dir_fd=directory), 'wb', buffering=0)
+def _check_directory(directory: fsx.DirHandle) -> None:
+    if isinstance(directory, fsx.WindowsDirectory):
+        current = fsx.fstat_dir(directory)
+        if (current.st_dev, current.st_ino) != (directory.info.st_dev, directory.info.st_ino):
+            raise OSError('log directory changed')
+        for path in (Path(directory.path), *Path(directory.path).parents):
+            if fsx.is_link(path.lstat()):
+                raise OSError('linked log directory component')
 
 
-def _capture(job: Job, directory: int, cwd: Path, quota: int, timeout: float | None,
+def _create_log(directory: fsx.DirHandle, name: str):
+    _check_directory(directory)
+    descriptor = fsx.open_at(directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+    try:
+        # WindowsDirectory is path based. Revalidate before writing any output.
+        _check_directory(directory)
+        named = fsx.lstat_at(directory, name)
+        opened = os.fstat(descriptor)
+        if fsx.is_link(named) or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError('log file changed during creation')
+        return os.fdopen(descriptor, 'wb', buffering=0)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _stop_process(process: subprocess.Popen, job: Job) -> None:
+    owned = fsx.owned_job(process)
+    try:
+        if owned is not None:
+            if not owned.terminate(1):
+                job.log_error = 'process-tree cleanup unconfirmed'
+        else:
+            fsx.kill_process_tree(process.pid)
+    except OSError as error:
+        job.log_error = f'process-tree cleanup failed (errno={error.errno})'
+
+
+def _capture(job: Job, directory: fsx.DirHandle, cwd: Path, quota: int, timeout: float | None,
              runner: Callable[..., Any], preview_limit: int = PREVIEW_BYTES,
              cancelled: Event | None = None) -> None:
     cancelled = cancelled or Event()
@@ -211,72 +243,97 @@ def _capture(job: Job, directory: int, cwd: Path, quota: int, timeout: float | N
     try:
         # One merged pipe drains both streams. Every shell command passed policy preflight.
         process = runner(job.command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B604
-                         start_new_session=True)
+                         bufsize=0)
+        chunks: Queue[bytes] = Queue(maxsize=2)
+        finished, stop_reader = Event(), Event()
+        read_errors: list[int | None] = []
+
+        def read() -> None:
+            try:
+                while not stop_reader.is_set():
+                    chunk = process.stdout.read(CHUNK_BYTES)
+                    if not chunk:
+                        return
+                    while not stop_reader.is_set():
+                        try:
+                            chunks.put(chunk, timeout=0.05)
+                            break
+                        except Full:
+                            continue
+            except OSError as error:
+                read_errors.append(error.errno)
+            finally:
+                try:
+                    process.stdout.close()
+                except OSError as error:
+                    read_errors.append(error.errno)
+                finally:
+                    finished.set()
+
+        reader = Thread(target=read, daemon=True, name=f'par-output-{job.index}')
         timed_out = False
         try:
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                stopped_at = None
-                # EOF does not imply process exit: the deadline and cancellation
-                # must cover children which close both descriptors before waiting.
-                while selector.get_map() or process.poll() is None:
-                    now = time.monotonic()
-                    timed_out = timed_out or (timeout is not None and now - started >= timeout)
-                    if stopped_at is None and (timed_out or cancelled.is_set()):
-                        stopped_at = now
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    if stopped_at is not None and now - stopped_at >= 1:
-                        job.log_error = 'process-group cleanup or output drain unconfirmed'
-                        break
-                    if not selector.get_map():
-                        time.sleep(0.01)
-                        continue
-                    for key, _ in selector.select(0.05):
-                        data = os.read(key.fd, CHUNK_BYTES)
-                        if not data:
-                            selector.unregister(key.fileobj)
-                            break
-                        job.observed_bytes += len(data)
-                        if preview_limit:
-                            preview.extend(data)
-                            del preview[:-preview_limit]
-                        head = data[:max(0, head_limit - head_bytes)]
-                        write(head)
-                        head_bytes += len(head)
-                        rest = data[len(head):]
-                        if rest and tail_limit:
-                            tail.append(rest)
-                            tail_bytes += len(rest)
-                            while tail_bytes > tail_limit:
-                                excess = tail_bytes - tail_limit
-                                first = tail.popleft()
-                                if len(first) > excess:
-                                    tail.appendleft(first[excess:])
-                                    tail_bytes -= excess
-                                else:
-                                    tail_bytes -= len(first)
-                job.returncode = 130 if cancelled.is_set() else (124 if timed_out else process.returncode)
+            reader.start()
+            stopped_at = None
+            # The reader works on native Windows pipes too. Its bounded queue
+            # cannot accumulate the producer's complete output in memory.
+            while not finished.is_set() or not chunks.empty() or process.poll() is None:
+                now = time.monotonic()
+                timed_out = timed_out or (timeout is not None and now - started >= timeout)
+                if stopped_at is None and (timed_out or cancelled.is_set()):
+                    stopped_at = now
+                    _stop_process(process, job)
+                if stopped_at is not None and now - stopped_at >= 2:
+                    job.log_error = 'process-tree cleanup or output drain unconfirmed'
+                    break
+                try:
+                    data = chunks.get(timeout=0.05)
+                except Empty:
+                    continue
+                job.observed_bytes += len(data)
+                if preview_limit:
+                    preview.extend(data)
+                    del preview[:-preview_limit]
+                head = data[:max(0, head_limit - head_bytes)]
+                write(head)
+                head_bytes += len(head)
+                rest = data[len(head):]
+                if rest and tail_limit:
+                    tail.append(rest)
+                    tail_bytes += len(rest)
+                    while tail_bytes > tail_limit:
+                        excess = tail_bytes - tail_limit
+                        first = tail.popleft()
+                        if len(first) > excess:
+                            tail.appendleft(first[excess:])
+                            tail_bytes -= excess
+                        else:
+                            tail_bytes -= len(first)
+            job.returncode = 130 if cancelled.is_set() else (124 if timed_out else process.returncode)
         finally:
-            # An interrupted parent must not leave its owned process group running.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            if process.stdout is not None:
-                process.stdout.close()
+            stop_reader.set()
+            _stop_process(process, job)
+            owned = fsx.owned_job(process)
+            if owned is not None:
+                owned.close()
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                job.log_error = 'process-group cleanup unconfirmed'
+                job.log_error = 'process-tree cleanup unconfirmed'
                 job.returncode = 124 if timed_out else 130
+            if reader.ident is not None:
+                reader.join(timeout=1)
+            else:
+                process.stdout.close()
+            if reader.is_alive():
+                job.log_error = 'output-reader cleanup unconfirmed'
+            elif read_errors:
+                job.log_error = f'output read failed (errno={read_errors[0]})'
         for chunk in tail:
             write(chunk)
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         job.returncode = 127
-        job.log_error = f'capture failed (errno={error.errno})'
+        job.log_error = f'capture failed (errno={getattr(error, "errno", None)})'
     finally:
         if handle is not None:
             try:
@@ -299,7 +356,7 @@ def _entry(job: Job) -> dict[str, Any]:
 
 
 def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeout: float | None = None,
-              runner: Callable[..., Any] = subprocess.Popen,
+              runner: Callable[..., Any] | None = None,
               log_quota: int = LOG_BYTES) -> tuple[list[Job], Path]:
     """Synchronous batch; the combined retained output budget applies to the whole batch.
 
@@ -308,13 +365,25 @@ def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeo
     if not commands or not 0 <= log_quota <= LOG_BYTES:
         raise ValueError('commands required and log quota must be between zero and 32 MiB')
     cwd = cwd.resolve()
+    runner = runner or fsx.owned_popen
     jobs = [Job(index, command) for index, command in enumerate(commands, 1)]
     for job in jobs:
         job.refused = policy_refusal(root, job.command, cwd=cwd)
+    if fsx.WINDOWS and not any(job.refused for job in jobs):
+        try:
+            supported = fsx.process_jobs_supported()
+        except (OSError, AttributeError, NotImplementedError):
+            supported = False
+        if not supported:
+            for job in jobs:
+                job.returncode = 125
+                job.log_error = 'unsupported: process ownership backend unavailable'
+            return jobs, root / LOGS / 'unsupported'
     with _log_folder(root) as (folder, directory):
         if any(job.refused for job in jobs):
             return jobs, folder
 
+        owned = fsx.fstat_dir(directory)
         cancellation = Event()
 
         def one(job: Job) -> None:
@@ -336,9 +405,9 @@ def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeo
         else:
             pool.shutdown(wait=True)
         from .resource_inventory import classify
-        owned = os.fstat(directory)
         try:
             current = folder.lstat()
+            _check_directory(directory)
             intact = (classify(root, folder) == 'ephemeral'
                       and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino))
         except OSError:
