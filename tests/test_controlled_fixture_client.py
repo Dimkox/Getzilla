@@ -142,6 +142,59 @@ def public_cleanup_case(mode, *, uncertain, sync=False):
 
 @unittest.skipIf(os.name == 'nt','public journal fixture requires POSIX directory fsync')
 class ClientCleanupTests(unittest.TestCase):
+    def test_two_live_clients_refuse_more_creation_without_sending_signals(self):
+        clients = []
+
+        class Client(InertClient):
+            def __init__(self,argv,**kwargs):
+                super().__init__(True)
+                self.args = argv
+                self.directory = Path(kwargs['env']['HOME'])
+                clients.append(self)
+
+        with patch.object(fixture.subprocess,'Popen',Client):
+            with fixture._docker_client():
+                context = fixture._DOCKER_CONFIG.get()
+                try:
+                    fixture._client_popen(['/never-run','attached-a'])
+                    fixture._client_popen(['/never-run','attached-b'])
+                    with self.assertRaisesRegex(fixture.FixtureError,'container_unavailable'):
+                        fixture._client_popen(['/never-run','must-not-start'])
+                    self.assertEqual(len(clients),2)
+                    self.assertTrue(all(client.events==[] for client in clients))
+                finally:
+                    for client in clients:
+                        client.returncode = 0
+                        context.confirm_exit(client)
+
+    def test_completed_attached_clients_do_not_block_synchronous_inspection(self):
+        clients = []
+
+        class Client(InertClient):
+            def __init__(self,argv,**kwargs):
+                super().__init__(False)
+                self.args = argv
+                self.directory = Path(kwargs['env']['HOME'])
+                clients.append(self)
+
+            def communicate(self,timeout):
+                self.returncode = 0
+
+        with patch.object(fixture.subprocess,'Popen',Client):
+            with fixture._docker_client():
+                context = fixture._DOCKER_CONFIG.get()
+                try:
+                    for _ in range(2):
+                        process = fixture._client_popen(['/never-run','attached'])
+                        process.returncode = 0
+                    self.assertEqual(fixture._command(['/never-run','inspect']),'')
+                    self.assertEqual(len(clients),3)
+                    self.assertTrue(all(row['exit']==0 for row in context._clients))
+                finally:
+                    for client in clients:
+                        client.returncode = 0
+                        context.confirm_exit(client)
+
     def test_constructor_without_pid_retains_unknown_context_without_adoption(self):
         with tempfile.TemporaryDirectory() as temporary:
             original_mkdtemp = tempfile.mkdtemp

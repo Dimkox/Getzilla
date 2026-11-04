@@ -303,6 +303,13 @@ def _docker_argv(args):
 
 def _client_popen(args, **kwargs):
     context = _DOCKER_CONFIG.get()
+    if context is not None:
+        # Attached clients can finish before their caller reaches its finally
+        # block. Confirm those exits without signals before reserving a slot
+        # for a synchronous inspect/cleanup command.
+        for row in context._clients:
+            if row['exit'] is None:
+                context.confirm_exit(row['process'])
     if (context is None or len(context.processes) >= 1024
             or sum(row['exit'] is None for row in context._clients) >= 2):
         raise FixtureError('container_unavailable')
