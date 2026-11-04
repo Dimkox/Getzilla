@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import subprocess
 import os
+import multiprocessing
 from pathlib import Path
 import tempfile
 import threading
@@ -64,6 +65,18 @@ def owned_route(root, session='owner', task='Fix a README typo.'):
     route = build_route(root, task, session).to_dict()
     state.set_active_route(root, route)
     return state.get_active_route(root)
+
+
+def observe_saved_attempt(path, execution_id, result):
+    root = Path(path)
+    state.bind_session('owner')
+    from getzilla.execution_output import read_output
+    caller = execution.trusted_caller(root, execution_id=execution_id)
+    view = execution.get(root, caller, execution_id)
+    output = read_output(root, caller, execution_id)
+    result.put({'execution_id': view['execution_id'], 'route_id': view['owner']['route_id'],
+                'authority': view['evidence_authority'], 'live_continuity': view['live_continuity'],
+                'observation_status': view['observation_status'], 'output_status': output['status']})
 
 
 class ExecutionTests(unittest.TestCase):
@@ -179,6 +192,8 @@ class ExecutionTests(unittest.TestCase):
         ledger['active']['worker-one']['generation'] = 'new-generation'
         state.durable_json(self.root, state.agent_state_path(self.root), ledger)
         admission = backend.admissions[0]
+        with self.assertRaises(execution.ExecutionError):
+            execution.trusted_caller(self.root, execution_id=view['execution_id'])
         with self.assertRaises(execution.ExecutionError):
             execution.record_event(self.root, admission.token, view['execution_id'], view['revision'],
                                    admission.execution_generation, 'late-worker', {'execution_status': 'succeeded'})
@@ -437,3 +452,71 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(observed['observation_status'], 'persistence_unknown')
         self.assertNotEqual(observed['execution_status'], 'succeeded')
         self.assertFalse(observed['evidence_authority'])
+
+
+    def test_fresh_process_observation_selector_needs_no_active_pointer_or_new_task(self):
+        backend = CountingBackend(complete=False)
+        view = self.submit(backend)
+        state.active_route_path(self.root).unlink()
+        state._session_pointer(self.root, 'owner').unlink()
+        route_bytes = (self.root / '.getzilla/runtime/routes' / (self.route['route_id'] + '.json')).read_bytes()
+        caller = execution.trusted_caller(self.root, execution_id=view['execution_id'])
+        self.assertEqual(execution.get(self.root, caller, view['execution_id'])['owner'], view['owner'])
+        with self.assertRaises(execution.ExecutionError):
+            execution.submit(self.root, caller, replace(self.request, intent_key='not-a-new-task'), backend=backend)
+        self.assertEqual(backend.calls, 1)
+        with self.assertRaises(execution.ExecutionError) as caught:
+            execution.cancel(self.root, caller, view['execution_id'])
+        self.assertEqual(caught.exception.code, 'unsupported_backend')
+        context = multiprocessing.get_context('spawn')
+        result = context.Queue()
+        child = context.Process(target=observe_saved_attempt, args=(str(self.root), view['execution_id'], result))
+        child.start()
+        child.join(15)
+        self.assertEqual(child.exitcode, 0)
+        observed = result.get(timeout=2)
+        result.close()
+        self.assertEqual(observed['execution_id'], view['execution_id'])
+        self.assertEqual(observed['route_id'], self.route['route_id'])
+        self.assertFalse(observed['authority'])
+        self.assertFalse(observed['live_continuity'])
+        self.assertEqual(observed['observation_status'], 'recovery_unknown')
+        self.assertEqual(observed['output_status'], 'unavailable')
+        accepted = execution.cancel(self.root, caller, view['execution_id'], backend=backend)
+        self.assertEqual(accepted['execution_status'], 'cancel_requested')
+        self.assertEqual(backend.cancels, 1)
+        self.assertFalse(state.active_route_path(self.root).exists())
+        self.assertFalse(state._session_pointer(self.root, 'owner').exists())
+        self.assertEqual((self.root / '.getzilla/runtime/routes' / (self.route['route_id'] + '.json')).read_bytes(), route_bytes)
+        self.assertFalse((self.root / '.getzilla/runtime/approvals.json').exists())
+
+    def test_observation_selector_rejects_foreign_scope_epoch_and_corruption_without_fallback(self):
+        backend = CountingBackend(complete=False)
+        first = self.submit(backend)
+        second = self.submit(request=replace(self.request, intent_key='other-attempt'))
+        observer = execution.trusted_caller(self.root, execution_id=first['execution_id'])
+        from getzilla.execution_output import read_output
+        for callback in (lambda: execution.get(self.root, observer, second['execution_id']),
+                         lambda: execution.wait(self.root, observer, second['execution_id'], .01),
+                         lambda: read_output(self.root, observer, second['execution_id'])):
+            with self.assertRaises(execution.ExecutionError):
+                callback()
+        state.bind_session('foreign')
+        with self.assertRaises(execution.ExecutionError):
+            execution.trusted_caller(self.root, execution_id=first['execution_id'])
+        state.bind_session('owner')
+        with tempfile.TemporaryDirectory() as name:
+            with self.assertRaises((execution.ExecutionError, store.RegistryError)):
+                execution.trusted_caller(Path(name), execution_id=first['execution_id'])
+            self.assertFalse((Path(name) / '.getzilla').exists())
+        with self.assertRaises(execution.ExecutionError):
+            execution.trusted_caller(self.root, execution_id='0' * 32)
+        route = state.canonical_route(self.root, self.route['route_id'])
+        route['authority_epoch'] += 1
+        state.durable_json(self.root, self.root / '.getzilla/runtime/routes' / (route['route_id'] + '.json'), route)
+        with self.assertRaises(execution.ExecutionError):
+            execution.trusted_caller(self.root, execution_id=first['execution_id'])
+        (self.root / store.REGISTRY_PATH).write_text('{')
+        with self.assertRaises(store.RegistryError) as caught:
+            execution.trusted_caller(self.root, execution_id=first['execution_id'])
+        self.assertEqual(caught.exception.code, 'registry_unavailable')

@@ -54,6 +54,7 @@ class CallerContext:
     authority_epoch: int
     agent_id: str | None
     agent_generation: str | None
+    _observation_id: str | None
     _issuer: object
 
 
@@ -99,15 +100,25 @@ def _agent(root, agent_id):
         raise ExecutionError('actor_unavailable') from error
 
 
-def trusted_caller(root: Path, *, agent_id: str | None = None) -> CallerContext:
+def trusted_caller(root: Path, *, agent_id: str | None = None, execution_id: str | None = None) -> CallerContext:
     """Calling adapters bind the native session first; principal text is never an input."""
     root = root.resolve(strict=True)
-    try:
-        route = state.require_route_owner(root)
-    except ValueError as error:
-        raise ExecutionError('actor_unavailable') from error
-    route = state.canonical_route(root, route['route_id'])
     session = state.current_session()
+    if not session:
+        raise ExecutionError('actor_unavailable')
+    saved = None
+    if execution_id is not None:
+        saved = _find(store.load_registry(root), execution_id)
+        if saved['owner']['workspace'] != str(root) or saved['owner']['session_id'] != session:
+            raise ExecutionError('execution_forbidden')
+        _owner_current(root, saved)
+        route = state.canonical_route(root, saved['owner']['route_id'])
+    else:
+        try:
+            route = state.require_route_owner(root)
+        except ValueError as error:
+            raise ExecutionError('actor_unavailable') from error
+        route = state.canonical_route(root, route['route_id'])
     if not session or session != route.get('session_id') or not continuity.has_task_context(route):
         raise ExecutionError('actor_unavailable')
     generation = None
@@ -117,10 +128,13 @@ def trusted_caller(root: Path, *, agent_id: str | None = None) -> CallerContext:
                 or agent.get('authority_epoch', 0) != route['authority_epoch']):
             raise ExecutionError('actor_unavailable')
         generation = agent['generation']
+        if saved is not None and (saved['owner']['agent_id'] != agent_id
+                                  or saved['owner']['agent_generation'] != generation):
+            raise ExecutionError('execution_forbidden')
     value = object.__new__(CallerContext)
     fields = dict(workspace=str(root), session_id=session, route_id=route['route_id'],
                   logical_task_id=continuity.task_identity(route), authority_epoch=route['authority_epoch'],
-                  agent_id=agent_id, agent_generation=generation, _issuer=_ISSUER)
+                  agent_id=agent_id, agent_generation=generation, _observation_id=execution_id, _issuer=_ISSUER)
     for key, item in fields.items():
         object.__setattr__(value, key, item)
     return value
@@ -150,6 +164,8 @@ def _caller(root, caller):
 
 def _authorize(root, caller, record):
     _caller(root, caller)
+    if caller._observation_id is not None and caller._observation_id != record['execution_id']:
+        raise ExecutionError('execution_forbidden')
     owner = record['owner']
     if any(owner[key] != value for key, value in (
         ('workspace', caller.workspace), ('session_id', caller.session_id),
@@ -240,6 +256,9 @@ def _view(root, record):
     result['evidence_authority'] = False
     result['observation_status'] = 'expired' if record['expired'] else 'ready'
     live = _LIVE.get((str(root.resolve()), record['execution_id']))
+    result['live_continuity'] = bool(live and live[2] == record['execution_generation'])
+    if record['execution_status'] not in store.TERMINAL and not result['live_continuity']:
+        result['observation_status'] = 'recovery_unknown'
     result['deadline_elapsed'] = bool(live and live[0].monotonic() >= live[1])
     if (str(root.resolve()), record['execution_id']) in _UNCERTAIN:
         result.update(observation_status='persistence_unknown', execution_status='orphaned',
@@ -281,6 +300,9 @@ def _backend(backend):
 def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend: ExecutionBackend | None = None,
            clock: Clock = SYSTEM_CLOCK):
     _backend(backend)
+    if (type(caller) is not CallerContext or getattr(caller, '_issuer', None) is not _ISSUER
+            or caller._observation_id is not None):
+        raise ExecutionError('execution_forbidden')
     if (type(request) is not SubmitRequest or type(request.hard_timeout_seconds) is not int
             or not 1 <= request.hard_timeout_seconds <= 86400 or not isinstance(request.intent_key, str)
             or not 1 <= len(request.intent_key.encode()) <= 1024
