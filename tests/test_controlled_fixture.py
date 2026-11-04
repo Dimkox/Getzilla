@@ -105,6 +105,40 @@ def _cleanup_owned_fixture(root, binding, *, required=False):
 
 
 class ControlledFixtureTest(unittest.TestCase):
+    def image_commands(self, hashes):
+        calls = []
+        labels = {}
+        image = 'sha256:' + 'b'*64
+
+        def command(args, timeout=60):
+            calls.append(args)
+            if args[1:3] == ['image', 'inspect']:
+                if args[3].startswith('python@'):
+                    return json.dumps([{'Id': controlled_fixture.IMAGE, 'RepoDigests': [args[3]],
+                                        'Os': 'linux', 'Architecture': 'amd64'}])
+                return json.dumps([{'Id': image, 'Os': 'linux', 'Architecture': 'amd64',
+                                    'Config': {'Labels': labels}}])
+            if args[1] == 'build':
+                for index, item in enumerate(args):
+                    if item == '--label':
+                        key, value = args[index+1].split('=', 1)
+                        labels[key] = value
+                Path(args[args.index('--iidfile')+1]).write_text(image)
+                self.assertEqual({p.name for p in Path(args[-1]).iterdir()},
+                                 {'Dockerfile', 'fixture.py', 'fixture-codex', 'fixture-contract.json'})
+            if args[1] == 'create':
+                return 'a'*64
+            if args[1] == 'start':
+                return '\n'.join(hashes)
+            return ''
+
+        return calls, command
+
+    @staticmethod
+    def copy_image_input(source, destination, expected, error):
+        # Only the Docker protocol is mocked here; native input qualification is separate.
+        destination.write_bytes(b'unit Docker protocol input')
+
     def test_host_request_requires_exact_fixture_model_and_path(self):
         frame = {'type': 'model_request', 'version': 1, 'nonce': 'n', 'model': 'fixture-a',
                  'path': '/v1/responses', 'stream': True, 'tool_types': ['function']}
@@ -484,42 +518,22 @@ class ControlledFixtureTest(unittest.TestCase):
         image_id = 'sha256:' + 'b' * 64
         for hashes in (('wrong', controlled_fixture.CODEX_SHA256), (controlled_fixture.FIXTURE_SHA256, 'wrong')):
             with self.subTest(hashes=hashes):
-                calls = []
-
-                def command(args, timeout=15):
-                    calls.append(args)
-                    if args[1] == 'create':
-                        return container_id
-                    if args[1] == 'commit':
-                        return image_id
-                    if args[1] == 'start':
-                        return '\n'.join(hashes)
-                    return ''
-
-                with patch.object(controlled_fixture, '_command', side_effect=command):
+                calls, command = self.image_commands(('3.12.16', controlled_fixture.CONTRACT_SHA256, *hashes))
+                with patch.object(controlled_fixture, '_command', side_effect=command), \
+                        patch.object(controlled_fixture, '_copy_input', side_effect=self.copy_image_input):
                     with self.assertRaises(controlled_fixture.FixtureError):
                         controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex')
                 self.assertIn(['docker', 'rm', '-fv', container_id], calls)
                 self.assertIn(['docker', 'image', 'rm', image_id], calls)
 
     def test_immutable_image_checks_both_hashes_and_returns_content_id(self):
-        staging, checker = 'a' * 64, 'c' * 64
+        checker = 'a' * 64
         image_id = 'sha256:' + 'b' * 64
-        calls = []
-
-        def command(args, timeout=15):
-            calls.append(args)
-            if args[1] == 'create':
-                return checker if '--entrypoint' in args else staging
-            if args[1] == 'commit':
-                return image_id
-            if args[1] == 'start':
-                return controlled_fixture.FIXTURE_SHA256 + '\n' + controlled_fixture.CODEX_SHA256
-            return ''
-
-        with patch.object(controlled_fixture, '_command', side_effect=command):
+        calls, command = self.image_commands(('3.12.16', controlled_fixture.CONTRACT_SHA256,
+                                              controlled_fixture.FIXTURE_SHA256, controlled_fixture.CODEX_SHA256))
+        with patch.object(controlled_fixture, '_command', side_effect=command), \
+                patch.object(controlled_fixture, '_copy_input', side_effect=self.copy_image_input):
             self.assertEqual(controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex'), image_id)
-        self.assertIn(['docker', 'rm', '-fv', staging], calls)
         self.assertIn(['docker', 'rm', '-fv', checker], calls)
         self.assertNotIn(['docker', 'image', 'rm', image_id], calls)
 
@@ -551,6 +565,7 @@ class ControlledFixtureTest(unittest.TestCase):
                 'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False,
                                'CapDrop': ['ALL'], 'SecurityOpt': ['no-new-privileges'], 'PidMode': '', 'IpcMode': 'private',
                                'PidsLimit': 64, 'Memory': 536870912, 'NanoCpus': 2000000000,
+                               'CpusetCpus': controlled_fixture._cpu_set(),
                                'Tmpfs': {'/tmp': 'rw,nosuid,nodev,size=64m,mode=1777',
                                          '/work': 'rw,nosuid,nodev,size=64m,mode=1777'}},
                 'Mounts': [{'Type': 'bind', 'Source': '/fixture.py', 'Destination': '/fixture.py', 'RW': False},

@@ -12,6 +12,7 @@ import re
 import selectors
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -21,7 +22,8 @@ from . import model_continuation_state as journal
 from .codex_continuation import TurnObserver
 from .model_continuation import load_policy
 
-IMAGE = 'sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704'
+IMAGE = 'sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487'
+CONTRACT_SHA256 = 'd08934d1aa8e857c34e21b3c7ac8fb89c822a9c35f224876678c1ca5a7ce4e3e'
 CODEX_SHA256 = 'c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5'
 FIXTURE_SHA256 = '5fba526ae5fc2f899db04961029b0c632ebc928630a959ca9568b1e135c38080'
 MAX_FRAME = 65536
@@ -69,6 +71,7 @@ def _validate_container(info, image, mounts, nonce):
                 or host['NetworkMode'] != 'none' or host['ReadonlyRootfs'] is not True
                 or host['Privileged'] is not False or host['CapDrop'] != ['ALL'] or host.get('CapAdd') not in (None, [])
                 or host['PidsLimit'] != 64 or host['Memory'] != 536870912 or host['NanoCpus'] != 2000000000
+                or host.get('CpusetCpus') != _cpu_set()
                 or host.get('Devices') not in (None, []) or host.get('DeviceRequests') not in (None, [])
                 or host.get('VolumesFrom') not in (None, [])
                 or host['Tmpfs'] != {CONTAINER_TMP: 'rw,nosuid,nodev,size=64m,mode=1777',
@@ -112,46 +115,157 @@ def _command(args, timeout=60):
         raise FixtureError('container_unavailable') from None
 
 
+def _cpu_set():
+    available = set(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else set(range(os.cpu_count() or 0))
+    value = os.environ.get('GETZILLA_FIXTURE_CPUSET', ','.join(map(str, sorted(available)[:2])))
+    if not re.fullmatch(r'[0-9]+,[0-9]+', value):
+        raise FixtureError('fixture_cpu_unavailable')
+    chosen = [int(item) for item in value.split(',')]
+    if len(set(chosen)) != 2 or not set(chosen) <= available:
+        raise FixtureError('fixture_cpu_unavailable')
+    return ','.join(map(str, sorted(chosen)))
+
+
+def _image_contract():
+    folder = Path(__file__).resolve().parents[2] / 'tests/fixtures'
+    try:
+        with (folder/'codex-fixture-contract.json').open('rb') as handle:
+            raw = handle.read(65537)
+        if len(raw) > 65536 or hashlib.sha256(raw).hexdigest() != CONTRACT_SHA256:
+            raise FixtureError('image_contract_unqualified')
+        contract = json.loads(raw, object_pairs_hook=_pairs)
+        with (folder/'codex-fixture.Dockerfile').open('rb') as handle:
+            recipe = handle.read(8193)
+        if (len(recipe) > 8192 or hashlib.sha256(recipe).hexdigest() != contract['dockerfile_sha256']
+                or contract['base_image_id'] != IMAGE or contract['base_reference'] != 'python@'+IMAGE
+                or contract['codex_sha256'] != CODEX_SHA256 or contract['fixture_sha256'] != FIXTURE_SHA256):
+            raise FixtureError('image_contract_unqualified')
+        return contract, recipe
+    except (OSError, KeyError, ValueError, TypeError):
+        raise FixtureError('image_contract_unqualified') from None
+
+
+def _base_image(docker, contract):
+    try:
+        info = json.loads(_command([docker, 'image', 'inspect', contract['base_reference']]))
+        if (not isinstance(info, list) or len(info) != 1 or info[0]['Id'] != IMAGE
+                or contract['base_reference'] not in info[0]['RepoDigests']
+                or (info[0]['Os'], info[0]['Architecture']) != ('linux', 'amd64')):
+            raise FixtureError('base_image_unqualified')
+    except (KeyError, TypeError, ValueError):
+        raise FixtureError('base_image_unqualified') from None
+
+
+def _bound_image(docker, image, contract, owner=None):
+    try:
+        info = json.loads(_command([docker, 'image', 'inspect', image]))
+        labels = info[0]['Config']['Labels']
+        if (len(info) != 1 or info[0]['Id'] != image or not re.fullmatch(r'sha256:[a-f0-9]{64}', image)
+                or (info[0]['Os'], info[0]['Architecture']) != ('linux', 'amd64')
+                or labels['getzilla.fixture.contract'] != CONTRACT_SHA256
+                or labels['getzilla.fixture.base'] != contract['base_image_id']
+                or not re.fullmatch(r'[a-f0-9]{32}', labels['getzilla.fixture'])
+                or owner is not None and labels['getzilla.fixture'] != owner):
+            raise FixtureError('image_mismatch')
+        return True
+    except (IndexError, KeyError, TypeError, ValueError):
+        raise FixtureError('image_mismatch') from None
+
+
+def _owned_image(docker, image, owner):
+    try:
+        info = json.loads(_command([docker, 'image', 'inspect', image]))
+        return len(info) == 1 and info[0]['Id'] == image and info[0]['Config']['Labels']['getzilla.fixture'] == owner
+    except (FixtureError, KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
+def _copy_input(source, destination, expected, error):
+    try:
+        descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(descriptor, 'rb') as handle, destination.open('xb') as output:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 512*1024*1024:
+                raise FixtureError(error)
+            digest = hashlib.sha256()
+            count = 0
+            while data := handle.read(65536):
+                count += len(data)
+                if count > 512*1024*1024:
+                    raise FixtureError(error)
+                digest.update(data)
+                output.write(data)
+            if count != info.st_size or digest.hexdigest() != expected:
+                raise FixtureError(error)
+        destination.chmod(0o555 if error == 'codex_unqualified' else 0o444)
+        os.utime(destination, (0, 0))
+    except OSError:
+        raise FixtureError(error) from None
+
+
 def _immutable_image(docker, fixture, codex):
-    """Copy fixture inputs into a content-addressed image and verify both bytes."""
-    staging = None
+    """Build a closed offline recipe, then bind its observed ID and exact inputs."""
     checker = None
     image = None
     accepted = False
+    owner = secrets.token_hex(16)
+    contract, recipe = _image_contract()
     try:
-        staging = _command([docker, 'create', '--pull', 'never', '--network', 'none', IMAGE])
-        if not re.fullmatch(r'[a-f0-9]{64}', staging):
-            raise FixtureError('invalid_container')
-        _command([docker, 'cp', str(fixture), staging + ':/fixture.py'], timeout=60)
-        _command([docker, 'cp', codex, staging + ':/fixture-codex'], timeout=60)
-        image = _command([docker, 'commit', '--change', 'LABEL getzilla.fixture=' + secrets.token_hex(16), staging], timeout=60)
+        with tempfile.TemporaryDirectory(prefix='getzilla-fixture-build-') as temporary:
+            folder = Path(temporary)
+            context = folder/'context'
+            context.mkdir(mode=0o700)
+            _copy_input(codex, context/'fixture-codex', CODEX_SHA256, 'codex_unqualified')
+            _copy_input(fixture, context/'fixture.py', FIXTURE_SHA256, 'fixture_unqualified')
+            (context/'Dockerfile').write_bytes(recipe)
+            source = Path(__file__).resolve().parents[2]/'tests/fixtures/codex-fixture-contract.json'
+            _copy_input(source, context/'fixture-contract.json', CONTRACT_SHA256, 'image_contract_unqualified')
+            os.utime(context/'Dockerfile', (0, 0))
+            _base_image(docker, contract)
+            identity = folder/'image-id'
+            _command([docker, 'build', '--quiet', '--pull=false', '--network=none', '--platform', 'linux/amd64',
+                      '--build-arg', 'SOURCE_DATE_EPOCH=0', '--label', 'getzilla.fixture='+owner,
+                      '--label', 'getzilla.fixture.contract='+CONTRACT_SHA256,
+                      '--label', 'getzilla.fixture.base='+IMAGE, '--iidfile', str(identity),
+                      '--file', str(context/'Dockerfile'), str(context)], timeout=180)
+            with identity.open('r', encoding='ascii') as handle:
+                image = handle.read(128).strip()
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
             raise FixtureError('invalid_image')
+        _bound_image(docker, image, contract, owner)
         program = ('import hashlib; from pathlib import Path; '
+                   'import platform; print(platform.python_version()); '
+                   "print(hashlib.sha256(Path('/fixture-contract.json').read_bytes()).hexdigest()); "
                    "print(hashlib.sha256(Path('/fixture.py').read_bytes()).hexdigest()); "
                    "print(hashlib.sha256(Path('/fixture-codex').read_bytes()).hexdigest())")
         checker = _command([docker, 'create', '--pull', 'never', '--network', 'none', '--read-only',
-                            '--cap-drop', 'ALL', '--entrypoint', 'python', image, '-c', program])
+                            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64',
+                            '--memory', '512m', '--cpus', '2', '--cpuset-cpus', _cpu_set(),
+                            '--user', '65534:65534', '--label', 'getzilla.owner='+owner,
+                            '--entrypoint', 'python', image, '-c', program])
         if not re.fullmatch(r'[a-f0-9]{64}', checker):
             raise FixtureError('invalid_container')
         hashes = _command([docker, 'start', '-a', checker], timeout=60).splitlines()
-        if hashes != [FIXTURE_SHA256, CODEX_SHA256]:
+        if hashes != [contract['python_version'], CONTRACT_SHA256, FIXTURE_SHA256, CODEX_SHA256]:
             raise FixtureError('image_mismatch')
         accepted = True
         return image
     finally:
         cleanup_failed = False
-        for container in (checker, staging):
+        for container in (checker,):
             if isinstance(container, str) and re.fullmatch(r'[a-f0-9]{64}', container):
                 try:
                     _command([docker, 'rm', '-fv', container])
                 except FixtureError:
                     cleanup_failed = True
         if (not accepted or cleanup_failed) and isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image):
-            try:
-                _command([docker, 'image', 'rm', image])
-            except FixtureError:
+            if not _owned_image(docker, image, owner):
                 cleanup_failed = True
+            else:
+                try:
+                    _command([docker, 'image', 'rm', image])
+                except FixtureError:
+                    cleanup_failed = True
         if cleanup_failed:
             raise FixtureError('cleanup_uncertain') from None
 
@@ -314,7 +428,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--label', 'getzilla.owner=' + nonce,
             '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m',
-            '--cpus', '2', '--user', '65534:65534', '--tmpfs', CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
+            '--cpus', '2', '--cpuset-cpus', _cpu_set(), '--user', '65534:65534', '--tmpfs', CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
             '--tmpfs', '/work:rw,nosuid,nodev,size=64m,mode=1777', '-e', 'HOME=' + CONTAINER_TMP, '-e', 'CODEX_HOME=' + CONTAINER_TMP + '/codex',
             '-e', 'GETZILLA_CONTROLLED_GATE=1', '-e', 'GETZILLA_FIXTURE_NONCE=' + nonce,
             image, 'python', '-u', '/fixture.py']

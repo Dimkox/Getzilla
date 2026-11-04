@@ -89,6 +89,7 @@ def _valid(info, ident, image, nonce, volumes, phase, thread):
                 or host.get('DeviceRequests') not in (None, []) or host.get('VolumesFrom') not in (None, [])
                 or host['RestartPolicy'] != {'Name': 'no', 'MaximumRetryCount': 0}
                 or host['PidsLimit'] != 64 or host['Memory'] != 536870912 or host['NanoCpus'] != 2000000000
+                or host.get('CpusetCpus') != fixture._cpu_set()
                 or host['SecurityOpt'] != ['no-new-privileges']
                 or host['Tmpfs'] != {fixture.CONTAINER_TMP: 'rw,nosuid,nodev,size=64m,mode=1777'}
                 or host['PidMode'] not in ('', 'private') or host['IpcMode'] not in ('', 'private')):
@@ -120,7 +121,8 @@ def _helper(docker, image, volumes, program, *, root=False):
     mounts = [part for name, target in zip(volumes, ('/state', '/work'))
               for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target + ('' if root else ',readonly'))]
     args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2']
+            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2',
+            '--cpuset-cpus', fixture._cpu_set()]
     if root:
         args += ['--cap-add', 'CHOWN']
     args += ['--user', '0' if root else '65534:65534', *mounts, '--entrypoint', 'python', image, '-c', program]
@@ -148,7 +150,7 @@ def _volume_names(root, binding):
 def _create(docker, image, volumes, nonce, phase, thread=''):
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--label', 'getzilla.owner=' + nonce, '--restart', 'no', '--security-opt', 'no-new-privileges', '--pids-limit', '64',
-            '--memory', '512m', '--cpus', '2', '--user', '65534:65534',
+            '--memory', '512m', '--cpus', '2', '--cpuset-cpus', fixture._cpu_set(), '--user', '65534:65534',
             '--tmpfs', fixture.CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
             *_mounts(volumes), '-e', 'HOME=' + fixture.CONTAINER_TMP,
             '-e', 'CODEX_HOME=' + fixture.CONTAINER_TMP + '/codex',
@@ -378,6 +380,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             image = info.get('Image')
             if not isinstance(image, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
                 raise fixture.FixtureError('invalid_image')
+            contract, _ = fixture._image_contract()
+            fixture._bound_image(docker, image, contract)
             if not _stopped(docker, a, image, nonce, volumes, 'a', ''):
                 raise fixture.FixtureError('shutdown_uncertain')
             if not _exclusive_volumes(docker, volumes, [a]):
@@ -386,9 +390,10 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             fence_ready = True
             image_owned = True
             program = ("import hashlib; from pathlib import Path; "
+                       "print(hashlib.sha256(Path('/fixture-contract.json').read_bytes()).hexdigest()); "
                        "print(hashlib.sha256(Path('/fixture.py').read_bytes()).hexdigest()); "
                        "print(hashlib.sha256(Path('/fixture-codex').read_bytes()).hexdigest())")
-            if _helper(docker, image, volumes, program).splitlines() != [fixture.FIXTURE_SHA256, fixture.CODEX_SHA256]:
+            if _helper(docker, image, volumes, program).splitlines() != [fixture.CONTRACT_SHA256, fixture.FIXTURE_SHA256, fixture.CODEX_SHA256]:
                 raise fixture.FixtureError('image_mismatch')
             checkpoint = _checkpoint(docker, image, volumes)
             if (checkpoint != _checkpoint(docker, image, volumes)
