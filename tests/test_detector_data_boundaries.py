@@ -80,6 +80,75 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_repeated_identical_imports_keep_direct_calls_within_source_budget(self):
+        repo = GitArchitectureRepo(self)
+        repo.model(_system(), _rules())
+        imports = []
+        for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES):
+            repo.write_text(f'leaf{index}.py', 'def ordinary(): return None\n')
+            imports.append(f'from leaf{index} import ordinary as value{index}\n')
+        repo.write_text('provider.py', ''.join(imports) + 'def helper(): return [' +
+                        ', '.join(f'value{index}()' for index in range(FIT.MAX_QUEUE_ADAPTER_MODULES)) + ']\n')
+        base = repo.commit('ordinary callable behind a long import closure')
+        source = ('def first():\n    from provider import helper\n    helper()\n'
+                  'def second():\n    from provider import helper\n    helper()\n')
+        repo.write_text('consumer.py', source)
+        head = repo.commit('identical imports in separate lexical scopes')
+        diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        cache = FIT._queue_module_inventory(repo.root, diff, 'head', ('',))
+        result = FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', ('',),
+                                   source_path='consumer.py', source=source.encode())
+        self.assertEqual(result.state, 'not_queue')
+        self.assertEqual(result.signals, ())
+
+    def test_uniform_import_identity_requires_all_bindings_and_closed_namespace(self):
+        source = ('def first():\n    from bridge import helper\n    helper()\n'
+                  'def second():\n    from bridge import helper\n    helper()\n')
+        proof = FIT._queue_source_preparation('uniform.py', source.encode()).callable_uses
+        self.assertIn('helper', proof.stable_imports)
+        negatives = (
+            'helper = replacement', 'del helper', 'def shadow(helper): pass',
+            'shadow = lambda helper: None', 'def scope():\n    global helper',
+            'def scope():\n    nonlocal helper', '[None for helper in values]',
+            '[(helper := replacement) for _ in values]',
+            'try: pass\nexcept Exception as helper: pass',
+            'match value:\n    case helper: pass', 'match value:\n    case [*helper]: pass',
+            'match value:\n    case {**helper}: pass', 'if False:\n    helper = replacement',
+            'from other import helper', 'from bridge import other as helper',
+            'from .bridge import helper', 'from bridge import helper as helper',
+            'from bridge import *', "globals()['helper'] = replacement",
+        )
+        for mutation in negatives:
+            with self.subTest(mutation=mutation):
+                changed = (source + mutation + '\n').encode()
+                proof = FIT._queue_source_preparation('uniform.py', changed).callable_uses
+                self.assertNotIn('helper', proof.stable_imports)
+
+    def test_repeated_imports_preserve_returned_queue_carriers(self):
+        operations = ('helper().enqueue(work)', 'consume([helper]).enqueue(work)',
+                      'consume({"factory": helper}).enqueue(work)',
+                      'selected, = (helper,)\nselected().enqueue(work)',
+                      'def select(): return helper\nselect()().enqueue(work)')
+        for governed, provider in ((False, 'def helper(): return None\n'),
+                                   (True, 'from rq import Queue\ndef helper(): return Queue()\n')):
+            for operation in operations:
+                with self.subTest(governed=governed, operation=operation):
+                    repo = GitArchitectureRepo(self)
+                    repo.model(_system(), _rules())
+                    repo.write_text('provider.py', provider)
+                    base = repo.commit('ordinary or queue-bearing callable')
+                    source = ('def first():\n    from provider import helper\n    helper()\n'
+                              'def second():\n    from provider import helper\n    helper()\n'
+                              'from provider import helper\ndef consume(items): return items\n' + operation + '\n')
+                    repo.write_text('consumer.py', source)
+                    head = repo.commit('repeated provider imports and returned carrier')
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'unsupported' if governed else 'not_applicable')
+                    self.assertEqual('new_queue' in report.triggers, governed)
+
     def test_scalar_source_preparation_clones_once_across_member_requests(self):
         source = b'def first(): return str(1)\ndef second(): return str(2)\n'
         FIT._queue_owned_export_slice.cache_clear()

@@ -2585,8 +2585,9 @@ def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict)
     This is a complete syntactic use inventory, not a carrier recognizer. A
     future or unsupported expression therefore cannot make an import disappear.
     Caller-owned trees are prepared afresh; only owned immutable source bytes
-    may cache the result. Whole-source binding uniqueness is conservative across
-    lexical scopes and includes exception/pattern/comprehension writes.
+    may cache the result. Whole-source binding identity is conservative across
+    lexical scopes: repeated identical imports share one provider identity, but
+    every other binding or namespace uncertainty refuses that shortcut.
     """
     nodes = tuple(ast.walk(tree))
     parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
@@ -2685,9 +2686,13 @@ def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict)
             kinds[name] = max(kinds.get(name, 0), use_kind(node))
     stable_imports = set()
     if namespace_closed:
+        import_identities = {node: ast.dump(node) for node in {event.node for event in bindings}
+                             if isinstance(node, (ast.Import, ast.ImportFrom))}
+        identities: dict[str, set[str | None]] = {}
         for event in bindings:
-            if isinstance(event.node, (ast.Import, ast.ImportFrom)) and counts[event.name] == 1:
-                stable_imports.add(event.name)
+            identities.setdefault(event.name, set()).add(import_identities.get(event.node))
+        stable_imports = {name for name, values in identities.items()
+                          if name not in declared_nonlocal and len(values) == 1 and None not in values}
     function_calls: dict[str, set[str]] = {}
     for node in nodes:
         if not isinstance(node, ast.Call) or not (called := reference(node.func)):
