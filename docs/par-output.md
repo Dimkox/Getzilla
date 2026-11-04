@@ -16,13 +16,21 @@ preview memory budget. The CLI response and `summary.json` each have a 32 KiB
 byte limit. Truncation markers show omitted text or metadata. Command strings are
 excluded from saved metadata and displayed output. Credential labels suppress a
 preview; this heuristic cannot identify every possible secret in arbitrary output.
-Raw retained logs are private files and can contain sensitive command output.
+Raw retained logs can contain sensitive command output. POSIX files use mode 0600.
+Windows files inherit the repository's access controls.
 
-The POSIX runner holds directory descriptors and refuses symbolic links when it
-creates logs. It does not reopen log paths to build a response. A changed log
-namespace makes the artifact unavailable. The runner owns its child process group
-and kills that group on timeout or interruption. This is not a sandbox for a child
-that deliberately leaves the group. Windows junction handling is not qualified.
+The runner uses the existing `fsx` filesystem and process backends. POSIX holds
+directory descriptors. Windows uses directory identities, reparse-point refusal,
+and checks before output writes. The runner does not reopen log paths to build a
+response. A changed log namespace makes the artifact unavailable. A bounded reader
+queue drains pipes on both platforms without socket-only selectors.
+
+POSIX owns a child process group. Windows assigns each child to a kill-on-close
+Job Object before its code runs. Timeout or cancellation stops the owned group or
+job. A missing Windows ownership backend returns exit 125 with an explicit
+unsupported result before commands run. POSIX groups do not sandbox a child that
+deliberately leaves the group. Native Windows process and junction controls need
+their real CI run; adapter tests on POSIX do not establish that qualification.
 
 No cursor or host-path retrieval interface is provided. EX-02 must normalize old
 results before restoring them to context. Historical restore integration and

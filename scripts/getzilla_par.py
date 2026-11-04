@@ -40,7 +40,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     workers = args.jobs or capacity(root)
     started = time.monotonic()
-    jobs, folder = run_batch(root, commands, workers=workers, cwd=cwd, timeout=args.timeout)
+    try:
+        jobs, folder = run_batch(root, commands, workers=workers, cwd=cwd, timeout=args.timeout)
+    except (OSError, NotImplementedError, AttributeError):
+        print('getzilla par: execution or log-ownership backend unavailable; complete_output=false')
+        return 1
     print(report(root, jobs, folder, workers=workers, wall=time.monotonic() - started, show_all=args.show_all))
     if any(job.refused for job in jobs):
         return 2
