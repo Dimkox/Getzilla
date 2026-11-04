@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 import zlib
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -45,11 +46,19 @@ class SecurityToolTests(unittest.TestCase):
                              'Packages': [{'Name': 'openssl', 'Version': '3.1.0'}],
                              'Vulnerabilities': []}]}
 
+    @contextmanager
     def scanner(self, code):
-        path = self.root / 'scanner'
-        path.write_text('#!' + sys.executable + '\n' + code)
-        path.chmod(0o700)
-        return path
+        path = self.root / 'scanner.py'
+        path.write_text(code, encoding='utf-8')
+        execute = security_tools.execute
+
+        def launch(command, *args, **kwargs):
+            return execute([sys.executable, *command], *args, **kwargs)
+
+        # Keep the real process runner, environment and scanner arguments while
+        # using Python's native executable instead of platform shebang support.
+        with mock.patch.object(security_tools, 'execute', side_effect=launch):
+            yield path
 
     def source_scan(self, scanner):
         (self.root / 'Dockerfile').write_text('FROM scratch\n')
@@ -83,9 +92,9 @@ class SecurityToolTests(unittest.TestCase):
         sentinel = 'private-process-canary'
         code = 'import sys; sys.stderr.write(' + repr(
             'proxyconnect tcp: connection refused https://user:' + sentinel + '@host\n') + '); sys.exit(2)'
-        scanner = self.scanner(code)
-        with self.assertRaises(SecurityDataError) as caught:
-            security_tools._process([str(scanner)], self.root, self.root)
+        with self.scanner(code) as scanner:
+            with self.assertRaises(SecurityDataError) as caught:
+                security_tools._process([str(scanner)], self.root, self.root)
         detail = str(caught.exception)
         self.assertIn('network', detail)
         self.assertIn('exit=2', detail)
@@ -93,8 +102,8 @@ class SecurityToolTests(unittest.TestCase):
         self.assertNotIn(str(scanner), detail)
 
     def test_source_exit_one_keeps_scanner_error_instead_of_missing_filename(self):
-        scanner = self.scanner('import sys; sys.stderr.write("x509: certificate signed by unknown authority"); sys.exit(1)')
-        report = self.source_scan(scanner)
+        with self.scanner('import sys; sys.stderr.write("x509: certificate signed by unknown authority"); sys.exit(1)') as scanner:
+            report = self.source_scan(scanner)
         self.assertEqual(report['outcome'], 'blocked')
         self.assertIn('tls', report['summary'])
         self.assertIn('exit=1', report['summary'])
@@ -109,7 +118,8 @@ class SecurityToolTests(unittest.TestCase):
                 if payload is not None:
                     code += ('from pathlib import Path\n'
                              'Path(sys.argv[sys.argv.index("--output") + 1]).write_text(' + repr(payload) + ')\n')
-                report = self.source_scan(self.scanner(code))
+                with self.scanner(code) as scanner:
+                    report = self.source_scan(scanner)
                 self.assertEqual(report['outcome'], 'blocked')
                 self.assertIn(category, report['summary'])
                 self.assertIn('exit=0', report['summary'])
@@ -120,9 +130,9 @@ class SecurityToolTests(unittest.TestCase):
     def test_acquisition_failure_retains_classified_diagnostics_without_credentials(self):
         sentinel = 'private-acquisition-canary'
         diagnostic = 'UNAUTHORIZED Authorization: Bearer ' + sentinel + '\n' + 'x' * 10000
-        scanner = self.scanner('import sys; sys.stderr.write(' + repr(diagnostic) + '); sys.exit(1)')
-        with mock.patch.object(security_tools, 'pinned_tool', return_value=scanner):
-            reports = security_tools.refresh_images({'images': []}, self.root)
+        with self.scanner('import sys; sys.stderr.write(' + repr(diagnostic) + '); sys.exit(1)') as scanner:
+            with mock.patch.object(security_tools, 'pinned_tool', return_value=scanner):
+                reports = security_tools.refresh_images({'images': []}, self.root)
         self.assertEqual(reports[0]['status'], 'fail')
         self.assertIn('authentication', reports[0]['reason'])
         self.assertIn('exit=1', reports[0]['reason'])
@@ -137,7 +147,8 @@ class SecurityToolTests(unittest.TestCase):
                           'Misconfigurations': [{'ID': 'fixture-rule', 'Status': 'FAIL'}]}]}
                 code = ('import sys\nfrom pathlib import Path\n'
                         'Path(sys.argv[sys.argv.index("--output") + 1]).write_text(' + repr(json.dumps(report)) + ')\n')
-                self.assertEqual(self.source_scan(self.scanner(code))['outcome'], outcome)
+                with self.scanner(code) as scanner:
+                    self.assertEqual(self.source_scan(scanner)['outcome'], outcome)
 
     def test_image_zero_exit_empty_or_foreign_report_is_not_a_scan(self):
         for value in ({}, {**self.report(), 'Results': []},
