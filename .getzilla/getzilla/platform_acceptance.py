@@ -249,12 +249,12 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
                     if checks['from_project_version'] != checks['from_version']:
                         raise ScenarioFailed('previous stable project engine differs from the installed release')
                     command(['git', 'init', '--quiet', project])
-                    (project/'user-file.txt').write_text('user-owned fixture\n', encoding='utf-8')
+                    (project/'user-file.txt').write_text('user-owned fixture\n', encoding='utf-8', newline='\n')
                     settings = project/'user-settings.json'
-                    settings.write_text('{"agents":["qwen"],"theme":"fixture"}\n', encoding='utf-8')
+                    settings.write_text('{"agents":["qwen"],"theme":"fixture"}\n', encoding='utf-8', newline='\n')
                     ignore = project/'.gitignore'
                     if not ignore.exists():
-                        ignore.write_text('.getzilla/runtime/\n', encoding='utf-8')
+                        ignore.write_text('.getzilla/runtime/\n', encoding='utf-8', newline='\n')
                     user_before, settings_before = digest(project/'user-file.txt'), digest(settings)
                     command(['git', 'add', '-A'], cwd=project)
                     command(['git', 'commit', '--quiet', '-m', 'Record stable project and user settings'], cwd=project)
@@ -287,7 +287,8 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
                               'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
                               'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'),
                               'sha256': digest(source/'.github/workflows/getzilla.yml')}
-        (workspace/'result.json').write_text(json.dumps(record, indent=2, allow_nan=False)+'\n', encoding='utf-8')
+        (workspace/'result.json').write_text(json.dumps(record, indent=2, allow_nan=False)+'\n',
+                                             encoding='utf-8', newline='\n')
         summary = os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
             run_url = (f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/"

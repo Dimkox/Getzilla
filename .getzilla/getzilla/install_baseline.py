@@ -51,7 +51,7 @@ def restore_release_payload(home: Path, historical_source: Path, target: Path) -
     if len(catalog) != 695:
         raise ValueError('historical restoration requires the complete qualified vendor catalog')
     identity = subprocess.check_output(['git', '--no-optional-locks', '-C', str(historical_source),
-                    'rev-parse', 'HEAD', 'refs/tags/v2.3.0'], text=True, timeout=20).splitlines()
+                    'rev-parse', 'HEAD', 'refs/tags/v2.3.0'], text=True, encoding='utf-8', timeout=20).splitlines()
     if identity != ['2bb417431f1e4b9494e4af71ebf27adb1d04d898',
                     '815aeabc5d215d65e72651692a6457920de9fa71']:
         raise ValueError('historical source identity differs from the published release')

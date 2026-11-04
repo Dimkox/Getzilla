@@ -61,8 +61,10 @@ def main(argv=None):
                               'error': record.get('error')}))
             return 0 if not record.get('error') and all(s.get('status') == 'pass' for s in record['scenarios'].values()) else 1
         records = load_artifacts(args.aggregate, maximum=len(required))
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, timeout=20).strip()
-        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True, timeout=20).strip()
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
+                                       text=True, encoding='utf-8', timeout=20).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT,
+                                       text=True, encoding='utf-8', timeout=20).strip()
         if head != args.head:
             raise ValueError('aggregate checkout differs from expected candidate SHA')
         problems = validate_results(records, matrix=contract['cells'], required=[c['id'] for c in required],
