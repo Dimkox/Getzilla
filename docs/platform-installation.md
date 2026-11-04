@@ -81,6 +81,15 @@ use their actual materialized bytes, not the source template hash. The full
 inventory is a superset: only the project's committed selection can authorize
 incoming files. This qualification does not replace native installer CI.
 
+The catalog separately pins the two runtime anchors from the old Git install.
+The published ZIP contains `.gitkeep` but omits the runtime `.gitignore`.
+These anchors do not expand the common 695-file restoration payload. An ignored
+managed file stays outside Git only when existing ownership or the selected
+qualified baseline proves its exact bytes and mode, and the candidate already
+matches both. The updater leaves that file in place, checks it for concurrent
+changes, and preserves it when switching back to the original branch. Other
+ignored collisions still refuse. Runtime user data remains outside the payload.
+
 macOS upgrade cells use the explicit baseline mode `restored-v230-artifact`.
 The historical v2.3.0 new-project installer calls Linux `renameat2`, which is
 unavailable on macOS; its create path remains **unsupported**, not passed.

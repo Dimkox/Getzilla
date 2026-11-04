@@ -74,6 +74,163 @@ class HistoricalUpgradeTests(unittest.TestCase):
         with mock.patch.dict(os.environ, self.environment):
             return upgrade.sync_project(ROOT, self.project, baseline_release='v2.3.0', **kwargs)
 
+    def stock_ignored_runtime(self):
+        # The stock install.sh --create route invokes this exact historical
+        # materializer. Native acceptance then adds this project ignore rule.
+        anchors = ('.getzilla/runtime/.gitignore', '.getzilla/runtime/.gitkeep')
+        self.assertEqual((self.project / anchors[0]).read_bytes(),
+            b'# Getzilla runtime state (receipts, metrics, counters, worktrees) is machine-local and never committed.\n'
+            b'# This file ships with Getzilla so a project needs no root .gitignore rule for it.\n*\n!.gitignore\n!.gitkeep\n')
+        self.assertEqual((self.project / anchors[1]).read_bytes(), b'')
+        self.git('rm', '--cached', '--', *anchors)
+        (self.project / '.gitignore').write_text('.getzilla/runtime/\n')
+        self.commit()
+        self.before = self.git('rev-parse', 'HEAD')
+        sentinel = self.project / '.getzilla/runtime/user-sentinel.bin'
+        sentinel.write_bytes(b'ignored user data\x00\xff')
+        return anchors, sentinel
+
+    def test_stock_ignored_runtime_anchors_survive_upgrade_and_rollback_untracked(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        def identity(path):
+            value = (self.project/path).stat()
+            return value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns
+        before = {path: identity(path) for path in anchors}
+        directory = (self.project / '.getzilla/runtime').stat()
+        self.update()
+        self.assertEqual(self.git('ls-files', '--', *anchors), '')
+        for path in anchors:
+            self.assertEqual(identity(path), before[path])
+        self.assertEqual((self.project/'.getzilla/runtime').stat().st_mode, directory.st_mode)
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+        self.git('switch', '--quiet', 'main')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
+        for path in anchors:
+            self.assertEqual(identity(path), before[path])
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+        self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_unproved_ignored_runtime_anchors_remain_a_collision(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        self.update()
+        manifest = read_state(self.project).manifest
+        for component in manifest['components'].values():
+            for path in anchors:
+                component['owned'].pop(path, None)
+        (self.project/MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit()
+        self.before = self.git('rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'ignored local files'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
+        self.assertTrue(all((self.project/path).is_file() for path in anchors))
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_already_owned_ignored_anchors_are_idempotent_without_baseline(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        self.update()
+        head = self.git('rev-parse', 'HEAD')
+        result = upgrade.sync_project(ROOT, self.project)
+        self.assertIn('is up to date', result)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), head)
+        self.assertEqual(self.git('ls-files', '--', *anchors), '')
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_changed_ignored_runtime_anchor_refuses_before_publication(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        (self.project/anchors[0]).write_bytes(b'# user ignore rules\n*\n')
+        with self.assertRaisesRegex(upgrade.UpdateError, 'ownership conflict'):
+            self.update()
+        self.assertEqual(self.git('branch', '--list'), '* main')
+        self.assertEqual((self.project/anchors[0]).read_bytes(), b'# user ignore rules\n*\n')
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_missing_ignored_anchor_is_created_without_claiming_old_bytes(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        (self.project/anchors[1]).unlink()
+        self.update()
+        self.assertEqual(self.git('ls-files', '--', *anchors), anchors[1])
+        self.assertEqual((self.project/anchors[1]).read_bytes(), b'')
+        self.git('switch', '--quiet', 'main')
+        self.assertFalse((self.project/anchors[1]).exists())
+        self.assertTrue((self.project/anchors[0]).is_file())
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_foreign_ignored_identical_file_is_not_historical_ownership(self):
+        _anchors, sentinel = self.stock_ignored_runtime()
+        target = self.project/'scripts/getzilla_platform_install.py'
+        self.assertFalse(target.exists())
+        with (self.project/'.gitignore').open('a') as stream:
+            stream.write('scripts/getzilla_platform_install.py\n')
+        self.commit()
+        target.write_bytes((ROOT/'scripts/getzilla_platform_install.py').read_bytes())
+        with self.assertRaisesRegex(upgrade.UpdateError, 'ignored local files'):
+            self.update()
+        self.assertEqual(target.read_bytes(), (ROOT/'scripts/getzilla_platform_install.py').read_bytes())
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_proved_ignored_old_file_that_needs_replacement_is_not_overwritten(self):
+        _anchors, sentinel = self.stock_ignored_runtime()
+        path = 'scripts/getzilla_route.py'
+        original = (self.project/path).read_bytes()
+        self.assertNotEqual(original, (ROOT/path).read_bytes())
+        self.git('rm', '--cached', '--', path)
+        with (self.project/'.gitignore').open('a') as stream:
+            stream.write(path+'\n')
+        self.commit()
+        with self.assertRaisesRegex(upgrade.UpdateError, 'ignored local files'):
+            self.update()
+        self.assertEqual((self.project/path).read_bytes(), original)
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    def test_ignored_anchor_commit_failure_and_cas_preserve_runtime(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        original = (self.project/anchors[0]).read_bytes()
+        with mock.patch.object(upgrade, 'commit_changes', side_effect=upgrade.UpdateError('private commit failed')):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'private commit failed'):
+                self.update()
+        self.assertEqual(self.git('branch', '--list'), '* main')
+        self.assertEqual((self.project/anchors[0]).read_bytes(), original)
+        real_commit = upgrade.commit_changes
+
+        def changed_during_commit(*args, **kwargs):
+            result = real_commit(*args, **kwargs)
+            (self.project/anchors[0]).write_bytes(b'# concurrent user edit\n')
+            return result
+
+        with mock.patch.object(upgrade, 'commit_changes', side_effect=changed_during_commit):
+            with self.assertRaisesRegex(upgrade.UpdateError, 'changed during the update'):
+                self.update()
+        self.assertEqual(self.git('branch', '--list'), '* main')
+        self.assertEqual((self.project/anchors[0]).read_bytes(), b'# concurrent user edit\n')
+        self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX link and mode controls')
+    def test_ignored_runtime_anchor_link_directory_and_mode_refuse(self):
+        anchors, sentinel = self.stock_ignored_runtime()
+        target = self.project/anchors[1]
+        for kind in ('symlink', 'hardlink', 'directory', 'mode'):
+            with self.subTest(kind=kind):
+                target.unlink()
+                if kind == 'symlink':
+                    target.symlink_to(sentinel)
+                elif kind == 'hardlink':
+                    os.link(sentinel, target)
+                elif kind == 'directory':
+                    target.mkdir()
+                else:
+                    target.write_bytes(b'')
+                    target.chmod(0o755)
+                with self.assertRaises((upgrade.UpdateError, ValueError)):
+                    self.update()
+                self.assertEqual(self.git('branch', '--list'), '* main')
+                self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
+                if target.is_dir():
+                    target.rmdir()
+                else:
+                    target.unlink()
+                target.write_bytes(b'')
+
     def test_actual_stable_upgrade_preserves_selection_user_files_and_rollback(self):
         settings = (self.project / '.qwen/settings.json').read_bytes()
         self.update()

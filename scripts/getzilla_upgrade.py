@@ -433,7 +433,7 @@ def sync_project(home: Path, project: Path, *, accept: bool = False, retire: boo
     try:
         if baseline_release is not None and (accept or retire):
             raise UpdateError('baseline migration cannot be combined with accept-local or retire-legacy')
-        baseline = load_baseline(home, baseline_release) if baseline_release is not None else None
+        baseline = load_baseline(home, baseline_release, include_runtime_anchors=True) if baseline_release is not None else None
         with BoundRoot(project) as binding:
             _require_clean_project(project)
             head = _git_out(project, 'rev-parse', 'HEAD')
@@ -559,6 +559,27 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
     if encoded is not None:
         changes.append((MANIFEST, encoded, '100644'))
+    # Keep ignored, positively owned files outside Git when the incoming bytes
+    # and mode already match. Tracking them would remove them on rollback.
+    # The original observations remain in check_current and the checkout CAS.
+    ignored = set(_git_out(project, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+                           *(path for path, _, _ in changes)).split('\0')) - {''} if changes else set()
+    retained_ignored = set()
+    for path, content, mode in changes:
+        if path not in ignored:
+            continue
+        current = observations[path]
+        proved = (matches_owned(current, owned_proof(state.manifest, path))
+                  or baseline is not None and matches_owned(current, baseline.get(path)))
+        if (proved and content is not None and current.content == content
+                and mode_matches(current.mode, 0o755 if mode == '100755' else 0o644)):
+            retained_ignored.add(path)
+    if ignored - retained_ignored:
+        raise UpdateError('ignored local files sit on managed paths; move them first: '
+                          + ', '.join(sorted(ignored - retained_ignored)))
+    changes = [(path, content, mode) for path, content, mode in changes if path not in retained_ignored]
+    if retained_ignored:
+        notes.append(f'kept {len(retained_ignored)} unchanged owned ignored file(s) outside Git')
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:
@@ -572,11 +593,6 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
         raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
-    # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
-    ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
-                       *(path for path, _, _ in changes))
-    if ignored:
-        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
     check_current()
     commit = commit_changes(project, changes, f'chore: update Getzilla to {version}', expected_head=expected_head)
     check_current()
