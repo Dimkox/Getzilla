@@ -1,21 +1,17 @@
 """Mandatory baseline: security data plus pinned Superpowers, BMAD and Spec Kit for the agent in use.
 
-Nothing here is optional. `install_user` (run by the installer through `getzilla_update.py --only
-baseline`) fetches the exact pinned tag of each workflow source, checks that it resolves to the
-pinned commit, and installs the pinned Spec Kit CLI. `apply_project` wires them into a project:
-Superpowers skills into the canonical `.agents/skills` and the agent's skill directory, BMAD and
-Spec Kit through their own installers run in an empty staging directory and merged without
-overwriting anything that already exists. `inspect` says what is missing; verify and doctor turn
-that into a red result.
+`install_user` fetches the configured exact source pins. `apply_project` consumes
+reviewable generated assets tied to those pins, full archive hashes, dependency locks,
+and fixed generation commands. It never invokes ambient npx/specify or upstream code.
+No native sandbox is required on consumer machines. Semantic safety remains unqualified.
+`inspect` reports missing baseline data; it does not claim tools or permissions exist.
 """
 from __future__ import annotations
 
-import filecmp
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -107,94 +103,53 @@ def install_user(home: Path, *, run: Runner = default_runner, which: Callable[[s
                               f"PINNED_COMMIT_MISMATCH: {component['upstream_tag']} is {head}, expected {expected}"))
             continue
         steps.append(Step(f'baseline:{component_id}', 'ok', f"{component['pinned']} ({expected[:12]})"))
-    spec_kit = config.get('spec-kit')
-    if spec_kit:
-        if not which('uv'):
-            steps.append(Step('baseline:specify-cli', 'fail', 'uv is required for the Spec Kit CLI; install uv and re-run'))
+    from .baseline_assets import load
+    for component_id in ('superpowers', 'bmad', 'spec-kit'):
+        try:
+            load(component_id, 'claude')
+        except ValueError as exc:
+            steps.append(Step(f'baseline:{component_id}-assets', 'fail', str(exc)))
         else:
-            source = locate(f"https://github.com/{spec_kit['repository']}.git")
-            process = run([which('uv') or 'uv', 'tool', 'install', '--force', 'specify-cli', '--from',
-                           f"git+{source}@{spec_kit['upstream_tag']}"], None)
-            steps.append(Step('baseline:specify-cli', 'ok' if process.returncode == 0 else 'fail',
-                              spec_kit['upstream_tag'] if process.returncode == 0 else _tail(process)))
-    if 'bmad' in config:
-        steps.append(Step('baseline:node', 'ok' if which('npx') else 'fail',
-                          'npx available for the pinned BMAD installer' if which('npx') else
-                          'Node.js (npx) is required for the BMAD installer; install Node.js and re-run'))
+            steps.append(Step(f'baseline:{component_id}-assets', 'ok',
+                              'bound generated assets; no ambient workflow CLI installed or required'))
+
     return steps
-
-
-def _merge_without_overwrite(source: Path, target: Path) -> tuple[list[str], list[str]]:
-    added, conflicts = [], []
-    for path in sorted(source.rglob('*')):
-        relative = path.relative_to(source)
-        if relative.parts and relative.parts[0] == '.git' or path.is_dir() or path.is_symlink():
-            continue
-        destination = target / relative
-        if destination.exists():
-            if not filecmp.cmp(path, destination, shallow=False):
-                conflicts.append(relative.as_posix())
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-        added.append(relative.as_posix())
-    return added, conflicts
-
-
-def _staged_install(component_id: str, command: list[str], project: Path, run: Runner, marker: str) -> Step:
-    if (project / marker).exists():
-        return Step(f'project:{component_id}', 'ok', f'{marker} already present; left as it is')
-    with tempfile.TemporaryDirectory(prefix=f'getzilla-{component_id}-') as tmp:
-        stage = Path(tmp)
-        process = run([part.replace('{stage}', str(stage)) for part in command], stage)
-        if process.returncode != 0:
-            return Step(f'project:{component_id}', 'fail', _tail(process))
-        if not (stage / marker).exists():
-            return Step(f'project:{component_id}', 'fail', f'installer did not create {marker}')
-        added, conflicts = _merge_without_overwrite(stage, project)
-    detail = f'{len(added)} files added'
-    if conflicts:
-        detail += f'; {len(conflicts)} existing files kept (not overwritten): {", ".join(conflicts[:5])}'
-    return Step(f'project:{component_id}', 'ok', detail)
 
 
 def apply_project(project: Path, agent: str, home: Path, *, run: Runner = default_runner,
                   config: Mapping[str, Mapping[str, Any]] | None = None, windows: bool = os.name == 'nt') -> list[Step]:
-    """Wire the pinned baseline into one project for one agent; never overwrites an existing file."""
+    """Validate the whole pinned asset batch, then copy data without running upstream tools.
+
+    Existing BMAD/Spec Kit directories remain untouched. Imported skill prose is
+    not semantic approval and never grants tool, network or secret permissions.
+    """
+    from .baseline_assets import load, materialize, preflight_destination
     if agent not in AGENTS:
         return [Step('project:agent', 'fail', f'unknown agent {agent!r}; expected one of {", ".join(AGENTS)}')]
     config = config or components()
-    steps: list[Step] = []
-    source = pinned_checkout(home) / 'superpowers' / 'skills'
-    if not source.is_dir():
-        steps.append(Step('project:superpowers', 'fail', 'pinned Superpowers is not installed; run getzilla_update.py --only baseline'))
-    else:
-        license_file = pinned_checkout(home) / 'superpowers' / 'LICENSE'
-        targets = [SKILL_SOURCE] + ([AGENT_SKILL_DIRS[agent]] if agent in AGENT_SKILL_DIRS else [])
-        added = conflicts = 0
-        for skill in sorted(path for path in source.iterdir() if path.is_dir()):
-            for directory in dict.fromkeys(targets):
-                destination = project / directory / skill.name
-                new, kept = _merge_without_overwrite(skill, destination)
-                added += len(new)
-                conflicts += len(kept)
-                if license_file.is_file() and not (destination / 'LICENSE').exists():
-                    shutil.copy2(license_file, destination / 'LICENSE')
-        if agent == 'copilot':
-            steps.append(Step('project:superpowers', 'ok', f'{added} skill files in {SKILL_SOURCE}; Copilot also needs '
-                              '`copilot plugin install superpowers@superpowers-marketplace` (upstream marketplace, not pinned)'))
-        else:
-            steps.append(Step('project:superpowers', 'ok', f"{config['superpowers']['pinned']}: {added} files added, "
-                              f'{conflicts} existing kept'))
-    bmad = config['bmad']
-    tool = bmad['install']['tools'][agent]
-    steps.append(_staged_install('bmad', ['npx', '--yes', f"bmad-method@{bmad['pinned']}", 'install', '--directory',
-                                          '{stage}', '--tools', tool, '--yes'], project, run, '_bmad'))
-    spec = config['spec-kit']
-    integration = spec['install']['integrations'][agent]
-    steps.append(_staged_install('spec-kit', ['specify', 'init', '--here', '--integration', integration, '--non-interactive',
-                                              '--ignore-agent-tools', '--script', 'ps' if windows else 'sh'],
-                                 project, run, '.specify'))
+    prepared = []
+    try:
+        for component_id in ('superpowers', 'bmad', 'spec-kit'):
+            spec = config[component_id]
+            if _head(run, pinned_checkout(home) / component_id) != spec['pinned_commit']:
+                raise ValueError('PINNED_COMMIT_MISMATCH:' + component_id)
+            payload = load(component_id, agent, windows=windows)
+            if spec.get('asset_inputs', {}).get('source_commit') != spec['pinned_commit']:
+                raise ValueError('ASSET_SOURCE_BINDING_MISMATCH:' + component_id)
+            preflight_destination(project, payload)
+            prepared.append(payload)
+    except (ValueError, KeyError, OSError) as exc:
+        return [Step('project:preflight', 'fail', 'NEEDS_REVIEW:' + str(exc)[:200])]
+    steps = []
+    for payload in prepared:
+        try:
+            result = materialize(project, payload)
+        except (ValueError, OSError) as exc:
+            steps.append(Step('project:' + payload.component, 'fail', str(exc)[:200]))
+            break
+        detail = (f"{result['marker']} already present; left as it is; byte custody unqualified" if result['status'] == 'preserved'
+                  else f"{result['added']} bound asset files added; semantic safety unqualified; no native execution")
+        steps.append(Step('project:' + payload.component, 'ok', detail))
     return steps
 
 

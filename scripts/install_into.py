@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.skill_inventory import inspect_payload as inspect_skill_payload
 from getzilla.component_state import (
     AGENT_COMPONENT_PATHS as AGENT_COMPONENT_PATHS, KNOWN_AGENTS,
     EXTRA_COMPONENT_PATHS as EXTRA_COMPONENT_PATHS, KNOWN_EXTRAS,
@@ -68,6 +69,7 @@ MANAGED_FILES = (
     "scripts/getzilla_governance.py",
     "scripts/getzilla_history.py",
     "scripts/getzilla_harness.py",
+    "scripts/getzilla_skill_preflight.py",
     "scripts/getzilla_route.py",
     "scripts/getzilla_change.py",
     "scripts/getzilla_spec.py",
@@ -112,6 +114,8 @@ MANAGED_FILES = (
     "schemas/workflow-source-v1.schema.json",
     "schemas/workflow-task-graph-v1.schema.json",
     "schemas/workflow-convergence-report-v1.schema.json",
+    "schemas/skill-preflight.v1.schema.json",
+    "docs/skill-preflight.md",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {
@@ -937,6 +941,7 @@ def _build_full_payload(
         for length in range(1, len(parts)):
             if PurePosixPath(*parts[:length]).as_posix() in seen:
                 raise UnsafeInstallTarget(f"managed file/directory collision: {path}")
+    inspect_skill_payload((entry.path, entry.content) for entry in entries)
     return tuple(entries)
 
 
