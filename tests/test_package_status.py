@@ -663,6 +663,64 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIsNone(result['head'])
             self.assertIsNone(result['commits_ahead'])
 
+    def test_nested_non_git_selection_never_borrows_parent_metadata(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            selected = root/'selected non-git folder'
+            selected.mkdir()
+            module = self.module()
+            with patch.object(module, '_git_read', wraps=module._git_read) as reads:
+                result = module.collect_worktree(selected, {})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['branch'])
+            self.assertIsNone(result['detached'])
+            self.assertIsNone(result['diagnostic_base'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            self.assertEqual(reads.call_count, 1)
+            self.assertIn('git_root_unknown', self.codes(result))
+            real = module.collect_worktree(root, route)
+            self.assertTrue(real['git_available'])
+            self.assertEqual(real['head'], route['base_commit'])
+            self.assertEqual(real['branch'], self.git(root, 'branch', '--show-current'))
+
+    def test_actual_detached_and_linked_worktree_roots_remain_observable(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            self.git(root, 'checkout', '--detach', '-q')
+            result = self.module().collect_worktree(root, route)
+            self.assertTrue(result['detached'])
+            self.assertEqual(result['head'], route['base_commit'])
+            self.assertEqual(result['commits_ahead'], 0)
+            linked = root.parent/'linked root'
+            self.git(root, 'worktree', 'add', '--quiet', '--detach', str(linked), 'HEAD')
+            try:
+                result = self.module().collect_worktree(linked, route)
+                self.assertTrue(result['git_available'])
+                self.assertTrue(result['detached'])
+                self.assertEqual(result['head'], route['base_commit'])
+                self.assertEqual(result['commits_ahead'], 0)
+            finally:
+                self.git(root, 'worktree', 'remove', '--force', str(linked))
+
+    @unittest.skipUnless(os.name == 'posix', 'non-UTF8/newline root paths require POSIX')
+    def test_root_identity_check_preserves_non_utf8_and_special_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            linked = root.parent/os.fsdecode(b'linked-\xff-\n\t-root')
+            subprocess.run(['git', 'worktree', 'add', '--quiet', '--detach', str(linked), 'HEAD'],
+                           cwd=root, capture_output=True, check=True)
+            try:
+                result = self.module().collect_worktree(linked, route)
+                self.assertTrue(result['git_available'], result['findings'])
+                self.assertEqual(result['head'], route['base_commit'])
+                self.assertEqual(result['commits_ahead'], 0)
+            finally:
+                subprocess.run(['git', 'worktree', 'remove', '--force', str(linked)],
+                               cwd=root, capture_output=True, check=True)
+
     def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
         with project_copy(git=True) as root:
             route, _, _, _ = self.prepare(root)
