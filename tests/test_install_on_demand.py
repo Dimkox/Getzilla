@@ -435,7 +435,7 @@ class FreshSelectionTests(unittest.TestCase):
                     subdirectory = target / 'src/deep'
                     subdirectory.mkdir(parents=True)
                     custom_source = b'description = "Consumer-only agent"\ndeveloper_instructions = "Keep this project specific."\n'
-                    (target / '.grok/agents/consumer_only.toml').write_bytes(custom_source)
+                    (target / '.getzilla/agents/consumer_only.toml').write_bytes(custom_source)
                     generated = '.codex/agents/consumer_only.toml'
                     environment = {**os.environ, 'GETZILLA_AGENT': 'qwen'}
                     before = subprocess.run([sys.executable, '-I', str(target / 'scripts/getzilla_harness.py')],
@@ -520,7 +520,7 @@ class FootprintTests(unittest.TestCase):
         self.assertFalse(any(path.startswith(('.claude/', '.codex/', '.gemini/', '.github/agents/')) for path in paths))
         self.assertTrue(any(path.startswith('.qwen/') for path in paths))
         self.assertTrue(any(path.startswith('.agents/skills/') for path in paths))  # one canonical skill source
-        self.assertTrue({'AGENTS.md', '.grok/hooks/pre_tool_use.py'} <= paths)
+        self.assertTrue({'AGENTS.md', '.getzilla/hooks/pre_tool_use.py'} <= paths)
         self.assertLess(len(paths), 400)  # was 672 for every agent plus factory
 
     def test_agents_flag_and_full_layout_do_not_infer_membership_from_folders(self) -> None:

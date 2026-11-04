@@ -141,7 +141,7 @@ class InstallerTests(unittest.TestCase):
                         self.assertFalse(alias.is_symlink())
                         self.assertEqual(alias.read_bytes(), expected_bytes)
                         self.assertEqual(stat.S_IMODE(alias.stat().st_mode), expected_mode)
-                        canonical = root / '.grok/hooks' / name
+                        canonical = root / '.getzilla/hooks' / name
                         canonical.write_text('import json, sys\nfrom pathlib import Path\nprint(json.dumps({"name": Path(sys.argv[0]).name, "payload": json.load(sys.stdin)}))\n')
                         result = subprocess.run([sys.executable, name], cwd=root, input='{"sentinel": 1}', text=True, capture_output=True, timeout=10)
                         self.assertEqual(result.returncode, 0, result.stderr)
@@ -149,7 +149,7 @@ class InstallerTests(unittest.TestCase):
                         canonical.unlink()
                         fallback = subprocess.run([sys.executable, name], cwd=root, input='{}', text=True, capture_output=True, timeout=10)
                         self.assertEqual(fallback.returncode, 0, fallback.stderr)
-                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'allow'} if name == 'pre_tool_use.py' else {})
+                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'deny', 'reason': 'Getzilla canonical policy hook is missing'} if name == 'pre_tool_use.py' else {})
 
     def test_hook_aliases_use_the_inventoried_template_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -38,8 +38,8 @@ class AgentLifecycleTests(unittest.TestCase):
             # policy evaluation and hook output remain real.
             import runpy
             from getzilla import agent_lifecycle
-            with patch.object(sys, 'path', [str(root / '.grok/hooks'), *sys.path]):
-                hook = runpy.run_path(str(root / '.grok/hooks/pre_tool_use.py'))
+            with patch.object(sys, 'path', [str(root / '.getzilla/hooks'), *sys.path]):
+                hook = runpy.run_path(str(root / '.getzilla/hooks/pre_tool_use.py'))
             for failure in (RuntimeError('observer'), TypeError('observer'), AttributeError('observer')):
                 for tool, values in [('Bash', {'command': 'git push origin feature'}),
                                      ('Write', {'file_path': str(root / '.getzilla/getzilla/policy.py'), 'content': 'x'}),

@@ -170,7 +170,7 @@ class ModelContinuationTest(unittest.TestCase):
     def test_six_startup_hooks_without_route_report_policy_once(self):
         shutil.copytree(ROOT / '.getzilla/getzilla', self.root / '.getzilla/getzilla',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-        shutil.copytree(ROOT / '.grok/hooks', self.root / '.grok/hooks',
+        shutil.copytree(ROOT / '.getzilla/hooks', self.root / '.getzilla/hooks',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         for data, state in ((None, 'missing'), ({'schema_version': 1, 'enabled': False}, 'disabled'),
                             (enabled_policy(), 'configured'), ({'secret': 'NEVER_ECHO'}, 'invalid')):
@@ -179,7 +179,7 @@ class ModelContinuationTest(unittest.TestCase):
             for harness in ('grok', 'qwen', 'claude', 'codex', 'gemini', 'copilot'):
                 with self.subTest(state=state, harness=harness):
                     result = subprocess.run(
-                        [sys.executable, str(self.root / '.grok/hooks/session_start.py'), '--harness', harness],
+                        [sys.executable, str(self.root / '.getzilla/hooks/session_start.py'), '--harness', harness],
                         cwd=self.root, input=json.dumps({'cwd': str(self.root)}),
                         capture_output=True, text=True, timeout=15,
                         env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'HOME': str(self.root)})
@@ -224,7 +224,7 @@ class ModelContinuationTest(unittest.TestCase):
         self.assertFalse((target / '.getzilla/getzilla/model_continuation.py').exists())
         self.assertFalse((target / '.claude').exists())
         result = subprocess.run(
-            [sys.executable, str(target / '.grok/hooks/session_start.py'), '--harness', 'codex'],
+            [sys.executable, str(target / '.getzilla/hooks/session_start.py'), '--harness', 'codex'],
             cwd=target, input=json.dumps({'cwd': str(target)}), capture_output=True,
             text=True, timeout=15, env={**os.environ, 'HOME': str(self.root)})
         self.assertEqual(result.returncode, 0, result.stderr)

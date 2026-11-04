@@ -16,13 +16,13 @@ from .component_state import (
 
 HARNESSES = ('qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok')
 CURSOR_OUTPUT = '.cursor/rules/getzilla'
-GENERATED_ROOTS = ('.grok/skills', '.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
-HOOK_SOURCE = '.grok/hooks.json'
-CODEX_HOOK_SOURCE = '.grok/codex-hooks.json'
-AGENT_SOURCE = '.grok/agents'
+GENERATED_ROOTS = ('.grok/skills', '.grok/hooks.json', '.qwen', '.claude', '.codex', '.gemini', '.github/hooks', '.github/agents', CURSOR_OUTPUT)
+HOOK_SOURCE = '.getzilla/config/hooks.json'
+CODEX_HOOK_SOURCE = '.getzilla/config/codex-hooks.json'
+AGENT_SOURCE = '.getzilla/agents'
 SKILL_SOURCE = '.agents/skills'
-CURSOR_SOURCE = '.grok/cursor-rules'
-CURSOR_MARKER = '<!-- Generated from .grok/cursor-rules/'  # marks the files Getzilla owns in .cursor/rules
+CURSOR_SOURCE = '.getzilla/cursor-rules'
+CURSOR_MARKER = '<!-- Generated from .getzilla/cursor-rules/'  # marks the files Getzilla owns in .cursor/rules
 CURSOR_KEYS = frozenset({'description', 'always_apply', 'globs', 'instructions'})
 CURSOR_BUDGET = {True: 4096, False: 8192}  # bytes per always-applied core / per scoped rule
 # Cursor splits `globs` on commas (https://cursor.com/docs/context/rules), so a pattern
@@ -51,7 +51,7 @@ QWEN_READ_ONLY_BLOCK = ('write_file', 'edit')
 COPILOT_READ_ONLY_TOOLS = ('read', 'search', 'shell')
 CLAUDE_READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch')
 LOCAL_FILES = frozenset({'settings.local.json', 'CLAUDE.local.md', '.env'})
-_SCRIPT = re.compile(r'\.grok/hooks/([A-Za-z0-9_]+\.py)')
+_SCRIPT = re.compile(r'\.getzilla/hooks/([A-Za-z0-9_]+\.py)')
 
 
 def _source(binding: BoundRoot | ComponentTransaction, path: str) -> bytes:
@@ -73,7 +73,7 @@ def _events_from_bytes(content: bytes) -> list[tuple[str, str, int]]:
             for hook in group['hooks']:
                 match = _SCRIPT.search(hook['command'])
                 if match is None:
-                    raise ValueError(f'{HOOK_SOURCE}: {event} names no .grok/hooks script')
+                    raise ValueError(f'{HOOK_SOURCE}: {event} names no .getzilla/hooks script')
                 events.append((event, match.group(1), int(hook.get('timeout', 60))))
     return events
 
@@ -113,20 +113,20 @@ def _command(script: str, harness: str) -> str:
 
     The project directory the agent reports (CLAUDE_PROJECT_DIR, QWEN_PROJECT_DIR or
     GEMINI_PROJECT_DIR) wins; otherwise the nearest installed project at cwd or an ancestor is used.
-    An installed project has `.getzilla` and the requested canonical hook, so a
+    An installed project has the engine initializer and the requested canonical hook, so a
     hook-only subdirectory cannot replace its project. A relative path would also fail from a subdirectory with exit code
     2, which Claude-compatible agents treat as a blocking error. The hook learns which
     agent launched it through --harness. Only single quotes are used inside, so the
     same text works in sh, cmd and PowerShell.
     """
-    target = f".grok/hooks/{script}"
+    target = f".getzilla/hooks/{script}"
     code = (
         "import os,pathlib,runpy,sys;"
         f"t='{target}';"
         "p=pathlib.Path;"
         "d=p.cwd();"
         "e=[p(os.environ[k]) for k in ('CLAUDE_PROJECT_DIR','QWEN_PROJECT_DIR','GEMINI_PROJECT_DIR') if os.environ.get(k)];"
-        "f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla').is_dir() and (q/t).is_file());"
+        "f=next(q/t for q in (*e,d,*d.parents) if (q/'.getzilla/getzilla/__init__.py').is_file() and (q/t).is_file());"
         "sys.path.insert(0,str(f.parent));"
         f"sys.argv=[str(f),'--harness','{harness}'];"
         "runpy.run_path(str(f),run_name='__main__')"
@@ -261,11 +261,13 @@ def render(root: Path, *, repository_all: bool = False) -> dict[str, bytes]:
 def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]) -> dict[str, bytes]:
     if not selected:
         return {}
-    execution = bool(set(selected) & {'qwen', 'claude', 'codex', 'gemini', 'copilot'})
+    execution = bool(set(selected) & {'qwen', 'claude', 'codex', 'gemini', 'copilot', 'grok'})
     events = _hook_events(binding) if execution else []
     agents = _agents(binding) if execution else []
     skills = _skills(binding) if set(selected) & {'qwen', 'claude', 'gemini', 'grok'} else {}
     out: dict[str, bytes] = {}
+
+    out['.grok/hooks.json'] = _json({'hooks': _hooks_block(events, harness='grok', milliseconds=False)})
 
     out['.qwen/settings.json'] = _json({
         'context': {'fileName': ['AGENTS.md']},
@@ -308,7 +310,7 @@ def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]
 _GENERATED_PATH = re.compile(
     r'(?:\.(?:qwen|claude|gemini)/settings\.json|\.claude/CLAUDE\.md|'
     r'\.(?:qwen|claude|gemini)/agents/[^/]+\.md|\.codex/agents/[^/]+\.toml|'
-    r'\.codex/(?:hooks\.json|config\.toml)|\.github/hooks/getzilla\.json|'
+    r'\.grok/hooks\.json|\.codex/(?:hooks\.json|config\.toml)|\.github/hooks/getzilla\.json|'
     r'\.github/agents/[^/]+\.agent\.md|\.(?:qwen|claude|gemini|grok)/skills/.+|'
     r'\.cursor/rules/getzilla/[^/]+\.mdc)'
 )

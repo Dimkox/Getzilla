@@ -1198,3 +1198,7 @@ The child interpreter check does not establish controller pidfd support. Check b
 ## 2026-10-29 — Keep model IDs separate from account references
 
 Model IDs are opaque provider identifiers, not filesystem paths; existing OpenRouter entries use `:free`. Validate model IDs separately from provider/account references so safe variant suffixes remain valid without accepting URLs. The regression uses an existing repository model ID.
+
+### 2026-11-04 — Neutral hook root discovery
+
+Require the engine initializer when a launcher selects an installed hook root. After shared hooks move into `.getzilla`, checking only that directory also accepts a planted hook-only subtree; the regression must use the neutral path.

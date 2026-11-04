@@ -1,6 +1,6 @@
 """The Qwen Code, Claude Code and Codex harnesses are generated, never hand-edited.
 
-`.grok/hooks.json`, `.grok/agents/*.toml` and `.agents/skills/` stay canonical;
+`.getzilla/config/hooks.json`, `.getzilla/agents/*.toml` and `.agents/skills/` stay canonical;
 `scripts/getzilla_harness.py --repository-all --write` renders `.qwen/`, `.claude/` and `.codex/`
 from them. These tests fail when the committed copies drift.
 """
@@ -57,9 +57,10 @@ class SelectedHarnessTests(unittest.TestCase):
 
     def qwen(self) -> Path:
         root = self.fixture(('qwen',))
-        (root / '.grok/cursor-rules').mkdir(parents=True)
-        (root / '.grok/cursor-rules/unused.toml').write_text('not valid TOML')
-        (root / '.grok/hooks.json').write_text('{"hooks": {}}')
+        (root / '.getzilla/cursor-rules').mkdir(parents=True)
+        (root / '.getzilla/cursor-rules/unused.toml').write_text('not valid TOML')
+        (root / '.getzilla/config').mkdir(parents=True, exist_ok=True)
+        (root / '.getzilla/config/hooks.json').write_text('{"hooks": {}}')
         (root / '.agents/skills/example').mkdir(parents=True)
         (root / '.agents/skills/example/SKILL.md').write_text('first canonical version\n')
         return root
@@ -259,6 +260,8 @@ class SelectedHarnessTests(unittest.TestCase):
 
     def test_legacy_keep_record_maps_old_generated_skill_names(self) -> None:
         root = self.fixture(('grok',))
+        (root / '.getzilla/config').mkdir()
+        (root / '.getzilla/config/hooks.json').write_text('{"hooks": {}}')
         source = root / '.agents/skills/getzilla-delivery/SKILL.md'
         source.parent.mkdir(parents=True)
         source.write_text('retained canonical version\n')
@@ -281,8 +284,9 @@ class SelectedHarnessTests(unittest.TestCase):
         for scenario in ('missing-config', 'missing-hooks', 'malformed-config', 'disabled-config', 'stale-hooks'):
             with self.subTest(scenario=scenario):
                 root = self.fixture(('codex',))
-                (root / '.grok/agents').mkdir(parents=True)
-                (root / '.grok/hooks.json').write_text('{"hooks":{}}')
+                (root / '.getzilla/agents').mkdir(parents=True)
+                (root / '.getzilla/config').mkdir()
+                (root / '.getzilla/config/hooks.json').write_text('{"hooks":{}}')
                 write(root)
                 kept = hooks_path if scenario in ('missing-hooks', 'stale-hooks') else config_path
                 original = (root / kept).read_bytes()
@@ -293,15 +297,15 @@ class SelectedHarnessTests(unittest.TestCase):
                 elif scenario == 'disabled-config':
                     (root / kept).write_text('[features]\ncodex_hooks = false\n')
                 else:
-                    (root / '.grok/hooks.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{
-                        'command': 'python3 .grok/hooks/stop_gate.py', 'timeout': 10,
+                    (root / '.getzilla/config/hooks.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{
+                        'command': 'python3 .getzilla/hooks/stop_gate.py', 'timeout': 10,
                     }]}]}}))
                 preserved = (root / kept).read_bytes() if (root / kept).exists() else None
                 (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
                     'schema_version': 1, 'kept_local': [kept],
                     'kept_local_sha256': {kept: hashlib.sha256(preserved if preserved is not None else original).hexdigest()},
                 }))
-                (root / '.grok/agents/new.toml').write_text('description="new"\ndeveloper_instructions="new"\n')
+                (root / '.getzilla/agents/new.toml').write_text('description="new"\ndeveloper_instructions="new"\n')
                 manifest_before = (root / '.getzilla/managed-components.json').read_bytes()
                 with self.assertRaisesRegex(ValueError, 'conflict'):
                     write(root)
@@ -311,8 +315,8 @@ class SelectedHarnessTests(unittest.TestCase):
 
     def test_coherent_kept_codex_pair_stays_unchanged_without_owned_proofs(self) -> None:
         root = self.fixture(('codex',))
-        (root / '.grok').mkdir()
-        (root / '.grok/hooks.json').write_text('{"hooks":{}}')
+        (root / '.getzilla/config').mkdir(parents=True, exist_ok=True)
+        (root / '.getzilla/config/hooks.json').write_text('{"hooks":{}}')
         write(root)
         paths = ('.codex/config.toml', '.codex/hooks.json')
         before = {path: (root / path).read_bytes() for path in paths}
@@ -330,13 +334,13 @@ class HarnessTests(unittest.TestCase):
     def test_codex_overlay_survives_regeneration_without_replacing_guards(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            shutil.copytree(ROOT / '.grok', root / '.grok')
+            shutil.copytree(ROOT / '.getzilla', root / '.getzilla', ignore=shutil.ignore_patterns('runtime', '__pycache__'))
             _select(root)
             overlay = {'hooks': {
                 'Stop': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex stop', 'timeout': 30}]}],
                 'SessionEnd': [{'hooks': [{'type': 'command', 'command': 'entire hooks codex session-end', 'timeout': 3}]}],
             }}
-            (root / '.grok/codex-hooks.json').write_text(json.dumps(overlay), encoding='utf-8')
+            (root / '.getzilla/config/codex-hooks.json').write_text(json.dumps(overlay), encoding='utf-8')
             outputs = render(root)
             hooks = json.loads(outputs['.codex/hooks.json'])['hooks']
             self.assertEqual(set(hooks), set(CODEX_HOOK_EVENTS) | {'SessionEnd'})
@@ -349,14 +353,14 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(drift(root), [])
             write(root)
             self.assertEqual((root / '.codex/hooks.json').read_bytes(), outputs['.codex/hooks.json'])
-            (root / '.grok/codex-hooks.json').unlink()
+            (root / '.getzilla/config/codex-hooks.json').unlink()
             baseline = json.loads(render(root)['.codex/hooks.json'])['hooks']
             self.assertEqual(set(baseline), set(CODEX_HOOK_EVENTS))
             self.assertNotIn('entire', json.dumps(baseline))
 
     @unittest.skipIf(os.name == 'nt', 'Entire shell hooks require POSIX sh')
     def test_entire_missing_cli_is_nonblocking(self):
-        overlay = json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']
+        overlay = json.loads((ROOT / '.getzilla/config/codex-hooks.json').read_text())['hooks']
         shell = shutil.which('sh')
         self.assertIsNotNone(shell)
         with tempfile.TemporaryDirectory() as empty_path:
@@ -380,14 +384,14 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
 
     def test_every_harness_runs_every_canonical_hook_script(self) -> None:
-        grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
+        grok = json.loads((ROOT / '.getzilla/config/hooks.json').read_text(encoding='utf-8'))['hooks']
         for rel, events in (
             ('.qwen/settings.json', set(grok)),
             ('.claude/settings.json', set(grok)),
             ('.codex/hooks.json', set(CODEX_HOOK_EVENTS)),
         ):
             hooks = json.loads((ROOT / rel).read_text(encoding='utf-8'))['hooks']
-            extra = set(json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']) if rel == '.codex/hooks.json' else set()
+            extra = set(json.loads((ROOT / '.getzilla/config/codex-hooks.json').read_text())['hooks']) if rel == '.codex/hooks.json' else set()
             self.assertEqual(set(hooks), events | extra, rel)
             for event in events:
                 command = hooks[event][0]['hooks'][0]['command']
@@ -398,7 +402,7 @@ class HarnessTests(unittest.TestCase):
     def test_entire_is_codex_only_and_each_hook_runs_once(self):
         expected = {'SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop',
                     'SessionEnd', 'SubagentStart', 'SubagentStop'}
-        overlay = json.loads((ROOT / '.grok/codex-hooks.json').read_text())['hooks']
+        overlay = json.loads((ROOT / '.getzilla/config/codex-hooks.json').read_text())['hooks']
         self.assertEqual(set(overlay), expected)
         outputs = render(ROOT)
         codex = json.loads(outputs['.codex/hooks.json'])['hooks']
@@ -412,7 +416,7 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(not cursor.exists() or 'entire' not in cursor.read_text())
 
     def test_gemini_and_copilot_hooks_use_their_own_event_names(self) -> None:
-        grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
+        grok = json.loads((ROOT / '.getzilla/config/hooks.json').read_text(encoding='utf-8'))['hooks']
         gemini = json.loads((ROOT / '.gemini/settings.json').read_text(encoding='utf-8'))
         self.assertEqual(gemini['context']['fileName'], ['AGENTS.md'])
         self.assertEqual(set(gemini['hooks']), {GEMINI_EVENTS[event] for event in grok if event in GEMINI_EVENTS})
@@ -428,7 +432,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(pre['timeoutSec'], grok['PreToolUse'][0]['hooks'][0]['timeout'])
 
     def test_qwen_timeouts_are_milliseconds_and_others_seconds(self) -> None:
-        grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
+        grok = json.loads((ROOT / '.getzilla/config/hooks.json').read_text(encoding='utf-8'))['hooks']
         qwen = json.loads((ROOT / '.qwen/settings.json').read_text(encoding='utf-8'))['hooks']
         claude = json.loads((ROOT / '.claude/settings.json').read_text(encoding='utf-8'))['hooks']
         seconds = grok['Stop'][0]['hooks'][0]['timeout']
@@ -436,7 +440,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(claude['Stop'][0]['hooks'][0]['timeout'], seconds)
 
     def test_read_only_agents_cannot_write_in_any_harness(self) -> None:
-        for path in sorted((ROOT / '.grok/agents').glob('*.toml')):
+        for path in sorted((ROOT / '.getzilla/agents').glob('*.toml')):
             data = tomllib.loads(path.read_text(encoding='utf-8'))
             qwen = (ROOT / '.qwen/agents' / f'{path.stem}.md').read_text(encoding='utf-8')
             claude = (ROOT / '.claude/agents' / f'{path.stem}.md').read_text(encoding='utf-8')
@@ -484,11 +488,13 @@ class CursorRuleTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / 'repo'
-        (root / '.grok/cursor-rules').mkdir(parents=True)
+        (root / '.getzilla/cursor-rules').mkdir(parents=True)
+        (root / '.getzilla/config').mkdir(exist_ok=True)
         _select(root)
-        (root / '.grok/hooks.json').write_text('{"hooks": {}}', encoding='utf-8')
+        (root / '.getzilla/config').mkdir(parents=True, exist_ok=True)
+        (root / '.getzilla/config/hooks.json').write_text('{"hooks": {}}', encoding='utf-8')
         for index, rule in enumerate(rules or (CORE, SCOPED)):
-            (root / f'.grok/cursor-rules/{index}0-rule.toml').write_text(_toml(rule), encoding='utf-8')
+            (root / f'.getzilla/cursor-rules/{index}0-rule.toml').write_text(_toml(rule), encoding='utf-8')
         return root
 
     def frontmatter(self, content: bytes) -> dict[str, str]:
@@ -570,14 +576,14 @@ class CursorRuleTests(unittest.TestCase):
                 render(self.fixture(*rules))
         for name, text in (('duplicate key', _toml(CORE) + 'always_apply = true\n'), ('broken TOML', 'description = ')):
             root = self.fixture()
-            (root / '.grok/cursor-rules/00-rule.toml').write_text(text, encoding='utf-8')
+            (root / '.getzilla/cursor-rules/00-rule.toml').write_text(text, encoding='utf-8')
             with self.subTest(case=name), self.assertRaises(ValueError):
                 render(root)
 
     def test_empty_rule_source_set_is_rejected_and_keeps_generated_rules(self) -> None:
         root = self.fixture()
         write(root)
-        for source in (root / '.grok/cursor-rules').glob('*.toml'):
+        for source in (root / '.getzilla/cursor-rules').glob('*.toml'):
             source.unlink()
         with self.assertRaises(ValueError):
             write(root)
@@ -598,7 +604,7 @@ class CursorRuleTests(unittest.TestCase):
         self.assertIn(b'globs: **/*.py,ruff.toml\n', (root / CURSOR_OUTPUT / '10-rule.mdc').read_bytes())
         self.assertEqual(drift(root), [])
         self.assertEqual(write(root), [])
-        source = root / '.grok/cursor-rules/90-retired.toml'
+        source = root / '.getzilla/cursor-rules/90-retired.toml'
         source.write_text(_toml(SCOPED), encoding='utf-8')
         write(root)
         stale = root / CURSOR_OUTPUT / '90-retired.mdc'
@@ -666,11 +672,11 @@ class CursorRuleTests(unittest.TestCase):
         canonical = root / '.agents/skills/example/SKILL.md'
         canonical.parent.mkdir(parents=True)
         canonical.write_text('canonical skill')
-        agent = root / '.grok/agents/owner.toml'
+        agent = root / '.getzilla/agents/owner.toml'
         agent.parent.mkdir(parents=True)
-        agent_bytes = (ROOT / '.grok/agents/general_implementer.toml').read_bytes()
+        agent_bytes = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
         agent.write_bytes(agent_bytes)
-        hooks = (root / '.grok/hooks.json').read_bytes()
+        hooks = (root / '.getzilla/config/hooks.json').read_bytes()
         write(root)
         mirror = root / '.grok/skills/example/SKILL.md'
         canonical.write_text('updated canonical skill')
@@ -684,7 +690,7 @@ class CursorRuleTests(unittest.TestCase):
         write(root)
         self.assertFalse(mirror.exists())
         self.assertEqual(retired.read_text(), 'user file')
-        self.assertEqual((root / '.grok/hooks.json').read_bytes(), hooks)
+        self.assertEqual((root / '.getzilla/config/hooks.json').read_bytes(), hooks)
         self.assertEqual(agent.read_bytes(), agent_bytes)
 
     def test_write_preserves_unowned_empty_directories(self) -> None:
@@ -757,7 +763,7 @@ class CursorRuleTests(unittest.TestCase):
     def test_failed_replace_leaves_no_temp_file(self) -> None:
         root = self.fixture()
         write(root)
-        (root / '.grok/cursor-rules/00-rule.toml').write_text(_toml({**CORE, 'instructions': '- Changed.'}))
+        (root / '.getzilla/cursor-rules/00-rule.toml').write_text(_toml({**CORE, 'instructions': '- Changed.'}))
         with mock.patch.object(harnesses.fsx, 'replace_at', side_effect=OSError('disk full')), \
                 self.assertRaisesRegex(ValueError, 'incomplete'):
             write(root)
@@ -809,7 +815,7 @@ class CursorRuleTests(unittest.TestCase):
         self.assertFalse((root / '.cursor').exists())
         self.assertEqual(run('--write').returncode, 0)
         self.assertEqual(run().returncode, 0)
-        (root / '.grok/cursor-rules/10-rule.toml').write_text('globs = ["a,b"]', encoding='utf-8')
+        (root / '.getzilla/cursor-rules/10-rule.toml').write_text('globs = ["a,b"]', encoding='utf-8')
         for args in ((), ('--write',)):
             result = run(*args)
             self.assertEqual(result.returncode, 2, result.stderr)

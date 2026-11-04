@@ -7,7 +7,7 @@
    `getzilla-update-<version>`, which is then checked out. The commit is built in a private Git
    index. A failure before branch publication leaves product files unchanged; a later failure
    reports the retained branch or incomplete checkout. The project must be a clean Git
-   work tree with committed v2 adapter selection. Nothing is pushed, nothing is deleted without --retire-legacy, and an up-to-date
+   work tree with committed v2 adapter selection. Nothing is pushed. Superseded common hooks retire only with matching ownership proofs; --retire-legacy controls earlier engine files. An up-to-date
    project gets no branch. Paths the
    project keeps (`.getzilla/AGBP_SYNC.json`) are left alone; in AGENTS.md only the managed block
    is replaced. The project's own ruff.toml, bandit.yaml and .coveragerc stay; --retire-legacy also removes
@@ -292,17 +292,32 @@ def planned_changes(installer, home: Path, project: Path,
             raise installer.UnsafeInstallTarget(str(exc)) from exc
         for record in manifest['components'].values():
             record.get('owned', {}).pop(path, None)
-    retained_overlay = binding.read('.grok/codex-hooks.json')
+    # Never silently deactivate a customized canonical legacy guard. Unknown
+    # extra hooks stay; a customization of a replaced entrypoint needs review.
+    for path in sorted(by_path):
+        if not path.startswith('.getzilla/hooks/') or not path.endswith('.py'):
+            continue
+        legacy_path = '.grok/hooks/' + path.removeprefix('.getzilla/hooks/')
+        current = binding.read(legacy_path)
+        if observations is not None:
+            observations[legacy_path] = current
+        if current is not None and (legacy_path in kept or not matches_owned(current, owned_proof(state.manifest, legacy_path))):
+            raise UpdateError(f'custom legacy hook must be reconciled before neutral migration: {legacy_path}')
+    retained_overlay = binding.read('.getzilla/config/codex-hooks.json')
+    legacy_overlay = binding.read('.grok/codex-hooks.json') if retained_overlay is None else None
     if observations is not None:
-        observations['.grok/codex-hooks.json'] = retained_overlay
-    incoming_overlay = by_path.get('.grok/codex-hooks.json')
+        observations['.getzilla/config/codex-hooks.json'] = retained_overlay
+        if retained_overlay is None:
+            observations['.grok/codex-hooks.json'] = legacy_overlay
+    consumer_overlay = retained_overlay or legacy_overlay
+    incoming_overlay = by_path.get('.getzilla/config/codex-hooks.json')
     codex_hooks = None
     retained_config = None
     if 'codex' in selected:
-        canonical = by_path.get('.grok/hooks.json')
+        canonical = by_path.get('.getzilla/config/hooks.json')
         if canonical is None or '.codex/config.toml' not in by_path or '.codex/hooks.json' not in by_path:
             raise UpdateError('incoming Codex activation unit is incomplete')
-        overlay = retained_overlay.content if retained_overlay else incoming_overlay.content if incoming_overlay else None
+        overlay = consumer_overlay.content if consumer_overlay else incoming_overlay.content if incoming_overlay else None
         codex_hooks = render_codex_hooks(canonical.content, overlay)
         existing_config = binding.read('.codex/config.toml')
         if observations is not None:
@@ -334,8 +349,10 @@ def planned_changes(installer, home: Path, project: Path,
         if observations is not None:
             observations[entry.path] = current
         content = entry.content
-        if entry.path == '.grok/codex-hooks.json' and retained_overlay is not None:
+        if entry.path == '.getzilla/config/codex-hooks.json' and retained_overlay is not None:
             continue  # shared consumer input is never replaced by the source default
+        if entry.path == '.getzilla/config/codex-hooks.json' and legacy_overlay is not None:
+            content = legacy_overlay.content
         if entry.path == '.codex/config.toml' and retained_config is not None:
             continue
         if entry.path == '.codex/hooks.json' and codex_hooks is not None:
@@ -353,9 +370,50 @@ def planned_changes(installer, home: Path, project: Path,
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
                 and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
-        record_owned(manifest, entry.path, content, entry.mode)
+        if entry.path != '.getzilla/config/codex-hooks.json' or content == entry.content:
+            record_owned(manifest, entry.path, content, entry.mode)
+        else:
+            record = manifest['components'].setdefault('core', {'files': [], 'owned': {}})
+            record['files'] = sorted(set(record['files']) | {entry.path})
+        # A migrated custom overlay remains a consumer input, without an ownership claim.
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
             changes.append((entry.path, content, mode))
+    legacy_dependencies = False
+    for config_path in ('.grok/hooks.json', '.grok/hooks/adaptive.json', '.claude/settings.json',
+                        '.qwen/settings.json', '.codex/hooks.json', '.gemini/settings.json',
+                        '.github/hooks/getzilla.json'):
+        if config_path in by_path:
+            continue
+        current = binding.read(config_path)
+        if observations is not None:
+            observations[config_path] = current
+        if current is None:
+            continue
+        if (config_path not in kept and neutral_source_path(config_path) in by_path
+                and matches_owned(current, owned_proof(state.manifest, config_path))):
+            continue  # This declaration retires in the same commit.
+        if b'.grok' in current.content and b'hooks' in current.content:
+            legacy_dependencies = True
+    # Publish neutral replacements and retire old sources in the same Git commit.
+    # A path alone never proves ownership; changed, kept and unknown files stay.
+    for record in manifest['components'].values():
+        for path, proof in list(record.get('owned', {}).items()):
+            replacement = neutral_source_path(path)
+            if path in by_path or path in kept or replacement is None:
+                continue
+            if legacy_dependencies and path.startswith('.grok/hooks/'):
+                continue  # A preserved adapter still uses this compatibility engine.
+            if replacement not in by_path and path != '.grok/config.toml':
+                continue
+            current = binding.read(path)
+            if observations is not None:
+                observations[path] = current
+            if current is not None and not matches_owned(current, proof):
+                continue
+            if current is not None:
+                changes.append((path, None, ''))
+            del record['owned'][path]
+            record['files'].remove(path)
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
     try:
         validate_manifest_publication(binding.read(MANIFEST), encoded, kept, kept_digests)
@@ -364,6 +422,21 @@ def planned_changes(installer, home: Path, project: Path,
     if encoded is not None:
         changes.append((MANIFEST, encoded, '100644'))
     return changes
+
+
+def neutral_source_path(path: str) -> str | None:
+    if path in {'.grok/hooks.json', '.grok/hooks/adaptive.json'}:
+        return '.getzilla/config/hooks.json'
+    if path == '.grok/codex-hooks.json':
+        return '.getzilla/config/codex-hooks.json'
+    if path == '.grok/config.toml':
+        return path  # old Core owned this adapter file even without selecting Grok
+    for old, new, suffix in (('.grok/hooks/', '.getzilla/hooks/', ('.py', 'README.md')),
+                             ('.grok/agents/', '.getzilla/agents/', ('.toml',)),
+                             ('.grok/cursor-rules/', '.getzilla/cursor-rules/', ('.toml',))):
+        if path.startswith(old) and '/' not in path[len(old):] and path.endswith(suffix):
+            return new + path[len(old):]
+    return None
 
 
 def version_of(home: Path) -> str:
@@ -531,7 +604,7 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 component.get('owned', {}).pop(path, None)
                 if path in component['files']:
                     component['files'].remove(path)
-        else:
+        elif path != '.getzilla/config/codex-hooks.json' or owned_proof(pending_manifest, path):
             record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
     changes = permitted
     encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None

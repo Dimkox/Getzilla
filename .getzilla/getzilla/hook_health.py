@@ -1,6 +1,6 @@
 """Hook health: fail-open hooks keep the agent working, but every time they do it is recorded.
 
-`.grok/hooks/_lib.record_degraded` appends a `HOOK_DEGRADED` event to
+`.getzilla/hooks/_lib.record_degraded` appends a `HOOK_DEGRADED` event to
 `.getzilla/runtime/hook-events.jsonl` whenever a hook lets an action through because its own code
 failed (policy not importable, an exception inside the hook). The stop gate shows the count,
 verify records it in the receipt, and a high-risk change does not pass pr/release while its route

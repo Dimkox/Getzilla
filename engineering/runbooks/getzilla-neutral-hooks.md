@@ -1,0 +1,15 @@
+# Neutral hook sources
+
+Getzilla stores shared executable hooks in `.getzilla/hooks/`. The event source is `.getzilla/config/hooks.json`. The optional Codex consumer overlay is `.getzilla/config/codex-hooks.json`. Canonical agent TOML files live in `.getzilla/agents/`; Cursor rules live in `.getzilla/cursor-rules/`. `.agents/skills/` remains the skill source.
+
+`python3 scripts/getzilla_harness.py --repository-all --write` regenerates source-checkout adapters. Installed projects regenerate only their explicit selected adapters. `.grok/` contains Grok Build configuration, hook declarations, agent Markdown briefs and skill copies. Other clients do not need this directory. The neutral hook path has the same directory depth as its predecessor, so root discovery and route/session/grant identity remain unchanged.
+
+An update creates one new branch and one commit containing the neutral sources, new launchers and manifest. It copies an old Codex overlay if the neutral overlay does not exist. Existing neutral overlays take precedence. Custom overlays remain consumer inputs without new ownership claims. Generated guards precede the retained Entire/user overlay.
+
+Old shared source files retire only when the ledger records their exact current bytes and mode. Changed files, unknown files and declared local overrides stay. A customized canonical legacy hook stops migration before publication, so the update cannot silently deactivate its behavior. Reconcile that customization before retrying. An old manifest without proofs cannot authorize deletion. Legacy ownership classifications remain readable. A selected Grok adapter receives its new neutral launcher in the same commit. Preserved unselected adapter declarations that still reference legacy hooks keep their verified legacy hook dependencies. Custom adapter conflicts stop the update before branch publication.
+
+Rollback uses the update commit's original parent: return to the original branch before merging the update. This restores old sources and their manifest together. After integration, revert the whole update commit through the normal PR checks. Do not restore only a hook declaration or only its scripts.
+
+Package checks cover the source archive and the lean engine archive. The shared hooks remain ordinary files beside the engine archive so launchers work from subdirectories. Linux runs locally; native Windows and macOS checks run through the existing required CI jobs. Their smoke commands use the neutral paths. There is no consumer uninstall command in this version; the ownership ledger is the file inventory for a later removal operation. Do not recursively remove `.grok` during migration or removal.
+
+Historical rename scripts and hash-bound evidence retain their original paths. Provider names and deployed infrastructure identities retain their original names.

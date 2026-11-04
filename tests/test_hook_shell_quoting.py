@@ -116,7 +116,7 @@ class ShellQuotingTests(unittest.TestCase):
         entry = next(row for row in ledger['exact'].values() if row['command_sha256'] == digest)
         self.assertEqual(entry['root_failure_sources'], ['command.control-flow'])
         self.assertEqual(entry['command_workdir_sources'], ['command.control-flow', 'workdir'])
-        self.assertEqual(entry['hook_implementation']['hook']['path'], str(self.root / '.grok/hooks/pre_tool_use.py'))
+        self.assertEqual(entry['hook_implementation']['hook']['path'], str(self.root / '.getzilla/hooks/pre_tool_use.py'))
         for source in entry['hook_implementation'].values():
             self.assertRegex(source['sha256'], r'^[0-9a-f]{64}$')
         self.assertNotIn('ledger-private-value', json.dumps(ledger))
