@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -91,7 +92,9 @@ class BatchTests(unittest.TestCase):
                                     workers=2, cwd=directory, runner=runner)
                 self.assertIsNotNone(jobs[0].refused)
                 runner.assert_not_called()
-        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        # Use a real harmless child for the admitted scanner command. The injection
+        # checks execution context without installing or executing a scanner.
+        runner = mock.Mock(side_effect=lambda _command, **kwargs: subprocess.Popen('echo public', **kwargs))
         jobs, _ = run_batch(self.root, ['python3 -m bandit -cpublic.yaml -- example.py'],
                             workers=1, cwd=directory, runner=runner)
         self.assertIsNone(jobs[0].refused)
@@ -129,6 +132,116 @@ class BatchTests(unittest.TestCase):
         self.assertIn('3 passed, 0 failed', ok.stdout)
         bad = subprocess.run([*cli, 'echo a', 'false'], cwd=self.root, capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1, bad.stdout)
+
+    def test_large_combined_output_is_drained_and_quota_loss_is_reported(self) -> None:
+        # Dropping reads after the quota would hang this real producer on a full pipe.
+        script = "import os; os.write(1,b'HEAD'+b'x'*200000); os.write(2,b'y'*200000+b'TAIL'); exit(3)"
+        command = shlex.join([sys.executable, '-c', script])
+        jobs, folder = run_batch(self.root, [command], workers=1, cwd=self.root, log_quota=8192)
+        job = jobs[0]
+        self.assertEqual(job.returncode, 3)
+        self.assertEqual(job.observed_bytes, 400008)
+        self.assertEqual(job.retained_bytes, 8192)
+        self.assertEqual(job.dropped_bytes, 391816)
+        self.assertTrue(job.truncated)
+        data = (folder / '001.log').read_bytes()
+        self.assertEqual(len(data), 8192)
+        self.assertTrue(data.startswith(b'HEAD'))
+        self.assertTrue(data.endswith(b'TAIL'))
+        summary = json.loads((folder / 'summary.json').read_text())
+        self.assertEqual(summary[0]['observed_bytes'], 400008)
+        self.assertFalse(summary[0]['complete_output'])
+
+    def test_preview_and_entire_response_are_utf8_byte_bounded(self) -> None:
+        script = "import os; os.write(1,('€'*10000).encode()); exit(7)"
+        jobs, folder = run_batch(self.root, [shlex.join([sys.executable, '-c', script])],
+                                 workers=1, cwd=self.root)
+        self.assertLessEqual(len(jobs[0].preview.encode('utf-8')), 4096)
+        self.assertNotIn('\ufffd', jobs[0].preview)
+        text = report(self.root, jobs * 40, folder, workers=1, wall=1, show_all=True)
+        self.assertLessEqual(len(text.encode('utf-8')), 32768)
+        self.assertIn('response truncated', text)
+
+    def test_quota_is_shared_across_jobs_and_metadata_envelope_is_bounded(self) -> None:
+        command = shlex.join([sys.executable, '-c', "import os; os.write(1,b'x'*20000)"])
+        jobs, folder = run_batch(self.root, [command] * 10, workers=3, cwd=self.root, log_quota=8193)
+        self.assertEqual(sum(job.retained_bytes for job in jobs), 8193)
+        self.assertEqual(sum(job.dropped_bytes for job in jobs), 191807)
+        self.assertLessEqual((folder / 'summary.json').stat().st_size, 32768)
+        metadata = json.loads((folder / 'summary.json').read_text())
+        self.assertTrue(metadata[-1]['metadata_truncated'])
+
+    def test_credential_label_withholds_preview(self) -> None:
+        jobs, folder = run_batch(self.root, ['echo password=synthetic-fixture; exit 1'], workers=1, cwd=self.root)
+        text = report(self.root, jobs, folder, workers=1, wall=0)
+        self.assertNotIn('synthetic-fixture', text)
+        self.assertNotIn('synthetic-fixture', (folder / 'summary.json').read_text())
+        self.assertIn('preview withheld', text)
+
+    def test_report_does_not_reopen_logs_or_echo_command_secrets(self) -> None:
+        command = "echo visible; password=do-not-print-command; exit 2"
+        jobs, folder = run_batch(self.root, [command], workers=1, cwd=self.root)
+        jobs[0].log.unlink()
+        jobs[0].log.symlink_to('/does/not/exist')
+        text = report(self.root, jobs, folder, workers=1, wall=0)
+        self.assertIn('visible', text)
+        self.assertNotIn('do-not-print-command', text)
+        self.assertNotIn('do-not-print-command', (folder / 'summary.json').read_text())
+
+    def test_symlink_log_parent_is_refused_before_execution(self) -> None:
+        outside = self.root / 'outside'
+        outside.mkdir()
+        runtime = self.root / '.getzilla/runtime'
+        runtime.mkdir(parents=True)
+        (runtime / 'par').symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(OSError):
+            run_batch(self.root, ['touch marker'], workers=1, cwd=self.root)
+        self.assertFalse((self.root / 'marker').exists())
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_write_failure_still_drains_and_reports_missing_artifact(self) -> None:
+        create = parallel._create_log
+
+        def fail_log(directory, name):
+            if name.endswith('.log'):
+                raise OSError(28, 'synthetic disk full')
+            return create(directory, name)
+
+        command = shlex.join([sys.executable, '-c', "import os; os.write(1,b'x'*200000)"])
+        with mock.patch.object(parallel, '_create_log', side_effect=fail_log):
+            jobs, folder = run_batch(self.root, [command], workers=1, cwd=self.root)
+        self.assertEqual(jobs[0].returncode, 0)
+        self.assertEqual(jobs[0].observed_bytes, 200000)
+        self.assertEqual(jobs[0].retained_bytes, 0)
+        self.assertEqual(jobs[0].dropped_bytes, 200000)
+        self.assertIn('errno=28', jobs[0].log_error)
+        self.assertIn('complete_output=false', report(self.root, jobs, folder, workers=1, wall=0))
+
+    def test_timeout_kills_descendants_which_hold_the_output_pipe(self) -> None:
+        script = "import subprocess,time; subprocess.Popen(['sleep','20']); time.sleep(20)"
+        started = time.monotonic()
+        jobs, _ = run_batch(self.root, [shlex.join([sys.executable, '-c', script])],
+                            workers=1, cwd=self.root, timeout=0.15)
+        self.assertEqual(jobs[0].returncode, 124)
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_replaced_log_directory_cannot_redirect_writes(self) -> None:
+        outside = self.root / 'outside'
+        outside.mkdir()
+        create = parallel._create_log
+
+        def replace_before_write(directory, name):
+            if name == '001.log':
+                folder = next((self.root / parallel.LOGS).iterdir())
+                folder.rename(folder.with_name('moved'))
+                folder.symlink_to(outside, target_is_directory=True)
+            return create(directory, name)
+
+        with mock.patch.object(parallel, '_create_log', side_effect=replace_before_write):
+            jobs, folder = run_batch(self.root, ['echo own-output'], workers=1, cwd=self.root)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertIn('namespace changed', jobs[0].log_error)
+        self.assertIn('own-output', report(self.root, jobs, folder, workers=1, wall=0, show_all=True))
 
 
 class SerialTests(unittest.TestCase):
