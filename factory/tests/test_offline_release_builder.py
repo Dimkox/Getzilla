@@ -54,7 +54,8 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         lock = self.repo / "factory/uv.lock"
         lock.write_text(
             'version = 1\nrevision = 3\nrequires-python = ">=3.12,<3.13"\n\n'
-            '[[package]]\nname = "getzilla-factory"\nversion = "1.2.3"\n\n'
+            '[[package]]\nname = "getzilla-factory"\nversion = "1.2.3"\n'
+            'dependencies = [{ name = "demo" }]\n\n'
             '[[package]]\nname = "demo"\nversion = "1.0.0"\n'
             f'wheels = [{{ url = "https://invalid.example/{wheel.name}", '
             f'hash = "sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}", size = {wheel.stat().st_size} }}]\n'

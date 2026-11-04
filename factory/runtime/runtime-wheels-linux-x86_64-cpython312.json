@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "5b52c4db6fc07fdd06639f614ea47dbff4c94f99a209ccdeb0aae174208c5a0a",
+  "lock_sha256": "e6d5f3f021055951d5273d323051953fb2314a2b2a011d01cf59fa33f08ac929",
   "profile": "ubuntu-24.04-x86_64-cpython312",
   "schema_version": "factory-runtime-wheels/v1",
   "wheels": [

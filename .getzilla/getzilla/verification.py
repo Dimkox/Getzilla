@@ -2004,21 +2004,27 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
 
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
-    factory_modules = [
-        f'factory.tests.test_{name}'
-        for name in ('contracts', 'state', 'migrations', 'service')
-        if (factory_tests / f'test_{name}.py').is_file()
-    ]
-    if (root / 'factory' / 'pyproject.toml').is_file() and factory_modules:
-        return [
-            _command_check(
-                root,
-                'factory-unit',
-                [sys.executable, '-m', 'unittest', *factory_modules],
-                300,
-            )
-        ]
-    return []
+    if not ((root / 'factory/pyproject.toml').is_file() and factory_tests.is_dir()):
+        return []
+    with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
+        report = Path(temporary) / 'results.json'
+        result = _command_check(
+            root, 'factory-unit',
+            [sys.executable, str(Path(__file__).with_name('factory_tests.py')),
+             '--root', str(root), '--report', str(report)], 300,
+        )
+        try:
+            if report.stat().st_size > 4 * 1024 * 1024:
+                raise ValueError('Factory result exceeds evidence bound')
+            evidence = json.loads(report.read_text(encoding='utf-8'))
+            if (evidence.get('schema_version') != 1 or evidence.get('check_id') != 'factory-unit'
+                    or evidence.get('status') != result.status):
+                raise ValueError('Factory result does not match subprocess outcome')
+            result.details.append(evidence)
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            result.status = 'fail'
+            result.summary += '; Factory result missing or invalid: ' + str(exc)
+        return [result]
 
 
 def _focused_python(
@@ -2098,9 +2104,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
 
 
 def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
-    if (root / 'factory/pyproject.toml').is_file() and any(
-        (root / f'factory/tests/test_{name}.py').is_file() for name in ('contracts', 'state', 'migrations', 'service')
-    ):
+    if (root / 'factory/pyproject.toml').is_file() and (root / 'factory/tests').is_dir():
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
@@ -2143,9 +2147,9 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # An installed project runs source and unit checks only: the factory's container/database exit
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
+    _dispatch_factory_unit(root, dispatch)
     if uses_pytest_runner:
         return results
-    _dispatch_factory_unit(root, dispatch)
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
