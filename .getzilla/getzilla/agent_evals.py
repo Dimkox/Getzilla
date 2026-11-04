@@ -460,6 +460,18 @@ def _report(report, *, passing=False):
                      and assertion['id'] not in assertions and isinstance(assertion.get('status'), str)
                      and assertion['status'] in STATUSES and _sha(assertion.get('assertion_digest')), 'result_assertion_schema')
             assertions.add(assertion['id'])
+        # A grading error or exhausted budget can interrupt a case after its
+        # assertions ran. Successful/completed verdicts must match those facts.
+        if case['assertions']:
+            _require(case['status'] in {'invalid', 'timeout'}
+                     or case['status'] == _aggregate({a['status'] for a in case['assertions']}),
+                     'result_case_verdict')
+        else:
+            _require(case['status'] not in {'pass', 'fail'}, 'result_case_verdict')
+    # Outer input failures and report-size refusals can have no complete cohort.
+    _require((value['status'] == 'invalid' and isinstance(value.get('reason'), str))
+             or (value['cases'] and value['status'] == _aggregate({c['status'] for c in value['cases']})),
+             'result_overall_verdict')
     if passing:
         _require(value['status'] == 'pass' and value['cases']
                  and all(c['status'] == 'pass' and c['assertions']

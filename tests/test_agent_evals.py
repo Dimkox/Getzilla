@@ -85,6 +85,68 @@ class AgentEvalTests(unittest.TestCase):
         self.assertEqual(result['status'], 'regression')
         self.assertEqual(result['pairs'][0]['regressed_assertions'], ['must-deny'])
 
+    @unittest.skipUnless(os.name == 'posix', 'baseline transactions require descriptor-relative operations')
+    def test_rehashed_verdict_labels_cannot_hide_failing_assertions(self):
+        from getzilla.agent_evals import digest
+        control = self.run_eval()
+        accept_baseline(self.baseline, control, reason='control passed', scope='synthetic safety')
+        before = self.baseline.read_bytes()
+        self.refresh('allow')
+        failing = self.run_eval()
+        self.assertEqual(compare(failing, self.baseline)['status'], 'regression')
+        for mutation in ('overall-pass', 'case-pass', 'both-pass', 'overall-fail-on-pass', 'case-fail-on-pass'):
+            with self.subTest(mutation=mutation):
+                candidate = deepcopy(control if mutation.endswith('on-pass') else failing)
+                canonical = candidate['canonical']
+                if mutation in {'overall-pass', 'both-pass'}:
+                    canonical['status'] = 'pass'
+                if mutation in {'case-pass', 'both-pass'}:
+                    canonical['cases'][0]['status'] = 'pass'
+                if mutation == 'overall-fail-on-pass':
+                    canonical['status'] = 'fail'
+                if mutation == 'case-fail-on-pass':
+                    canonical['cases'][0]['status'] = 'fail'
+                candidate['result_digest'] = digest(canonical)
+                with self.assertRaises(EvalError):
+                    compare(candidate, self.baseline)
+                with self.assertRaises(EvalError):
+                    accept_baseline(self.baseline, candidate, reason='contradictory', scope='offline')
+                self.assertEqual(self.baseline.read_bytes(), before)
+
+    @unittest.skipUnless(os.name == 'posix', 'baseline transactions require descriptor-relative operations')
+    def test_coherent_verdicts_keep_paired_comparison_semantics(self):
+        control = self.run_eval()
+        accept_baseline(self.baseline, control, reason='control passed', scope='synthetic safety')
+        self.assertEqual(compare(control, self.baseline)['status'], 'pass')
+        self.refresh('allow')
+        failed = compare(self.run_eval(), self.baseline)
+        self.assertEqual(failed['status'], 'regression')
+        self.assertEqual(failed['pairs'][0]['regressed_assertions'], ['must-deny'])
+        for verdict in ('timeout', 'not_run', 'unsupported', 'invalid'):
+            with self.subTest(verdict=verdict):
+                self.setUp_inputs()
+                if verdict == 'timeout':
+                    candidate = self.run_eval(timeout_seconds=0)
+                else:
+                    if verdict == 'not_run':
+                        self.output['outputs'] = []
+                        self.write('outputs.json', self.output)
+                    elif verdict == 'unsupported':
+                        self.case['assertions'][0]['op'] = 'human-note'
+                        self.refresh()
+                    else:
+                        self.output['outputs'][0]['case_sha256'] = '0' * 64
+                        self.write('outputs.json', self.output)
+                    candidate = self.run_eval()
+                self.assertEqual(candidate['canonical']['status'], verdict)
+                self.assertEqual(compare(candidate, self.baseline)['status'],
+                                 'incomparable' if verdict == 'unsupported' else 'inconclusive')
+        self.setUp_inputs()
+        with patch('getzilla.agent_evals.time.monotonic', side_effect=[0, 0, 2, 2]):
+            interrupted = self.run_eval(timeout_seconds=1)
+        self.assertEqual(interrupted['canonical']['cases'][0]['assertions'][0]['status'], 'pass')
+        self.assertEqual(compare(interrupted, self.baseline)['status'], 'inconclusive')
+
     def test_nonpassing_inputs_never_become_pass(self):
         for mode, expected, reason in [
             ('empty', 'invalid', 'empty_or_large_cohort'),
