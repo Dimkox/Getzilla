@@ -4,6 +4,8 @@ import os
 import json
 import copy
 import shutil
+import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
-from getzilla import verification
+from getzilla import verification, factory_tests, fsx
 
 PASS = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): self.assertTrue(True)\n"
 FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): self.fail('new module was executed')\n"
@@ -21,7 +23,7 @@ FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self):
 class FactoryDiscoveryTests(unittest.TestCase):
     def test_pytest_consumer_cannot_bypass_factory_discovery(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS})
             (root / "pyproject.toml").write_text("[project]\nname='probe'\n")
             (root / "tests").mkdir()
@@ -44,7 +46,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_new_module_failure_cannot_hide_behind_legacy_contract_pass(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS, "test_new_lifecycle.py": FAIL})
             result = verification._factory_unit(root)
             self.assertEqual(len(result), 1)
@@ -58,7 +60,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
             def batch(self, _names, callback):
                 self.results.extend(callback())
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_new_lifecycle.py": PASS})
             dispatch = Dispatch()
             verification._dispatch_factory_unit(root, dispatch)
@@ -67,7 +69,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_an_applicable_empty_suite_never_passes(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": "# no tests\n"})
             result = verification._factory_unit(root)
             self.assertEqual(len(result), 1)
@@ -75,7 +77,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_an_entirely_skipped_unit_suite_never_passes(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": "import unittest\n@unittest.skip('unavailable')\nclass Probe(unittest.TestCase):\n def test_skip(self): pass\n"})
             result = verification._factory_unit(root)
             self.assertEqual(result[0].status, "fail", result[0])
@@ -99,7 +101,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
             "FACTORY_TEST_POSTGRES_NETWORK_ID": "3" * 64,
             "FACTORY_TEST_POSTGRES_NAMESPACE": "gz-sentinel",
         }):
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": source})
             result = verification._factory_unit(root)
             self.assertEqual(len(result), 1)
@@ -107,7 +109,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_import_errors_are_not_a_successful_empty_discovery(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": "import dependency_that_is_not_installed\n"})
             result = verification._factory_unit(root)
             self.assertEqual(len(result), 1)
@@ -115,7 +117,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_collected_and_executed_identities_are_retained(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_new_lifecycle.py": PASS})
             result = verification._factory_unit(root)[0]
             self.assertEqual(result.status, "pass", result)
@@ -129,7 +131,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
     def test_mixed_required_skip_fails_and_is_not_executed(self):
         skipped = "import unittest\nclass Probe(unittest.TestCase):\n @unittest.skip('not available')\n def test_required(self): pass\n"
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS, "test_required.py": skipped})
             result = verification._factory_unit(root)[0]
             self.assertEqual(result.status, "fail", result)
@@ -138,7 +140,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
     def test_borrowing_a_known_skip_reason_does_not_qualify_an_unknown_case(self):
         skipped = "import unittest\n@unittest.skip('FACTORY_TEST_DATABASE_URL must name a disposable database')\nclass Probe(unittest.TestCase):\n def test_required(self): pass\n"
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS, "test_unknown.py": skipped})
             self.assertEqual(verification._factory_unit(root)[0].status, "fail")
 
@@ -147,7 +149,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
                   " def test_pass(self): pass\n def test_required(self): self.fail('required')\n"
                   "def load_tests(loader, standard, pattern): return unittest.TestSuite([Probe('test_pass')])\n")
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": source})
             self.assertEqual(verification._factory_unit(root)[0].status, "fail")
 
@@ -157,7 +159,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
             report.write_text(json.dumps({"schema_version": 1, "check_id": name, "status": "pass"}))
             return verification.CheckResult(name, "pass", "exit=0")
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS})
             with patch.object(verification, "_command_check", side_effect=partial):
                 self.assertEqual(verification._factory_unit(root)[0].status, "fail")
@@ -168,7 +170,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
                     "class PostgresFactoryTests(unittest.TestCase):\n"
                     " def test_database(self): self.fail('unit mode reached a database case')\n")
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS, "test_postgres_integration.py": database})
             result = verification._factory_unit(root)[0]
             self.assertEqual(result.status, "pass", result)
@@ -183,7 +185,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_complete_reports_require_current_binding_and_consistent_accounting(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS})
             baseline = verification._factory_unit(root)[0]
             self.assertEqual(baseline.status, "pass", baseline)
@@ -226,7 +228,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
             def __init__(self): self.results = []
             def batch(self, _names, callback): self.results.extend(callback())
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS})
             shutil.rmtree(root / "factory/tests")
             dispatch = Dispatch()
@@ -236,7 +238,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_consumer_package_cannot_shadow_the_selected_source_engine(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_contracts.py": PASS})
             (root / "getzilla").mkdir()
             (root / "getzilla/__init__.py").write_text("raise RuntimeError('consumer shadowed selected engine')\n")
@@ -245,12 +247,189 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
     def test_factory_python_requirement_does_not_change_core_python_support(self):
         with tempfile.TemporaryDirectory() as raw, patch.object(sys, "version_info", (3, 10, 99)):
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.assertEqual(verification._factory_unit(root), [])
             self.project(root, {"test_contracts.py": PASS})
             result = verification._factory_unit(root)[0]
             self.assertEqual(result.status, "fail", result)
             self.assertIn("Factory units require Python >=3.11", result.summary)
+
+    def _linked_source(self, *, selected, internal, junction=False):
+        with tempfile.TemporaryDirectory() as raw:
+            private = Path(raw).resolve()
+            root = private / 'candidate'
+            sentinel = private / 'imported-outside-source'
+            source = "from pathlib import Path\nPath(" + repr(str(sentinel)) + ").touch()\n" + PASS
+            self.project(root, {"test_contracts.py": source})
+            link = root / selected
+            target = (root if internal else private) / 'relocated'
+            link.rename(target)
+            if junction:
+                created = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)],
+                                         text=True, capture_output=True, timeout=10)
+                self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+            else:
+                try:
+                    link.symlink_to(target, target_is_directory=True)
+                except OSError as exc:
+                    self.skipTest('directory links unavailable: ' + str(exc))
+            try:
+                result = verification._factory_unit(root)[0]
+                self.assertFalse(sentinel.exists(), 'linked test source was imported before refusal')
+                self.assertEqual(result.status, 'fail', result)
+            finally:
+                if junction:
+                    link.rmdir()
+                else:
+                    link.unlink()
+
+    def test_selected_test_root_and_factory_ancestor_links_refuse_before_import(self):
+        for selected in ('factory/tests', 'factory'):
+            for internal in (False, True):
+                with self.subTest(selected=selected, internal=internal):
+                    self._linked_source(selected=selected, internal=internal)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows junction qualification runs in CI')
+    def test_native_windows_source_root_and_factory_junctions_refuse_before_import(self):
+        for selected in ('factory/tests', 'factory'):
+            for internal in (False, True):
+                with self.subTest(selected=selected, internal=internal):
+                    self._linked_source(selected=selected, internal=internal, junction=True)
+
+    def test_candidate_root_and_parent_links_refuse_before_import(self):
+        for ancestor in (False, True):
+            with self.subTest(ancestor=ancestor), tempfile.TemporaryDirectory() as raw:
+                private = Path(raw).resolve()
+                root = private / 'real-parent/candidate'
+                sentinel = private / 'imported-outside-source'
+                self.project(root, {"test_contracts.py":
+                    "from pathlib import Path\nPath(" + repr(str(sentinel)) + ").touch()\n" + PASS})
+                alias = private / 'alias'
+                try:
+                    alias.symlink_to(root.parent if ancestor else root, target_is_directory=True)
+                except OSError as exc:
+                    self.skipTest('directory links unavailable: ' + str(exc))
+                candidate = alias / 'candidate' if ancestor else alias
+                result = verification._factory_unit(candidate)[0]
+                self.assertFalse(sentinel.exists(), 'candidate ancestry was resolved before checking links')
+                self.assertEqual(result.status, 'fail', result)
+
+    def test_reparse_point_metadata_refuses_on_selected_roots(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {"test_contracts.py": PASS})
+            original = fsx.lstat_at
+            def reparse(parent, name):
+                metadata = original(parent, name)
+                if name == 'tests':
+                    return SimpleNamespace(st_mode=metadata.st_mode,
+                                           st_file_attributes=fsx.FILE_ATTRIBUTE_REPARSE_POINT)
+                return metadata
+            with patch.object(fsx, 'lstat_at', side_effect=reparse):
+                result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, 'fail', result)
+
+    def test_jsonl_and_binary_fixture_edits_are_refused_at_consumer_readback(self):
+        for relative in ('fixtures/codex-0.152.1/success.jsonl', 'fixtures/pixels.bin'):
+            with self.subTest(fixture=relative), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                self.project(root, {"test_contracts.py": PASS})
+                fixture = root / 'factory/tests' / relative
+                fixture.parent.mkdir(parents=True, exist_ok=True)
+                fixture.write_bytes(b'original\x00\xff')
+                baseline = verification._factory_unit(root)[0]
+                self.assertEqual(baseline.status, 'pass', baseline)
+                original = verification._command_check
+                def mutate(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    fixture.write_bytes(b'changed\x00\xff')
+                    return result
+                with patch.object(verification, '_command_check', side_effect=mutate):
+                    result = verification._factory_unit(root)[0]
+                self.assertEqual(result.status, 'fail', result)
+
+    def test_fixture_edits_during_execution_cannot_claim_source_stable(self):
+        for relative in ('fixtures/codex-0.152.1/success.jsonl', 'fixtures/pixels.bin'):
+            with self.subTest(fixture=relative), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                fixture = root / 'factory/tests' / relative
+                source = ("from pathlib import Path\nimport unittest\nclass Probe(unittest.TestCase):\n"
+                          " def test_fixture(self):\n"
+                          "  path=Path(" + repr(str(fixture)) + ")\n"
+                          "  self.assertEqual(path.read_bytes(), b'original')\n"
+                          "  path.write_bytes(b'changed')\n")
+                self.project(root, {"test_contracts.py": source})
+                fixture.parent.mkdir(parents=True, exist_ok=True)
+                fixture.write_bytes(b'original')
+                documents = []
+                original = verification._command_check
+                def record(_root, name, command, *args, **kwargs):
+                    result = original(_root, name, command, *args, **kwargs)
+                    documents.append(json.loads(Path(command[command.index('--report') + 1]).read_text()))
+                    return result
+                with patch.object(verification, '_command_check', side_effect=record):
+                    result = verification._factory_unit(root)[0]
+                self.assertEqual(result.status, 'fail', result)
+                self.assertFalse(documents[0]['source_stable'])
+
+    def test_all_regular_fixture_inputs_are_bound_and_generated_caches_excluded(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {"test_contracts.py": PASS})
+            for relative in ('fixtures/success.jsonl', 'fixtures/pixels.bin', 'fixtures/readme.txt',
+                             '__pycache__/generated.bin', '.pytest_cache/generated.bin', 'loose.pyc'):
+                fixture = root / 'factory/tests' / relative
+                fixture.parent.mkdir(parents=True, exist_ok=True)
+                fixture.write_bytes(b'fixture bytes')
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, 'pass', result)
+            inventory = result.details[0]['binding']['source_inventory']
+            for relative in ('fixtures/success.jsonl', 'fixtures/pixels.bin', 'fixtures/readme.txt'):
+                self.assertIn('factory/tests/' + relative, inventory)
+            self.assertFalse(any('__pycache__' in name or '.pytest_cache' in name or name.endswith('.pyc')
+                                 for name in inventory))
+
+    def test_declared_case_parser_rejects_a_linked_candidate_root(self):
+        with tempfile.TemporaryDirectory() as raw:
+            private = Path(raw).resolve()
+            root = private / 'candidate'
+            self.project(root, {"test_contracts.py": PASS})
+            alias = private / 'alias'
+            try:
+                alias.symlink_to(root, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('directory links unavailable: ' + str(exc))
+            with self.assertRaises(ValueError):
+                factory_tests.declared_ids(alias)
+
+    def test_equal_bytes_do_not_hide_replaced_source_directory_identity(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {"test_contracts.py": PASS})
+            original = verification._command_check
+            def replace(*args, **kwargs):
+                result = original(*args, **kwargs)
+                source = root / 'factory/tests'
+                retired = root / 'retired-tests'
+                source.rename(retired)
+                shutil.copytree(retired, source)
+                return result
+            with patch.object(verification, '_command_check', side_effect=replace):
+                result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, 'fail', result)
+
+    def test_oversized_binary_fixture_refuses_before_test_import(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            sentinel = root / 'imported'
+            source = "from pathlib import Path\nPath(" + repr(str(sentinel)) + ").touch()\n" + PASS
+            self.project(root, {"test_contracts.py": source})
+            with (root / 'factory/tests/oversized.bin').open('wb') as stream:
+                stream.truncate(factory_tests.MAX_INPUT_BYTES + 1)
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, 'fail', result)
+            self.assertFalse(sentinel.exists())
+            self.assertIn('size limit', result.summary)
 
     def test_spawned_python_uses_the_same_candidate_package(self):
         source = (
@@ -260,7 +439,7 @@ class FactoryDiscoveryTests(unittest.TestCase):
             "  subprocess.run([sys.executable,'-c','import candidate_probe; assert candidate_probe.VALUE == 7'],check=True)\n"
         )
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             self.project(root, {"test_child.py": source})
             package = root / "factory/src"
             package.mkdir(parents=True)
