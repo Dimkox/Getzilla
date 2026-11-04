@@ -144,6 +144,20 @@ class ReadLedgerUnitTests(unittest.TestCase):
         with project_copy(git=True) as root:
             start = threading.Barrier(40)
             errors = []
+            refusals = []
+            real_lock = state.runtime_lock
+
+            @contextmanager
+            def observed_lock(*args, **kwargs):
+                stage = 'acquire'
+                try:
+                    with real_lock(*args, **kwargs):
+                        stage = 'update'
+                        yield
+                        stage = 'release'
+                except OSError as error:
+                    refusals.append((threading.current_thread().name, stage, type(error).__name__, error.errno))
+                    raise
 
             def writer(index):
                 try:
@@ -152,15 +166,17 @@ class ReadLedgerUnitTests(unittest.TestCase):
                 except BaseException as error:
                     errors.append(error)
 
-            threads = [threading.Thread(target=writer, args=(index,)) for index in range(40)]
-            for thread in threads:
-                thread.start()
-            deadline = time.monotonic() + 10
-            for thread in threads:
-                thread.join(max(0, deadline - time.monotonic()))
+            threads = [threading.Thread(target=writer, args=(index,), name=f'f{index}.py') for index in range(40)]
+            with mock.patch.object(state, 'runtime_lock', observed_lock):
+                for thread in threads:
+                    thread.start()
+                deadline = time.monotonic() + 10
+                for thread in threads:
+                    thread.join(max(0, deadline - time.monotonic()))
             self.assertFalse(any(thread.is_alive() for thread in threads))
             self.assertEqual(errors, [])
-            self.assertEqual(seen(root, 's'), {f'f{index}.py' for index in range(40)})
+            self.assertEqual(seen(root, 's'), {f'f{index}.py' for index in range(40)},
+                             f'advisory refusals (writer, stage, error, errno): {refusals}')
 
     def test_a_full_ledger_drops_the_oldest(self) -> None:
         with project_copy(git=True) as root:
@@ -313,6 +329,26 @@ class ReadLedgerUnitTests(unittest.TestCase):
             self.assertEqual(seen(root, 's'), {'before.py'})
             record(root, 's', {'after.py'})
             self.assertEqual(seen(root, 's'), {'before.py', 'after.py'})
+
+    def test_unreadable_existing_ledger_preserves_saved_entries_and_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record(root, 's', {'prior.py'})
+            path, = (root / ledger.LEDGER_DIR).glob('*.json')
+            before = path.read_bytes()
+            real_read = Path.read_text
+
+            def read(target, *args, **kwargs):
+                if target == path:
+                    raise OSError(errno.EMFILE, 'descriptor limit')
+                return real_read(target, *args, **kwargs)
+
+            with mock.patch.object(Path, 'read_text', read):
+                self.assertIsNone(seen(root, 's'))
+                record(root, 's', {'unconfirmed.py'})
+            self.assertEqual(path.read_bytes(), before)
+            record(root, 's', {'after.py'})
+            self.assertEqual(seen(root, 's'), {'prior.py', 'after.py'})
 
     def test_cd_globs_and_printed_paths(self) -> None:
         with project_copy(git=True) as root:
