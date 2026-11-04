@@ -126,7 +126,7 @@ class ProjectSyncTests(unittest.TestCase):
     def test_neutral_upgrade_preserves_legacy_overlay_and_retires_only_proven_sources(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned, read_state
         manifest = self.select(('codex',))
-        overlay = b'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"entire hooks codex stop"}]}]}}\n'
+        overlay = (ROOT / '.getzilla/config/codex-hooks.json').read_bytes()
         sources = {'.grok/hooks/pre_tool_use.py': b'# previous managed guard\n',
                    '.grok/agents/code_reviewer.toml': b'# previous role\n',
                    '.grok/codex-hooks.json': overlay}
@@ -149,13 +149,13 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
         migrated = read_state(self.project).manifest['components']['core']
         self.assertIn('.getzilla/config/codex-hooks.json', migrated['files'])
-        self.assertNotIn('.getzilla/config/codex-hooks.json', migrated['owned'])
+        self.assertIn('.getzilla/config/codex-hooks.json', migrated['owned'])
         for path in sources:
             self.assertFalse((self.project / path).exists(), path)
         self.assertEqual(custom.read_bytes(), b'# user hook\n')
         hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
         self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
-        self.assertEqual(hooks[1]['hooks'][0]['command'], 'entire hooks codex stop')
+        self.assertEqual(hooks[1:], json.loads(overlay)['hooks']['Stop'])
         self.assertNotIn('.grok/hooks/pre_tool_use.py', read_state(self.project).manifest['components']['core']['files'])
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
         current = git(self.project, 'rev-parse', 'HEAD')
@@ -219,7 +219,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
         self.assertIn('.getzilla/hooks/pre_tool_use.py', (self.project / '.codex/hooks.json').read_text())
 
-    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None, command_path=None):
+    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None, command_path=None, config_transform=None):
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
         manifest = self.select((agent,))
         relative = '.grok/hooks/pre_tool_use.py'
@@ -232,6 +232,8 @@ class ProjectSyncTests(unittest.TestCase):
         config = self.project / config_path
         config.parent.mkdir(exist_ok=True, parents=True)
         custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + (command_path or relative)}]}]}}).encode()
+        if config_transform is not None:
+            custom = config_transform(custom)
         config.write_bytes(custom)
         record_path = '.grok-stack/AGBP_SYNC.json' if legacy_record else '.getzilla/AGBP_SYNC.json'
         record = self.project / record_path
@@ -301,6 +303,110 @@ class ProjectSyncTests(unittest.TestCase):
                         self._selected_kept_legacy_dependency('claude', '.claude/settings.json', command_path=command)
             finally:
                 self.project = original_project
+
+    def test_custom_or_unsupported_hook_configs_conservatively_keep_legacy_engine(self) -> None:
+        from getzilla.spec import MAX_SPEC_BYTES, MAX_DEPTH, MAX_NODES, MAX_STRING_LENGTH
+        cases = {
+            'escaped-namespace': lambda raw: raw.replace(b'.grok', br'\u002egrok'),
+            'dynamic-command': lambda _raw: b'{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 dispatch_guard.py"}]}]}}',
+            'jsonc': lambda _raw: b'{"hooks":{}} // custom hook configuration\n',
+            'invalid-encoding': lambda _raw: b'\xff\xfe{\x00}\x00',
+            'unknown-format': lambda _raw: b'not a supported hook configuration\n',
+            'duplicate-key': lambda _raw: b'{"hooks":{},"hooks":{}}',
+            'unknown-root': lambda _raw: b'["custom hooks"]',
+            'size-bound': lambda _raw: b'{"padding":"' + b'x' * MAX_SPEC_BYTES + b'"}',
+            'depth-bound': lambda _raw: b'{"layers":' + b'[' * MAX_DEPTH + b'0' + b']' * MAX_DEPTH + b'}',
+            'node-bound': lambda _raw: b'{"nodes":[' + b','.join([b'0'] * MAX_NODES) + b']}',
+            'string-bound': lambda _raw: b'{"padding":"' + b'x' * (MAX_STRING_LENGTH + 1) + b'"}',
+        }
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, (label, transform) in enumerate(cases.items()):
+                    with self.subTest(label=label):
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        self._selected_kept_legacy_dependency('claude', '.claude/settings.json', config_transform=transform)
+            finally:
+                self.project = original_project
+
+    def test_dormant_custom_codex_overlay_keeps_legacy_helpers(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# dormant overlay may dispatch this guard indirectly\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        overlay = b'{"hooks":{"Stop":[{"hooks":[{"command":"python3 dispatch_guard.py"}]}]}}'
+        (self.project / '.grok/codex-hooks.json').write_bytes(overlay)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('custom overlay for a currently unselected client')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertFalse((self.project / '.codex/hooks.json').exists())
+
+    def test_exact_generated_neutral_kept_config_allows_proven_retirement(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        hook.write_bytes(b'# previous proven hook\n')
+        hook.chmod(0o644)
+        record_owned(manifest, relative, hook.read_bytes(), 0o644)
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        config.write_bytes(canonical)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': ['.claude/settings.json'],
+            'kept_local_sha256': {'.claude/settings.json': hashlib.sha256(canonical).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('exact generated neutral configuration')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), canonical)
+        self.assertFalse(hook.exists())
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'decoded-command execution uses a native POSIX fixture')
+    def test_decoded_escaped_posix_command_and_helper_still_deny_after_upgrade(self) -> None:
+        import shlex
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        sources = {'.grok/hooks/pre_tool_use.py': b'from _lib import deny\ndeny()\n',
+                   '.grok/hooks/_lib.py': b'import json\ndef deny(): print(json.dumps({"decision":"deny"}))\n'}
+        for relative, content in sources.items():
+            target = self.project / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            target.chmod(0o644)
+            record_owned(manifest, relative, content, 0o644)
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        command = 'python3 -B .grok/hooks/pre_tool_use.py'
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': command}]}]}}).encode().replace(b'.grok', br'\u002egrok')
+        config.write_bytes(custom)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': ['.claude/settings.json'],
+            'kept_local_sha256': {'.claude/settings.json': hashlib.sha256(custom).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('decoded fixed fixture command depends on owned guard and helper')
+        decoded = json.loads(custom)['hooks']['PreToolUse'][0]['hooks'][0]['command']
+        before = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        self.assertEqual(json.loads(before.stdout), {'decision': 'deny'})
+        upgrade.sync_project(ROOT, self.project)
+        after = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertEqual(json.loads(after.stdout), {'decision': 'deny'})
+        self.assertEqual(config.read_bytes(), custom)
+        for relative, content in sources.items():
+            self.assertEqual((self.project / relative).read_bytes(), content)
 
     def test_migrated_codex_overlay_retains_legacy_guard_dependency(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
@@ -782,6 +888,51 @@ class SelfUpdateTests(unittest.TestCase):
         (self.home / 'VERSION').write_text('mine\n', encoding='utf-8')
         self.assertIn('local changes', upgrade.update_self(self.home, None))
         self.assertEqual((self.home / 'VERSION').read_text(encoding='utf-8'), 'mine\n')
+
+
+class NeutralHookConfigurationTests(unittest.TestCase):
+    def classifier(self):
+        function = getattr(upgrade, '_neutral_hook_configuration', None)
+        self.assertIsNotNone(function, 'neutrality needs bounded decoded evidence, not a raw-byte search')
+        return function
+
+    def test_only_exact_generated_neutral_configuration_proves_neutrality(self):
+        classify = self.classifier()
+        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        self.assertTrue(classify(canonical, canonical))
+        self.assertFalse(classify(canonical + b' ', canonical))
+        self.assertFalse(classify(canonical, None))
+
+    def test_decoded_legacy_strings_disqualify_even_matching_artifacts(self):
+        classify = self.classifier()
+        for path in ('.grok/hooks/pre_tool_use.py', r'.GROK\HOOKS\pre_tool_use.py',
+                     '.gRoK//hOoKs/pre_tool_use.py'):
+            raw = json.dumps({'hooks': {'Nested': [{'command': 'python3 ' + path}]}}).encode()
+            for escaped in (raw, raw.replace(b'.grok', br'\u002egrok')):
+                with self.subTest(path=path, escaped=escaped != raw):
+                    self.assertFalse(classify(escaped, escaped))
+
+    def test_invalid_or_over_budget_json_cannot_prove_neutrality(self):
+        from getzilla.spec import MAX_SPEC_BYTES, MAX_DEPTH, MAX_NODES, MAX_STRING_LENGTH
+        classify = self.classifier()
+        cases = {
+            'jsonc': b'{"hooks":{}} // comment',
+            'encoding': b'\xff',
+            'bom': b'\xef\xbb\xbf{"hooks":{}}',
+            'duplicate': b'{"hooks":{},"hooks":{}}',
+            'surrogate': br'{"hooks":{},"value":"\ud800"}',
+            'non-finite': b'{"hooks":{},"value":NaN}',
+            'overflow-float': b'{"hooks":{},"value":1e999}',
+            'root': b'[]',
+            'unknown-hooks-shape': b'{"hooks":[]}',
+            'bytes': b'{"hooks":{},"padding":"' + b'x' * MAX_SPEC_BYTES + b'"}',
+            'depth': b'{"hooks":{},"layers":' + b'[' * MAX_DEPTH + b'0' + b']' * MAX_DEPTH + b'}',
+            'nodes': b'{"hooks":{},"nodes":[' + b','.join([b'0'] * MAX_NODES) + b']}',
+            'string': b'{"hooks":{},"padding":"' + b'x' * (MAX_STRING_LENGTH + 1) + b'"}',
+        }
+        for label, raw in cases.items():
+            with self.subTest(label=label):
+                self.assertFalse(classify(raw, raw))
 
 
 if __name__ == '__main__':
