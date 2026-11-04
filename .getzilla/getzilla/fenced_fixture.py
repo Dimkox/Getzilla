@@ -62,6 +62,10 @@ for root in ('/state', '/work'):
 print('\\n'.join(digests))
 '''
 
+_INIT = ("import os, sys; "
+         "sys.exit(4) if os.listdir('/state') or os.listdir('/work') else None; "
+         "os.chown('/state',65534,65534); os.chown('/work',65534,65534)")
+
 
 def _inspect(docker, ident):
     value = json.loads(fixture._command([docker, 'inspect', ident]))
@@ -117,12 +121,42 @@ def _valid(info, ident, image, nonce, volumes, phase, thread):
         return False
 
 
+def _volume_owner(docker, volumes):
+    if (not isinstance(volumes, (list, tuple)) or len(volumes) != 2
+            or not re.fullmatch(r'getzilla-fixture-[a-f0-9]{32}-state', volumes[0])
+            or volumes[1] != volumes[0].removesuffix('-state')+'-work'):
+        raise fixture.FixtureError('invalid_volume')
+    owners = []
+    for name in volumes:
+        try:
+            rows = json.loads(fixture._command([docker, 'volume', 'inspect', name]))
+            if not isinstance(rows, list) or len(rows) != 1 or rows[0]['Name'] != name:
+                raise fixture.FixtureError('invalid_volume')
+            owner = rows[0]['Labels']['getzilla.owner']
+            if not isinstance(owner, str) or not re.fullmatch(r'[a-f0-9]{32}', owner):
+                raise fixture.FixtureError('invalid_volume')
+            owners.append(owner)
+        except (KeyError, TypeError, ValueError):
+            raise fixture.FixtureError('invalid_volume') from None
+    if owners[0] != owners[1]:
+        raise fixture.FixtureError('invalid_volume')
+    return owners[0]
+
+
 def _helper(docker, image, volumes, program, *, root=False):
+    if root and program != _INIT:
+        raise fixture.FixtureError('root_init_unqualified')
+    owner = _volume_owner(docker, volumes)
+    contract, _ = fixture._image_contract()
+    if image == fixture.IMAGE and not root:
+        fixture._base_image(docker, contract)
+    else:
+        fixture._bound_image(docker, image, contract)
     mounts = [part for name, target in zip(volumes, ('/state', '/work'))
               for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target + ('' if root else ',readonly'))]
     args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2',
-            '--cpuset-cpus', fixture._cpu_set()]
+            '--cpuset-cpus', fixture._cpu_set(), '--label', 'getzilla.owner='+owner]
     if root:
         args += ['--cap-add', 'CHOWN']
     args += ['--user', '0' if root else '65534:65534', *mounts, '--entrypoint', 'python', image, '-c', program]
@@ -320,14 +354,14 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
                         or (volume[0].get('Labels') or {}).get('getzilla.owner') != nonce):
                     raise fixture.FixtureError('invalid_volume')
                 created_volumes.append(name)
-            _helper(docker, image, volumes, "import os; os.chown('/state',65534,65534); os.chown('/work',65534,65534)", root=True)
+            _helper(docker, image, volumes, _INIT, root=True)
             baseline = _checkpoint(docker, image, volumes)
             a = _create(docker, image, volumes, nonce, 'a')
             containers.append(a)
             first = journal.consume_controlled_send(root, binding, 1, 1)
             if not first['claimed']:
                 raise fixture.FixtureError('claim_denied')
-            proc_a = subprocess.Popen([docker, 'start', '-ai', a], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            proc_a = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', a]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
             processes.append(proc_a)
             preserve_volumes = True
@@ -412,7 +446,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         second = journal.consume_controlled_send(root, binding, 2, reserved['revision'])
         if not second['claimed']:
             raise fixture.FixtureError('claim_denied')
-        proc_b = subprocess.Popen([docker, 'start', '-ai', b], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc_b = subprocess.Popen(fixture._docker_argv([docker, 'start', '-ai', b]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
         processes.append(proc_b)
         pipe_b = fixture._Lines(proc_b)

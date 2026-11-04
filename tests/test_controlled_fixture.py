@@ -98,10 +98,29 @@ def _cleanup_owned_fixture(root, binding, *, required=False):
         for name in volumes:
             controlled_fixture._command(['/usr/bin/docker', 'volume', 'rm', name])
         for image in images:
+            contract, _ = controlled_fixture._image_contract()
+            controlled_fixture._bound_image('/usr/bin/docker', image, contract)
             controlled_fixture._command(['/usr/bin/docker', 'image', 'rm', image])
     except controlled_fixture.FixtureError:
         if required:
             raise
+
+
+def _change_owned_workspace(docker, image, volumes):
+    """Fault injection stays non-root and mounts only this test's owned workspace."""
+    owner = fenced_fixture._volume_owner(docker, volumes)
+    args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2',
+            '--cpuset-cpus', controlled_fixture._cpu_set(), '--user', '65534:65534',
+            '--label', 'getzilla.owner='+owner, '--mount', 'type=volume,src='+volumes[1]+',dst=/work',
+            '--entrypoint', 'python', image, '-c', "from pathlib import Path; Path('/work/partial').write_text('synthetic')"]
+    ident = controlled_fixture._command(args)
+    if not re.fullmatch(r'[a-f0-9]{64}', ident):
+        raise AssertionError('invalid owned fault container')
+    try:
+        controlled_fixture._command([docker, 'start', '-a', ident])
+    finally:
+        controlled_fixture._command([docker, 'rm', '-fv', ident])
 
 
 class ControlledFixtureTest(unittest.TestCase):
@@ -439,8 +458,7 @@ class ControlledFixtureTest(unittest.TestCase):
                 volumes_seen = True
                 count += 1
                 if count == 2:
-                    fenced_fixture._helper(docker, image, volumes,
-                        "import os; from pathlib import Path; os.chown('/work',0,0); Path('/work/partial').write_text('synthetic'); os.chown('/work',65534,65534)", root=True)
+                    _change_owned_workspace(docker, image, volumes)
                 return original(docker, image, volumes)
 
             try:
@@ -692,15 +710,15 @@ class ControlledFixtureTest(unittest.TestCase):
                                       'fixture-session', 'a'*64, 'b'*64, 'c'*64)
             budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600)
             original = controlled_fixture._command
-            removals = 0
 
             def uncertain_cleanup(args, timeout=60):
-                nonlocal removals
-                result = original(args, timeout=timeout)
+                native = False
                 if args[1] == 'rm':
-                    removals += 1
-                    if removals == 3:
-                        raise controlled_fixture.FixtureError('container_unavailable')
+                    info = json.loads(original([args[0], 'inspect', args[-1]]))[0]
+                    native = info['Config']['Cmd'] == ['python', '-u', '/fixture.py']
+                result = original(args, timeout=timeout)
+                if native:
+                    raise controlled_fixture.FixtureError('container_unavailable')
                 return result
 
             with patch.object(controlled_fixture, '_command', side_effect=uncertain_cleanup):

@@ -31,6 +31,52 @@ Eligibility never authorizes dispatch. The offline journal retains attempt, requ
 
 An isolated Codex 0.165.0 app-server used a synthetic loopback provider. A failed model A turn with typed HTTP 429 was followed by a model B turn in the same thread. The probe started the second turn itself; it did not use Getzilla dispatch authority. The client still advertised five built-in tools. This proves protocol behavior only, not safe tool fencing or live adapter qualification. The reproducible fixture is `tests/fixtures/codex_loopback_probe.py`; run it only in a disposable container with no external network and no host credentials. Normal lifecycle notifications and the exact typed 429 shape are recognized as observations. Unknown events, mismatched turn identities and conflicting errors fail closed. Journal provenance remains unknown and no successor dispatch is allowed.
 
+### Reproduce the isolated fixture inputs
+
+The old bare image ID `a0f57064…` is historical and is not reconstructed by
+retagging another image. The current fixture uses the declared offline recipe
+`tests/fixtures/codex-fixture.Dockerfile` and its digest-bound JSON contract.
+Prepare the official `python@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487`
+base for Linux/amd64 separately. Missing or substituted local base metadata
+refuses before building; the fixture never pulls it automatically.
+
+The contract names the official Codex 0.165.0 Linux musl archive and its archive
+digest. Verify downloaded archive bytes before extraction, then verify the
+executable SHA256 `c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5`.
+An archive digest does not substitute for the executable digest. Select this
+binary through that test invocation's PATH; do not change the normal Codex
+installation. Other versions are unqualified by this fixture.
+
+With the base cached, the fixture uses the explicit local Docker socket and
+default local builder with `--pull=false --network=none`. The private build
+context contains only the declared binary, fixed script, Dockerfile and contract;
+the Dockerfile has no RUN instruction or package installation. A fresh owner
+label changes each ephemeral image's identity. The real observed ID, owner,
+base and contract binding are checked, followed by actual in-image Python
+version and all input hashes. No mutable tag or caller-supplied image is trusted.
+Record those identities for each qualification row; matching input recipes do
+not make run-specific owner-labelled images byte-identical.
+
+Use the existing opt-in `GETZILLA_RUN_CODEX_FIXTURE=1` tests in
+`tests.test_controlled_fixture`. Allocate two measured CPUs to the daemon-created
+containers with `GETZILLA_FIXTURE_CPUSET` or a two-CPU host affinity from which
+the fixture selects its pair. Unknown or unavailable CPU sets refuse. Every
+native container is network-none, root-filesystem read-only, UID 65534, with all
+capabilities dropped, no-new-privileges, 64 PIDs, 512 MiB and two CPUs. Fenced
+state/work mounts are newly owned named volumes; no host credentials, project
+binds or Docker socket enter them. The sole UID 0 helper has only CHOWN, accepts
+one fixed initialization program and changes only the two empty, label-verified
+owned volume roots. It performs no recursive changes. Controlled workspace
+fault injection runs as UID 65534.
+
+Retain actual outcomes and owned-resource cleanup readback. Unknown outcomes
+preserve their journal and investigation resources; do not reset consumed sends
+or treat replay as a fresh qualification. Synthetic provider responses, models,
+429s, usage and budgets remain synthetic. These tests cannot qualify live
+authentication, model inference, provider/account switching, other five clients,
+production trusted pins or independent security authority. Issue 235 remains
+open until its separately required live boundaries are qualified.
+
 ## Recovery
 
 Set `enabled:false` to disable requested continuation. No dispatch exists in this slice. Revert the source change through a reviewed PR to remove passive reporting; preserve consumer configuration and native user settings.

@@ -9,9 +9,31 @@ from pathlib import Path
 from unittest.mock import patch
 
 from getzilla import controlled_fixture as fixture
+from getzilla import fenced_fixture
 
 
 class FixtureImageContractTests(unittest.TestCase):
+    def test_root_helper_cannot_run_an_arbitrary_program(self):
+        volumes = ['getzilla-fixture-'+'b'*32+'-'+kind for kind in ('state', 'work')]
+        with patch.object(fixture, '_command', return_value='c'*64) as command:
+            with self.assertRaisesRegex(fixture.FixtureError, 'root_init_unqualified'):
+                fenced_fixture._helper('docker', 'sha256:'+'a'*64, volumes, 'print("not initialization")', root=True)
+            command.assert_not_called()
+
+    def test_unknown_volume_is_refused_before_container_creation(self):
+        with patch.object(fixture, '_command', return_value='c'*64) as command:
+            with self.assertRaisesRegex(fixture.FixtureError, 'invalid_volume'):
+                fenced_fixture._helper('docker', fixture.IMAGE, ['foreign-state', 'foreign-work'], 'print(1)')
+            command.assert_not_called()
+
+    def test_docker_command_uses_the_local_socket_despite_context_environment(self):
+        with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://untrusted.invalid:2375', 'DOCKER_CONTEXT': 'untrusted'}), \
+                patch.object(fixture.subprocess, 'run') as run:
+            self.assertEqual(fixture._command(['/usr/bin/docker', 'version']), '')
+            args = run.call_args.args[0]
+            self.assertEqual(args[:3], ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock'])
+            self.assertEqual(run.call_args.kwargs['env'], {'PATH': '/usr/bin:/bin'})
+
     def test_contract_names_immutable_official_base_and_exact_inputs(self):
         contract, recipe = fixture._image_contract()
         self.assertEqual(contract['base_reference'], 'python@'+fixture.IMAGE)

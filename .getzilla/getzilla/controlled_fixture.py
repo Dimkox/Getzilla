@@ -99,7 +99,7 @@ def _validate_container(info, image, mounts, nonce):
 def _command(args, timeout=60):
     try:
         with tempfile.TemporaryFile() as output:
-            subprocess.run(args, stdin=subprocess.DEVNULL, stdout=output,
+            subprocess.run(_docker_argv(args), stdin=subprocess.DEVNULL, stdout=output,
                            stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'},
                            timeout=timeout, check=True)
             output.seek(0)
@@ -113,6 +113,11 @@ def _command(args, timeout=60):
         raise FixtureError('container_command_failed') from None
     except (OSError, subprocess.SubprocessError, UnicodeError):
         raise FixtureError('container_unavailable') from None
+
+
+def _docker_argv(args):
+    # Ignore saved Docker contexts as well as endpoint environment selectors.
+    return [args[0], '--host', 'unix:///var/run/docker.sock', *args[1:]]
 
 
 def _cpu_set():
@@ -223,7 +228,7 @@ def _immutable_image(docker, fixture, codex):
             os.utime(context/'Dockerfile', (0, 0))
             _base_image(docker, contract)
             identity = folder/'image-id'
-            _command([docker, 'build', '--quiet', '--pull=false', '--network=none', '--platform', 'linux/amd64',
+            _command([docker, 'build', '--builder', 'default', '--quiet', '--pull=false', '--network=none', '--platform', 'linux/amd64',
                       '--build-arg', 'SOURCE_DATE_EPOCH=0', '--label', 'getzilla.fixture='+owner,
                       '--label', 'getzilla.fixture.contract='+CONTRACT_SHA256,
                       '--label', 'getzilla.fixture.base='+IMAGE, '--iidfile', str(identity),
@@ -450,7 +455,7 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         first = journal.consume_controlled_send(root, binding, 1, 1)
         if not first['claimed']:
             raise FixtureError('claim_denied')
-        process = subprocess.Popen([docker, 'start', '-ai', container_id], stdin=subprocess.PIPE,
+        process = subprocess.Popen(_docker_argv([docker, 'start', '-ai', container_id]), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                    env={'PATH': '/usr/bin:/bin'}, bufsize=0)
         lines = _Lines(process)
