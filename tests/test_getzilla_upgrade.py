@@ -219,6 +219,92 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
         self.assertIn('.getzilla/hooks/pre_tool_use.py', (self.project / '.codex/hooks.json').read_text())
 
+    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None):
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select((agent,))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# baseline used by a kept selected adapter\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        config = self.project / config_path
+        config.parent.mkdir(exist_ok=True, parents=True)
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + relative}]}]}}).encode()
+        config.write_bytes(custom)
+        record_path = '.grok-stack/AGBP_SYNC.json' if legacy_record else '.getzilla/AGBP_SYNC.json'
+        record = self.project / record_path
+        record.parent.mkdir(exist_ok=True, parents=True)
+        kept = keep_alias or config_path
+        record.write_text(json.dumps({'schema_version': 1, 'kept_local': [kept],
+                                      'kept_local_sha256': {kept: hashlib.sha256(custom).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('selected kept adapter depends on legacy hook')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), custom)
+        self.assertTrue(hook.is_file(), 'a kept selected adapter still references this guard')
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+        before = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+
+    def test_selected_kept_claude_retains_legacy_guard_dependency(self) -> None:
+        self._selected_kept_legacy_dependency('claude', '.claude/settings.json')
+
+    def test_selected_kept_adapter_aliases_retain_legacy_guard_dependencies(self) -> None:
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        from getzilla import component_state
+        original_project = self.project
+        original_match = component_state.match_kept_local
+        def windows_match(*args):
+            # Exercise the real Windows case matcher with the native host's I/O backend.
+            with mock.patch.object(component_state, 'fsx', SimpleNamespace(WINDOWS=True)):
+                return original_match(*args)
+        cases = [('qwen', '.qwen/settings.json', False, None),
+                 ('gemini', '.gemini/settings.json', False, None),
+                 ('copilot', '.github/hooks/getzilla.json', False, None),
+                 ('grok', '.grok/hooks.json', False, None),
+                 ('claude', '.claude/settings.json', True, None),
+                 ('claude', '.claude/settings.json', False, '.CLAUDE/SETTINGS.JSON')]
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, (agent, path, legacy, alias) in enumerate(cases):
+                    with self.subTest(agent=agent, legacy=legacy, alias=alias), ExitStack() as stack:
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        if alias is not None:
+                            installer = upgrade.load_installer(ROOT)
+                            stack.enter_context(mock.patch.object(upgrade, 'load_installer', return_value=installer))
+                            stack.enter_context(mock.patch.object(upgrade, 'match_kept_local', side_effect=windows_match))
+                            stack.enter_context(mock.patch.object(installer, 'match_kept_local', side_effect=windows_match))
+                        self._selected_kept_legacy_dependency(agent, path, legacy_record=legacy, keep_alias=alias)
+            finally:
+                self.project = original_project
+
+    def test_migrated_codex_overlay_retains_legacy_guard_dependency(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        path = '.grok/hooks/post_tool_use.py'
+        target = self.project / path
+        target.parent.mkdir(parents=True)
+        content = b'# baseline used by a retained overlay\n'
+        target.write_bytes(content)
+        target.chmod(0o644)
+        record_owned(manifest, path, content, 0o644)
+        overlay = {'hooks': {'Stop': [{'hooks': [{'command': 'python3 ' + path}]}]}}
+        (self.project / '.grok/codex-hooks.json').write_text(json.dumps(overlay))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('overlay still calls a legacy guard')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(target.read_bytes(), content)
+        hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
+        self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
+        self.assertEqual(hooks[1]['hooks'][0]['command'], 'python3 ' + path)
+
     def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
         original = upgrade.planned_changes
         def moving(*args, **kwargs):
