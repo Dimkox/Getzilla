@@ -7,7 +7,6 @@ import itertools
 import json
 import math
 import os
-import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,8 +14,8 @@ from typing import Any
 
 from .architecture_bindings import architecture_digest, bind_paths
 from .history_git import GitReader, HistoryReadError
+from .history_objects import VerifiedObjects
 
-OID = re.compile(r'(?:[a-f0-9]{40}|[a-f0-9]{64})\Z')
 POLICIES = {'timestamp': 'committer_epoch_seconds', 'timezone': 'UTC',
             'windows': 'half_open_start_inclusive_end_exclusive',
             'range': 'base_exclusive_end_inclusive_all_reachable',
@@ -28,6 +27,9 @@ POLICIES = {'timestamp': 'committer_epoch_seconds', 'timezone': 'UTC',
             'extractor': 'getzilla-graph-history-v1', 'root_commits': 'diff_against_empty_tree',
             'line_diff': 'python_difflib_sequence_matcher_autojunk_false_v1_LF_records_keep_terminators_prefix_suffix_anchored',
             'order': 'committer_timestamp_then_oid; component_and_pair_lexicographic'}
+POLICIES['object_admission'] = 'Git_format_type_length_header_and_content_hash_before_use'
+POLICIES['history_interpretation'] = 'verified_raw_commit_DAG_and_trees; no_grafts_or_replace_traversal'
+POLICIES['revision_inputs'] = 'literal_refs_or_full_object_ids; verified_annotated_tag_chain'
 
 
 def _memory_observation() -> dict:
@@ -132,18 +134,6 @@ def _model_snapshot(architecture: Any) -> tuple[dict, dict]:
     return system, rules
 
 
-def _revision(reader: GitReader, value: str) -> str:
-    if not isinstance(value, str) or not value or value.startswith('-') or len(value) > 256 or '\0' in value:
-        raise HistoryReadError('INVALID_REVISION')
-    code, raw = reader.read('rev-parse', '--verify', '--end-of-options', value + '^{commit}', allowed_codes=(0, 128))
-    if code != 0:
-        raise HistoryReadError('INVALID_REVISION')
-    oid = raw.decode('ascii', 'strict').strip()
-    if not OID.fullmatch(oid):
-        raise HistoryReadError('GIT_READ_INCOMPLETE')
-    return oid
-
-
 def _line_churn(old: bytes, new: bytes, config: HistoryConfig) -> tuple[int, int]:
     """A declared deterministic line algorithm, independent of Git diff drivers."""
     old_count = old.count(b'\n') + int(bool(old) and not old.endswith(b'\n'))
@@ -181,34 +171,6 @@ def _line_churn(old: bytes, new: bytes, config: HistoryConfig) -> tuple[int, int
     return inserted, deleted
 
 
-def _changed_blobs(raw: bytes, *, max_entries: int) -> dict[str, tuple[str, str]]:
-    """Raw NUL paths expose exact old/new objects before any diff fallback can run."""
-    if not raw:
-        return {}
-    if not raw.endswith(b'\0'):
-        raise HistoryReadError('GIT_READ_INCOMPLETE')
-    fields = raw[:-1].split(b'\0')
-    if len(fields) % 2:
-        raise HistoryReadError('GIT_READ_INCOMPLETE')
-    if len(fields) // 2 > max_entries:
-        raise HistoryReadError('FILE_TOUCH_BUDGET')
-    objects = {}
-    for index in range(0, len(fields), 2):
-        metadata = fields[index].decode('ascii').split()
-        if len(metadata) != 5 or not metadata[0].startswith(':') or not fields[index + 1]:
-            raise HistoryReadError('GIT_READ_INCOMPLETE')
-        if '160000' in (metadata[0][1:], metadata[1]):
-            raise HistoryReadError('UNSUPPORTED_GITLINK')
-        for oid in metadata[2:4]:
-            if not OID.fullmatch(oid):
-                raise HistoryReadError('GIT_READ_INCOMPLETE')
-        path = fields[index + 1].decode('utf-8', 'surrogateescape')
-        if path in objects:
-            raise HistoryReadError('GIT_READ_INCOMPLETE')
-        objects[path] = (metadata[2], metadata[3])
-    return objects
-
-
 def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig | None = None,
                  base: str | None = None, end: str = 'HEAD') -> dict:
     """Read immutable committed history only. Observations are outside deterministic metrics."""
@@ -221,6 +183,7 @@ def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig 
                                'bulk_commits': [], 'merge_commits_excluded': [], 'excluded_file_touches': 0,
                                'unmapped_file_touches': 0, 'windows': []}
     identity: dict[str, Any] = {}
+    objects = None
     try:
         system, rules = _model_snapshot(architecture)
         model_digest = architecture_digest(system, rules)
@@ -257,16 +220,16 @@ def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig 
         code, _ = reader.read('rev-parse', '--verify', 'HEAD', allowed_codes=(0, 128))
         if code:
             raise HistoryReadError('UNBORN_HISTORY')
-        end_oid = _revision(reader, end)
-        base_oid = None if base is None else _revision(reader, base)
-        _, tree = reader.read('rev-parse', end_oid + '^{tree}')
         _, object_format = reader.read('rev-parse', '--show-object-format')
-        identity = {'end': end_oid, 'base': base_oid, 'tree': tree.decode().strip(),
-                    'object_format': object_format.decode().strip(), 'repository_identity': 'committed_object_ids_only'}
+        objects = VerifiedObjects(reader, object_format.decode().strip(), config.max_commits)
+        end_oid = objects.resolve(end)
+        base_oid = None if base is None else objects.resolve(base)
+        end_commit = objects.commit(end_oid)
+        objects.tree(end_commit.tree)
         if base_oid:
-            code, _ = reader.read('merge-base', '--is-ancestor', base_oid, end_oid, allowed_codes=(0, 1))
-            if code:
-                raise HistoryReadError('NON_ANCESTOR_RANGE')
+            objects.tree(objects.commit(base_oid).tree)
+        identity = {'end': end_oid, 'base': base_oid, 'tree': end_commit.tree,
+                    'object_format': objects.format, 'repository_identity': 'verified_committed_object_ids_only'}
         _, shallow = reader.read('rev-parse', '--is-shallow-repository')
         if shallow.strip() == b'true':
             reasons.add('SHALLOW_HISTORY')
@@ -277,19 +240,10 @@ def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig 
                                   r'^remote\..*\.promisor$', allowed_codes=(0, 1))
         if any(line.endswith(b' true') for line in promisor.splitlines()):
             reasons.add('PARTIAL_HISTORY')
-        _, raw_commits = reader.read('rev-list', '--timestamp', '--parents', '--topo-order',
-                                     '--max-count=' + str(config.max_commits + 1), end_oid,
-                                     *(['^' + base_oid] if base_oid else []))
-        records = []
-        for line in raw_commits.splitlines():
-            fields = line.decode('ascii').split()
-            if len(fields) < 2 or not fields[0].isdigit() or any(not OID.fullmatch(v) for v in fields[1:]):
-                raise HistoryReadError('GIT_READ_INCOMPLETE')
-            records.append((int(fields[0]), fields[1], fields[2:]))
-        if len(records) > config.max_commits:
-            reasons.add('COMMIT_BUDGET')
-            records = records[:config.max_commits]
-        for timestamp, oid, parents in sorted(records, key=lambda item: (item[0], item[1])):
+        records, range_reasons = objects.range(end_oid, base_oid, config.max_commits)
+        reasons.update(range_reasons)
+        for record in sorted(records, key=lambda item: (item.timestamp, item.oid)):
+            timestamp, oid, parents = record.timestamp, record.oid, record.parents
             if time.monotonic() >= reader.deadline:
                 raise HistoryReadError('TIME_BUDGET')
             metrics['commits_read'] += 1
@@ -299,14 +253,11 @@ def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig 
             window_ids = [i for i, (start, stop) in enumerate(config.windows) if start <= timestamp < stop]
             if config.windows and not window_ids:
                 continue
-            _, raw_changes = reader.read('diff-tree', '--root', '--no-commit-id', '-r', '-z', '--raw',
-                                          '--no-abbrev', '--no-renames', '--no-ext-diff', '--no-textconv', oid, '--', bare=True)
-            changed_blobs = _changed_blobs(raw_changes, max_entries=config.max_file_touches - file_touches_read)
+            parent_tree = objects.commit(parents[0]).tree if parents else None
+            changed_blobs = objects.changes(parent_tree, record.tree, config.max_file_touches - file_touches_read)
             object_ids = {blob for pair in changed_blobs.values() for blob in pair if set(blob) != {'0'}}
             for blob in sorted(object_ids - blob_contents.keys()):
-                # numstat can otherwise borrow a worktree file when an object is
-                # missing. Admit every old/new blob through the object store first.
-                _, contents = reader.read('cat-file', 'blob', blob, bare=True)
+                _, contents = objects.object(blob, 'blob')
                 blob_contents[blob] = contents
             entries = []
             for path, (old, new) in sorted(changed_blobs.items()):
@@ -428,6 +379,8 @@ def mine_history(root: Path, *, architecture: Any = None, config: HistoryConfig 
                                                           'policies': POLICIES, 'coverage': coverage}),
             'coverage': coverage, 'facts': facts,
             'observations': {'wall_seconds': time.monotonic() - started, 'git_commands': reader.commands,
+                             'verified_objects_by_type': {kind: sum(actual == kind for actual, _ in objects.objects.values())
+                                                          for kind in ('commit', 'tree', 'blob', 'tag')} if objects else {},
                              'git_bytes_read': reader.bytes_read, 'peak_git_buffer_bytes': reader.peak_buffer_bytes,
                              'memory_scope': 'retained Git output buffer, plus separate process-lifetime RSS observation',
                              'process_rss_before_bytes': resident_before, 'process_rss_after_bytes': _resident_bytes(),

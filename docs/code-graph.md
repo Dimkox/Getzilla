@@ -86,6 +86,21 @@ commits still count. Root commits compare with the empty tree. Renames count as 
 addition, without heuristic rename detection. Tabs, newlines and Unicode in file paths use NUL
 records; authors, messages, source and absolute source paths do not enter the report.
 
+Revision inputs are full object IDs or literal refs (`HEAD`, branch/tag names, full refs).
+Ancestry/reflog expressions such as `HEAD~10` refuse: Git's mutable interpretation cannot choose
+an unverified range. Annotated tag chains are independently verified before peeling. Every
+consumed commit, tree, blob and tag is hashed with the repository's SHA1/SHA256 format over
+its exact type, decimal byte length, NUL header and raw payload. Wrong-hash objects or wrong
+types yield explicit incomplete coverage; a readable object name is not integrity proof.
+
+Parents, committer times, range membership and tree changes come from those verified raw bytes,
+not Git `rev-list`, merge-base, grafts or replacement interpretation. Ordinary small ranges close
+with a positive bounded reachability proof; ambiguous side branches require a bounded verified
+base-ancestor closure. Unclosed range membership never produces full trends. The original finite
+commit limit plus one metadata lookahead remains; object bytes/time share the original budgets.
+Immutable cached bytes prevent a later metadata rewrite from relabeling already admitted facts.
+This is object identity verification, not a signature, author authentication or human approval.
+
 Mappings reuse the existing `architecture/system.yaml` and `architecture/rules.yaml` loader and
 longest declared path binding, including deleted paths. The architecture digest, explicit history
 config digest, extractor version and fixed policy strings bind numerical evidence. Missing or
@@ -101,8 +116,10 @@ counts inserted/deleted records. It does **not** claim Git-Myers-equivalent coun
 a NUL in the first8000 raw blob bytes. Raw old/new objects are admitted with `cat-file blob`
 before counting; missing objects cannot borrow working-tree files. Blob bytes stay private and
 never enter exported reports or model packets. Local Git attributes, diff drivers and custom
-function-name regexes do not choose this line algorithm. Only NUL-safe raw tree entries are
-collected by Git; source working-tree content is not used.
+function-name regexes do not choose this line algorithm. Binary tree names are parsed directly,
+including NUL framing and SHA1/SHA256 object widths; source working-tree content is not used.
+Identical referenced subtree IDs prove no change without scanning unrelated contents. Changed
+objects must pass admission before counters publish.
 
 Co-change pairs count distinct commits touching both components. A commit touching more than
 the configured component threshold retains touches/churn but contributes no pairs. The report
@@ -112,7 +129,8 @@ empty/excluded diffs. No percentage or dependency strength is inferred from thos
 `coverage.complete` applies only to the declared available range and mappings. Reasons include
 `NO_GIT_HISTORY`, `UNBORN_HISTORY`, `SHALLOW_HISTORY`, `PARTIAL_HISTORY`, `EMPTY_RANGE`,
 `EMPTY_WINDOW`, `MAPPING_UNAVAILABLE`, `UNSUPPORTED_MAPPING`, `UNMAPPED_PATHS`,
-`AMBIGUOUS_MAPPING`, `COMMIT_BUDGET`, `BYTE_BUDGET` and `TIME_BUDGET`. No-Git or incomplete
+`AMBIGUOUS_MAPPING`, `COMMIT_BUDGET`, `BYTE_BUDGET`, `TIME_BUDGET`, `OBJECT_ID_MISMATCH`,
+`OBJECT_TYPE_MISMATCH`, `INVALID_COMMIT` and `INVALID_TREE`. No-Git or incomplete
 history never means clean risk. A normal JSON response exits0 even for incomplete coverage;
 callers must inspect coverage. Invalid CLI/config arguments refuse (exit2/3). For example:
 
@@ -128,7 +146,11 @@ parsed entries and total pair/commit evidence, including combinatorial cross-com
 `--history-max-line-comparisons` (1000000) bounds the product of unmatched old/new line counts
 after anchoring. An over-budget pair reports `LINE_DIFF_BUDGET`; it does not publish that
 commit's partial counters. This is a finite prototype, not an arbitrary-history performance SLA.
-The byte probe can retain one extra byte to detect overflow. The deadline also covers per-file
+The stdout probe can retain one extra byte to detect overflow; both pipes share the byte budget.
+Each pipe has a bounded transient read chunk (at most64KiB); refused overflow reads can consume
+detection chunks beyond the threshold but cannot publish complete over-budget facts.
+Raw stdout is separate from discarded diagnostics, so warnings cannot become object bytes.
+The deadline also covers per-file
 analysis; bounded process cleanup may follow it. Only fully analysed commits publish counters.
 Reported wall time, Git command/read counts, peak retained Git buffer and observed process-lifetime
 RSS are separate observations outside `metrics_digest`. RSS is not attributed solely to mining

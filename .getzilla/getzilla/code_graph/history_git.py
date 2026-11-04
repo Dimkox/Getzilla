@@ -41,47 +41,56 @@ class GitReader:
             raise HistoryReadError('GIT_READ_INCOMPLETE')
         try:
             process = fsx.owned_popen(command, cwd=self.git_dir if bare else self.root, env=_env(), stdin=subprocess.DEVNULL,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError:
             raise HistoryReadError('GIT_UNAVAILABLE') from None
         self.commands += 1
         output = bytearray()
-        done, overflow = threading.Event(), threading.Event()
+        overflow = threading.Event()
+        done = [threading.Event(), threading.Event()]
+        captured = [0]
+        capture_lock = threading.Lock()
         read_error: list[BaseException] = []
         limit = self.remaining
 
-        def collect():
+        def collect(stream, keep, completed):
             try:
                 while True:
-                    chunk = process.stdout.read(min(65536, limit - len(output) + 1))
+                    chunk = stream.read(min(65536, limit + 1))
                     if not chunk:
                         return
-                    output.extend(chunk)
-                    if len(output) > limit:
-                        overflow.set()
-                        return
+                    with capture_lock:
+                        allowance = max(0, limit + 1 - captured[0])
+                        if keep:
+                            output.extend(chunk[:allowance])
+                        captured[0] += len(chunk)
+                        if captured[0] > limit:
+                            overflow.set()
+                            return
             except (OSError, ValueError) as error:
                 read_error.append(error)
             finally:
-                done.set()
+                completed.set()
 
-        reader = threading.Thread(target=collect, name='getzilla-history-git', daemon=True)
-        reader_started = False
+        readers = []
         reason = None
         try:
             try:
-                reader.start()
-                reader_started = True
+                for stream, keep, completed in ((process.stdout, True, done[0]), (process.stderr, False, done[1])):
+                    reader = threading.Thread(target=collect, args=(stream, keep, completed),
+                                              name='getzilla-history-git', daemon=True)
+                    readers.append(reader)
+                    reader.start()
             except RuntimeError:
                 raise HistoryReadError('LOCAL_RESOURCE_UNAVAILABLE') from None
-            while not (done.is_set() and process.poll() is not None):
+            while not (all(item.is_set() for item in done) and process.poll() is not None):
                 if overflow.is_set():
                     reason = 'BYTE_BUDGET'
                     break
                 if time.monotonic() >= self.deadline:
                     reason = 'TIME_BUDGET'
                     break
-                done.wait(0.005)
+                overflow.wait(0.005)
             if overflow.is_set():
                 reason = 'BYTE_BUDGET'
         finally:
@@ -89,13 +98,15 @@ class GitReader:
             try:
                 _stop(process)
             finally:
-                if reader_started:
-                    reader.join(timeout=2)
+                for reader in readers:
+                    if reader.ident is not None:
+                        reader.join(timeout=2)
                 process.stdout.close()
-        if reader.is_alive() or read_error:
+                process.stderr.close()
+        if any(reader.is_alive() for reader in readers) or read_error:
             raise HistoryReadError('GIT_READ_INCOMPLETE')
-        self.bytes_read += len(output)
-        self.remaining -= len(output)
+        self.bytes_read += captured[0]
+        self.remaining -= captured[0]
         self.peak_buffer_bytes = max(self.peak_buffer_bytes, len(output))
         if reason:
             raise HistoryReadError(reason)

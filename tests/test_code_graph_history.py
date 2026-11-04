@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest import mock
 from pathlib import Path
 
@@ -309,6 +311,13 @@ class HistoryTests(unittest.TestCase):
                 reader.read('rev-parse', 'HEAD')
         self.assertIsNotNone(processes[-1].poll())
         self.assertLessEqual(reader.peak_buffer_bytes, 129)
+        script.write_text('import sys,time\nsys.stderr.buffer.write(b"x"*1000000)\nsys.stderr.flush()\ntime.sleep(60)\n')
+        with mock.patch.object(history_git.fsx, 'owned_popen', create):
+            reader = GitReader(self.root, max_bytes=128, max_seconds=3)
+            with self.assertRaisesRegex(HistoryReadError, 'BYTE_BUDGET'):
+                reader.read('rev-parse', 'HEAD')
+        self.assertIsNotNone(processes[-1].poll())
+        self.assertLessEqual(reader.peak_buffer_bytes, 129)
         script.write_text('import time\ntime.sleep(60)\n')
         with mock.patch.object(history_git.fsx, 'owned_popen', create):
             reader = GitReader(self.root, max_bytes=128, max_seconds=0.05)
@@ -428,6 +437,229 @@ class HistoryTests(unittest.TestCase):
         os.mkfifo(self.root / '.gitattributes')
         report = mine_history(self.root, architecture=MODEL, config=HistoryConfig(max_seconds=2))
         self.assertTrue(report['coverage']['complete'], report['coverage'])
+
+    def substitute_object(self, oid, kind, content):
+        path = self.root / '.git/objects' / oid[:2] / oid[2:]
+        replacement = path.with_name(path.name + '.owned-fixture')
+        replacement.write_bytes(zlib.compress(kind.encode() + b' ' + str(len(content)).encode() + b'\0' + content))
+        replacement.replace(path)
+
+    def test_wrong_hash_blob_cannot_change_sha_grounded_churn(self):
+        self.commit({'a/x': b'one\n'})
+        baseline = mine_history(self.root, architecture=MODEL)
+        oid = git(self.root, 'rev-parse', 'HEAD:a/x')
+        self.substitute_object(oid, 'blob', b'one\ntwo\nthree\n')
+        report = mine_history(self.root, architecture=MODEL)
+        self.assertEqual(baseline['identity'], report['identity'])
+        self.assertFalse(report['coverage']['complete'])
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+        self.assertEqual(report['metrics']['components'], {})
+
+    def test_wrong_hash_commit_cannot_move_window_evidence(self):
+        self.commit({'a/x': b'one\n'}, day=1)
+        self.commit({'a/x': b'two\n'}, day=3)
+        self.commit({'a/x': b'three\n'}, day=4)
+        self.commit({'a/x': b'four\n'}, day=4)
+        oid = self.shas[0]
+        raw = git(self.root, 'cat-file', 'commit', oid).encode() + b'\n'
+        # Preserve a well-formed commit under the old filename, moving only the
+        # declared committer timestamp; Git will read it without hash admission.
+        raw = b'\n'.join(line.replace(b'1704110400 +0000', b'1704283200 +0000')
+                         if line.startswith(b'committer ') else line for line in raw.split(b'\n'))
+        self.substitute_object(oid, 'commit', raw)
+        report = self.report()
+        self.assertFalse(report['coverage']['complete'])
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+        self.assertFalse(any(fact['kind'] == 'increase' for fact in report['facts']))
+        self.assertTrue(all(oid not in fact['commits'] for fact in report['facts']))
+
+    def test_wrong_hash_tree_cannot_hide_paths(self):
+        self.commit({'a/x': b'x\n'})
+        tree = git(self.root, 'rev-parse', 'HEAD^{tree}')
+        self.substitute_object(tree, 'tree', b'')
+        report = mine_history(self.root, architecture=MODEL)
+        self.assertFalse(report['coverage']['complete'])
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+        self.assertEqual(report['metrics']['components'], {})
+
+    def test_graft_metadata_does_not_rewrite_verified_ancestry(self):
+        self.commit({'a/x': b'one\n'})
+        self.commit({'a/x': b'two\n'})
+        before = mine_history(self.root, architecture=MODEL)
+        (self.root / '.git/info/grafts').write_text(self.shas[-1] + '\n')
+        git(self.root, 'config', 'advice.graftFileDeprecated', 'false')
+        after = mine_history(self.root, architecture=MODEL)
+        self.assertTrue(after['coverage']['complete'], after['coverage'])
+        self.assertEqual(after['metrics_digest'], before['metrics_digest'])
+        self.assertEqual(after['metrics']['components']['a']['touches'], 2)
+
+    def test_annotated_tag_object_is_verified_before_peeling(self):
+        self.commit({'a/x': b'one\n'})
+        git(self.root, 'tag', '-a', '-m', 'ordinary', 'fixture-tag')
+        positive = mine_history(self.root, architecture=MODEL, end='fixture-tag')
+        self.assertTrue(positive['coverage']['complete'])
+        tag_oid = git(self.root, 'rev-parse', 'fixture-tag')
+        raw = git(self.root, 'cat-file', 'tag', tag_oid).encode() + b'\n'
+        self.substitute_object(tag_oid, 'tag', raw.replace(b'ordinary', b'changed'))
+        report = mine_history(self.root, architecture=MODEL, end='fixture-tag')
+        self.assertFalse(report['coverage']['complete'])
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+
+    def test_sha256_object_format_and_tamper_controls(self):
+        nested = self.root / 'sha256'
+        nested.mkdir()
+        git(nested, 'init', '-q', '-b', 'main', '--object-format=sha256')
+        (nested / 'a').mkdir()
+        (nested / 'a/x').write_bytes(b'one\n')
+        git(nested, 'add', '-A')
+        git(nested, 'commit', '-q', '-m', 'ordinary')
+        positive = mine_history(nested, architecture=MODEL)
+        self.assertTrue(positive['coverage']['complete'], positive['coverage'])
+        self.assertEqual(len(positive['identity']['end']), 64)
+        oid = git(nested, 'rev-parse', 'HEAD:a/x')
+        path = nested / '.git/objects' / oid[:2] / oid[2:]
+        replacement = path.with_name(path.name + '.owned-fixture')
+        replacement.write_bytes(zlib.compress(b'blob 8\0one\ntwo\n'))
+        replacement.replace(path)
+        report = mine_history(nested, architecture=MODEL)
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+
+    def test_range_membership_handles_branch_diverging_before_base(self):
+        self.commit({'a/x': b'x\n'})
+        git(self.root, 'checkout', '-q', '-b', 'side')
+        side = self.commit({'b/y': b'y\n'})
+        git(self.root, 'checkout', '-q', 'main')
+        base = self.commit({'a/x': b'z\n'})
+        git(self.root, 'merge', '--no-ff', '-q', '-m', 'merge', 'side')
+        report = mine_history(self.root, architecture=MODEL, base=base)
+        self.assertTrue(report['coverage']['complete'], report['coverage'])
+        self.assertEqual(report['metrics']['components'], {'b': report['metrics']['components']['b']})
+        self.assertEqual(report['metrics']['components']['b']['commits'], [side])
+
+    def test_graft_warning_is_not_mistaken_for_object_payload(self):
+        self.commit({'a/x': b'one\n'})
+        self.commit({'a/x': b'two\n'})
+        before = mine_history(self.root, architecture=MODEL)
+        (self.root / '.git/info/grafts').write_text(self.shas[-1] + '\n')
+        after = mine_history(self.root, architecture=MODEL)
+        self.assertTrue(after['coverage']['complete'], after['coverage'])
+        self.assertEqual(after['metrics_digest'], before['metrics_digest'])
+
+    def test_raw_git_stdout_and_diagnostics_are_framed_separately(self):
+        from getzilla import fsx
+        from getzilla.code_graph import history_git
+        original = fsx.owned_popen
+        script = self.root / 'inert_probe.py'
+        script.write_text('import sys\nsys.stderr.buffer.write(b"diagnostic")\nsys.stdout.buffer.write(b"raw-object-bytes")\n')
+        def create(_command, **kwargs):
+            return original([sys.executable, str(script)], **kwargs)
+        with mock.patch.object(history_git.fsx, 'owned_popen', create):
+            code, output = GitReader(self.root, max_bytes=1000, max_seconds=2).read('cat-file', 'blob', 'inert')
+        self.assertEqual(code, 0)
+        self.assertEqual(output, b'raw-object-bytes')
+
+    def test_verified_commit_cannot_point_to_a_blob_as_tree(self):
+        self.commit({'a/x': b'x\n'})
+        raw = git(self.root, 'cat-file', 'commit', 'HEAD').encode() + b'\n'
+        tree = git(self.root, 'rev-parse', 'HEAD^{tree}')
+        blob = git(self.root, 'rev-parse', 'HEAD:a/x')
+        malformed = raw.replace(('tree ' + tree).encode(), ('tree ' + blob).encode())
+        payload = b'commit ' + str(len(malformed)).encode() + b'\0' + malformed
+        oid = hashlib.sha1(payload, usedforsecurity=False).hexdigest()
+        path = self.root / '.git/objects' / oid[:2] / oid[2:]
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(zlib.compress(payload))
+        git(self.root, 'update-ref', 'refs/heads/main', oid)
+        report = mine_history(self.root, architecture=MODEL)
+        self.assertIn('OBJECT_TYPE_MISMATCH', report['coverage']['reasons'])
+        self.assertEqual(report['facts'], [])
+
+    def test_packed_objects_and_replace_refs_preserve_declared_history(self):
+        self.commit({'a/x': b'one\n'})
+        self.commit({'a/x': b'two\n'})
+        before = mine_history(self.root, architecture=MODEL)
+        git(self.root, 'repack', '-a', '-d')
+        packed = mine_history(self.root, architecture=MODEL)
+        self.assertEqual(before['metrics_digest'], packed['metrics_digest'])
+        git(self.root, 'replace', self.shas[-1], self.shas[0])
+        replaced = mine_history(self.root, architecture=MODEL)
+        self.assertEqual(before['metrics_digest'], replaced['metrics_digest'])
+
+    def test_integrity_failure_preserves_already_verified_prefix(self):
+        self.commit({'a/x': b'one\n'}, day=1)
+        self.commit({'a/x': b'two\n'}, day=2)
+        self.commit({'a/x': b'three\n'}, day=3)
+        oid = git(self.root, 'rev-parse', 'HEAD:a/x')
+        self.substitute_object(oid, 'blob', b'three\nfour\n')
+        report = mine_history(self.root, architecture=MODEL)
+        self.assertIn('OBJECT_ID_MISMATCH', report['coverage']['reasons'])
+        self.assertEqual(report['metrics']['components']['a']['touches'], 2)
+        self.assertEqual(report['metrics']['components']['a']['commits'], self.shas[:2])
+        self.assertFalse(any(fact['kind'] == 'increase' for fact in report['facts']))
+
+    def test_merge_base_frontier_excludes_old_crossover_commits(self):
+        self.commit({'a/x': b'root\n'})
+        git(self.root, 'checkout', '-q', '-b', 'old-chain')
+        middle = self.commit({'a/x': b'old\n'})
+        self.commit({'b/y': b'base-branch\n'})
+        git(self.root, 'checkout', '-q', 'main')
+        git(self.root, 'merge', '--no-ff', '-q', '-m', 'base merge', 'old-chain')
+        base = git(self.root, 'rev-parse', 'HEAD')
+        git(self.root, 'checkout', '-q', '-b', 'side', middle)
+        new = self.commit({'c/z': b'new\n'})
+        git(self.root, 'checkout', '-q', 'main')
+        git(self.root, 'merge', '--no-ff', '-q', '-m', 'end merge', 'side')
+        report = mine_history(self.root, architecture=MODEL, base=base)
+        self.assertTrue(report['coverage']['complete'], report['coverage'])
+        self.assertEqual(set(report['metrics']['components']), {'c'})
+        self.assertEqual(report['metrics']['components']['c']['commits'], [new])
+
+    def test_tree_file_directory_and_mode_transitions(self):
+        self.commit({'a/x': b'one\n'})
+        self.commit({'a/x': None, 'a/x/y': b'two\n'})
+        (self.root / 'a/x/y').unlink()
+        (self.root / 'a/x').rmdir()
+        self.commit({'a/x': b'three\n'})
+        report = mine_history(self.root, architecture=MODEL)
+        value = report['metrics']['components']['a']
+        self.assertTrue(report['coverage']['complete'], report['coverage'])
+        self.assertEqual((value['touches'], value['file_touches'], value['insertions'], value['deletions']), (3, 5, 3, 2))
+        git(self.root, 'update-index', '--chmod=+x', 'a/x')
+        git(self.root, 'commit', '-q', '-m', 'mode only')
+        changed = mine_history(self.root, architecture=MODEL)['metrics']['components']['a']
+        self.assertEqual((changed['touches'], changed['file_touches'], changed['insertions'], changed['deletions']), (4, 6, 3, 2))
+
+    def test_revision_ancestry_expressions_do_not_use_unverified_git_graph(self):
+        self.commit({'a/x': b'one\n'})
+        self.commit({'a/x': b'two\n'})
+        report = mine_history(self.root, architecture=MODEL, end='HEAD~1')
+        self.assertIn('INVALID_REVISION', report['coverage']['reasons'])
+        self.assertEqual(report['facts'], [])
+
+    def test_reader_interrupt_after_both_streams_start_reaps_and_joins(self):
+        from getzilla import fsx
+        from getzilla.code_graph import history_git
+        original_create = fsx.owned_popen
+        original_start = history_git.threading.Thread.start
+        children, started = [], []
+        script = self.root / 'inert_probe.py'
+        script.write_text('import time\ntime.sleep(60)\n')
+        def create(_command, **kwargs):
+            child = original_create([sys.executable, str(script)], **kwargs)
+            children.append(child)
+            return child
+        def start(thread):
+            original_start(thread)
+            started.append(thread)
+            if len(started) == 2:
+                raise KeyboardInterrupt('owned fixture interruption')
+        with mock.patch.object(history_git.fsx, 'owned_popen', create), \
+                mock.patch.object(history_git.threading.Thread, 'start', start):
+            with self.assertRaises(KeyboardInterrupt):
+                GitReader(self.root, max_bytes=1000, max_seconds=2).read('cat-file', 'blob', 'inert')
+        self.assertIsNotNone(children[0].poll())
+        self.assertTrue(started)
+        self.assertTrue(all(not thread.is_alive() for thread in started))
 
 
 if __name__ == '__main__':
