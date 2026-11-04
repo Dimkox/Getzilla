@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -128,7 +129,7 @@ class ProjectSyncTests(unittest.TestCase):
         manifest = self.select(('codex',))
         overlay = (ROOT / '.getzilla/config/codex-hooks.json').read_bytes()
         sources = {'.grok/hooks/pre_tool_use.py': b'# previous managed guard\n',
-                   '.grok/agents/code_reviewer.toml': b'# previous role\n',
+                   '.grok/agents/code_reviewer.toml': (ROOT / '.getzilla/agents/code_reviewer.toml').read_bytes(),
                    '.grok/codex-hooks.json': overlay}
         for path, content in sources.items():
             target = self.project / path
@@ -433,7 +434,7 @@ class ProjectSyncTests(unittest.TestCase):
         original_project = self.project
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                for scenario in ('kept', 'divergent', 'unowned', 'mode-only'):
+                for scenario in ('kept', 'divergent', 'unowned', 'mode-only', 'owned-custom'):
                     with self.subTest(scenario=scenario):
                         self.project = Path(tmp) / scenario
                         git(original_project, 'clone', '--quiet', str(original_project), str(self.project))
@@ -455,7 +456,7 @@ class ProjectSyncTests(unittest.TestCase):
                             (self.project / legacy).chmod(0o444)
                         original_mode = (self.project / legacy).stat().st_mode
                         if scenario != 'unowned':
-                            record_owned(manifest, legacy, baseline, 0o644)
+                            record_owned(manifest, legacy, custom if scenario == 'owned-custom' else baseline, 0o644)
                         record_owned(manifest, active, custom, 0o644)
                         if scenario == 'kept':
                             (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
@@ -464,14 +465,18 @@ class ProjectSyncTests(unittest.TestCase):
                         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
                         self.commit('custom canonical read-only policy')
                         before = git(self.project, 'rev-parse', 'HEAD')
+                        permissions = tomllib.loads((self.project / active).read_text())['sandbox_mode']
+                        if scenario != 'mode-only':
+                            self.assertEqual(permissions, 'read-only')
                         with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
                             upgrade.sync_project(ROOT, self.project)
                         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
-                        self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+                        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
                         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
                         self.assertEqual((self.project / legacy).read_bytes(), custom)
                         self.assertEqual((self.project / legacy).stat().st_mode, original_mode)
                         self.assertEqual((self.project / active).read_bytes(), custom)
+                        self.assertEqual(tomllib.loads((self.project / active).read_text())['sandbox_mode'], permissions)
                         self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
                         self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
             finally:
@@ -479,25 +484,39 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_custom_relocated_cursor_source_refuses_before_publication(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
-        manifest = self.select(('cursor',))
-        legacy = '.grok/cursor-rules/00-core.toml'
-        source = self.project / legacy
-        source.parent.mkdir(parents=True)
-        baseline = (ROOT / '.getzilla/cursor-rules/00-core.toml').read_bytes()
-        custom = baseline.replace(b'# Getzilla engineering contract', b'# Local Cursor policy: keep this workspace read-only')
-        source.write_bytes(custom)
-        source.chmod(0o644)
-        record_owned(manifest, legacy, baseline, 0o644)
-        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
-        self.commit('custom Cursor canonical policy')
-        before = git(self.project, 'rev-parse', 'HEAD')
-        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/cursor-rules/00-core\.toml'):
-            upgrade.sync_project(ROOT, self.project)
-        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
-        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
-        self.assertEqual(source.read_bytes(), custom)
-        self.assertFalse((self.project / '.getzilla/cursor-rules/00-core.toml').exists())
-        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for scenario in ('divergent', 'owned-custom'):
+                    with self.subTest(scenario=scenario):
+                        self.project = Path(tmp) / scenario
+                        git(original_project, 'clone', '--quiet', str(original_project), str(self.project))
+                        manifest = self.select(('cursor',))
+                        legacy = '.grok/cursor-rules/00-core.toml'
+                        source = self.project / legacy
+                        source.parent.mkdir(parents=True)
+                        baseline = (ROOT / '.getzilla/cursor-rules/00-core.toml').read_bytes()
+                        custom = baseline.replace(b'# Getzilla engineering contract',
+                                                  b'# Local Cursor policy: keep this workspace read-only')
+                        self.assertNotEqual(custom, baseline)
+                        source.write_bytes(custom)
+                        source.chmod(0o644)
+                        original_mode = source.stat().st_mode
+                        record_owned(manifest, legacy, custom if scenario == 'owned-custom' else baseline, 0o644)
+                        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                        self.commit('custom Cursor canonical policy')
+                        before = git(self.project, 'rev-parse', 'HEAD')
+                        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/cursor-rules/00-core\.toml'):
+                            upgrade.sync_project(ROOT, self.project)
+                        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+                        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+                        self.assertEqual(source.read_bytes(), custom)
+                        self.assertEqual(source.stat().st_mode, original_mode)
+                        self.assertFalse((self.project / '.getzilla/cursor-rules/00-core.toml').exists())
+                        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+            finally:
+                self.project = original_project
 
     def test_canonical_role_migrates_and_rolls_back_without_touching_grok_markdown(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
@@ -512,6 +531,7 @@ class ProjectSyncTests(unittest.TestCase):
         extension = self.project / '.grok/agents/local-extension.md'
         extension.write_bytes(b'# Local Grok-only adapter extension\n')
         extension.chmod(0o600)
+        extension_mode = extension.stat().st_mode
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('ordinary canonical input and independent Grok brief')
         original = git(self.project, 'rev-parse', 'HEAD')
@@ -519,13 +539,15 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), content)
         self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+        self.assertEqual(extension.stat().st_mode, extension_mode)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
         git(self.project, 'switch', '--quiet', 'main')
         self.assertEqual(old.read_bytes(), content)
         self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
         self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+        self.assertEqual(extension.stat().st_mode, extension_mode)
 
-    def test_owned_previous_canonical_baseline_can_upgrade_to_incoming_source(self) -> None:
+    def test_owned_previous_canonical_bytes_require_reconciliation(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
         manifest = self.select(('codex',))
         current = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
@@ -540,9 +562,16 @@ class ProjectSyncTests(unittest.TestCase):
             record_owned(manifest, relative, previous, 0o644)
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('unchanged previous managed role baseline')
-        upgrade.sync_project(ROOT, self.project)
-        self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), current)
-        self.assertEqual((self.project / '.codex/agents/general_implementer.toml').read_bytes(), current)
+        original = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual((self.project / '.grok/agents/general_implementer.toml').read_bytes(), previous)
+        self.assertEqual((self.project / '.codex/agents/general_implementer.toml').read_bytes(), previous)
+        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
 
     def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
         original = upgrade.planned_changes
