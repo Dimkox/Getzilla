@@ -3,6 +3,8 @@ import hashlib
 from pathlib import Path
 import shutil
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,20 @@ NOW = datetime(2026, 9, 4, 11, 0, tzinfo=timezone.utc)
 REPOSITORY_ID = "github.com/Dimkox/ai-dark-factory-landing"
 BASE_SHA = "699010380f4f90a0193a9c22090c35e6aded7d2c"
 BASE_TREE = "f7dbbd80c6e95d2a365109d937f5be76d8fe0bd4"
+_FIXTURE_DIRECTORY = tempfile.TemporaryDirectory(prefix="public-landing-provider-")
+
+
+def owned_fixture():
+    # Keep the canonical fixture body exact, but run it with this test process's
+    # actual interpreter rather than an unrelated platform /usr/bin/python3.
+    python = os.fsencode(Path(sys.executable).resolve())
+    if b"\n" in python or b" " in python or len(python) > 240:
+        raise RuntimeError("public fixture interpreter cannot be expressed as a pinned shebang")
+    target = Path(_FIXTURE_DIRECTORY.name) / ("fixture-" + digest(python) + ".py")
+    if not target.exists():
+        target.write_bytes(b"#!" + python + b"\n" + FIXTURE.read_bytes().partition(b"\n")[2])
+        target.chmod(0o755)
+    return target
 
 
 def digest(value):
@@ -60,8 +76,8 @@ def landing_input(payload=b"same semantic request", *, kind="text", media_type="
     )
 
 
-def profile(mode="normal", *, executable=FIXTURE, timeout_seconds=2):
-    executable = Path(executable).resolve()
+def profile(mode="normal", *, executable=None, timeout_seconds=2):
+    executable = Path(owned_fixture() if executable is None else executable).resolve()
     return LandingProviderProfile.from_facts(
         {
             "schema_version": 1,
@@ -91,6 +107,20 @@ def clock():
 
 
 class LandingProviderTests(unittest.TestCase):
+    def test_owned_fixture_uses_current_interpreter_and_exact_canonical_body(self):
+        configured = profile()
+        executable = Path(configured.executable)
+        header, separator, body = executable.read_bytes().partition(b"\n")
+        self.assertEqual(header, b"#!" + os.fsencode(Path(sys.executable).resolve()))
+        self.assertEqual(separator, b"\n")
+        self.assertEqual(body, FIXTURE.read_bytes().partition(b"\n")[2])
+        self.assertEqual(configured.executable_sha256, digest(executable.read_bytes()))
+        self.assertTrue(stat.S_ISREG(executable.lstat().st_mode))
+        self.assertEqual(executable.lstat().st_nlink, 1)
+        self.assertEqual(executable.lstat().st_uid, os.geteuid())
+        self.assertEqual(stat.S_IMODE(executable.parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(executable.stat().st_mode), 0o755)
+
     def _fixture_environment(self, environment, mode="normal"):
         # Exercise actual fixture bytes with a controlled child-only environment.
         # This is a protocol fixture contrast, never native Mac qualification.

@@ -63,6 +63,18 @@ _LINUX_CASES = frozenset({
     "test_setup_manager_real_process_install_failed_update_reconcile_remove_and_purge",
     "test_concurrent_managers_leave_one_child_and_coherent_journal",
 })
+_PROCFS_STORE_CASES = frozenset({
+    "test_crc_and_encrypted_members_fail_closed",
+    "test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded",
+    "test_exact_archive_bounds_are_admitted",
+    "test_external_hardlinks_in_object_generation_manifest_and_active_fail_closed",
+    "test_hostile_zip_matrix_preserves_old_active",
+    "test_manifest_tamper_and_generation_symlink_are_rejected",
+    "test_registry_callback_cannot_redirect_object_writes_or_reads",
+    "test_replay_rechecks_digest_origin_and_lifecycle_authority",
+    "test_restart_and_tenant_repository_symlink_isolation",
+    "test_thread_and_process_competitors_converge_and_reconcile",
+})
 _CLI_CASES = frozenset({
     "test_bb_contracts.BBContractTests.test_structural_schemas_accept_canonical_records_but_parser_is_semantic_gate",
     "test_execution_contracts.ExecutionContractTests.test_workspace_result_schema_validates_records_with_jsonschema_cli",
@@ -247,6 +259,25 @@ def declared_ids(root: Path, *, contents: dict[str, bytes] | None = None) -> lis
     return sorted(set(identifiers))
 
 
+def _procfs_descriptor_reopen() -> bool:
+    # Measure independently of the optional Factory implementation. A caller's
+    # skip reason, host label or a changed report cannot supply this fact.
+    if not sys.platform.startswith("linux"):
+        return False
+    opened = []
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        opened.append(os.open("/", flags | os.O_NOFOLLOW))
+        opened.append(os.open(f"/proc/self/fd/{opened[0]}", flags))
+        identities = [_directory_identity(os.fstat(descriptor)) for descriptor in opened]
+        return identities[0] == identities[1]
+    except (OSError, AttributeError):
+        return False
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+
+
 def observed_context(path: str | None = None) -> dict:
     try:
         child = subprocess.run(
@@ -272,6 +303,7 @@ def observed_context(path: str | None = None) -> dict:
     except (OSError, subprocess.SubprocessError, UnicodeError):
         pass
     return {"unit_database_bindings": "scrubbed", "host_supported": supported,
+            "procfs_descriptor_reopen": _procfs_descriptor_reopen(),
             "pypdf_version": child.stdout.strip() or None,
             "jsonschema_cli": shutil.which("jsonschema", path=path)}
 
@@ -298,6 +330,9 @@ def skip_allowance(identifier: str, context: dict) -> tuple[str, str] | None:
     if (group == "test_linux_process_adapter.LinuxProcessAdapterTests"
             and method in _LINUX_CASES and not context["host_supported"]):
         return "unsupported-process-host", "requires the supported host profile: Ubuntu 24.04 x86_64 with /usr/bin/python3.12"
+    if (group == "test_vibevm_store.VibeVMStoreTests" and method in _PROCFS_STORE_CASES
+            and context.get("procfs_descriptor_reopen") is False):
+        return "unsupported-procfs-store", "requires Linux procfs descriptor reopening"
     if (case == "test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable"
             and context["pypdf_version"] is not None):
         return "parser-present", "pypdf present; unavailable branch cannot run"
