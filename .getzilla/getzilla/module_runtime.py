@@ -178,7 +178,7 @@ def _activation(binding, root, name, request, entitlement=None):
     _need(set(request.operations) == set(metadata['permissions']), 'explicit_scoped_grants_required')
     for dependency, version in metadata['dependencies'].items():
         from .optional_modules import admit_module
-        admitted = admit_module(root, dependency)
+        admitted = admit_module(root, dependency, entitlement=entitlement)
         _need(admitted['allowed'] and admitted['version'] == version, 'module_dependency_invalid')
     return observed, state.manifest, record
 

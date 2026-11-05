@@ -25,12 +25,29 @@ class RuntimeModuleTests(unittest.TestCase):
         self.make_runtime('1.0.0')
         self.fixture.run_module('install', {'runtime-addon': '1.0.0'})
 
-    def make_runtime(self, version, features=None, entitlement=None):
+    def make_runtime(self, version, features=None, entitlement=None, dependencies=None):
         descriptor = {'schema_version': 1, 'module': 'runtime-addon', 'version': version,
                       'required_features': features or ['owned-runtime-v1', 'trusted-transport-v1'],
                       'native_profiles': ['fixture-owned-v1']}
         self.fixture.make_module('runtime-addon', version, permissions=['fixture.read'], entitlement=entitlement,
+                                 dependencies=dependencies,
                                  files={'runtime.v1.json': (json.dumps(descriptor).encode(), False)})
+
+    @staticmethod
+    def synthetic_entitlement(root, name, version, capability):
+        """Public metadata only; this fixture is not a native entitlement service."""
+        return {'verified': True, 'project': str(root.absolute()), 'module': name,
+                'version': version, 'capability': capability}
+
+    def prepare_dependency(self, *, licensed):
+        from dataclasses import replace
+        self.fixture.make_module('runtime-dependency', '1.0.0',
+                                 entitlement='fixture.dependency' if licensed else None)
+        self.make_runtime('2.0.0', dependencies={'runtime-dependency': '1.0.0'})
+        self.fixture.run_module('update', {'runtime-addon': '2.0.0'}, entitlement=self.synthetic_entitlement)
+        self.fixture.run_module('enable', {'runtime-dependency': None}, grants=['context.read'],
+                                entitlement=self.synthetic_entitlement)
+        return replace(self.request(), version='2.0.0')
 
     def request(self):
         record = read_state(self.root).manifest['components']['module:runtime-addon']['module']
@@ -222,6 +239,54 @@ class RuntimeModuleTests(unittest.TestCase):
         with self.assertRaisesRegex(ModuleError, 'entitlement_adapter_required'):
             commit_activation(self.root, plan, **ports)
         self.assertEqual(commit_activation(self.root, plan, entitlement=verify, **ports).state, 'enabled')
+
+    def test_unlicensed_dependency_activation_needs_no_verifier(self):
+        request = self.prepare_dependency(licensed=False)
+        ports = self.fixture_ports()
+        self.assertTrue(admit_module(self.root, 'runtime-dependency')['allowed'])
+        plan = plan_activation(self.root, 'runtime-addon', request, **ports)
+        self.assertEqual(commit_activation(self.root, plan, **ports).state, 'enabled')
+        self.assertTrue(module_status(self.root)['modules']['runtime-addon']['enabled'])
+
+    def test_licensed_dependency_verifier_reaches_plan_and_commit(self):
+        request = self.prepare_dependency(licensed=True)
+        ports = self.fixture_ports()
+        self.assertTrue(admit_module(self.root, 'runtime-dependency',
+                                     entitlement=self.synthetic_entitlement)['allowed'])
+        try:
+            plan = plan_activation(self.root, 'runtime-addon', request,
+                                   entitlement=self.synthetic_entitlement, **ports)
+        except ModuleError as error:
+            self.fail(f'Enabled licensed dependency with matching verifier must plan: {error}')
+        self.assertEqual(commit_activation(self.root, plan, entitlement=self.synthetic_entitlement,
+                                            **ports).state, 'enabled')
+        self.assertTrue(module_status(self.root)['modules']['runtime-addon']['enabled'])
+
+    def test_licensed_dependency_missing_or_rejected_verifier_publishes_nothing(self):
+        request = self.prepare_dependency(licensed=True)
+        ports = self.fixture_ports()
+        before = (self.root / MANIFEST).read_bytes()
+        def rejected(root, name, version, capability):
+            return {'verified': False, 'project': str(root.absolute()), 'module': name,
+                    'version': version, 'capability': capability}
+        for verifier in (None, rejected):
+            with self.subTest(stage='plan', verifier='missing' if verifier is None else 'rejected'):
+                with self.assertRaisesRegex(ModuleError, 'module_dependency_invalid'):
+                    plan_activation(self.root, 'runtime-addon', request, entitlement=verifier, **ports)
+                self.assertEqual((self.root / MANIFEST).read_bytes(), before)
+                self.assertFalse((self.root / '.getzilla/runtime/modules/pending.json').exists())
+        try:
+            plan = plan_activation(self.root, 'runtime-addon', request,
+                                   entitlement=self.synthetic_entitlement, **ports)
+        except ModuleError as error:
+            self.fail(f'Matching dependency verifier must permit the pre-commit plan: {error}')
+        for verifier in (None, rejected):
+            with self.subTest(stage='commit', verifier='missing' if verifier is None else 'rejected'):
+                with self.assertRaisesRegex(ModuleError, 'module_dependency_invalid'):
+                    commit_activation(self.root, plan, entitlement=verifier, **ports)
+                self.assertEqual((self.root / MANIFEST).read_bytes(), before)
+                self.assertFalse((self.root / '.getzilla/runtime/modules/pending.json').exists())
+                self.assertFalse(module_status(self.root)['modules']['runtime-addon']['enabled'])
 
 
 if __name__ == '__main__':
