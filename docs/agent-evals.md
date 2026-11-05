@@ -74,11 +74,16 @@ labels: these labels are intentionally included in reports. Run IDs, timestamps
 and measured time stay outside `canonical` and `result_digest`. The same files
 and runner produce the same canonical verdicts and digest.
 
+The runner identity hashes the validated corresponding `.py` source through its actual supported module loader, including a legacy `.pyc` ZIP import. Missing source or an unsupported loader refuses with `runner_source_unavailable`; bytecode is not source proof. A changed runner implementation requires explicit new baseline acceptance: readable historical V1 data does not make different runner hashes comparable.
+
 ## Baseline comparison and acceptance
 
-Baseline transactions require POSIX descriptor-relative file operations. Other
-platforms return `baseline_descriptor_unsupported` and keep offline replay
-available. Create a trusted baseline parent directory first. Missing parents
+Baseline transactions require POSIX descriptor-relative file operations and a
+working shared/exclusive kernel lock on the held parent directory. A host that
+lacks the descriptor operations returns `baseline_descriptor_unsupported`; a
+directory-lock refusal returns `baseline_lock_unsupported`. Offline replay stays
+available. Directory-lock support is exercised on the local Linux profile; this
+is not Windows/macOS or every filesystem qualification. Create a trusted baseline parent directory first. Missing parents
 are refused and are never created by replay or acceptance. Then explicitly accept
 a passing run:
 
@@ -108,16 +113,49 @@ budget. Version 1 accepts only `repetitions: 1`.
 
 `accept` reruns the supplied files and refuses any nonpassing run. It appends
 reason, scope, timestamp and the previous acceptance digest to a hash-linked
-history. Atomic replacement and an exclusive sibling lock serialize acceptance. Baseline
-reads, lock/temp creation, replacement and cleanup use held parent descriptors.
-The runner holds and validates every ancestor before and after operations; a
-changed directory name or destination identity causes refusal. It never reopens
-the selected parent by path during a baseline transaction.
-Corrupt history is refused. All previous entries remain. Each baseline file
-holds at most 32 acceptances; at the limit, select a new baseline path and retain
-the old file. A process crash can leave `<baseline>.lock`; inspect the stopped
-process before removing that stale lock. History hashes detect accidental edits;
-local files are not signed attestations or merge authority.
+history. Current readers take a nonblocking shared parent-directory lock; a
+writer retains the exclusive lock until it closes its owned baseline descriptor.
+Sibling baselines in one directory share this lock. Contention is an explicit
+`baseline_acceptance_busy` refusal. An existing legacy `<baseline>.lock` also
+blocks writing; the evaluator never removes it.
+
+Initial creation uses no-follow `O_CREAT|O_EXCL`, so an existing replacement leaf
+cannot be overwritten. Updates append through the admitted same-owner,
+single-link file descriptor with `O_APPEND`. No operation renames, replaces,
+truncates or unlinks a baseline, temporary file or pathname lock. Replacing a
+name cannot redirect the held descriptor's writes into the replacement object.
+The evaluator checks the opened object and all held ancestors, verifies the
+resulting bytes, and refuses changed custody. Cleanup only unlocks/closes owned
+descriptors. This is a cooperating local workflow protocol, not confinement
+against arbitrary same-UID code ignoring locks.
+
+New files use V2 append framing: a `{"schema_version":2,"history":[]}` header,
+then newline-terminated acceptance-entry/commit-marker pairs. Each marker is
+`{"schema_version":2,"commit":"<acceptance_digest>"}`. Entry data is synced
+before writing its marker; both the marker and directory are synced and custody
+is rechecked before an `accepted` return. Existing V1 JSON history remains
+readable. Its exact bytes stay as the prefix when adding V2 pairs. History
+digests and previous-digest links are checked across that boundary. Use the CLI
+or evaluator reader for the resulting stream; a generic single-document JSON
+reader and older evaluator versions do not support V2 framing.
+
+Visibility is mediated by the current reader/writer kernel lock, rather than an
+atomic pathname replacement or portable leaf-CAS. A crash, cancellation, short
+write or failed preparation sync can leave an incomplete tail or a new incomplete
+file. Comparison then reports `incomparable` with `baseline_incomplete_append`;
+further acceptance refuses too. It does not silently compare an older entry or
+truncate/delete the incomplete data. Previous history bytes survive. If a
+complete commit exists but its success response or final durability confirmation
+was lost, the caller must treat the acceptance outcome as uncertain; an error
+does not prove no bytes were written. A later readable complete commit is an
+observation of history, not proof that the original caller received an ACK.
+Choose a new explicit path or reconcile the retained file outside this automatic
+writer. No backup or temporary leaves accumulate.
+
+Corrupt history is refused. Each baseline remains bounded by 32 acceptances and
+the existing byte cap; at the limit, select a new path and retain the old file.
+History hashes detect accidental edits. Neither history, local acceptance nor
+kernel locking supplies a signed attestation, human decision or merge authority.
 
 ## Existing verifier integration
 

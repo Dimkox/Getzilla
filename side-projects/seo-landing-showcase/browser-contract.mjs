@@ -5,6 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const option = (name) => {
@@ -15,9 +16,11 @@ const targetUrl = option("--url");
 const outputOption = option("--output");
 const suppliedCdp = option("--cdp-url");
 const suppliedChrome = option("--chrome");
+const cleanupPython = option("--cleanup-python") ?? (process.platform === "win32" ? "python" : "python3");
+const cleanupHelper = fileURLToPath(new URL("./cleanup-owned-directory.py", import.meta.url));
 
 if (!targetUrl || !outputOption) {
-  console.error("Usage: node browser-contract.mjs --url <http-url> --output <directory> [--chrome <path> | --cdp-url <url>]");
+  console.error("Usage: node browser-contract.mjs --url <http-url> --output <directory> [--chrome <path> | --cdp-url <url>] [--cleanup-python <python>]");
   process.exit(2);
 }
 const parsedTarget = new URL(targetUrl);
@@ -29,6 +32,22 @@ const outputDir = path.resolve(outputOption);
 fs.mkdirSync(outputDir, { recursive: true });
 let chromeProcess;
 let chromeProfile;
+let chromeRuntime;
+let chromeDiagnostic = "";
+let chromeStartupError;
+let chromeStopping;
+const ownedDirectories = [];
+const directoryCleanup = [];
+let browserReport;
+let cleanupPublished = false;
+
+function privateDirectory(parent, prefix) {
+  const directory = fs.mkdtempSync(path.join(parent, prefix));
+  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  const identity = fs.lstatSync(directory, { bigint: true });
+  ownedDirectories.push({ directory, identity });
+  return directory;
+}
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -54,7 +73,9 @@ function findChrome() {
 async function launchChrome() {
   if (suppliedCdp) return suppliedCdp.replace(/\/$/, "");
   const port = await freePort();
-  chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), "seo-landing-browser-contract-"));
+  chromeProfile = privateDirectory(os.tmpdir(), "seo-landing-browser-contract-");
+  // Chrome adds a singleton socket suffix. Inherited test paths can exceed AF_UNIX limits.
+  chromeRuntime = privateDirectory(process.platform === "win32" ? os.tmpdir() : "/tmp", "gzc-");
   chromeProcess = spawn(findChrome(), [
     "--headless=new",
     "--no-sandbox",
@@ -63,17 +84,27 @@ async function launchChrome() {
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${chromeProfile}`,
     "about:blank",
-  ], { stdio: "ignore" });
+  ], {
+    stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, TMPDIR: chromeRuntime, TEMP: chromeRuntime, TMP: chromeRuntime },
+  });
+  chromeProcess.stderr.on("data", (chunk) => {
+    chromeDiagnostic = (chromeDiagnostic + chunk.toString("utf8")).slice(-4096);
+  });
+  chromeProcess.once("error", (error) => { chromeStartupError = error; });
   const cdpUrl = `http://127.0.0.1:${port}`;
   for (let attempt = 0; attempt < 450; attempt += 1) {
+    if (chromeStartupError || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) {
+      const reason = chromeStartupError?.message ?? chromeProcess.signalCode ?? chromeProcess.exitCode;
+      throw new Error(`Chrome exited before startup: ${reason}\n${chromeDiagnostic}`);
+    }
     try {
       const response = await fetch(`${cdpUrl}/json/version`);
       if (response.ok) return cdpUrl;
     } catch {}
-    if (chromeProcess.exitCode !== null) throw new Error(`Chrome exited with ${chromeProcess.exitCode}`);
     await delay(100);
   }
-  throw new Error("Timed out waiting for Chrome DevTools Protocol");
+  throw new Error(`Timed out waiting for Chrome DevTools Protocol\n${chromeDiagnostic}`);
 }
 
 function waitForExit(child, timeoutMs) {
@@ -94,21 +125,103 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-async function stopChrome() {
-  if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
-    chromeProcess.kill("SIGTERM");
-    if (!await waitForExit(chromeProcess, 3000)) {
-      chromeProcess.kill("SIGKILL");
-      if (!await waitForExit(chromeProcess, 3000)) throw new Error("Chrome did not exit after SIGKILL");
-    }
-  }
-  if (chromeProfile && chromeProfile.startsWith(path.join(os.tmpdir(), "seo-landing-browser-contract-"))) {
-    await fs.promises.rm(chromeProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+function cleanOwnedDirectory({ directory, identity }) {
+  const expected = Object.fromEntries(["dev", "ino", "uid"].map((key) => [key, String(identity[key])]));
+  const retained = (reason) => ({ schema_version: 1, directory, identity: expected,
+    contents_cleaned: false, root_removed: false, path_state: "unknown", reason });
+  return new Promise((resolve) => {
+    let child, timer, finished = false, stdout = "", size = 0, refusal;
+    const finish = (report) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(report);
+    };
+    try {
+      child = spawn(cleanupPython, ["-I", "-S", cleanupHelper, "--directory", directory,
+        ...Object.entries(expected).flatMap(([key, value]) => [`--${key}`, value])],
+      { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    } catch { finish(retained("cleanup-helper-unavailable")); return; }
+    child.once("error", () => { refusal = "cleanup-helper-unavailable"; });
+    child.stdout.on("data", (chunk) => {
+      size += chunk.length;
+      if (size <= 4096) stdout += chunk.toString("utf8");
+      else { refusal = "cleanup-helper-output-limit"; child.kill("SIGTERM"); }
+    });
+    child.once("close", (code) => {
+      if (refusal || code !== 0) { finish(retained(refusal ?? "cleanup-helper-failed")); return; }
+      try {
+        const report = JSON.parse(stdout);
+        const keys = ["schema_version", "directory", "identity", "contents_cleaned", "root_removed", "path_state", "reason"].sort();
+        if (!report || Object.keys(report).sort().join() !== keys.join()
+            || report.schema_version !== 1 || report.directory !== directory
+            || !report.identity || Object.keys(report.identity).sort().join() !== "dev,ino,uid"
+            || !Object.entries(expected).every(([key, value]) => report.identity[key] === value)
+            || typeof report.contents_cleaned !== "boolean" || report.root_removed !== false
+            || !["owned", "changed", "absent", "unknown"].includes(report.path_state)
+            || typeof report.reason !== "string" || report.reason.length > 100
+            || (report.contents_cleaned && report.reason !== "contents-cleaned-root-retained")) {
+          throw new Error("invalid cleanup result");
+        }
+        finish(report);
+      } catch { finish(retained("cleanup-helper-invalid-result")); }
+    });
+    timer = setTimeout(async () => {
+      refusal = "cleanup-helper-timeout";
+      child.kill("SIGTERM");
+      if (!await waitForExit(child, 1000)) {
+        child.kill("SIGKILL");
+        await waitForExit(child, 1000);
+      }
+      finish(retained(refusal));
+    }, 3000);
+  });
+}
+
+function publishCleanup() {
+  if (cleanupPublished) return;
+  cleanupPublished = true;
+  const directChild = !chromeProcess || chromeProcess.pid === undefined ? "not-owned"
+    : chromeProcess.exitCode !== null || chromeProcess.signalCode !== null ? "reaped" : "running-or-unknown";
+  const cleanup = { direct_child: directChild, directories: directoryCleanup };
+  fs.writeFileSync(path.join(outputDir, "browser-cleanup.json"), `${JSON.stringify(cleanup, null, 2)}\n`);
+  if (browserReport) {
+    browserReport.cleanup = cleanup;
+    fs.writeFileSync(path.join(outputDir, "browser-contract.json"), `${JSON.stringify(browserReport, null, 2)}\n`);
+    console.log(JSON.stringify(browserReport, null, 2));
   }
 }
 
-const cdpUrl = await launchChrome();
+function stopChrome() {
+  chromeStopping ??= (async () => {
+    try {
+      if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
+        chromeProcess.kill("SIGTERM");
+        if (!await waitForExit(chromeProcess, 3000)) {
+          chromeProcess.kill("SIGKILL");
+          if (!await waitForExit(chromeProcess, 3000)) throw new Error("Chrome did not exit after SIGKILL");
+        }
+      }
+    } finally {
+      for (const owned of ownedDirectories.reverse()) {
+        directoryCleanup.push(await cleanOwnedDirectory(owned));
+      }
+    }
+  })();
+  return chromeStopping;
+}
+
+const signalHandlers = new Map([["SIGINT", 130], ["SIGTERM", 143]].map(([signal, code]) => {
+  const handler = () => {
+    stopChrome().catch((error) => console.error(`Chrome cleanup failed: ${error.message}`))
+      .finally(() => { publishCleanup(); process.exit(code); });
+  };
+  process.once(signal, handler);
+  return [signal, handler];
+}));
+let primaryError;
 try {
+  const cdpUrl = await launchChrome();
   const pageResponse = await fetch(`${cdpUrl}/json/new?${encodeURIComponent(targetUrl)}`, { method: "PUT" });
   if (!pageResponse.ok) throw new Error(`Cannot create CDP page: HTTP ${pageResponse.status}`);
   const target = await pageResponse.json();
@@ -201,11 +314,19 @@ try {
     && keyboardFirstTab.visible
     && keyboardFirstTab.outlineStyle !== "none"
     && Number.parseFloat(keyboardFirstTab.outlineWidth) >= 2;
-  const report = { url: targetUrl, viewports, keyboardFirstTab, passed };
-  fs.writeFileSync(path.join(outputDir, "browser-contract.json"), `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify(report, null, 2));
+  browserReport = { url: targetUrl, viewports, keyboardFirstTab, passed };
   socket.close();
   if (!passed) process.exitCode = 1;
+} catch (error) {
+  primaryError = error;
+  throw error;
 } finally {
-  await stopChrome();
+  try { await stopChrome(); }
+  catch (error) {
+    if (!primaryError) throw error;
+    console.error(`Chrome cleanup failed: ${error.message}`);
+  } finally {
+    publishCleanup();
+    for (const [signal, handler] of signalHandlers) process.off(signal, handler);
+  }
 }

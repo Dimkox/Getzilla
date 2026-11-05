@@ -24,3 +24,7 @@ Distinct recorded occurrences:
 - [2026-09-05-root-897](incidents/2026-09-05-root-897.md)
 
 For a new failure, record the date, concrete cause, consequence and countermeasure in a new incident. Link the actual PR when known; disclose unknown associations. Add a recurring lesson only when distinct incidents support it. Historical instructions remain observations of their dates, not current policy.
+
+## Restart completed workers
+
+Use `followup_task` for new work when a worker is completed. `send_message` queues a message without starting a turn; use it for coordination with an active worker. Confirm the running status before waiting for a result. See the [handoff delay](incidents/2026-11-04-completed-worker-followup.md).

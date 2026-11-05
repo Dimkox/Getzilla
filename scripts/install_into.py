@@ -65,12 +65,15 @@ MANAGED_FILES = (
     "scripts/getzilla_spec.py",
     "scripts/getzilla_artifacts.py",
     "scripts/getzilla_verify.py",
+    "scripts/getzilla_evals.py",
+    "scripts/getzilla_unittest.py",
     "scripts/getzilla_verification_tools.py",
     "scripts/getzilla_audit_bundle.py",
     "scripts/getzilla_compliance.py",
     "scripts/getzilla_vulns.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
+    "scripts/getzilla_components.py",
     "scripts/getzilla_doctor.py",
     "scripts/getzilla_status.py",
     "scripts/getzilla_agent.py",
@@ -92,6 +95,9 @@ MANAGED_FILES = (
     "ruff.toml",
     "bandit.yaml",
     ".coveragerc",
+    "schemas/optional-module-v1.schema.json",
+    "schemas/optional-module-registry-v1.schema.json",
+    "docs/optional-modules.md",
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
@@ -119,7 +125,7 @@ ROOT_HOOK_SHIMS = frozenset(
     }
 )
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".getzilla/runtime/",)
+SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -185,7 +191,7 @@ _UNSUPPORTED_RENAME_ERRNOS = frozenset(
 
 # Grok Build reads these briefs; the router, doctor and generated harnesses read the .toml beside them.
 GROK_AGENT_BRIEFS = ".grok/agents/"
-# A fresh install ships the engine as one archive (sources plus bytecode for the installing Python);
+# A fresh install ships one source archive; zipimport compiles for the current interpreter.
 # __init__.py stays a file and adds the archive to the package path. Upgrades keep the file layout.
 ENGINE_DIR = ".getzilla/getzilla/"
 ENGINE_INIT = ".getzilla/getzilla/__init__.py"
@@ -284,26 +290,22 @@ def wants_engine_archive(target: Path) -> bool:
 
 
 def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
-    """One deterministic zip: every engine file plus unchecked-hash bytecode for this Python."""
-    import importlib.util
+    """One deterministic source zip; native zipimport compiles for its interpreter."""
     import io
     import zipfile
-    from importlib import _bootstrap_external  # type: ignore[attr-defined]
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for entry in sorted(entries, key=lambda item: item.path):
             name = entry.path[len(".getzilla/"):]
-            members = [(name, entry.content)]
             if name.endswith(".py"):
-                code = compile(entry.content, name, "exec", dont_inherit=True)
-                pyc = _bootstrap_external._code_to_hash_pyc(code, importlib.util.source_hash(entry.content), False)
-                members.append((name[:-3] + ".pyc", bytes(pyc)))
-            for member, data in members:
-                info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o644 << 16
-                archive.writestr(info, data)
+                # Preserve syntax refusal before publication without serializing
+                # interpreter-specific code constants or parent intern state.
+                compile(entry.content, name, "exec", dont_inherit=True)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, entry.content)
     return InstallEntry(ENGINE_ARCHIVE, buffer.getvalue(), 0o644)
 
 
@@ -644,6 +646,8 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
+                continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
                 metadata = fsx.lstat_at(descriptor, name)
             except OSError as exc:
@@ -862,7 +866,10 @@ def build_payload(
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
     if selection.engine_archive:
-        engine = [entry for entry in payload if entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+        engine_selection = PayloadSelection(selection.agents, factory=selection.factory, full=selection.full,
+                                            compliance=selection.compliance, extras=selection.extras,
+                                            root_shims=selection.root_shims, engine_archive=False)
+        engine = [entry for entry in payload if engine_selection.includes(entry.path) and entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
                   and "/__pycache__/" not in entry.path]
         chosen += (engine_archive_entry(engine),)
     if selection.compliance:

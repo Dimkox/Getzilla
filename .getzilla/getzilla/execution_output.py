@@ -124,6 +124,8 @@ def normalize_output(value: object) -> dict:
             known &= counts is not None
             if counts is not None:
                 totals = [left + right for left, right in zip(totals, counts)]
+                if any(total > 2**63 - 1 for total in totals):
+                    raise ValueError('invalid counters')
             for flag in ('truncated', 'preview_truncated', 'complete_output'):
                 if flag in item and type(item[flag]) is not bool:
                     raise ValueError('invalid flag')

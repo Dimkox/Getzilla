@@ -5,6 +5,7 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+from importlib.machinery import SourceFileLoader, SourcelessFileLoader
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import re
 import stat
 import time
 import uuid
+from zipimport import zipimporter
 
 from . import fsx
 
@@ -49,9 +51,20 @@ def digest(value):
 def _runner_digest():
     # Lean installs keep this module in getzilla.zip and __init__.py outside it.
     # Read through this module's loader, not the package loader or a virtual Path.
-    loader = globals().get('__loader__')
-    _require(callable(getattr(loader, 'get_data', None)), 'runner_source_unavailable')
-    return hashlib.sha256(loader.get_data(__file__)).hexdigest()
+    try:
+        loader = globals().get('__loader__')
+        _require(type(loader) in {SourceFileLoader, SourcelessFileLoader, zipimporter}
+                 and __name__ == 'getzilla.agent_evals', 'runner_source_unavailable')
+        filename = loader.get_filename(__name__)
+        _require(filename == __file__ and filename.replace('\\', '/').endswith(
+            ('/getzilla/agent_evals.py', '/getzilla/agent_evals.pyc')), 'runner_source_unavailable')
+        source = filename[:-1] if filename.endswith('.pyc') else filename
+        raw = loader.get_data(source)
+        _require(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES, 'runner_source_unavailable')
+        compile(raw, source, 'exec', dont_inherit=True)
+        return hashlib.sha256(raw).hexdigest()
+    except (OSError, ValueError, SyntaxError, TypeError, AttributeError, RecursionError) as exc:
+        raise EvalError('runner_source_unavailable') from exc
 
 
 def _unique(pairs):
@@ -99,7 +112,7 @@ def _inode(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
 
 
-def _read_at(directory, name, limit, check=lambda: None):
+def _read_at(directory, name, limit, check=lambda: None, *, raw_bytes=False):
     """Read one selected name using its held parent; never reopen that parent."""
     try:
         check()
@@ -114,6 +127,8 @@ def _read_at(directory, name, limit, check=lambda: None):
                      and _file_identity(before) == _file_identity(os.fstat(handle.fileno()))
                      and _file_identity(before) == _file_identity(fsx.lstat_at(directory, name)), 'input_changed_or_large')
         check()
+        if raw_bytes:
+            return raw, hashlib.sha256(raw).hexdigest(), _file_identity(before)
         value = json.loads(raw.decode('utf-8'), object_pairs_hook=_unique, parse_constant=_invalid_constant, parse_float=_finite_float)
         _json_depth(value)
         return value, hashlib.sha256(raw).hexdigest(), _file_identity(before)
@@ -195,14 +210,22 @@ def _baseline_parent(path):
             fsx.close_dir(handle)
 
 
-def _remove_owned(directory, name, identity):
-    if identity is None:
-        return
+@contextmanager
+def _baseline_lock(directory, *, exclusive):
+    """Retain a kernel lock on the held parent; no lock pathname is mutated."""
     try:
-        _require(_inode(fsx.lstat_at(directory, name)) == identity, 'baseline_file_replaced')
-        fsx.unlink_at(directory, name)
-    except FileNotFoundError:
-        pass
+        fsx.lock_file(directory, exclusive=exclusive, blocking=False)
+    except BlockingIOError as exc:
+        raise EvalError('baseline_acceptance_busy') from exc
+    except (OSError, NotImplementedError) as exc:
+        raise EvalError('baseline_lock_unsupported') from exc
+    try:
+        yield
+    finally:
+        try:
+            fsx.unlock_file(directory)
+        except OSError as exc:
+            raise EvalError('baseline_lock_unavailable') from exc
 
 
 def _fields(value, required, optional=(), reason='schema'):
@@ -490,8 +513,40 @@ def _report(report, *, passing=False):
     return value
 
 
-def _baseline_at(directory, name, check):
-    value, _sha, identity = _read_at(directory, name, MAX_BASELINE_BYTES, check)
+def _decode_baseline(raw):
+    """Read V1 unchanged, or V2/legacy-prefix complete append frames only."""
+    try:
+        text = raw.decode('utf-8')
+        decoder = json.JSONDecoder(object_pairs_hook=_unique, parse_constant=_invalid_constant, parse_float=_finite_float)
+        header, end = decoder.raw_decode(text, len(text) - len(text.lstrip()))
+        _json_depth(header)
+        _fields(header, {'schema_version', 'history'}, reason='baseline_schema')
+        _require(type(header['schema_version']) is int and header['schema_version'] in {1, 2}
+                 and isinstance(header['history'], list), 'baseline_schema')
+        if header['schema_version'] == 2:
+            _require(not header['history'], 'baseline_schema')
+        tail = text[end:]
+        frames = [line for line in tail.split('\n') if line.strip()]
+        if frames:
+            _require(tail.lstrip(' \t\r').startswith('\n') and raw.endswith(b'\n'), 'baseline_incomplete_append')
+        _require(header['schema_version'] == 1 or frames, 'baseline_incomplete_append')
+        _require(len(frames) % 2 == 0, 'baseline_incomplete_append')
+        _require(len(header['history']) + len(frames) // 2 <= MAX_HISTORY, 'baseline_history_limit')
+        history = list(header['history'])
+        for offset in range(0, len(frames), 2):
+            entry, commit = [json.loads(line, object_pairs_hook=_unique, parse_constant=_invalid_constant,
+                                        parse_float=_finite_float) for line in frames[offset:offset + 2]]
+            _json_depth(entry)
+            _fields(commit, {'schema_version', 'commit'}, reason='baseline_commit_mismatch')
+            _require(type(commit['schema_version']) is int and commit['schema_version'] == 2
+                     and isinstance(entry, dict) and _sha(entry.get('acceptance_digest'))
+                     and commit['commit'] == entry['acceptance_digest'], 'baseline_commit_mismatch')
+            history.append(entry)
+        value = {'schema_version': 1, 'history': history}
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        if isinstance(exc, EvalError):
+            raise
+        raise EvalError('baseline_incomplete_append' if not raw.endswith(b'\n') else 'baseline_schema') from exc
     _fields(value, {'schema_version', 'history'}, reason='baseline_schema')
     _require(type(value['schema_version']) is int and value['schema_version'] == 1 and isinstance(value['history'], list) and 1 <= len(value['history']) <= MAX_HISTORY, 'baseline_schema')
     previous = None
@@ -500,13 +555,21 @@ def _baseline_at(directory, name, check):
         _report(item, passing=True)
         _require(item['previous_digest'] == previous and item['acceptance_digest'] == digest({k: v for k, v in item.items() if k != 'acceptance_digest'}), 'baseline_history_digest')
         previous = item['acceptance_digest']
+    return value
+
+
+
+def _baseline_at(directory, name, check):
+    raw, _sha, identity = _read_at(directory, name, MAX_BASELINE_BYTES, check, raw_bytes=True)
+    value = _decode_baseline(raw)
     check()
     return value, identity
 
 
 def _baseline(path):
     with _baseline_parent(path) as (directory, name, check):
-        value, _identity = _baseline_at(directory, name, check)
+        with _baseline_lock(directory, exclusive=False):
+            value, _identity = _baseline_at(directory, name, check)
     return value
 
 
@@ -546,64 +609,95 @@ def compare(report: dict, baseline_path: Path) -> dict:
     return result
 
 
+def _append_baseline(directory, name, check, previous_raw, previous_identity, entry):
+    """Append only to the admitted object; never replace, truncate or unlink a leaf."""
+    prefix = previous_raw if previous_identity is not None else _bytes({'schema_version': 2, 'history': []})
+    appended = (b'' if prefix.endswith(b'\n') else b'\n') + _bytes(entry) + b'\n'
+    commit = _bytes({'schema_version': 2, 'commit': entry['acceptance_digest']}) + b'\n'
+    expected = prefix + appended + commit
+    _require(len(expected) <= MAX_BASELINE_BYTES, 'baseline_history_limit')
+    flags = os.O_RDWR | os.O_APPEND | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC
+    if previous_identity is None:
+        flags |= os.O_CREAT | os.O_EXCL
+    descriptor = fsx.open_at(directory, name, flags, 0o600)
+    try:
+        before = os.fstat(descriptor)
+        inode = _inode(before)
+        if previous_identity is not None:
+            _require(_file_identity(before) == previous_identity, 'baseline_file_replaced')
+        def custody():
+            check()
+            info = os.fstat(descriptor)
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
+                     and stat.S_IMODE(info.st_mode) in {0o600, 0o644}
+                     and _inode(info) == inode and _inode(fsx.lstat_at(directory, name)) == inode,
+                     'baseline_file_replaced')
+        def write_all(raw):
+            pending = memoryview(raw)
+            while pending:
+                custody()
+                count = os.write(descriptor, pending)
+                _require(type(count) is int and 0 < count <= len(pending), 'baseline_write_unavailable')
+                pending = pending[count:]
+        write_all(appended if previous_identity is not None else prefix + appended)
+        os.fsync(descriptor)  # No commit marker is issued before the prepared entry is durable.
+        custody()
+        write_all(commit)
+        os.fsync(descriptor)
+        os.fsync(directory)
+        custody()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks, total = [], 0
+        while True:
+            custody()
+            chunk = os.read(descriptor, min(65536, MAX_BASELINE_BYTES + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            _require(total <= MAX_BASELINE_BYTES, 'baseline_file_replaced')
+            chunks.append(chunk)
+        custody()
+        _require(b''.join(chunks) == expected, 'baseline_file_replaced')
+    finally:
+        os.close(descriptor)
+
+
+
 def accept_baseline(path: Path, report: dict, *, reason: str, scope: str) -> dict:
-    """Explicit local acceptance only. Every mutation uses the held parent."""
+    """Local acceptance with lock-mediated append visibility, not atomic leaf-CAS."""
     canonical = _report(report, passing=True)
     _require(all(isinstance(v, str) and 1 <= len(v) <= 512 and '\0' not in v for v in (reason, scope)), 'acceptance_reason_and_scope_required')
     with _baseline_parent(path) as (directory, name, check):
-        lock_name = name + '.lock'
-        lock_fd = None
-        lock_identity = None
-        temporary_name = '.eval-baseline-' + uuid.uuid4().hex
-        temporary_identity = None
-        try:
-            check()
-            lock_fd = fsx.open_at(directory, lock_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
-            lock_identity = _inode(os.fstat(lock_fd))
+        with _baseline_lock(directory, exclusive=True):
             check()
             try:
-                stored, previous_identity = _baseline_at(directory, name, check)
+                fsx.lstat_at(directory, name + '.lock')
+            except FileNotFoundError:
+                pass
+            else:
+                raise EvalError('baseline_acceptance_busy')  # Never remove a legacy or foreign lock.
+            try:
+                previous_raw, _sha, previous_identity = _read_at(directory, name, MAX_BASELINE_BYTES, check, raw_bytes=True)
+                stored = _decode_baseline(previous_raw)
             except EvalError as exc:
                 if str(exc) != 'input_missing':
                     raise
                 stored, previous_identity = {'schema_version': 1, 'history': []}, None
+                previous_raw = b''
             _require(len(stored['history']) < MAX_HISTORY, 'baseline_history_limit')
             previous = stored['history'][-1]['acceptance_digest'] if stored['history'] else None
             entry = {'canonical': canonical, 'result_digest': report['result_digest'], 'reason': reason, 'scope': scope,
                      'accepted_at': datetime.now(timezone.utc).isoformat(), 'previous_digest': previous}
             entry['acceptance_digest'] = digest(entry)
-            stored['history'].append(entry)
-            raw = _bytes(stored) + b'\n'
-            _require(len(raw) <= MAX_BASELINE_BYTES, 'baseline_history_limit')
-            check()
-            descriptor = fsx.open_at(directory, temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
-            with os.fdopen(descriptor, 'wb') as handle:
-                temporary_identity = _inode(os.fstat(handle.fileno()))
-                check()
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-            check()
-            _require(_inode(fsx.lstat_at(directory, lock_name)) == lock_identity
-                     and _inode(fsx.lstat_at(directory, temporary_name)) == temporary_identity, 'baseline_file_replaced')
             try:
-                current_identity = _file_identity(fsx.lstat_at(directory, name))
-            except FileNotFoundError:
-                current_identity = None
-            _require(current_identity == previous_identity, 'baseline_file_replaced')
-            fsx.replace_at(directory, temporary_name, directory, name)
-            temporary_identity = None
-            os.fsync(directory)
+                _append_baseline(directory, name, check, previous_raw, previous_identity, entry)
+            except FileExistsError as exc:
+                raise EvalError('baseline_file_replaced') from exc
+            except OSError as exc:
+                raise EvalError('baseline_write_unavailable') from exc
             check()
             return {'status': 'accepted', 'baseline_id': entry['acceptance_digest'], 'result_digest': report['result_digest'],
                     'previous_digest': previous, 'release_authority': False}
-        except FileExistsError as exc:
-            raise EvalError('baseline_acceptance_busy') from exc
-        finally:
-            _remove_owned(directory, temporary_name, temporary_identity)
-            if lock_fd is not None:
-                os.close(lock_fd)
-                _remove_owned(directory, lock_name, lock_identity)
 
 
 def render_text(report: dict) -> str:

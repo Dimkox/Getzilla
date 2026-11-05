@@ -95,8 +95,9 @@ CI result, approval, mandatory full report or external acceptance.
 
 Output normalization runs before every view, wait, output read and explicit
 restore. Historical stdout/stderr and job lists get a 4096-byte UTF-8 preview and
-32768-byte JSON envelope. Malformed counters fail closed; unknown totals stay
-null. Credential-label suppression is a heuristic and cannot detect all secrets.
+32768-byte JSON envelope. Malformed counters fail closed; each counter and the sum across historical jobs
+stay within signed 64-bit bounds. An overflowing sum is invalid before any view or
+restore publication; unknown totals stay null. Credential-label suppression is a heuristic and cannot detect all secrets.
 Raw streams stay outside new registry records. Old host-path log strings are
 never opened. Optional artifacts use a bounded reference in the existing `par`
 namespace, content digest, size and inode/time identity; missing, linked, oversized

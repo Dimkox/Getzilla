@@ -195,6 +195,67 @@ class BatchTests(unittest.TestCase):
             self.assertIsNotNone(owned)
             self.assertEqual(owned.active_processes(), 0)
 
+    def test_invalid_pipe_payload_is_refused_without_enqueue_or_payload_disclosure(self) -> None:
+        invoked = []
+
+        def work():
+            invoked.append(True)
+
+        for payload in (work, 'synthetic-nonbyte-payload', '', bytearray(b'not-exact-bytes'),
+                        b'x' * (parallel.CHUNK_BYTES + 1)):
+            processes = []
+            streams = []
+
+            def start(command, **kwargs):
+                process = fsx.owned_popen(command, **kwargs)
+                native = process.stdout
+
+                class Stream:
+                    closed = False
+                    delivered = False
+
+                    def read(self, size):
+                        if not self.delivered:
+                            self.delivered = True
+                            return payload
+                        return native.read(size)
+
+                    def close(self):
+                        self.closed = True
+                        native.close()
+
+                process.stdout = Stream()
+                processes.append(process)
+                streams.append(process.stdout)
+                return process
+
+            with self.subTest(kind=type(payload).__name__):
+                try:
+                    jobs, folder = run_batch(self.root, [_python_command('pass')],
+                                             workers=1, cwd=self.root, runner=start)
+                except (TypeError, ValueError) as error:
+                    self.fail(f'nonbyte pipe payload escaped bounded capture: {type(error).__name__}')
+                self.assertIn('output read failed', jobs[0].log_error or '')
+                self.assertEqual(jobs[0].observed_bytes, 0)
+                self.assertEqual(jobs[0].retained_bytes, 0)
+                self.assertEqual(jobs[0].preview, '')
+                self.assertTrue(streams[0].closed)
+                self.assertIsNotNone(processes[0].poll())
+                metadata = json.loads((folder / 'summary.json').read_text(encoding='utf-8'))
+                self.assertFalse(metadata[0]['complete_output'])
+                self.assertLessEqual((folder / 'summary.json').stat().st_size, parallel.RESPONSE_BYTES)
+                self.assertNotIn('synthetic-nonbyte-payload', report(self.root, jobs, folder, workers=1, wall=0))
+        self.assertEqual(invoked, [])
+
+    def test_exact_chunk_bound_native_bytes_are_retained(self) -> None:
+        command = _python_command(f'import os; os.write(1, b"x" * {parallel.CHUNK_BYTES})')
+        jobs, folder = run_batch(self.root, [command], workers=1, cwd=self.root)
+        self.assertEqual(jobs[0].returncode, 0)
+        self.assertIsNone(jobs[0].log_error)
+        self.assertEqual(jobs[0].observed_bytes, parallel.CHUNK_BYTES)
+        self.assertEqual(jobs[0].retained_bytes, parallel.CHUNK_BYTES)
+        self.assertEqual((folder / '001.log').read_bytes(), b'x' * parallel.CHUNK_BYTES)
+
     @unittest.skipIf(fsx.WINDOWS, 'portable adapter control with POSIX symlink fixture')
     def test_windows_directory_adapter_refuses_a_replaced_parent_before_output_write(self) -> None:
         outside = self.root / 'outside'

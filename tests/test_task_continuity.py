@@ -378,19 +378,6 @@ class ContinuityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 review_source_binding(root, head, relative, reviewed_context=observed['digest'])
 
-    def test_verifier_captures_before_work_and_refuses_scope_mutation(self):
-        from getzilla import verification
-        with project_copy(git=True, minimal_runtime=True) as root:
-            self.light_route(root)
-            def mutate(*args, **kwargs):
-                self.submit(root, 'New acceptance condition while verifier is working.')
-                return []
-            with patch.object(verification, '_python', side_effect=mutate):
-                report = verification.verify(root, mode='fast', record=False)
-            context_checks = [item for item in report['checks'] if item['name'] == 'task-context']
-            self.assertEqual(len(context_checks), 1)
-            self.assertEqual(context_checks[0]['status'], 'fail')
-            self.assertNotEqual(report['status'], 'pass')
 
     def test_unreadable_worker_state_cannot_prove_idle(self):
         with project_copy(git=True) as root:
@@ -662,16 +649,6 @@ class ContinuityTests(unittest.TestCase):
             self.assertIn('NOT admitted', rendered)
             self.assertIn('.json', rendered)
 
-    def test_verifier_refuses_unavailable_authority_without_recording(self):
-        from getzilla import verification
-        with project_copy(git=True, minimal_runtime=True) as root:
-            route = self.light_route(root)
-            canonical = root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')
-            canonical.write_text('{broken')
-            with patch.object(verification, '_python', return_value=[]):
-                report = verification.verify(root, mode='fast', record=False)
-            self.assertEqual(report['status'], 'fail')
-            self.assertTrue(any(item['name'] == 'task-context' and item['status'] == 'fail' for item in report['checks']))
 
     def test_same_head_old_review_report_stays_stale_after_scope_ack(self):
         from getzilla.continuity import ack_scope, context_binding

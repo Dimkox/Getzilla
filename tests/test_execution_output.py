@@ -122,6 +122,51 @@ class OutputTests(unittest.TestCase):
             with self.assertRaises(execution.ExecutionError):
                 output.capture_artifact(root, '.getzilla/runtime/par/fixture/../001.log')
 
+    def test_historical_job_counter_sum_keeps_exact_boundary_and_refuses_overflow(self):
+        maximum = 2**63 - 1
+        def job(count):
+            return {'stdout': 'public', 'observed_bytes': count,
+                    'retained_bytes': count, 'dropped_bytes': 0}
+        boundary = output.normalize_output({'jobs': [job(maximum - 1), job(1)]})
+        self.assertEqual(boundary['status'], 'available')
+        self.assertEqual(boundary['observed_bytes'], maximum)
+        self.assertTrue(boundary['counters_known'])
+        self.assertFalse(boundary['complete_output'])
+        overflow = output.normalize_output({'jobs': [job(maximum), job(1)]})
+        self.assertEqual(overflow['status'], 'invalid')
+        self.assertFalse(overflow['counters_known'])
+        self.assertIsNone(overflow['observed_bytes'])
+        self.assertEqual(overflow['preview'], '')
+
+    def test_get_wait_output_and_restore_refuse_historical_counter_sum_overflow(self):
+        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, {'GETZILLA_SESSION_ID': 'owner'}):
+            root = Path(name)
+            owned_route(root)
+            caller = execution.trusted_caller(root)
+            clock = FakeClock()
+            view = execution.submit(root, caller, execution.SubmitRequest('counter-restore', {}, 60),
+                                    backend=CountingBackend(), clock=clock)
+            registry = store.load_registry(root)
+            registry['records'][view['execution_id']]['output'] = {'jobs': [
+                {'stdout': 'public', 'observed_bytes': count,
+                 'retained_bytes': count, 'dropped_bytes': 0}
+                for count in (2**63 - 1, 1)]}
+            path = root / store.REGISTRY_PATH
+            path.write_text(json.dumps(registry))
+            before = path.read_bytes()
+            for observed in (execution.get(root, caller, view['execution_id'])['output'],
+                             execution.wait(root, caller, view['execution_id'], .1, clock=clock)['execution']['output'],
+                             output.read_output(root, caller, view['execution_id'])):
+                self.assertEqual(observed['status'], 'invalid')
+                self.assertFalse(observed['counters_known'])
+                self.assertFalse(observed['complete_output'])
+                self.assertFalse(observed['evidence_authority'])
+            self.assertEqual(path.read_bytes(), before)
+            report = execution.restore(root, clock=clock)
+            self.assertEqual(report['normalized_outputs'], 1)
+            self.assertEqual(execution.get(root, caller, view['execution_id'])['output']['status'], 'invalid')
+            self.assertEqual(execution.restore(root, clock=clock)['normalized_outputs'], 0)
+
     def tearDown(self):
         state.bind_session(None)
 

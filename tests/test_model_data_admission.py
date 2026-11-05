@@ -56,7 +56,10 @@ class ModelDataAdmissionTest(unittest.TestCase):
         result = self.recheck(preview)
         self.assertEqual(result, {'state': 'ready_for_review', 'dispatch_permitted': False,
                                   'account_identity_verified': False})
-        self.assertEqual(preview.endpoint, 'https://api.openai.com/v1/responses')
+        with (Path(__file__).resolve().parent / 'fixtures/model-data-admission-endpoint.json').open('rb') as stream:
+            expected_endpoint = stream.read(1025)
+        self.assertLessEqual(len(expected_endpoint), 1024)
+        self.assertEqual(preview.endpoint, json.loads(expected_endpoint.decode('utf-8'))['endpoint'])
         self.assertEqual(preview.request_bytes, len(self.request.body))
         self.assertEqual(preview.revision, 1)
         self.assertEqual(preview.issued_epoch, 1000)
