@@ -55,6 +55,13 @@ class ProvenanceTests(unittest.TestCase):
         data['requirements'][0]['interpretations'] = ['possibly contradictory prose']
         self.assertIn('semantic_conflict_unassessed', project_requirements(data)['unknown'])
 
+    def test_unsupported_unit_does_not_produce_a_guessed_conflict(self):
+        data = self.pair('equals', 30, 'business-days')
+        data['requirements'][0]['facts'][0]['unit'] = 'business-days'
+        result = project_requirements(data)
+        self.assertEqual(result['conflicts'], [])
+        self.assertIn('unsupported_unit', result['unknown'])
+
     def test_compatible_facts_keep_provenance_without_inventing_authority(self):
         result = project_requirements(self.pair('equals', 7))
         self.assertEqual(result['conflicts'], [])
@@ -112,6 +119,14 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(project_requirements(data)['draft_digest'], first['draft_digest'])
         data['sources'][0]['locator']['end'] = 3
         self.assertNotEqual(project_requirements(data)['draft_digest'], first['draft_digest'])
+
+    def test_imported_status_is_neither_substance_nor_approval(self):
+        data=snapshot()
+        first=project_requirements(data)
+        data['sources'][0]['imported_status']='pending'
+        second=project_requirements(data)
+        self.assertEqual(first['draft_digest'],second['draft_digest'])
+        self.assertEqual(second['decisions'],[])
 
     def test_action_title_rephrase_does_not_discard_unknown_mapping(self):
         data = snapshot()

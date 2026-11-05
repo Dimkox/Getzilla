@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import itertools
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -16,6 +17,37 @@ from .workflow_artifacts import canonical_json, _strict_json, MAX_SOURCE_BYTES
 
 class IntakeError(ValueError):
     """A safe fixed reason; never includes untrusted source values."""
+
+
+@dataclass(frozen=True)
+class NativeIntakeContext:
+    """Native producer bindings, not a deserializable approval or principal."""
+    identity: dict
+    request_digest: str
+    publication_id: str
+    at: str
+
+
+def reduce_intake(previous: dict | None, event: dict, trusted: NativeIntakeContext) -> dict:
+    if (type(trusted) is not NativeIntakeContext or not isinstance(event, dict) or
+            set(event) != {'id', 'kind'} or event['kind'] not in {'record','question_round','withdraw'}):
+        raise IntakeError('unsupported_decision_ingress')
+    value = copy.deepcopy(previous) if previous else {'identity':trusted.identity,'events':[],'rounds':0,'withdrawn':False}
+    if value['identity'] != trusted.identity:
+        raise IntakeError('intake_task_epoch_mismatch')
+    event_digest = digest(event,'intake-event-v1')
+    for row in value['events']:
+        if row['id'] == event['id']:
+            if row['event_digest'] != event_digest or row['request_digest'] != trusted.request_digest:
+                raise IntakeError('event_collision')
+            return value
+    if len(value['events']) >= 4096:
+        raise IntakeError('budget_exhausted')
+    value['events'].append({'id':event['id'],'event_digest':event_digest,'request_digest':trusted.request_digest,
+                            'publication_id':trusted.publication_id,'at':trusted.at})
+    value['rounds'] = min(3,value['rounds'] + (event['kind']=='question_round'))
+    value['withdrawn'] = value['withdrawn'] or event['kind']=='withdraw'
+    return value
 
 
 def digest(value: Any, domain: str = 'intake-v1') -> str:
@@ -46,6 +78,9 @@ def validate_intake(value: object) -> dict:
             raise IntakeError('substantive_backreference')
         _validate_document(value['spec'], gate=False)
         sources = value['sources']
+        for source in sources:
+            # Source tracker status is not substantive input and never an approval.
+            source.pop('imported_status', None)
         if len({source['id'] for source in sources}) != len(sources):
             raise IntakeError('duplicate_source')
         if any(source['locator']['start'] > source['locator']['end'] or
@@ -97,11 +132,16 @@ def project_requirements(snapshot: dict, prior: dict | None = None) -> dict:
     draft = digest(data, 'substantive-draft-v1')
     conflicts, unknown = [], set()
     facts = [(row, fact) for row in data['requirements'] for fact in row['facts']]
+    if any(fact['unit'] not in {None, 'count', 'days', 'hours', 'bytes'} for _, fact in facts):
+        unknown.add('unsupported_unit')
     for (left, a), (right, b) in itertools.combinations(facts, 2):
         if tuple(a[key] for key in ('subject', 'scope', 'facet')) != tuple(b[key] for key in ('subject', 'scope', 'facet')):
             continue
         if a['unit'] != b['unit']:
             unknown.add('incomparable_units')
+            continue
+        if a['unit'] not in {None, 'count', 'days', 'hours', 'bytes'}:
+            unknown.add('unsupported_unit')
             continue
         if _contradicts(a, b):
             refs = sorted({left['id'], right['id']})

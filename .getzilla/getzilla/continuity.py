@@ -131,11 +131,15 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
             not _integer(route.get('authority_epoch')) or not _integer(route.get('state_revision'))):
         raise ValueError('invalid task identity, workspace or authority epoch')
     context = route.get('context')
-    if (not isinstance(context, dict) or set(context) != set(new_context()) or
-            type(context['version']) is not int or context['version'] != 1 or
+    intake_v2 = isinstance(context, dict) and type(context.get('version')) is int and context['version'] == 2
+    if (not isinstance(context, dict) or set(context) != set(new_context()) | ({'intake'} if intake_v2 else set()) or
+            type(context['version']) is not int or context['version'] not in {1, 2} or
             not _integer(context['revision']) or type(context['legacy_compatible']) is not bool or
             not isinstance(context['pending'], list) or len(context['pending']) > MAX_PENDING):
         raise ValueError('invalid task context')
+    if intake_v2:
+        from .intake_publication import validate_protocol_metadata
+        validate_protocol_metadata(context['intake'])
     total, ids, events = 0, set(), set()
     for item in context['pending']:
         if (not isinstance(item, dict) or set(item) != {'id', 'event_id', 'text', 'digest', 'bytes', 'at'} or
@@ -539,6 +543,8 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'package_path': documents['path'] if documents else None,
              'spec_digest': documents['spec_digest'] if documents else None,
              'requirements_digest': documents['requirements_digest'] if documents else None}
+    if (route.get('context') or {}).get('version') == 2:
+        value.update(version=2, intake_protocol={'version': 1, 'required': True})
     return {**value, 'digest': digest(value)}
 
 

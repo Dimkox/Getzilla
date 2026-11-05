@@ -25,6 +25,7 @@
     }
   },
   "properties": {
+    "intake": {"type": "object", "additionalProperties": false, "required": ["version", "draft_digest"], "properties": {"version": {"type": "integer", "const": 1}, "draft_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
     "schema_version": {"const": 2},
     "change_id": {"type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[0-9]{8}-[A-Za-z0-9\u0400-\u04FF][A-Za-z0-9._:\u0400-\u04FF-]{2,120}$"},
     "objective": {"type": "object", "additionalProperties": false, "required": ["id", "statement", "success_metric", "target"], "properties": {"id": {"$ref": "#/$defs/obj_id"}, "statement": {"type": "string", "minLength": 1, "maxLength": 4096}, "success_metric": {"type": "string", "minLength": 1, "maxLength": 512}, "target": {"type": "string", "minLength": 1, "maxLength": 512}}},
