@@ -831,6 +831,8 @@ def _read_approvals(root: Path, binding) -> tuple[Any, list[dict[str, Any]]]:
 def validate_approval_history(rows: list[dict]) -> None:
     """Check retained links without requiring pruned history or following successors for authority."""
     for row in rows:
+        approval_record_kind(row)
+    for row in rows:
         if approval_record_kind(row) != 'supersession':
             continue
         successors = [candidate for candidate in rows if candidate.get('id') == row['successor_id']]
@@ -1080,7 +1082,7 @@ def _extend_protected_path_approval(
         raise GrantExtensionError('UNSUPPORTED_EXTENSION_SCOPE')
     try:
         if (not _grant_hex(parent_id, 16) or not _grant_hex(request_id, 32)
-                or type(reason) is not str or not reason.strip() or len(reason) > 1024
+                or type(reason) is not str or not reason.strip() or len(reason.encode('utf-8', 'strict')) > 1024
                 or type(ttl_minutes) is not int or not 1 <= ttl_minutes <= 1440
                 or type(source) is not str or source not in APPROVAL_SOURCES):
             raise ValueError('invalid request')

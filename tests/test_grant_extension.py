@@ -353,6 +353,36 @@ class GrantExtensionTests(unittest.TestCase):
                 with self.subTest(fields=fields), self.assertRaises(ValueError):
                     self.extend(root, parent)
 
+    def test_reason_limit_is_strict_utf8_bytes_and_refusals_do_not_write(self):
+        for reason in ('a' * 1024, 'é' * 512, '€' * 341 + 'a', '🙂' * 256):
+            with self.subTest(accepted_bytes=len(reason.encode('utf-8'))), github_project() as root:
+                parent = self.parent(root)
+                with mock.patch.object(state, 'add_approval', side_effect=AssertionError('fallback mint')):
+                    result = state.extend_protected_path_approval(
+                        root, parent['id'], '1' * 32, reason, 10,
+                        actions=['protected-path-write'], resources=[A, B])
+                self.assertEqual(result['status'], 'created')
+                self.assertEqual(result['grant']['reason'], reason)
+        class TextSubclass(str):
+            def encode(self, *args, **kwargs):
+                raise AssertionError('called text subtype hook')
+        for reason in ('a' * 1025, 'é' * 513, '€' * 342, '🙂' * 257,
+                       '\ud800', 'valid\udfff', TextSubclass('synthetic'), None, 42):
+            with self.subTest(reason_type=type(reason).__name__), github_project() as root:
+                parent = self.parent(root)
+                before = state.approvals_path(root).read_bytes()
+                original_write = BoundRoot.write
+                with mock.patch.object(BoundRoot, 'write', autospec=True, side_effect=original_write) as writer, \
+                     mock.patch.object(state, 'add_approval', side_effect=AssertionError('fallback mint')):
+                    with self.assertRaises(state.GrantExtensionError) as caught:
+                        state.extend_protected_path_approval(
+                            root, parent['id'], '1' * 32, reason, 10,
+                            actions=['protected-path-write'], resources=[A, B])
+                    self.assertEqual(caught.exception.code, 'INVALID_EXTENSION_REQUEST')
+                    self.assertEqual(str(caught.exception), 'INVALID_EXTENSION_REQUEST')
+                    writer.assert_not_called()
+                self.assertEqual(state.approvals_path(root).read_bytes(), before)
+
     def test_strict_fingerprint_preserves_complete_digest_and_detects_unstable_reads(self):
         with github_project() as root:
             outside = root / 'outside.py'
@@ -399,6 +429,15 @@ class GrantExtensionTests(unittest.TestCase):
                 with mock.patch.object(landing, 'read_private_file', return_value=json.dumps([{**grant, 'status': 'superseded'}]).encode()):
                     with self.assertRaises(PublicationError):
                         landing._authority(config, root, SimpleNamespace(resource='synthetic-tool'))
+                for unsupported in (42, None, [], {'schema_version': 99}, {**grant, 'kind': 'unknown'}):
+                    for rows in ([history[0], unsupported, grant], [unsupported, history[0], grant]):
+                        with self.subTest(unsupported_type=type(unsupported).__name__, history_first=rows[0] == history[0]), \
+                             mock.patch.object(landing, 'read_private_file', return_value=json.dumps(rows).encode()):
+                            with self.assertRaisesRegex(PublicationError, '^publication_grants$'):
+                                landing._authority(config, root, SimpleNamespace(resource='synthetic-tool'))
+                for rows in ([history[0], {'schema_version': 1}, grant], [{'schema_version': 1}, history[0], grant]):
+                    with mock.patch.object(landing, 'read_private_file', return_value=json.dumps(rows).encode()):
+                        self.assertEqual(len(landing._authority(config, root, SimpleNamespace(resource='synthetic-tool'))), 64)
 
     def test_conflicting_retained_links_refuse_but_pruned_history_is_not_authority(self):
         with github_project() as root:
