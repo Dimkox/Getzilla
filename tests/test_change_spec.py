@@ -153,7 +153,8 @@ class RuleYamlProfileTests(unittest.TestCase):
         self.assertEqual(len(self.parse(self.sample)['rules']), 2)
 
     def test_unknown_scalar_and_dynamic_profiles_never_become_plain_string_fallback(self):
-        for value in ('1.25', '.inf', '2026-11-05', '!custom value', '|', '>', '[&source x]'):
+        for value in ('1.25', '.inf', '2026-11-05', '!custom value', '|', '>', '[&source x]',
+                      'x: y', '- item', '? key', '@reserved', '`reserved', ']unmatched'):
             with self.subTest(value=value), self.assertRaises(SPEC.SpecError):
                 self.parse('rules:\n  - id: x\n    pattern: ' + value + '\n')
 

@@ -383,7 +383,8 @@ class _RuleYamlContext:
                 self.key(pair[0], depth + 1)
                 result[pair[0]] = self.scalar(pair[1], depth + 1)
             return result
-        if (raw[0] in '&*!|>%' or raw.startswith('<<') or '#' in raw
+        if (raw[0] in '&*!|>%@`]},' or raw.startswith('<<') or '#' in raw
+                or re.match(r'^[-?:](?:\s|$)', raw) or re.search(r':(?:\s|$)', raw)
                 or re.fullmatch(r'[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?', raw)
                 or re.fullmatch(r'[-+]?[0-9]+[eE][-+]?[0-9]+', raw)
                 or raw.lower() in {'.inf', '+.inf', '-.inf', '.nan'}

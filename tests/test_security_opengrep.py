@@ -17,6 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 
+@unittest.skipUnless(os.name == 'posix', 'POSIX FD census profile unavailable')
 class SourceCensusTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('getzilla.security_opengrep'),
@@ -216,6 +217,7 @@ class RuleHeaderProfileTests(unittest.TestCase):
                 self.scanner.rule_catalog(raw)
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'sealed Linux adapter profile unavailable')
 class AdapterRefusalTests(unittest.TestCase):
     def setUp(self):
         self.scanner = importlib.import_module('getzilla.security_opengrep')
@@ -246,6 +248,21 @@ class AdapterRefusalTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'blocked')
         self.assertIn('syntax_frontend_unavailable', result['summary'])
         self.assertFalse((self.root / 'ran').exists())
+
+
+class AdapterCapabilityTests(unittest.TestCase):
+    def test_missing_native_platform_capability_is_explicit_incomplete_without_effect(self):
+        from getzilla import security_opengrep as scanner
+        with mock.patch.object(scanner.sys, 'platform', 'unsupported'), \
+             mock.patch.object(scanner.fsx, 'owned_popen') as spawn:
+            result = scanner.scan_source(Path('/public-fixture'),
+                     rules_root=Path('/public-fixture/.getzilla/sast/rules'),
+                     executable=Path('/public-fixture/tool'), profile='native')
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertIsNone(result['coverage'])
+        self.assertIsNone(result['finding_count'])
+        self.assertIn('run_profile_unavailable', result['summary'])
+        spawn.assert_not_called()
 
 
 def _offline_fixture_child():

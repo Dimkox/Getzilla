@@ -53,6 +53,7 @@ class PublicDescriptorExecutionTests(unittest.TestCase):
                 self.assertEqual(result.stdout, 'public fixture descriptor')
                 self.assertEqual(result.cleanup_error, '')
 
+    @unittest.skipUnless(os.name == 'posix', 'descriptor transport unavailable on this platform')
     def test_explicit_public_stdin_reaches_child_without_default_api_change(self):
         self.assertIn('stdin_fd', inspect.signature(execute).parameters)
         with tempfile.TemporaryDirectory() as directory:
