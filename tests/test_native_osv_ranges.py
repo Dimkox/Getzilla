@@ -23,6 +23,49 @@ def affected(events,*,kind='SEMVER',ecosystem='npm',versions=None):
 
 
 class NativeOsvRangeTests(unittest.TestCase):
+    def test_pypi_c_is_rc_without_rewriting_local_labels_or_other_phases(self):
+        def qualified(version):
+            try:
+                return KV._pypi_key(version)
+            except KV.VulnerabilityError:
+                self.fail('valid qualified PyPI c/rc spelling was refused')
+        for prefix,suffix in [('0.6','1'),('1!1.2.0','02.post3.dev4+local.c1')]:
+            with self.subTest(prefix=prefix,suffix=suffix):
+                self.assertEqual(qualified(prefix+'c'+suffix),qualified(prefix+'rc'+suffix))
+                self.assertEqual(qualified(prefix+'C'+suffix),qualified(prefix+'RC'+suffix))
+        self.assertLess(qualified('0.6b1'),qualified('0.6c1'))
+        self.assertLess(qualified('0.6c1'),qualified('0.6'))
+        self.assertNotEqual(qualified('0.6c1+local.c1'),qualified('0.6rc1+local.rc1'))
+
+    def test_pypi_c_alias_keeps_native_range_boundaries_and_enumerated_versions(self):
+        fixed = affected([{'introduced':'0'},{'fixed':'0.6c1'}],kind='ECOSYSTEM',ecosystem='PyPI')
+        self.assertTrue(KV._in_ranges('0.6b2',fixed,ecosystem='PyPI'))
+        self.assertFalse(KV._in_ranges('0.6rc1',fixed,ecosystem='PyPI'))
+        inclusive = affected([{'introduced':'0.6c1'},{'last_affected':'0.6c2'}],kind='ECOSYSTEM',ecosystem='PyPI')
+        self.assertTrue(KV._in_ranges('0.6rc1',inclusive,ecosystem='PyPI'))
+        self.assertTrue(KV._in_ranges('0.6rc2',inclusive,ecosystem='PyPI'))
+        self.assertFalse(KV._in_ranges('0.6rc3',inclusive,ecosystem='PyPI'))
+        enumerated = {'versions':['0.6c1']}
+        self.assertTrue(KV._in_ranges('0.6rc1',enumerated,ecosystem='PyPI'))
+        for unsupported in ('0.6q1','0.6cc1','prefix0.6c1','0.6c1extra'):
+            with self.subTest(unsupported=unsupported),self.assertRaises(KV.VulnerabilityError):
+                KV._in_ranges(unsupported,fixed,ecosystem='PyPI')
+
+    def test_actual_offline_pypi_c_advisory_retains_clean_and_finding_controls(self):
+        record = {'id':'OSV-SYNTHETIC-PYPI-C','affected':[
+            affected([{'introduced':'0'},{'fixed':'0.6c1'}],kind='ECOSYSTEM',ecosystem='PyPI')]}
+        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            database = Path(directory)
+            fixtures._mirror(database,'PyPI',[record])
+            clean = KV.query_offline([KV.Dependency('PyPI','synthetic-package','84.1.0','requirements.txt')],database)
+            findings = KV.query_offline([KV.Dependency('PyPI','synthetic-package','0.6b1','requirements.txt')],database)
+        self.assertEqual(clean,[])
+        self.assertEqual([finding.vuln_id for finding in findings],['OSV-SYNTHETIC-PYPI-C'])
+
+    def test_osv_limit_containing_star_retains_infinity_semantics(self):
+        scope = affected([{'introduced':'0'},{'limit':'any*infinity'}])
+        self.assertTrue(KV._in_ranges('999.0.0',scope))
+
     def test_actual_native_cli_still_loads_after_comparator_repair(self):
         env = dict(os.environ)
         result = subprocess.run([sys.executable,str(fixtures.ROOT/'scripts/getzilla_vulns.py'),'--help'],

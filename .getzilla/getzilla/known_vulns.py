@@ -378,7 +378,7 @@ def _pypi_key(version: str) -> tuple[Any, ...]:
         raise VulnerabilityError('unsupported PyPI version (canonical PEP440 subset)')
     match = re.fullmatch(
         r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
-        r'(?:(?P<pre>a|b|rc)(?P<pre_n>[0-9]+))?'
+        r'(?:(?P<pre>a|b|rc|c)(?P<pre_n>[0-9]+))?'
         r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
         r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
     if match is None:
@@ -387,7 +387,7 @@ def _pypi_key(version: str) -> tuple[Any, ...]:
     while len(release) > 1 and release[-1] == 0:
         release.pop()
     if match['pre']:
-        pre = (0, {'a': 0, 'b': 1, 'rc': 2}[match['pre']], int(match['pre_n']))
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2, 'c': 2}[match['pre']], int(match['pre_n']))
     elif match['dev'] is not None and match['post'] is None:
         pre = (-1, 0, 0)
     else:
