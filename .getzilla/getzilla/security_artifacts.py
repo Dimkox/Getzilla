@@ -391,7 +391,12 @@ def package_metadata(files: dict[str, bytes], ecosystem: str, filename: str) -> 
     for value in message.get_all('License-File', []):
         safe_parts(value)
         paths.append(f'{license_root}/{value}' if license_root != '.' else value)
+    provides_extra = message.get_all('Provides-Extra', [])
+    if (len(provides_extra) > 256 or
+            any(not isinstance(value, str) or len(value) > 512 for value in provides_extra)):
+        raise ArtifactError('artifact-metadata', 'Provides-Extra exceeds its bounded metadata contract')
     return {'name': message.get('Name'), 'version': message.get('Version'), 'expression': expression,
             'license_paths': paths, 'requires': message.get_all('Requires-Dist', []),
+            'metadata_version': message.get('Metadata-Version'), 'provides_extra': provides_extra,
             'classifiers': message.get_all('Classifier', []), 'metadata_path': path, 'root': root,
             'dynamic': message.get_all('Dynamic', []), 'requires_external': message.get_all('Requires-External', [])}

@@ -325,6 +325,23 @@ def _extras(values: list[str]) -> set[str]:
     return {_extra_name(value) for value in values}
 
 
+def _validate_extra_scope(metadata: dict, dep: dict) -> None:
+    """Only exact artifact declarations can cover selected Python extras."""
+    if dep['ecosystem'] != 'PyPI':
+        return
+    values = metadata.get('provides_extra', [])
+    declared = _extras(values)
+    version = metadata.get('metadata_version')
+    if values and version not in {'2.1', '2.2', '2.3', '2.4', '2.5', '2.6'}:
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra is not defined for this metadata version')
+    if len(declared) != len(values):
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra declarations collide after normalization')
+    if version in {'2.3', '2.4', '2.5', '2.6'} and any(value != _extra_name(value) for value in values):
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra must be canonical in metadata 2.3 or newer')
+    if not _extras(dep.get('extras', [])) <= declared:
+        raise ArtifactError('license-transitive-coverage', 'selected extras are not declared by the exact artifact')
+
+
 def _marker_required(marker: str, dep: dict, environment: dict) -> bool:
     """Small explicit marker subset. Unknown target conditions stay unresolved."""
     match = re.fullmatch(r'''\s*([a-z_]+)\s*(==|!=|>=|<=|>|<)\s*(['"])([^'"\n]*)\3\s*''', marker)
@@ -453,6 +470,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     files.update(archive_files(payload, record['filename'], requested=missing_paths))
                 if package_key(dep['ecosystem'], metadata['name'], metadata['version']) != key:
                     raise ArtifactError('artifact-identity', 'artifact metadata Name/Version differs from inventory')
+                _validate_extra_scope(metadata, dep)
                 chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
                 license_files, notice_files = _license_evidence(files, metadata, identifiers, chosen)
                 custody = None
