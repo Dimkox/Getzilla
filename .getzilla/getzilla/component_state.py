@@ -86,7 +86,9 @@ def module_component(value: object) -> bool:
 def _module_state(value: object, name: str) -> None:
     fields = {'schema_version', 'version', 'enabled', 'manifest_sha256', 'registry_sha256', 'publisher',
               'license', 'entitlement', 'dependencies', 'permissions', 'grants', 'transaction'}
-    if type(value) is not dict or set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1:
+    if (type(value) is not dict or type(value.get('schema_version')) is not int
+            or value['schema_version'] not in (1, 2)
+            or set(value) != fields | ({'runtime'} if value['schema_version'] == 2 else set())):
         raise ComponentStateError(f'invalid module state: {name}')
     def version(v):
         return type(v) is str and re.fullmatch(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}', v) is not None
@@ -106,6 +108,25 @@ def _module_state(value: object, name: str) -> None:
             raise ComponentStateError(f'invalid module scopes: {name}')
     if (set(value['grants']) != set(value['permissions']) if value['enabled'] else bool(value['grants'])):
         raise ComponentStateError(f'invalid module activation: {name}')
+    if value['schema_version'] == 2:
+        runtime = value['runtime']
+        runtime_fields = {'schema_version', 'state', 'descriptor_sha256', 'generation', 'owner_handle', 'request_digest', 'native_fragments'}
+        if (type(runtime) is not dict or set(runtime) != runtime_fields
+                or type(runtime['schema_version']) is not int or runtime['schema_version'] != 1
+                or type(runtime['state']) is not str
+                or runtime['state'] not in {'installed-disabled', 'enabling', 'enabled', 'quiescing', 'disabled-conflict', 'recovery-required'}
+                or type(runtime['descriptor_sha256']) is not str or re.fullmatch('[0-9a-f]{64}', runtime['descriptor_sha256']) is None
+                or runtime['native_fragments'] != []
+                or value['enabled'] != (runtime['state'] == 'enabled')):
+            raise ComponentStateError(f'invalid runtime state: {name}')
+        if runtime['state'] == 'installed-disabled':
+            valid = all(runtime[k] is None for k in ('generation', 'owner_handle', 'request_digest'))
+        else:
+            valid = (type(runtime['generation']) is str and re.fullmatch('[0-9a-f]{32}', runtime['generation']) is not None
+                     and type(runtime['owner_handle']) is str and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', runtime['owner_handle']) is not None
+                     and type(runtime['request_digest']) is str and re.fullmatch('[0-9a-f]{64}', runtime['request_digest']) is not None)
+        if not valid:
+            raise ComponentStateError(f'invalid runtime ownership: {name}')
 
 
 def component_of(path: str) -> str:

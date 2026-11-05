@@ -105,3 +105,40 @@ See [ADR 0003](../engineering/adr/0003-optional-module-lifecycle.md). The test s
 measures actual Core install time and bytes, module payload/dependency footprint,
 and zero external dependency installations. These local observations do not
 qualify a future provider or replace the existing verifier and exact-head CI.
+
+
+## Runtime descriptor and source interfaces
+
+An artifact may include immutable `runtime.v1.json`, described by
+`schemas/module-runtime-v1.schema.json`. It keeps artifact/API1 compatibility and
+creates a nested module record2 in the existing component ledger. Passive
+record1 behavior remains unchanged. Installation stays disabled. Unknown runtime
+features refuse before publication.
+
+The generic `module_runtime` source interfaces bind an activation to the project,
+artifact, task/run/owner/epoch/context, native profile, scope digest and exact
+operations. Trusted host ports supply current task authority, owned runtime
+identity and transport proof. Project settings cannot supply those ports. There
+is no qualified live native profile in this source slice. The ordinary passive
+`enable` and admission APIs cannot enable or execute a runtime artifact.
+
+`disable` first records `quiescing` and clears grants. Missing owner-service
+proof leaves the worker count unknown. `module quiesce ID` exposes the same
+safe default: it denies new work but cannot claim teardown. The trusted host
+must prove zero exact owned resources before the record becomes
+`installed-disabled`. Update, uninstall and rollback refuse unresolved owned
+runtime. Rollback never restores activation or grants. Failed publication uses
+the same pending journal and recovery API; a runtime owner needs its current
+quiescence proof before recovery can clear that record.
+
+Native-fragment publication and the optional Jira artifact are subsequent
+source slices. Direct remote MCP registration is unavailable as a protected
+runtime profile. The inspected Qwen Code0.24.7 source supports project settings
+and tool filters, but its hook error path permits execution. A later owned
+native adapter must check the same canonical operation decoder and current
+source, destination and content decisions in its trusted transport before every
+call. It must use official MCP and native OAuth ownership. A project hook alone
+cannot authorize activation. See the official [MCP configuration](https://qwenlm.github.io/qwen-code-docs/en/users/features/mcp/)
+and [hook interface](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/).
+No native client, authentication, provider call or pilot is qualified by these
+source fixtures. Full issues166/207 remain unproven.

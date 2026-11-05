@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.on_demand import adopt_selection, ensure_components, find_installed_project, is_installed_project, is_source_checkout, getzilla_home  # noqa: E402
 from getzilla.component_state import parse_agents, read_state  # noqa: E402
+from dataclasses import asdict
+from getzilla.module_runtime import quiesce_module
 from getzilla.optional_modules import (  # noqa: E402
     REGISTRY, ModuleError, load_registry, module_status, plan_modules, manage_modules,
     recover_modules, rollback_modules,
@@ -42,6 +44,12 @@ def _module_command(args, project):
         if name in requests:
             raise ModuleError('duplicate_module_request')
         requests[name] = version if separator else None
+    if args.operation == 'quiesce':
+        if len(requests) != 1 or args.plan or args.grant or any(v is not None for v in requests.values()):
+            raise ModuleError('quiesce_requires_one_installed_module')
+        # No qualified resource-service port is composed by this standalone CLI.
+        # It durably denies new work and reports unavailable; it never claims teardown.
+        return asdict(quiesce_module(project, next(iter(requests))))
     source = args.source
     if args.operation in {'install', 'update'} and source is None:
         source = ROOT if is_source_checkout(ROOT) else getzilla_home()
@@ -61,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     adopt = sub.add_parser('adopt', help='Record a complete legacy selection without changing adapter files.')
     adopt.add_argument('--agents', required=True)
     module = sub.add_parser('module', help='Explicit optional module lifecycle; no addon runs during these commands.')
-    module.add_argument('operation', choices=('registry', 'status', 'install', 'update', 'enable', 'disable', 'uninstall', 'recover', 'rollback'))
+    module.add_argument('operation', choices=('registry', 'status', 'install', 'update', 'enable', 'disable', 'uninstall', 'recover', 'rollback', 'quiesce'))
     module.add_argument('modules', nargs='*', help='exact id@version for install/update; installed id for other operations')
     module.add_argument('--project', type=Path)
     module.add_argument('--source', type=Path)

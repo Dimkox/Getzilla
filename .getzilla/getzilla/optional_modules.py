@@ -296,6 +296,8 @@ def _plan(root, binding, operation, requests, source, registry_path, grants, ent
         for name in order:
             descriptor, sha, files = artifacts[name]
             old = installed.get(name)
+            if old is not None and old['module']['schema_version'] == 2:
+                _need(old['module']['runtime']['state'] == 'installed-disabled', 'runtime_quiescence_required')
             if old is not None:
                 _descriptor(binding, name, old, compatible=False)
             if old is not None and old['module']['version'] == descriptor['version']:
@@ -310,6 +312,14 @@ def _plan(root, binding, operation, requests, source, registry_path, grants, ent
                 'license': descriptor['license'], 'entitlement': descriptor['entitlement'],
                 'dependencies': descriptor['dependencies'], 'permissions': descriptor['permissions'], 'grants': [],
                 'transaction': transaction}}
+            runtime_file = files.get('runtime.v1.json')
+            if runtime_file is not None:
+                from .module_runtime import runtime_descriptor, disabled_runtime
+                _need(runtime_file[2] is False, 'runtime_descriptor_must_be_immutable')
+                runtime_descriptor(runtime_file[0], name, descriptor['version'])
+                record['module']['schema_version'] = 2
+                record['module']['runtime'] = disabled_runtime(hashlib.sha256(runtime_file[0]).hexdigest())
+                report['workers'] = None
             manifest['components']['module:' + name] = record
             for relative, (content, mode, mutable) in sorted(files.items()):
                 path = prefix + relative
@@ -362,6 +372,20 @@ def _plan(root, binding, operation, requests, source, registry_path, grants, ent
                     _need(not linked or operation == 'disable' and not record['module']['enabled'], 'module_has_dependents')
         for name in sorted(selected):
             record = manifest['components']['module:' + name]
+            if record['module']['schema_version'] == 2:
+                _need(operation != 'enable', 'runtime_activation_required')
+                active = record['module']['runtime']['state'] != 'installed-disabled'
+                _need(not active or operation == 'disable', 'runtime_quiescence_required')
+                report['workers'] = None
+                if active:
+                    report['quiescence_required'] = True
+                    report['reason'] = 'runtime_adapter_unavailable'
+                    if record['module']['runtime']['state'] != 'quiescing':
+                        record['module']['enabled'], record['module']['grants'] = False, []
+                        record['module']['runtime']['state'] = 'quiescing'
+                        record['module']['transaction'] = transaction
+                        affected.append(name)
+                    continue
             if operation == 'enable':
                 _validate_installed(binding, name, record)
                 _entitled(root, name, record['module'], entitlement)
@@ -434,6 +458,8 @@ def _descriptor(binding, name, record, *, compatible=True):
 
 def _validate_installed(binding, name, record):
     mutable = _descriptor(binding, name, record)
+    from .module_runtime import installed_runtime
+    installed_runtime(binding, name, record)
     for path in record['files']:
         if path not in mutable:
             _need(matches_owned(binding.read(path), record.get('owned', {}).get(path)), 'module_file_modified')
@@ -507,15 +533,23 @@ def _read_journal(binding, path):
     return snapshot, data
 
 
-def _rollback_preflight(transaction, journal):
+def _rollback_preflight(transaction, journal, *, quiesced=frozenset()):
     current_manifest = transaction.read(MANIFEST)
     original_raw, original_mode = _unpack(journal['before_manifest'])
     original = decode_manifest(original_raw)
+    current_decoded = decode_manifest(current_manifest.content) if current_manifest is not None else None
+    _need(current_decoded is not None and all(
+        record['module']['schema_version'] == 1 or record['module']['runtime']['state'] == 'installed-disabled'
+        or (record['module']['runtime']['owner_handle'], record['module']['runtime']['generation']) in quiesced
+        for name, record in _modules(current_decoded).items() if name in journal['affected']), 'runtime_quiescence_required')
     for name in journal['affected']:
         record = original['components'].get('module:' + name)
         if record is not None:
             record['module']['enabled'] = False
             record['module']['grants'] = []
+            if record['module']['schema_version'] == 2:
+                from .module_runtime import disabled_runtime
+                record['module']['runtime'] = disabled_runtime(record['module']['runtime']['descriptor_sha256'])
     target_manifest = encode_manifest(original)
     _need(current_manifest is not None and (any(_matches(current_manifest, value) for value in (
         journal['before_manifest'], journal['after_manifest']))
@@ -537,8 +571,8 @@ def _rollback_preflight(transaction, journal):
     return current_manifest, target_manifest, original_mode, observations, already
 
 
-def _rollback_locked(transaction, journal, *, status):
-    current_manifest, target_manifest, original_mode, observations, already = _rollback_preflight(transaction, journal)
+def _rollback_locked(transaction, journal, *, status, quiesced=frozenset()):
+    current_manifest, target_manifest, original_mode, observations, already = _rollback_preflight(transaction, journal, quiesced=quiesced)
     for change, current in reversed(observations):
         desired = change['before']
         if _matches(current, desired):
@@ -556,7 +590,38 @@ def _rollback_locked(transaction, journal, *, status):
     pending = transaction.read(PENDING)
     if pending is not None:
         transaction.remove(PENDING, expected=pending)
-    return {'status': 'already_rolled_back' if already and status == 'rolled_back' else status, 'workers': 0, 'external_authority': False}
+    runtime_records = any(record['module']['schema_version'] == 2 for record in _modules(decode_manifest(target_manifest)).values())
+    return {'status': 'already_rolled_back' if already and status == 'rolled_back' else status,
+            'workers': 0 if quiesced or not runtime_records else None, 'external_authority': False}
+
+
+def _publish_plan(transaction, plan, transaction_id):
+    raw = _journal(plan, transaction_id)
+    transaction.write(PENDING, raw, 0o600, expected=None)
+    try:
+        for change in plan.changes:
+            if change['after'] is None:
+                transaction.remove(change['path'], expected=change['before'])
+            else:
+                transaction.write(change['path'], change['after'], change['mode'], expected=change['before'])
+        transaction.write(MANIFEST, plan.after, 0o644, expected=plan.before)
+        if plan.report['rollback_available']:
+            transaction.write(f'{HISTORY}/{transaction_id}.json', raw, 0o600, expected=None)
+        pointer_status = 'applied' if plan.report['rollback_available'] else 'revoked_without_history'
+        transaction.write(LAST, _bytes({'schema_version': 1, 'transaction': transaction_id, 'status': pointer_status}), 0o600, expected=transaction.read(LAST))
+        transaction.remove(PENDING, expected=transaction.read(PENDING))
+    except (OSError, ValueError) as exc:
+        try:
+            if transaction.read(PENDING) is None:
+                _need(_completed(transaction, plan, transaction_id, raw), 'module_failed_state_inspection_required')
+                return {**plan.report, 'status': 'quiescing' if plan.report.get('quiescence_required') else 'applied',
+                        'transaction': transaction_id, 'completion': 'verified_after_cleanup_error'}
+            _snapshot, journal = _read_journal(transaction, PENDING)
+            _rollback_locked(transaction, journal, status='recovered')
+        except (OSError, ValueError) as recovery:
+            raise ModuleError('module_failed_recovery_required') from recovery
+        raise ModuleError('module_failed_rolled_back') from exc
+    return {**plan.report, 'status': 'quiescing' if plan.report.get('quiescence_required') else 'applied', 'transaction': transaction_id}
 
 
 def manage_modules(root, operation, requests, *, source=None, registry_path=REGISTRY, grants=(), entitlement=None):
@@ -565,44 +630,20 @@ def manage_modules(root, operation, requests, *, source=None, registry_path=REGI
         with BoundRoot(root) as binding:
             initial = _plan(root, binding, operation, requests, source, registry_path, grants, entitlement, transaction_id)
             if not initial.affected:
-                return {**initial.report, 'status': 'unchanged'}
+                return {**initial.report, 'status': 'quiescing' if initial.report.get('quiescence_required') else 'unchanged'}
             _journal(initial, transaction_id)
         with component_transaction(root) as transaction:
             plan = _plan(root, transaction, operation, requests, source, registry_path, grants, entitlement, transaction_id)
             if not plan.affected:
-                return {**plan.report, 'status': 'unchanged'}
-            raw = _journal(plan, transaction_id)
-            transaction.write(PENDING, raw, 0o600, expected=None)
-            try:
-                for change in plan.changes:
-                    if change['after'] is None:
-                        transaction.remove(change['path'], expected=change['before'])
-                    else:
-                        transaction.write(change['path'], change['after'], change['mode'], expected=change['before'])
-                transaction.write(MANIFEST, plan.after, 0o644, expected=plan.before)
-                if plan.report['rollback_available']:
-                    transaction.write(f'{HISTORY}/{transaction_id}.json', raw, 0o600, expected=None)
-                pointer_status = 'applied' if plan.report['rollback_available'] else 'revoked_without_history'
-                transaction.write(LAST, _bytes({'schema_version': 1, 'transaction': transaction_id, 'status': pointer_status}), 0o600, expected=transaction.read(LAST))
-                transaction.remove(PENDING, expected=transaction.read(PENDING))
-            except (OSError, ValueError) as exc:
-                try:
-                    if transaction.read(PENDING) is None:
-                        _need(_completed(transaction, plan, transaction_id, raw), 'module_failed_state_inspection_required')
-                        return {**plan.report, 'status': 'applied', 'transaction': transaction_id, 'completion': 'verified_after_cleanup_error'}
-                    _snapshot, journal = _read_journal(transaction, PENDING)
-                    _rollback_locked(transaction, journal, status='recovered')
-                except (OSError, ValueError) as recovery:
-                    raise ModuleError('module_failed_recovery_required') from recovery
-                raise ModuleError('module_failed_rolled_back') from exc
-            return {**plan.report, 'status': 'applied', 'transaction': transaction_id}
+                return {**plan.report, 'status': 'quiescing' if plan.report.get('quiescence_required') else 'unchanged'}
+            return _publish_plan(transaction, plan, transaction_id)
     except (ValueError, OSError, TypeError, RecursionError) as exc:
         if isinstance(exc, ModuleError):
             raise
         raise ModuleError('module_operation_refused') from exc
 
 
-def recover_modules(root):
+def recover_modules(root, *, runtime=None):
     try:
         with BoundRoot(root) as binding:
             if binding.read(PENDING) is None:
@@ -610,7 +651,10 @@ def recover_modules(root):
             _read_journal(binding, PENDING)
         with component_transaction(root) as transaction:
             _snapshot, journal = _read_journal(transaction, PENDING)
-            return _rollback_locked(transaction, journal, status='recovered')
+            from .module_runtime import quiesce_journal_owners
+            import time
+            quiesced = quiesce_journal_owners(journal, runtime, deadline=time.monotonic() + 30)
+            return _rollback_locked(transaction, journal, status='recovered', quiesced=quiesced)
     except (ValueError, OSError, TypeError, RecursionError) as exc:
         if isinstance(exc, ModuleError):
             raise
@@ -664,7 +708,8 @@ def module_status(root):
             state = read_state(root, binding=binding)
             modules = {name: copy.deepcopy(record['module']) for name, record in _modules(state.manifest).items()}
             return {'schema_version': 1, 'core_api': CORE_API, 'modules': modules, 'recovery_required': binding.read(PENDING) is not None,
-                    'workers': 0, 'external_dependencies_installed': 0, 'external_authority': False}
+                    'workers': None if any(m['schema_version'] == 2 for m in modules.values()) else 0,
+                    'external_dependencies_installed': 0, 'external_authority': False}
     except (ValueError, OSError, TypeError, RecursionError) as exc:
         raise ModuleError('module_state_unavailable') from exc
 
@@ -694,6 +739,7 @@ def admit_module(root, name, *, permission=None, entitlement=None):
                 checked.add(selected)
             validate(name)
             record = records[name]
+            _need(record['module']['schema_version'] == 1, 'runtime_native_admission_required')
             _need(permission is None or permission in record['module']['grants'], 'module_scope_not_granted')
             _need(binding.read(PENDING) is None and binding.read(MANIFEST) == observed, 'module_state_changed')
             return {**result, 'allowed': True, 'version': record['module']['version'], 'manifest_sha256': record['module']['manifest_sha256']}
