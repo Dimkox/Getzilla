@@ -5,11 +5,16 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from tests.branch_support import git
 
 class CiEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask,previous)
+
     def admit_private_fixture(self, root):
         saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
         self.addCleanup(os.close, saved)
@@ -29,7 +34,6 @@ class CiEvidenceTests(unittest.TestCase):
         from getzilla.ci_evidence import export_local_evidence
         from getzilla.receipts import MAX_RECEIPT_BYTES, write_receipt
         from tests._support import activate_owned_route
-        import zipfile
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             git(root, 'init', '-q')
@@ -171,7 +175,6 @@ class CiEvidenceTests(unittest.TestCase):
         from getzilla.ci_evidence import export_local_evidence
         from getzilla.trace_storage import _NativeRoot
         from unittest.mock import patch
-        import zipfile
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary) / 'shared'
             root = parent / 'project'
@@ -198,9 +201,9 @@ class CiEvidenceTests(unittest.TestCase):
                     (foreign / 'active-route.json').write_text('FOREIGN_SENTINEL')
                 return raw
             with patch.object(_NativeRoot, 'read', replacing):
-                export_local_evidence(root, runtime / 'exports/original.zip')
+                with self.assertRaisesRegex(ValueError,'native_trace_source_unavailable'):
+                    export_local_evidence(root, runtime / 'exports/original.zip')
             self.assertEqual(changed, [True])
             self.assertEqual((root / '.getzilla/runtime/active-route.json').read_text(), 'FOREIGN_SENTINEL')
             self.assertFalse((root / '.getzilla/runtime/exports').exists())
-            with zipfile.ZipFile(moved / 'project/.getzilla/runtime/exports/original.zip') as archive:
-                self.assertEqual(json.loads(archive.read('route.json'))['route_id'], 'original')
+            self.assertFalse((moved / 'project/.getzilla/runtime/exports/original.zip').exists())

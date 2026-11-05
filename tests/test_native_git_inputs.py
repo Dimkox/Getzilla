@@ -57,6 +57,72 @@ class NativeGitInputTests(fixtures._GuardFixture):
                     self.assertEqual(diff._git(self.root,['rev-parse','HEAD'],_scope=scope).strip(),self.head.encode())
         self.assertEqual(len(calls),1)
 
+    def test_native_source_and_spec_fingerprint_keep_a_during_child_launch_switch(self):
+        from getzilla.spec import spec_fingerprint
+        real_popen = diff.subprocess.Popen
+        before = os.umask(0o022)
+        try:
+            foreign,_,_,_ = self.repository(name='source-foreign')
+            linked,_,_,linked_head = self.repository(linked='source-linked',name='source-linked-root')
+        finally:
+            os.umask(before)
+        self.git(foreign,'-c','user.name=Public','-c','user.email=public@example.invalid',
+                 'commit','--allow-empty','-qm','foreign public source')
+        foreign_head = self.git(foreign,'rev-parse','HEAD').decode().strip()
+        for root,head in ((self.root,self.head),(linked,linked_head)):
+            with self.subTest(linked=root == linked):
+                root.chmod(0o755)
+                os.chdir(root)
+                self.assertNotEqual(head,foreign_head)
+                def switched(command,**kwargs):
+                    os.chdir(foreign)
+                    try:
+                        return real_popen(command,**kwargs)
+                    finally:
+                        os.chdir(root)
+                with native_root(root) as anchor:
+                    original = anchor.git_source()
+                    expected = spec_fingerprint(root,root/'change-spec.yaml',{},anchor=anchor)
+                    self.assertEqual(original['head'],head)
+                    with patch.object(diff.subprocess,'Popen',side_effect=switched):
+                        self.assertEqual(anchor.git_source(),original)
+                        self.assertEqual(spec_fingerprint(root,root/'change-spec.yaml',{},anchor=anchor),expected)
+
+    def test_native_source_uses_original_git_graph_admission(self):
+        config = self.common/'config'
+        config.chmod(0o664)
+        identity = config.stat().st_dev,config.stat().st_ino
+        real_read = os.read
+        def checked(descriptor,*args):
+            info = os.fstat(descriptor)
+            self.assertNotEqual((info.st_dev,info.st_ino),identity,'unsafe config bytes read')
+            return real_read(descriptor,*args)
+        with native_root(self.root) as anchor,patch('os.read',side_effect=checked):
+            with self.assertRaisesRegex(ValueError,'native_trace_source_unavailable'):
+                anchor.git_source()
+
+    def test_exact_native_commit_child_cannot_bypass_owned_fd_addressing(self):
+        actual = diff._run_capped
+        def observed(command,**kwargs):
+            self.assertTrue(str(kwargs['cwd']).startswith('/proc/self/fd/'))
+            self.assertTrue(kwargs['pass_fds'])
+            return actual(command,**kwargs)
+        with native_root(self.root) as anchor:
+            with diff._GitOperation(self.root,native_anchor=anchor) as scope:
+                with patch.object(diff,'_run_capped',side_effect=observed):
+                    self.assertEqual(diff._head_commit(self.root,_scope=scope),self.head)
+
+    def test_native_source_budget_also_bounds_configuration_and_preflight_children(self):
+        actual,timeouts = diff._run_capped,[]
+        def observed(command,**kwargs):
+            timeouts.append(kwargs['timeout'])
+            return actual(command,**kwargs)
+        with native_root(self.root) as anchor,patch.object(diff,'_run_capped',side_effect=observed):
+            self.assertEqual(anchor.git_source()['head'],self.head)
+        self.assertGreaterEqual(len(timeouts),3)
+        self.assertTrue(all(0 < timeout <= 0.5 for timeout in timeouts))
+        self.assertEqual(timeouts,sorted(timeouts,reverse=True))
+
     def test_preacquisition_parent_replacement_refuses_before_git_process(self):
         moved = self.root.with_name(self.root.name+'-moved')
         with native_root(self.root) as anchor:

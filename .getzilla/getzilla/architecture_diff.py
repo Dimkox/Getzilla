@@ -490,7 +490,17 @@ class _GitBinding:
             guard.check()
 
 
-def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> None:
+def _bounded_git_timeout(maximum: float, deadline: float | None = None) -> float:
+    if deadline is None:
+        return maximum
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
+    return min(maximum,remaining)
+
+
+def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard,
+                               *, _deadline: float | None = None) -> None:
     """Close a conservative read graph; let Git itself parse configuration syntax."""
     common = binding.common_directory
     objects = binding.objects_directory
@@ -550,7 +560,7 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
         cwd=guard.address(binding.root) if isinstance(guard,NativeGitGraph) else Path("/"),
         pass_fds=guard.pass_fds() if isinstance(guard,NativeGitGraph) else (),
         env=_git_environment(), stdout_limit=16_384,
-        stderr_limit=16_384, timeout=min(_GIT_TIMEOUT_SECONDS, guard.remaining()), stdin_data=content,
+        stderr_limit=16_384, timeout=_bounded_git_timeout(min(_GIT_TIMEOUT_SECONDS, guard.remaining()),_deadline), stdin_data=content,
     )
     guard.check()
     if returncode or (output and not output.endswith(b"\0")):
@@ -576,7 +586,10 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
 class _GitOperation:
     """One explicit snapshot and admission point, including pending cache writes."""
 
-    def __init__(self, root: Path, *, relaxed: bool = True, native_anchor=None) -> None:
+    def __init__(self, root: Path, *, relaxed: bool = True, native_anchor=None,
+                 _budget_seconds: float = 120.0) -> None:
+        if not 0 < _budget_seconds <= 120.0:
+            raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
         self.root = Path(os.path.abspath(root))
         self.guard: LinuxGitGuard | None = None
         self.binding: _GitBinding | None = None
@@ -587,15 +600,16 @@ class _GitOperation:
         self._owner = threading.get_ident()
         self._closed = False
         self._pending: dict[tuple[str, tuple[object, ...]], Any] = {}
-        self._deadline = time.monotonic() + 120.0
+        self._deadline = time.monotonic() + _budget_seconds
 
     def __enter__(self) -> "_GitOperation":
         try:
             if self._native_anchor is not None:
                 self._native_anchor.check_root(self.root)
                 self.guard = NativeGitGraph(self._native_anchor)
-                self.binding = _git_binding(self.root,_guard=self.guard)
+                self.binding = _git_binding(self.root,_guard=self.guard,_deadline=self._deadline)
                 self.mode,self.reason = self.guard.mode,'qualified'
+                self.check()
                 return self
             if not self._relaxed:
                 self.reason = "command"
@@ -704,7 +718,8 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
 
 
-def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBinding:
+def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
+                 _deadline: float | None = None) -> _GitBinding:
     try:
         native = isinstance(_guard,NativeGitGraph)
         def info(path):
@@ -784,7 +799,7 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                               common_directory, objects_directory)
         binding.verify(_guard, strict_directories=True)
         if _guard is not None:
-            _qualify_git_configuration(binding, _guard)
+            _qualify_git_configuration(binding, _guard,_deadline=_deadline)
             binding.verify(_guard, strict_directories=True)
             _guard.seal()
         child = _native_git_child(binding,_guard) if native else None
@@ -796,7 +811,7 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
             cwd=child['root'] if native else repository,
             env=child['env'] if native else _git_environment(),
             pass_fds=child['fds'] if native else (),stdout_limit=16_384,
-            stderr_limit=65_536, timeout=_GIT_TIMEOUT_SECONDS,
+            stderr_limit=65_536, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS,_deadline),
         )
         binding.verify(_guard, strict_directories=True)
         expected_git = Path(os.readlink(child['git'])) if native else git_directory
@@ -931,7 +946,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if _scope is None:
         with _GitOperation(root) as scope:
             return _exact_commit(root, value, label=label, _scope=scope)
-    binding = _scope.check(root)
+    _scope.check(root)
     object_id_length = _git_object_id_length(root, _scope=_scope)
     if not isinstance(value, str) or len(value) != object_id_length or _EXACT_SHA.fullmatch(value) is None:
         raise ArchitectureError(f"{label} must match the exact repository commit format", code="git")
@@ -940,19 +955,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if cached is True:
         _scope.check()
         return value
-    try:
-        returncode, kind, _error = _run_capped(
-            _git_command(["cat-file", "-t", value], safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root, env=_git_environment(), stdout_limit=64,
-            stderr_limit=65_536, timeout=_scope.remaining(),
-        )
-    except OSError as exc:
-        raise ArchitectureError("Git object operation is unavailable", code="git") from exc
-    finally:
-        _scope.check()
-    if returncode:
-        kind = None
+    kind = _git(root,["cat-file","-t",value],allow_failure=True,limit=64,_scope=_scope)
     if kind != b"commit\n":
         raise ArchitectureError(f"{label} is not an available commit object", code="git")
     _scope.stage("commit", key, True)

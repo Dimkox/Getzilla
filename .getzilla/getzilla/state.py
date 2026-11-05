@@ -331,6 +331,34 @@ def durable_bytes(root: Path, path: Path, raw: bytes, *, anchor=None) -> None:
     temporary = '.task-' + secrets.token_hex(16) + '.tmp'
     created = False
     try:
+        from .native_state_snapshot import metadata_limit,write as write_snapshot
+        limit = metadata_limit(relative)
+        if limit is not None:
+            def check_snapshot_parents():
+                for parent,name,device,inode in identities:
+                    info = fsx.lstat_at(parent,name)
+                    if fsx.is_link(info) or (info.st_dev,info.st_ino) != (device,inode):
+                        raise ValueError('state-directory-changed')
+            if fsx.effective_uid() is None:
+                # No POSIX owner/private-mode proof exists on this backend.
+                # Keep only the old unframed workflow behavior. This bounded
+                # format probe returns no contents or reader/ACL authority.
+                from .package_status import read_package_file
+                from .native_state_snapshot import HEADER,decode
+                decode(raw,limit=limit)
+                try:
+                    fsx.lstat_at(handles[-1],relative.name)
+                except FileNotFoundError:
+                    pass
+                else:
+                    existing = read_package_file(root,relative.as_posix(),limit=limit)
+                    if HEADER in existing:
+                        raise ValueError('native_state_snapshot_platform_unsupported')
+                    decode(existing,limit=limit)  # Also rejects partial/ambiguous framing.
+                    check_snapshot_parents()
+            elif write_snapshot(handles[-1],relative.name,raw,limit=limit,
+                                check=check_snapshot_parents,framed_only=True):
+                return
         descriptor = fsx.open_at(handles[-1], temporary,
                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
         created = True
@@ -401,6 +429,10 @@ def _route_document(root: Path, path: Path, *, limit: int = 1_048_576, anchor=No
         anchor.check_root(root)
     raw = (anchor.read(path.relative_to(root).as_posix(), limit) if anchor is not None
            else read_package_file(root, path.relative_to(root).as_posix(), limit=limit))
+    from .native_state_snapshot import metadata_limit,decode
+    allocated = metadata_limit(path.relative_to(root))
+    if allocated is not None:
+        raw = decode(raw,limit=min(limit,allocated))
     value = json.loads(raw, object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
     if not isinstance(value, dict):
         raise ValueError('invalid-route-document')

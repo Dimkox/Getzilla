@@ -169,53 +169,33 @@ if hasattr(os, 'register_at_fork'):
 
 @contextmanager
 def _pid_marker(anchor, name, deadline):
-    from .state import _process_alive, LOCK_WRITE_GRACE_SECONDS
-    relative = f'.getzilla/runtime/.{name}.lock'
+    """Anonymous lifetime marker; the existing named kernel guard serializes.
+
+    Never create, remove or repair a PID pathname. Legacy contenders acquire
+    the same kernel guard before their own PID marker protocol.
+    """
+    anchor.check()
     owner_pid = os.getpid()
-    descriptor = None
-    with anchor.parent(relative) as (parent, leaf):
-        while descriptor is None:
+    if name not in {'task-transition','route'} or time.monotonic() >= deadline:
+        raise ValueError('native_trace_marker_unavailable')
+    descriptor,writer = os.pipe()
+    os.close(writer)
+    os.set_inheritable(descriptor,False)
+    identity = _resource(descriptor)
+    try:
+        yield descriptor
+    finally:
+        if os.getpid() == owner_pid:
             try:
-                descriptor = fsx.open_at(parent, leaf, os.O_CREAT | os.O_EXCL | os.O_WRONLY | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
-            except FileExistsError:
-                with anchor.file(relative, limit=128) as (existing, _):
-                    info = os.fstat(existing)
-                    raw = os.read(existing, 129)
-                try:
-                    pid = int(raw.strip())
-                    stale = not _process_alive(pid)
-                except ValueError:
-                    stale = bool(raw.strip()) or time.time()-info.st_mtime >= LOCK_WRITE_GRACE_SECONDS
-                if stale:
-                    named = fsx.lstat_at(parent, leaf)
-                    if (_identity(named), named.st_mtime_ns) != (_identity(info), info.st_mtime_ns):
-                        continue
-                    if anchor.read(relative, 128) != raw:
-                        continue
-                    fsx.unlink_at(parent, leaf)
-                    continue
-                remaining = deadline-time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError('native_trace_lock_timeout')
-                time.sleep(min(0.01, remaining))
-        identity = _identity(os.fstat(descriptor))
-        try:
-            payload = f'{owner_pid}\n'.encode()
-            if os.write(descriptor, payload) != len(payload):
-                raise OSError('native_trace_marker_write')
-            yield descriptor
-        finally:
-            if os.getpid() == owner_pid:
-                os.close(descriptor)
-                named = fsx.lstat_at(parent, leaf)
-                if _identity(named) != identity:
-                    raise ValueError('native_trace_marker_changed')
-                fsx.unlink_at(parent, leaf)
+                if _resource(descriptor) == identity:
+                    os.close(descriptor)
+            except OSError:
+                pass
 
 
 @contextmanager
 def native_lock(anchor, name, timeout):
-    """Exact retained native guard/PID names, entirely relative to this anchor."""
+    """The existing retained kernel guard plus an anonymous lifetime marker."""
     if name not in {'task-transition', 'route'} or timeout < 0:
         raise ValueError('native_trace_lock_unavailable')
     deadline = time.monotonic()+timeout
@@ -327,16 +307,16 @@ class _NativeRoot:
                 for name in ('repository_digest', 'workspace_digest')}
 
     def git_source(self):
-        """Read native Git facts through the validated inherited CWD, not hint."""
-        from .architecture_diff import _git_environment, _GIT_EXECUTABLE
+        """Use the same admitted owned-FD graph as other native Git facts."""
+        from .architecture_diff import _GitOperation, _git, ArchitectureError
         self.check_cwd()
         try:
-            result = subprocess.run([_GIT_EXECUTABLE, 'show', '--no-patch', '--no-show-signature',
-                                     '--no-notes', '--format=%H%n%T', 'HEAD'],
-                                    cwd='.', env=_git_environment(), capture_output=True, timeout=0.5, check=False)
-        except (OSError, subprocess.SubprocessError):
+            with _GitOperation(Path(self.workspace),native_anchor=self,_budget_seconds=0.5) as scope:
+                output = _git(Path(self.workspace),['show','--no-patch','--no-show-signature',
+                              '--no-notes','--format=%H%n%T','HEAD'],limit=256,_scope=scope)
+        except (OSError, ArchitectureError, subprocess.SubprocessError):
             raise ValueError('native_trace_source_unavailable') from None
-        values = result.stdout.strip().decode('ascii').splitlines() if result.returncode == 0 else []
+        values = (output or b'').strip().decode('ascii').splitlines()
         head, tree = values if len(values) == 2 else ('', '')
         self.check_cwd()
         if (len(head) not in {40, 64} or len(tree) != len(head)
@@ -439,6 +419,12 @@ class _NativeRoot:
             raise ValueError('public_source_changed')
 
     def read(self, relative, limit=1_048_576, *, private=True, source=False, public_source=False):
+        allocated = None
+        if not source and not public_source:
+            from .native_state_snapshot import metadata_limit,decode
+            allocated = metadata_limit(relative)
+            if allocated is not None:
+                limit = min(limit,allocated)
         with self.file(relative, private=private, source=source, public_source=public_source, limit=limit) as (descriptor, parent):
             chunks, size = [], 0
             expected = os.fstat(descriptor) if public_source else None
@@ -450,7 +436,10 @@ class _NativeRoot:
                 if public_source:
                     self._source_unchanged(descriptor,parent,Path(relative).name,expected,limit)
                 if not chunk:
-                    return b''.join(chunks)
+                    raw = b''.join(chunks)
+                    if allocated is not None:
+                        return decode(raw,limit=limit)
+                    return raw
                 size += len(chunk)
                 if size > limit:
                     raise ValueError('trace_io_limit')
@@ -480,47 +469,19 @@ class _NativeRoot:
             return False
 
     def write(self, relative, raw):
-        if not isinstance(raw, bytes) or len(raw) > 1_048_576:
+        from .native_state_snapshot import metadata_limit,write
+        limit = metadata_limit(relative)
+        if limit is None:
+            raise ValueError('native_trace_metadata_path_unsupported')
+        if not isinstance(raw, bytes) or len(raw) > limit:
             raise ValueError('trace_io_limit')
-        self.charge(size=len(raw))
         with self.parent(relative, create=True) as (parent, name):
-            temporary = '.task-' + secrets.token_hex(16) + '.tmp'
-            created = False
-            try:
-                try:
-                    self._regular(fsx.lstat_at(parent, name))
-                except FileNotFoundError:
-                    pass
-                descriptor = fsx.open_at(parent, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
-                created = True
-                try:
-                    offset = 0
-                    while offset < len(raw):
-                        written = os.write(descriptor, raw[offset:])
-                        if not written:
-                            raise OSError('trace_write_failed')
-                        offset += written
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-                self.check_parent(parent)
-                try:
-                    self._regular(fsx.lstat_at(parent, name))
-                except FileNotFoundError:
-                    pass
-                fsx.replace_at(parent, temporary, parent, name)
-                created = False
-                fsx.fsync_dir(parent)
-            finally:
-                if created:
-                    fsx.unlink_at(parent, temporary)
+            write(parent,name,raw,limit=limit,check=lambda:self.check_parent(parent),charge=self.charge)
 
     def unlink(self, relative):
-        with self.parent(relative) as (parent, name):
-            self._regular(fsx.lstat_at(parent, name))
-            self.check_parent(parent)
-            fsx.unlink_at(parent, name)
-            fsx.fsync_dir(parent)
+        # POSIX pathname deletion cannot condition on an expected inode.
+        # Refuse before touching a leaf, rather than claim a recheck is CAS.
+        raise ValueError('native_trace_unlink_unsupported')
 
 
 @contextmanager

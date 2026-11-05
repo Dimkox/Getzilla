@@ -7,7 +7,6 @@ import select
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'.getzilla'))
 from getzilla import state, sprint_lifecycle, task_budget
 from getzilla.router import build_route
 from getzilla.observation_privacy import load_local
-from tests._support import project_copy
+from tests._native_public_fixture import project_copy
 try:
     from getzilla import trace_observation
 except ImportError:

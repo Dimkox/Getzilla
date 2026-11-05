@@ -202,7 +202,8 @@ def _delivery_proofs(root, rows, *, anchor):
                             or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)
                             or len(raw) != info.st_size):
                         raise ValueError('canonical_record_changed')
-                    route = _decode_observation(raw)
+                    from .native_state_snapshot import decode
+                    route = _decode_observation(decode(raw,limit=1_048_576))
                     if (route.get('route_id') != route_id or route.get('workspace') != str(root.absolute())
                             or selected and route.get('logical_task_id') != native_context(selected[0])['logical_task_id']):
                         raise ValueError('canonical_binding_mismatch')

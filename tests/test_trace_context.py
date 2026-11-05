@@ -2,10 +2,13 @@
 import os
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from tests._support import PROJECT, project_copy
+from tests._support import PROJECT
+from tests._native_public_fixture import project_copy
 from tests import test_task_continuity as continuity_fixtures
 from getzilla import state
 from getzilla.continuity import context_binding
@@ -83,6 +86,33 @@ class AnchoredContextTests(unittest.TestCase):
             with patch.object(receipts,'load_spec',side_effect=AssertionError('path fallback')):
                 actual = receipts._active_spec_binding(self.root,self.route,'verification',anchor=anchor)
         self.assertEqual(actual,expected)
+
+    def test_receipt_spec_binding_keeps_original_source_during_actual_launch_switch(self):
+        from getzilla import receipts
+        subprocess.run(['git','init','-q'],cwd=self.root,check=True)
+        subprocess.run(['git','-c','user.name=Test','-c','user.email=test@example.invalid',
+                        '-c','maintenance.auto=false','commit','--allow-empty','-qm','fixture A'],
+                       cwd=self.root,check=True)
+        foreign = Path(self.enterContext(tempfile.TemporaryDirectory(prefix='native-public-B-')))
+        subprocess.run(['git','init','-q'],cwd=foreign,check=True)
+        subprocess.run(['git','-c','user.name=Test','-c','user.email=test@example.invalid',
+                        '-c','maintenance.auto=false','commit','--allow-empty','-qm','fixture B'],
+                       cwd=foreign,check=True)
+        expected = receipts._active_spec_binding(self.root,self.route,'verification')
+        real_popen,calls = subprocess.Popen,[]
+        def switched(command,**kwargs):
+            os.chdir(foreign)
+            try:
+                child = real_popen(command,**kwargs)
+                calls.append(True)
+                return child
+            finally:
+                os.chdir(self.root)
+        with native_root(self.root) as anchor,patch('subprocess.Popen',side_effect=switched):
+            actual = receipts._active_spec_binding(self.root,self.route,'verification',anchor=anchor)
+        self.assertGreaterEqual(len(calls),3)
+        self.assertEqual(actual,expected)
+        self.assertEqual(Path.cwd(),self.root)
 
     def test_original_receipt_spec_binding_refuses_unqualified_active_spec(self):
         from getzilla import receipts

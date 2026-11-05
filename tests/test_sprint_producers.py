@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'.getzilla'))
 from getzilla import state
 from getzilla.router import build_route
-from tests._support import project_copy
+from tests._native_public_fixture import project_copy
 try:
     from getzilla import sprint_lifecycle
 except ImportError:
@@ -175,7 +175,7 @@ class ProducerTests(unittest.TestCase):
             route = self.route(root)
             self.assertIsNotNone(sprint_lifecycle)
             with patch('getzilla.sprint_lifecycle.append_batch', return_value=None):
-                current = self.select(root, route)
+                self.select(root, route)
             with patch('getzilla.sprint_lifecycle._native_clock', return_value='2000-01-01T00:00:00.000000Z'):
                 self.assertFalse(sprint_lifecycle.deliver(root, route['route_id']))
             self.assertEqual(state.canonical_route(root, route['route_id'])['observation_publication']['delivery'], {})
