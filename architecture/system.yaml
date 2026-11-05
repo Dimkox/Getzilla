@@ -2083,6 +2083,7 @@
         "factory/src/getzilla_factory/model_rotator_registry.py",
         "factory/src/getzilla_factory/prediction_contracts.py",
         "factory/src/getzilla_factory/recovery.py",
+        "factory/src/getzilla_factory/retrieval_context_contracts.py",
         "factory/src/getzilla_factory/vibevm_store.py",
         "factory/src/getzilla_factory/service.py",
         "factory/src/getzilla_factory/state.py",

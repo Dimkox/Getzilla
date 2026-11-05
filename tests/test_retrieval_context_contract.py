@@ -14,6 +14,28 @@ from tests.test_factory_v15_context_schema import context_facts
 
 
 class RetrievalContextTests(unittest.TestCase):
+    def test_tagged_context_source_has_precise_existing_factory_owner(self):
+        from getzilla.architecture import load_architecture, validate_repository_drift
+        snapshot = load_architecture(ROOT)
+        path = 'factory/src/getzilla_factory/retrieval_context_contracts.py'
+        owners = [node['id'] for node in snapshot.system['nodes']
+            if path in node['repository_paths']]
+        self.assertEqual(owners, ['NODE-FACTORY-CONTROL'])
+        self.assertEqual(validate_repository_drift(ROOT, snapshot), ())
+
+    def test_removing_tagged_context_owner_still_reports_undeclared_source(self):
+        from dataclasses import replace
+        from getzilla.architecture import load_architecture, validate_repository_drift
+        snapshot = load_architecture(ROOT)
+        system = deepcopy(snapshot.system)
+        path = 'factory/src/getzilla_factory/retrieval_context_contracts.py'
+        owner = next(node for node in system['nodes'] if node['id'] == 'NODE-FACTORY-CONTROL')
+        self.assertIn(path, owner['repository_paths'])
+        owner['repository_paths'].remove(path)
+        findings = validate_repository_drift(ROOT, replace(snapshot, system=system))
+        self.assertEqual([(item.code, item.path) for item in findings],
+            [('undeclared_source', path)])
+
     def contract(self):
         from getzilla_factory.retrieval_context_contracts import ContextManifestV2
         return ContextManifestV2
