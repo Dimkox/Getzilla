@@ -39,6 +39,7 @@ def _readings_differ(command: str) -> bool:
     return fsx.WINDOWS and '\\' in command
 
 
+@_legacy._bounded_invocation('secret-read')
 def sensitive_action(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> str | None:
@@ -116,6 +117,7 @@ def _shell_mutation(
     return protected_targets, opaque
 
 
+@_legacy._bounded_invocation((False, f'Policy resource budget exhausted: {_legacy._BUDGET_MARKER}'))
 def evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
