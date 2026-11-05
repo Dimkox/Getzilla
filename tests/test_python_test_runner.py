@@ -1185,6 +1185,22 @@ class CoverageLayout(unittest.TestCase):
             self.assertTrue(report.is_symlink())
             self.assertEqual(foreign.read_text(), content)
 
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'native FIFO support')
+    def test_collection_report_fifo_is_rejected_without_waiting_for_a_writer(self) -> None:
+        with fixture() as root:
+            report = root / 'result.fifo'
+            os.mkfifo(report, 0o600)
+            probe = root / 'probe.py'
+            probe.write_text(
+                'import sys\nfrom pathlib import Path\n'
+                f'sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / ".getzilla")!r})\n'
+                'from getzilla.python_test_runner import ProcessResult, _unittest_result\n'
+                f'result = _unittest_result(ProcessResult(["runner", "--nonce", "a" * 32], 0), Path({str(report)!r}))\n'
+                'assert result.returncode == 5, result\n')
+            result = subprocess.run([sys.executable, str(probe)], capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(report.exists())
+
     def test_degraded_serial_failures_propagate_without_retry(self) -> None:
         for source in (
             'import unittest\nclass T(unittest.TestCase):\n def test_bad(self): self.fail("expected")\n',

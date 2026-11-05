@@ -375,12 +375,15 @@ def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
         return result
     try:
         nonce = result.command[result.command.index('--nonce') + 1]
-        if not re.fullmatch('[0-9a-f]{32}', nonce) or fsx.is_link(result_file.lstat()):
+        initial = result_file.lstat()
+        if (not re.fullmatch('[0-9a-f]{32}', nonce) or fsx.is_link(initial)
+                or not stat.S_ISREG(initial.st_mode)):
             raise ValueError('invalid collection result identity')
-        descriptor = os.open(result_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        descriptor = os.open(result_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
         with os.fdopen(descriptor, 'rb') as source:
             identity = os.fstat(source.fileno())
             if (not stat.S_ISREG(identity.st_mode)
+                    or (identity.st_dev, identity.st_ino) != (initial.st_dev, initial.st_ino)
                     or (hasattr(os, 'getuid') and identity.st_uid != os.getuid())):
                 raise ValueError('invalid collection result owner or type')
             content = source.read(513)
