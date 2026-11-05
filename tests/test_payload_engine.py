@@ -21,6 +21,12 @@ def load_engine(path, name):
 
 
 class PayloadEngineTests(unittest.TestCase):
+    def test_legacy_shape_error_precedence_remains_compatible(self):
+        engine = load_engine(CANONICAL, 'public_payload_engine_legacy_shape')
+        with self.assertRaises(engine.PayloadError) as caught:
+            engine.check_shape({'a': 0, 'b': 0}, max_depth=1, max_records=1)
+        self.assertEqual(caught.exception.code, 'depth_limit')
+
     def test_native_bound_uses_counted_replacement_without_full_regex_sub(self):
         engine = load_engine(CANONICAL, 'public_payload_engine_redaction_bound')
         from unittest.mock import patch
@@ -50,7 +56,8 @@ class PayloadEngineTests(unittest.TestCase):
                 visited.append('traversed')
                 return super().items()
         with self.assertRaises(engine.PayloadError) as caught:
-            engine.check_shape(Observed({'a': 1, 'b': 2, 'c': 3}), max_depth=32, max_records=2)
+            engine.check_shape(Observed({'a': 1, 'b': 2, 'c': 3}), max_depth=32, max_records=2,
+                               before_children=True)
         self.assertEqual(caught.exception.code, 'record_limit')
         self.assertEqual(visited, [], 'aggregate budget must precede child traversal')
 

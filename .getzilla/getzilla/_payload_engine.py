@@ -202,7 +202,8 @@ def strict_json(value: str) -> Any:
 
 
 
-def check_shape(value: Any, *, max_depth: int, max_records: int) -> None:
+def check_shape(value: Any, *, max_depth: int, max_records: int,
+                before_children: bool = False) -> None:
     records = 0
 
     def visit(item: Any, depth: int) -> None:
@@ -211,7 +212,7 @@ def check_shape(value: Any, *, max_depth: int, max_records: int) -> None:
             raise PayloadError("depth_limit")
         if isinstance(item, dict):
             records += len(item)
-            if records > max_records:
+            if before_children and records > max_records:
                 raise PayloadError("record_limit")
             for key, child in item.items():
                 if not isinstance(key, str):
@@ -219,7 +220,7 @@ def check_shape(value: Any, *, max_depth: int, max_records: int) -> None:
                 visit(child, depth + 1)
         elif isinstance(item, list):
             records += len(item)
-            if records > max_records:
+            if before_children and records > max_records:
                 raise PayloadError("record_limit")
             for child in item:
                 visit(child, depth + 1)
@@ -227,6 +228,8 @@ def check_shape(value: Any, *, max_depth: int, max_records: int) -> None:
             raise PayloadError("malformed_payload")
         elif isinstance(item, float) and not math.isfinite(item):
             raise PayloadError("malformed_payload")
+        if records > max_records:
+            raise PayloadError("record_limit")
 
     visit(value, 1)
 

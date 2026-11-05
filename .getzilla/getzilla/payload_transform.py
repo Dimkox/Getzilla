@@ -280,7 +280,8 @@ def transform_candidate(*, policy, chunks, sources, purpose, absolute_deadline) 
             value = engine.strict_json(text)
             if type(value) is not dict:
                 raise engine.PayloadError('malformed_payload')
-            engine.check_shape(value, max_depth=policy.max_depth, max_records=policy.max_records)
+            engine.check_shape(value, max_depth=policy.max_depth, max_records=policy.max_records,
+                               before_children=True)
             _texts(value)
             engine.check_deadline(absolute_deadline)
             personal = any(s.classification is DataClass.PERSONAL for s in sources)
