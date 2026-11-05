@@ -225,8 +225,15 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
         # prevents grant/worker/scope changes. Closing metadata is not evidence.
         _ensure_idle(root)
         if target != 'cancelled':
+            from .completion import unfinished_runs
+            from .package_status import inspect_package
             from .receipts import validate_evidence
-            gaps = validate_evidence(root, route)
+            inspected = inspect_package(root, route, {
+                'change_id': change_id, 'path': package.relative_to(root).as_posix()})
+            gaps = [*unfinished_runs(inspected),
+                    *(f"{item['path']}: {item['code']}: {item['message']}"
+                      for item in inspected['findings'] if item['severity'] == 'error'),
+                    *validate_evidence(root, route)]
             if gaps:
                 raise ValueError('; '.join(gaps))
     set_active_change(root, {'change_id': change_id, 'path': package.relative_to(root).as_posix()})

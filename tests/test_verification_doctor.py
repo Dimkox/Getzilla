@@ -2137,7 +2137,7 @@ class QualityContourTests(unittest.TestCase):
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             recorded: list[str] = []
-            real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
+            real_check = verification_module._command_check
 
             def fake_exists(name: str) -> bool:
                 if name == 'ruff':
@@ -2490,6 +2490,31 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertIsNotNone(checks['factory-postgres-exit'].command)
             self.assertEqual(os.environ.get('GETZILLA_VERIFY_CAPABILITY'), 'repository-sandbox')
 
+    def test_missing_or_altered_factory_report_blocks_postgres_dispatch(self):
+        for mutation in ('missing', 'altered'):
+            def corrupt(report):
+                if mutation == 'missing':
+                    report.unlink()
+                else:
+                    document = json.loads(report.read_text(encoding='utf-8'))
+                    document['executed'] = []
+                    report.write_text(json.dumps(document), encoding='utf-8')
+
+            with self.subTest(mutation=mutation), self.python_tree(factory_report_mutator=corrupt) as root:
+                executed = []
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    executed.append(name)
+                    return CheckResult(name, 'pass', 'dispatch fixture', command=args)
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    checks = {item.name: item for item in _python(root, 'pr')}
+                self.assertEqual(checks['factory-unit'].status, 'fail')
+                self.assertNotIn('factory-postgres-exit', executed)
+                self.assertEqual(checks['factory-postgres-exit'].status, 'skip')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['blocked_by'], 'factory-unit')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['execution'], 'not_executed')
+
     def test_early_refusal_still_detects_mutation_and_refuses_receipt(self):
         with self.routed_tree() as (root, route):
             def refusal(project, files):
@@ -2544,7 +2569,7 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertTrue(all(item.status == 'skip' and item.command is None for item in checks[1:]))
 
     @contextlib.contextmanager
-    def python_tree(self):
+    def python_tree(self, *, factory_report_mutator=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for rel in ('tests', 'pilot/tests', 'factory/tests'):
@@ -2552,10 +2577,34 @@ class FailFastVerificationTests(unittest.TestCase):
             for rel in ('tests/test_ok.py', 'pilot/tests/test_ok.py', 'factory/tests/test_contracts.py',
                         'factory/tests/run_disposable_exit.py', 'factory/pyproject.toml'):
                 (root / rel).write_text('# dispatch fixture\n')
+            for rel in ('factory/__init__.py', 'factory/tests/__init__.py'):
+                (root / rel).write_text('')
+            (root / 'factory/tests/test_contracts.py').write_text(_PASSING_UNITTEST)
+            factory_unit = verification_module._factory_unit
+            actual_command = verification_module._command_check
+
+            def bound_factory_unit(project):
+                dispatch_command = verification_module._command_check
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    selected = dispatch_command(project, name, args, timeout, **kwargs)
+                    # Dispatch tests stub command outcomes. A successful Factory
+                    # child must still produce its real source-bound report.
+                    if selected.status != 'pass':
+                        return selected
+                    result = actual_command(project, name, args, timeout, **kwargs)
+                    if factory_report_mutator is not None:
+                        factory_report_mutator(Path(args[args.index('--report') + 1]))
+                    return result
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    return factory_unit(project)
+
             with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'ok')), \
                  patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'no non-test python paths')), \
                  patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(None, 'consumer')), \
                  patch.object(verification_module, 'run_core_tests', return_value=None), \
+                 patch.object(verification_module, '_factory_unit', side_effect=bound_factory_unit), \
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \
                  patch.dict(os.environ, {}, clear=False):
                 # The fake dispatcher models a local runner, not the outer CI sandbox.
