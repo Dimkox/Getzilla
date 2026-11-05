@@ -3,9 +3,10 @@ import copy
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from getzilla import route_metrics as metrics
-from tests.economics_fixtures import payloads, quantity, TASK
+from tests.economics_fixtures import payloads, quantity, query, TASK
 
 
 class EconomicPayloadTests(unittest.TestCase):
@@ -137,3 +138,82 @@ class EconomicPayloadTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class EconomicQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(callable(getattr(metrics, 'parse_report_query', None)), 'typed report query is absent')
+
+    def test_normalized_query_has_stable_set_order_utc_and_owned_value(self):
+        first = query()
+        first['scope_ids'] = ['scope-two', 'scope-one']
+        second = copy.deepcopy(first)
+        second['scope_ids'].reverse()
+        second['views'].reverse()
+        second['as_of'] = '2026-11-01T00:00:00.000000Z'
+        left, right = metrics.parse_report_query(first), metrics.parse_report_query(second)
+        self.assertEqual(left, right)
+        self.assertIsInstance(left, metrics.ReportQuery)
+        first['scope_ids'].clear()
+        self.assertEqual(left.as_dict()['scope_ids'], ['scope-one', 'scope-two'])
+        self.assertEqual(left.as_dict()['as_of'], '2026-11-01T00:00:00.000000Z')
+        exposed = left.as_dict()
+        exposed['cohort']['tasks'].clear()
+        self.assertEqual(len(left.as_dict()['cohort']['tasks']), 1)
+
+    def test_closed_query_rejects_effects_roles_bad_times_and_unbounded_dimensions(self):
+        for field in ('import', 'write', 'path', 'sql', 'shell', 'url', 'destination', 'role', 'source_grade'):
+            invalid = dict(query(), **{field: 'synthetic-disallowed'})
+            with self.subTest(field=field), self.assertRaises(ValueError) as caught:
+                metrics.parse_report_query(invalid)
+            self.assertEqual(str(caught.exception), 'invalid_report_query')
+        for field, value in (('scope_ids', []), ('scope_ids', ['a']*9), ('group_by', ['task']*3),
+                             ('views', ['invented']), ('as_of', '2026-02-30T00:00:00Z')):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                metrics.parse_report_query(dict(query(), **{field: value}))
+
+    def test_task_and_pr_cohorts_are_exact_and_not_authority_labels(self):
+        invalid = query()
+        invalid['cohort']['tasks'] *= 2
+        with self.assertRaises(ValueError):
+            metrics.parse_report_query(invalid)
+        invalid = query()
+        invalid['cohort'] = {'kind': 'verified_pr_ids', 'repository_digest': 'a'*64, 'pr_numbers': [True]}
+        with self.assertRaises(ValueError):
+            metrics.parse_report_query(invalid)
+        invalid['cohort']['pr_numbers'] = [2, 1]
+        self.assertEqual(metrics.parse_report_query(invalid).as_dict()['cohort']['pr_numbers'], [1, 2])
+
+    def test_query_decoder_rejects_duplicate_nonfinite_utf8_and_byte_limits(self):
+        self.assertEqual(metrics.decode_report_query(json.dumps(query()).encode()), metrics.parse_report_query(query()))
+        for raw in (b'{"scope_ids":[],"scope_ids":[]}', b'{"x":NaN}', b'\xff', b' ' * 65537):
+            with self.assertRaises(ValueError) as caught:
+                metrics.decode_report_query(raw)
+            self.assertEqual(str(caught.exception), 'invalid_report_query')
+
+    def test_protected_read_stays_fixed_unavailable_without_any_source_access(self):
+        expected = {'definition_version': metrics.ECONOMICS_DEFINITION, 'status': 'unavailable',
+                    'reason': 'protected_read_unavailable'}
+        with patch.object(metrics, 'regular', side_effect=AssertionError('no source may be opened')):
+            for handle in (None, object(), {'role': 'owner', 'uid': 1000}):
+                result = metrics.read_report(metrics.parse_report_query(query()), handle=handle)
+                self.assertIsInstance(result, metrics.ReportResult)
+                self.assertEqual(result.as_dict(), expected)
+                self.assertEqual(json.loads(metrics.render_report_json(result)), expected)
+                self.assertEqual(metrics.render_report_text(result), 'Economics unavailable: protected_read_unavailable\n')
+
+    def test_result_constructor_is_closed_and_strict_without_hidden_payload(self):
+        for canonical in ('{"definition_version":"task-economics-v1","status":"unavailable",'
+                          '"reason":"protected_read_unavailable","reason":"input_limit"}',
+                          '{"definition_version":"task-economics-v1","status":"unavailable",'
+                          '"reason":"protected_read_unavailable","payload":"rejected"}'):
+            with self.assertRaises(ValueError) as caught:
+                metrics.ReportResult(canonical)
+            self.assertEqual(str(caught.exception), 'invalid_report_result')
+
+    def test_published_query_contract_is_closed_and_complete(self):
+        path = Path(__file__).resolve().parents[1] / 'schemas/economics-query.schema.json'
+        self.assertTrue(path.is_file(), 'query schema is absent')
+        schema = json.loads(path.read_text())
+        self.assertEqual(set(schema['properties']), metrics._QUERY_FIELDS)
+        self.assertIs(schema['additionalProperties'], False)

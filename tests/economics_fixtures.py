@@ -12,6 +12,15 @@ def quantity(value, unit='token', reason=None):
     return {'value': value, 'unit': unit, 'unknown_reason': reason}
 
 
+def query():
+    return {'scope_ids': ['scope-one'], 'as_of': '2026-11-01T00:00:00Z',
+            'cohort': {'kind': 'task_ids', 'tasks': [deepcopy(TASK)]},
+            'accounting_interval': {'start': '2026-10-15T00:00:00Z', 'end_exclusive': '2026-11-01T00:00:00Z'},
+            'views': ['task_lifetime', 'period_spend'], 'group_by': ['task'],
+            'money_bases': ['confirmed_billed', 'tariff_estimate'],
+            'fx_refs': [], 'cache_pair_refs': [], 'snapshot_ref': None}
+
+
 def payloads():
     usage = {'source_fact_digest': H, 'source_proof_ref': H, 'operation': OP, 'service_period': PERIOD}
     state = {'task': TASK, 'effective_at': '2026-10-02T00:00:00Z', 'decision_id': H,

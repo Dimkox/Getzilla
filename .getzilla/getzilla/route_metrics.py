@@ -8,6 +8,7 @@ import copy
 import os
 import re
 import statistics
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from .metrics_journal import deduplicate, digest, load, record, source_summary, import_observations, regular  # noqa: F401
 from pathlib import Path
@@ -441,3 +442,170 @@ def decode_economics_payload(raw):
         return validate_economics_payload(_parse_canonical_json(raw, Path('economic-payload')))
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         raise EconomicsError('invalid_economics_payload') from None
+
+
+_QUERY_FIELDS = frozenset(('scope_ids as_of cohort accounting_interval views group_by money_bases '
+                           'fx_refs cache_pair_refs snapshot_ref').split())
+_QUERY_ENUMS = {
+    'views': ({'task_lifetime', 'period_spend', 'cache_comparison', 'friction138'}, 1, 4),
+    'group_by': ({'task', 'provider', 'model', 'cache_mode', 'runner_kind', 'disposition'}, 0, 2),
+    'money_bases': ({'confirmed_billed', 'tariff_estimate'}, 1, 2),
+}
+
+
+def _economic_json(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+
+
+def _economic_normal_time(value):
+    return _economic_utc(value).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+def _normalize_report_query(value):
+    _economic_builtin(value)
+    _economic_object(value, _QUERY_FIELDS)
+    _economic_require(len(_economic_json(value).encode('utf-8')) <= 65536)
+    value = copy.deepcopy(value)
+    _economic_require(type(value['scope_ids']) is list and 1 <= len(value['scope_ids']) <= 8)
+    for scope in value['scope_ids']:
+        _economic_id(scope)
+    _economic_require(len(set(value['scope_ids'])) == len(value['scope_ids']))
+    value['scope_ids'].sort()
+    value['as_of'] = _economic_normal_time(value['as_of'])
+    _economic_range(value['accounting_interval'])
+    for key in ('start', 'end_exclusive'):
+        value['accounting_interval'][key] = _economic_normal_time(value['accounting_interval'][key])
+    for field, (allowed, minimum, maximum) in _QUERY_ENUMS.items():
+        items = value[field]
+        _economic_require(type(items) is list and minimum <= len(items) <= maximum)
+        _economic_require(all(type(item) is str and item in allowed for item in items))
+        _economic_require(len(items) == len(set(items)))
+        if field != 'group_by':
+            items.sort()
+    for field in ('fx_refs', 'cache_pair_refs'):
+        items = value[field]
+        _economic_require(type(items) is list and len(items) <= 16)
+        for item in items:
+            _economic_digest(item)
+        _economic_require(len(items) == len(set(items)))
+        items.sort()
+    _economic_digest(value['snapshot_ref'], optional=True)
+    cohort = value['cohort']
+    _economic_require(type(cohort) is dict and type(cohort.get('kind')) is str)
+    if cohort['kind'] == 'task_ids':
+        _economic_object(cohort, ('kind', 'tasks'))
+        _economic_require(type(cohort['tasks']) is list and 1 <= len(cohort['tasks']) <= 256)
+        for task in cohort['tasks']:
+            _economic_task(task)
+        identities = [_economic_json(task) for task in cohort['tasks']]
+        _economic_require(len(identities) == len(set(identities)))
+        cohort['tasks'].sort(key=_economic_json)
+    elif cohort['kind'] == 'selection_window':
+        _economic_object(cohort, ('kind', 'selection_interval'))
+        _economic_range(cohort['selection_interval'])
+        for key in ('start', 'end_exclusive'):
+            cohort['selection_interval'][key] = _economic_normal_time(cohort['selection_interval'][key])
+    elif cohort['kind'] == 'verified_pr_ids':
+        _economic_object(cohort, ('kind', 'repository_digest', 'pr_numbers'))
+        _economic_digest(cohort['repository_digest'])
+        items = cohort['pr_numbers']
+        _economic_require(type(items) is list and 1 <= len(items) <= 256)
+        for number in items:
+            _economic_int(number, minimum=1)
+        _economic_require(len(items) == len(set(items)))
+        items.sort()
+    else:
+        _economic_require(False)
+    return value
+
+
+@dataclass(frozen=True)
+class ReportQuery:
+    """Immutable pure request; construction confers no source or destination rights."""
+    canonical: str
+
+    def __post_init__(self):
+        from .spec import _parse_canonical_json
+
+        try:
+            _economic_require(type(self.canonical) is str and len(self.canonical.encode('utf-8')) <= 65536)
+            value = _parse_canonical_json(self.canonical.encode('utf-8'), Path('report-query'))
+            object.__setattr__(self, 'canonical', _economic_json(_normalize_report_query(value)))
+        except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+            raise EconomicsError('invalid_report_query') from None
+
+    def as_dict(self):
+        return json.loads(self.canonical)
+
+
+def parse_report_query(value):
+    try:
+        if type(value) is ReportQuery:
+            return value
+        return ReportQuery(_economic_json(_normalize_report_query(value)))
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise EconomicsError('invalid_report_query') from None
+
+
+def decode_report_query(raw):
+    from .spec import _parse_canonical_json
+
+    try:
+        _economic_require(type(raw) is bytes and len(raw) <= 65536)
+        return parse_report_query(_parse_canonical_json(raw, Path('report-query')))
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise EconomicsError('invalid_report_query') from None
+
+
+@dataclass(frozen=True)
+class ReportResult:
+    """Immutable canonical result; a calculation is never a release capability."""
+    canonical: str
+
+    def __post_init__(self):
+        from .spec import _parse_canonical_json
+
+        try:
+            _economic_require(type(self.canonical) is str and len(self.canonical.encode('utf-8')) <= 1_048_576)
+            value = _parse_canonical_json(self.canonical.encode('utf-8'), Path('report-result'))
+            _economic_object(value, ('definition_version', 'status', 'reason'))
+            _economic_require(value['definition_version'] == ECONOMICS_DEFINITION
+                              and value['status'] in ('unavailable', 'invalid_request')
+                              and value['reason'] in ('protected_read_unavailable', 'invalid_report_query',
+                                  'input_unavailable', 'input_limit', 'snapshot_unavailable'))
+            object.__setattr__(self, 'canonical', _economic_json(value))
+        except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+            raise EconomicsError('invalid_report_result') from None
+
+    def as_dict(self):
+        return json.loads(self.canonical)
+
+
+def _unavailable_economics(reason='protected_read_unavailable', status='unavailable'):
+    return ReportResult(_economic_json({'definition_version': ECONOMICS_DEFINITION, 'status': status, 'reason': reason}))
+
+
+def read_report(request, *, handle=None):
+    """Protected read has no qualified150151 adapter yet; never open sources here.
+
+    A UID, role, private-FD token or public pure DTO cannot bootstrap that adapter.
+    Sequential integration must bind actual current authorization/sanitizer/release.
+    """
+    try:
+        parse_report_query(request)
+    except EconomicsError:
+        return _unavailable_economics('invalid_report_query', 'invalid_request')
+    return _unavailable_economics()
+
+
+def render_report_json(result):
+    if type(result) is not ReportResult:
+        raise EconomicsError('invalid_report_result')
+    return result.canonical + '\n'
+
+
+def render_report_text(result):
+    if type(result) is not ReportResult:
+        raise EconomicsError('invalid_report_result')
+    value = result.as_dict()
+    return 'Economics unavailable: ' + value['reason'] + '\n'
