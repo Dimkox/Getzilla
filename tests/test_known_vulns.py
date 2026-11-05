@@ -360,14 +360,14 @@ class AliasShapeTests(unittest.TestCase):
         self.assertEqual(KV._describe({'id': 'PUBLIC-1', 'aliases': []}, dependency).aliases, [])
         self.assertEqual(KV._describe({'id': 'PUBLIC-1', 'aliases': ['x_CUSTOM:1', 'CVE-2024-22195']}, dependency).aliases,
                          ['CVE-2024-22195', 'x_CUSTOM:1'])
-        for aliases in (None, 'CVE-2024-22195', {}, [''], ['CVE-2024-22195,'],
+        for aliases in ('CVE-2024-22195', {}, [''], ['CVE-2024-22195,'],
                         [' CVE-2024-22195 '], [3], ('CVE-2024-22195',)):
             with self.subTest(aliases=aliases), self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
                 KV._describe({'id': 'PUBLIC-1', 'aliases': aliases}, dependency)
 
     def test_online_detail_aliases_refuse_instead_of_partial_findings(self) -> None:
         dependency = KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')
-        for aliases in ('CVE-2024-22195', None, ['CVE-2024-22195,']):
+        for aliases in ('CVE-2024-22195', ['CVE-2024-22195,']):
             def fetch(url, body):
                 return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]} if body is not None
                                   else {**JINJA, 'aliases': aliases}).encode()
@@ -377,7 +377,7 @@ class AliasShapeTests(unittest.TestCase):
     def test_offline_validates_aliases_before_package_or_withdrawn_filter(self) -> None:
         dependency = KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')
         for record in ({**JINJA, 'aliases': 'CVE-2024-22195'},
-                       {'id': 'PUBLIC-unrelated', 'aliases': None, 'affected': []},
+                       {'id': 'PUBLIC-unrelated', 'aliases': 'CVE-2024-22195', 'affected': []},
                        {**WITHDRAWN, 'aliases': ['CVE-2024-22195,']}):
             with tempfile.TemporaryDirectory() as raw:
                 _mirror(Path(raw), 'PyPI', [JINJA, {**record, 'id': 'PUBLIC-malformed'}])
@@ -507,6 +507,40 @@ class CargoAdmissionTests(unittest.TestCase):
         for source in (None, 'git+https://example.invalid/public#'+'a'*40, 'registry+https://example.invalid/index'):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 list(KV.MANIFESTS['Cargo.lock'][1](CargoCoverageTests.lock('external', '1.0.0', source)))
+
+
+class NullAliasCompatibilityTests(unittest.TestCase):
+    def test_schema_null_is_absent_without_mutating_record(self) -> None:
+        record = {**JINJA, 'aliases': None}
+        try:
+            finding = KV._describe(record, KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt'))
+        except KV.VulnerabilityError as error:
+            self.fail(f'schema-valid null aliases refused: {error}')
+        self.assertEqual(finding.aliases, [])
+        self.assertIsNone(record['aliases'])
+
+    def test_online_null_details_preserve_the_ordinary_finding(self) -> None:
+        def fetch(url, body):
+            return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]} if body is not None
+                              else {**JINJA, 'aliases': None}).encode()
+        try:
+            findings = KV.query_online([KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')], fetch=fetch)
+        except KV.VulnerabilityError as error:
+            self.fail(f'schema-valid online null refused: {error}')
+        self.assertEqual([(finding.vuln_id, finding.aliases) for finding in findings], [(JINJA['id'], [])])
+
+    def test_actual_offline_cli_reports_null_finding_instead_of_data_refusal(self) -> None:
+        tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
+        with tmp:
+            mirror = root/'public-db'
+            _mirror(mirror, 'PyPI', [{**JINJA, 'aliases': None}])
+            result = subprocess.run([sys.executable, str(ROOT/'scripts/getzilla_vulns.py'), '--db', str(mirror), '--json'],
+                                    cwd=root, env={'PATH': '/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1'},
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report['status'], 'fail')
+            self.assertEqual([(finding['id'], finding['aliases']) for finding in report['findings']], [(JINJA['id'], [])])
 
 
 if __name__ == '__main__':

@@ -535,6 +535,8 @@ def _osv_aliases(record: dict[str, Any]) -> list[str]:
     if type(record) is not dict:
         raise VulnerabilityError('OSV aliases require a record object')
     aliases = record.get('aliases', [])
+    if aliases is None:
+        return []  # OSV's official JSON schema permits null as an absent alias list.
     if (type(aliases) is not list or any(type(alias) is not str
             or re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) is None for alias in aliases)):
         raise VulnerabilityError('OSV aliases must be a list of valid vulnerability identifiers')
