@@ -885,6 +885,62 @@ class QualifiedQueryNativeTests(unittest.TestCase):
         self.assertEqual(report['status'], 'fail')
         self.assertEqual([finding['id'] for finding in report['findings']], [ID])
 
+    def test_explicit_nondefault_lock_sources_refuse_before_transport(self):
+        from getzilla import security_acquisition
+        cases = [
+            {'uv.lock': '[[package]]\nname="public-package"\nversion="1.0.0"\nsource={registry="https://public.invalid/simple"}\n'},
+            {'poetry.lock': '[[package]]\nname="public-package"\nversion="1.0.0"\n[package.source]\ntype="legacy"\nurl="https://public.invalid/simple"\nreference="public"\n'},
+            {'package-lock.json': json.dumps({'packages': {'node_modules/public-package': {
+                'version': '1.0.0', 'resolved': 'https://public.invalid/public-package.tgz'}}})},
+            {'Pipfile.lock': json.dumps({'_meta': {'sources': [{'name': 'public-other', 'url': 'https://public.invalid/simple'}]},
+                                        'default': {'public-package': {'version': '==1.0.0', 'index': 'public-other'}}})},
+        ]
+        for files in cases:
+            temporary, root = _repo(files)
+            calls = []
+            def transport(*args):
+                calls.append(True)
+                return self.transport(*args)
+            with temporary, self.subTest(manifest=next(iter(files))):
+                result = security_acquisition.refresh_query(root, root / 'public-query-store', transport=transport)
+                self.assertEqual(result['status'], 'fail', 'an explicit foreign source was mapped to the default OSV registry')
+                self.assertEqual(calls, [])
+                self.assertFalse((root / 'public-query-store').exists())
+
+    def test_explicit_default_lock_sources_keep_complete_query_positive(self):
+        from getzilla import security_acquisition
+        cases = [
+            {'uv.lock': '[[package]]\nname="public-package"\nversion="1.0.0"\nsource={registry="https://pypi.org/simple"}\n'},
+            {'package-lock.json': json.dumps({'packages': {'node_modules/public-package': {
+                'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/public-package/-/public-package-1.0.0.tgz'}}})},
+            {'Pipfile.lock': json.dumps({'_meta': {'sources': [{'name': 'public-default', 'url': 'https://pypi.org/simple', 'verify_ssl': True}]},
+                                        'default': {'public-package': {'version': '==1.0.0', 'index': 'public-default'}}})},
+        ]
+        for files in cases:
+            temporary, root = _repo(files)
+            with temporary, self.subTest(manifest=next(iter(files))):
+                result = security_acquisition.refresh_query(root, root / 'public-query-store', transport=self.transport)
+                self.assertEqual(result['status'], 'pass', result)
+
+    def test_unhandled_python_dependency_declarations_cannot_be_structural_zero(self):
+        from getzilla import security_acquisition
+        cases = [
+            {'pyproject.toml': '[tool.poetry.dependencies]\npublic-package="^1"\n'},
+            {'pyproject.toml': '[project]\ndependencies=["public-package==1.0.0"]\n[tool.uv.sources]\npublic-package={git="https://public.invalid/public-project"}\n'},
+            {'pyproject.toml': '[dependency-groups]\ndev=["public-package>=1"]\n'},
+            {'pyproject.toml': '[project]\ndynamic=["optional-dependencies"]\n'},
+            {'pyproject.toml': '[project]\ndependencies=["public-package==1.0.0"]\n[[tool.uv.index]]\nurl="https://public.invalid/simple"\ndefault=true\n'},
+            {'setup.py': '# public fixture: unhandled dependency declaration\n'},
+            {'setup.cfg': '[options]\ninstall_requires=public-package>=1\n'},
+            {'requirements.in': 'public-package>=1\n'},
+        ]
+        for files in cases:
+            temporary, root = _repo(files)
+            with temporary, self.subTest(manifest=next(iter(files))):
+                result = security_acquisition.refresh_query(root, root / 'public-query-store', transport=self.transport)
+                self.assertEqual(result['status'], 'fail', 'an unsupported declaration became a complete or empty inventory')
+                self.assertFalse((root / 'public-query-store').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

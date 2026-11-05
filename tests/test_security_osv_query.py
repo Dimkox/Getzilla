@@ -91,6 +91,20 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(replay['records'][ID]['modified'], MODIFIED)
         self.assertIsNone(replay['records'][ID]['aliases'])
 
+    def test_named_query_with_separate_package_less_git_supplement_is_supported(self):
+        def transport(method, url, body, deadline, maximum):
+            answer = {'results': [{'vulns': [{'id': ID, 'modified': MODIFIED}]}, {}]} if method == 'POST' else detail()
+            if method == 'GET':
+                answer['affected'].append({'ranges': [{'type': 'GIT',
+                    'repo': 'https://public.invalid/public-project',
+                    'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}]})
+            return self.query.QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
+        try:
+            _, _, coverage = self.build(transport)
+        except Exception as error:
+            self.fail(f'supported separate Git supplement was not handled: {type(error).__name__}')
+        self.assertEqual(coverage['record_count'], 1)
+
     def test_missing_results_and_repeated_continuation_are_incomplete(self):
         for missing in (True, False):
             calls = []

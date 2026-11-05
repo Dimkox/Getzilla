@@ -63,6 +63,12 @@ Gradle locks, Composer locks, and the separately bounded Cargo resolver.
 Formats without a qualified complete resolver remain explicitly incomplete;
 this change does not qualify every dependency format or package registry.
 An actually object-free root may supply structural non-applicability proof.
+Explicit Python/npm registry overrides in supported locks are checked rather
+than silently queried as default-registry packages. Unsupported Poetry groups,
+UV source/index declarations, dynamic optional dependencies, dependency groups,
+setup.py/setup.cfg and requirements.in refuse before an empty result. This is
+manifest-scope evidence; external operator configuration and installed artifact
+provenance remain unqualified and are not read to invent a default identity.
 
 The native verifier retains the actual source report. The CLI rechecks it before
 emission. Every newly written modern verification PASS receipt requires current

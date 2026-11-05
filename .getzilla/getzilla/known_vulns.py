@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
@@ -499,6 +500,7 @@ def _read_manifest_text(root: Path, relative: str) -> str:
 def _inventory_files(root: Path, patterns: tuple[str, ...]) -> list[str]:
     """Count entries before materialization; never follow source directory links."""
     declarations = {'Cargo.toml', 'package.json', 'composer.json', 'Gemfile', 'Pipfile',
+                    'setup.py', 'setup.cfg', 'requirements.in',
                     'pom.xml', 'build.gradle', 'build.gradle.kts'}
     pending, selected, count = [('', 0)], [], 0
     try:
@@ -529,6 +531,23 @@ def _inventory_files(root: Path, patterns: tuple[str, ...]) -> list[str]:
     return sorted(selected)
 
 
+def _default_registry_url(value: Any, ecosystem: str) -> bool:
+    """Only declared default registry identities; never fetch a manifest URL."""
+    if (type(value) is not str or not value or len(value) > 2048 or value != value.strip()
+            or any(ord(character) <= 32 or ord(character) == 127 for character in value)):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.scheme != 'https' or parsed.port not in {None, 443} or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment):
+            return False
+        if ecosystem == 'PyPI':
+            return parsed.hostname == 'pypi.org' and parsed.path in {'/simple', '/simple/'}
+        return ecosystem == 'npm' and parsed.hostname == 'registry.npmjs.org'
+    except ValueError:
+        return False
+
+
 def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: dict[str, str], relative: str):
     """Supported exact-pin forms only; unknown records remain incomplete."""
     if REQUIREMENTS_RE.fullmatch(name):
@@ -543,8 +562,19 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
         if not isinstance(data, dict):
             raise ValueError('unsupported TOML dependency model')
         project, backend = data.get('project', {}), data.get('build-system', {})
-        if not isinstance(project, dict) or not isinstance(backend, dict) or 'dependencies' in project.get('dynamic', []):
+        if not isinstance(project, dict) or not isinstance(backend, dict):
             raise ValueError('unresolved dynamic dependency model')
+        dynamic = project.get('dynamic', [])
+        if (type(dynamic) is not list or any(type(item) is not str for item in dynamic)
+                or {'dependencies', 'optional-dependencies'} & set(dynamic)):
+            raise ValueError('unresolved dynamic dependency model')
+        tools = data.get('tool', {})
+        if type(tools) is not dict or type(tools.get('poetry', {})) is not dict or type(tools.get('uv', {})) is not dict:
+            raise ValueError('malformed dependency tool declarations')
+        if ('dependency-groups' in data
+                or any(key in tools.get('uv', {}) for key in ('sources', 'index', 'default-index', 'index-url', 'extra-index-url', 'find-links', 'no-index'))
+                or any(key in tools.get('poetry', {}) for key in ('dependencies', 'dev-dependencies', 'group', 'source'))):
+            raise ValueError('dependency declarations or source overrides require a qualified resolver')
         groups = project.get('optional-dependencies', {})
         if not isinstance(groups, dict):
             raise ValueError('malformed dependency groups')
@@ -566,15 +596,36 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
                 if (set(source) - {'editable', 'virtual'} or not source or set(source.values()) != {'.'}
                         or not isinstance(project, dict) or project.get('name') != item['name']):
                     raise ValueError('unqualified local or Git dependency')
+            elif source is not None:
+                if name == 'uv.lock':
+                    valid = type(source) is dict and set(source) == {'registry'} and _default_registry_url(source['registry'], 'PyPI')
+                else:
+                    valid = (type(source) is dict and source.get('type') == 'legacy'
+                             and not set(source) - {'type', 'url', 'reference'}
+                             and _default_registry_url(source.get('url'), 'PyPI'))
+                if not valid:
+                    raise ValueError('unqualified explicit Python registry source')
     elif name == 'Pipfile.lock':
         data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError('malformed package census')
+        metadata = data.get('_meta', {})
+        if type(metadata) is not dict:
+            raise ValueError('malformed Pipfile source metadata')
+        sources = metadata.get('sources', [])
+        if (type(sources) is not list or any(type(source) is not dict
+                or type(source.get('name')) is not str or not source['name']
+                or not _default_registry_url(source.get('url'), 'PyPI')
+                or source.get('verify_ssl', True) is not True for source in sources)):
+            raise ValueError('unqualified explicit Pipfile registry source')
+        source_names = {source['name'] for source in sources}
         for key in ('default', 'develop'):
             group = data.get(key, {})
             if not isinstance(group, dict) or any(not isinstance(row, dict) or type(row.get('version')) is not str
                                                or not row['version'].startswith('==') for row in group.values()):
                 raise ValueError('unresolved lock identity')
+            if any('index' in row and (type(row['index']) is not str or row['index'] not in source_names) for row in group.values()):
+                raise ValueError('unqualified Pipfile index identity')
     elif name in {'package-lock.json', 'npm-shrinkwrap.json'}:
         data = json.loads(text)
         if not isinstance(data, dict) or not ({'packages', 'dependencies'} & set(data)):
@@ -586,6 +637,9 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
                 if not isinstance(item, dict) or (path and (item.get('link') or type(item.get('version')) is not str
                                                           or not re.fullmatch(r'[0-9][A-Za-z0-9.+_-]*', item['version']))):
                     raise ValueError('unresolved package source')
+                if path and ('resolved' in item and not _default_registry_url(item['resolved'], 'npm')
+                             or item.get('inBundle') or item.get('bundled')):
+                    raise ValueError('unqualified explicit npm source')
         else:
             stack = [data['dependencies']]
             while stack:
@@ -595,6 +649,9 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
                 for item in group.values():
                     if not isinstance(item, dict) or type(item.get('version')) is not str or not re.fullmatch(r'[0-9][A-Za-z0-9.+_-]*', item['version']):
                         raise ValueError('unresolved package identity')
+                    if ('resolved' in item and not _default_registry_url(item['resolved'], 'npm')
+                            or item.get('inBundle') or item.get('bundled')):
+                        raise ValueError('unqualified explicit npm source')
                     if 'dependencies' in item:
                         stack.append(item['dependencies'])
     elif name == 'composer.lock':
@@ -643,6 +700,9 @@ def dependency_inventory(root: Path, config: dict[str, Any]) -> tuple[list[Depen
     files = _inventory_files(root, patterns)
     if len(files) > 4096:
         raise VulnerabilityError('incomplete inventory: manifest census exceeds bound')
+    if any(_manifest_parser(PurePosixPath(relative).name) is None
+           and PurePosixPath(relative).name != 'Cargo.toml' for relative in files):
+        raise VulnerabilityError('incomplete inventory: unsupported dependency declaration')
     snapshots, texts, total = {}, {}, 0
     try:
         with BoundRoot(root) as bound:
