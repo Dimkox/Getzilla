@@ -47,6 +47,8 @@ COPILOT_EVENTS = {
     'SessionEnd': 'sessionEnd',
 }
 COPILOT_HOOKS = '.github/hooks/getzilla.json'
+PAYLOAD_ENGINE = '.getzilla/getzilla/_payload_engine.py'
+FACTORY_PAYLOAD_ENGINE = 'factory/src/getzilla_factory/_payload_engine.py'
 QWEN_READ_ONLY_BLOCK = ('write_file', 'edit')
 COPILOT_READ_ONLY_TOOLS = ('read', 'search', 'shell')
 CLAUDE_READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch')
@@ -302,7 +304,12 @@ def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]
         out[f'.gemini/skills/{rel}'] = content
     if 'cursor' in selected:
         out.update(_cursor_rules(binding))
-    return {path: content for path, content in out.items() if agent_of(path) in selected}
+    rendered = {path: content for path, content in out.items() if agent_of(path) in selected}
+    # Fixed full-source output only. A selected consumer install must never
+    # acquire Factory files merely by regenerating its native client hooks.
+    if all(binding.read(path) is not None for path in ('scripts/install_into.py', 'factory/pyproject.toml')):
+        rendered[FACTORY_PAYLOAD_ENGINE] = _source(binding, PAYLOAD_ENGINE)
+    return rendered
 
 
 _GENERATED_PATH = re.compile(

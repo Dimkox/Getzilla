@@ -1262,6 +1262,17 @@
           "sha256": "319e16f46079ab845e08ba57e85a0ccd84976b434a1de30e186379112792593a"
         }
       }
+    },
+    "factory": {
+      "files": [
+        "factory/src/getzilla_factory/_payload_engine.py"
+      ],
+      "owned": {
+        "factory/src/getzilla_factory/_payload_engine.py": {
+          "mode": 420,
+          "sha256": "90729129740a031e553120882c64fe94fd0b44b3fcdf2b9f02867253d4d2d66f"
+        }
+      }
     }
   },
   "schema_version": "getzilla-managed-components-v2"
