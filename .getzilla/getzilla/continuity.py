@@ -769,29 +769,50 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
         rejected = context['rejected']
         lines.append(f"scope_sync_required: NOT admitted {rejected['id']} ({rejected['bytes']} bytes, "
                      f"sha256={rejected['digest']}); exact original bytes must be supplied again.")
-    lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
-    for item in context.get('pending', []):
-        lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
+    details: list[str] = []
+    evidence_recovery = ''
     if root:
         try:
             documents = package_documents(root, route)
-            lines.append('Task context digest: ' + context_binding(root, route, discovery=True)['digest'])
+            details.append('Task context digest: ' + context_binding(root, route, discovery=True)['digest'])
             if documents:
-                lines.extend([f"Typed package: {documents['path']}",
-                              f"Spec digest: {documents['spec_digest']}",
-                              f"Requirements digest: {documents['requirements_digest']}"])
+                evidence_recovery = (f"Full evidence: {documents['path']}/state.json "
+                                     '(evidence_accounting.obligations).\n')
+                unresolved = [row for row in documents['state'].get('evidence_accounting', {}).get('obligations', [])
+                              if not (row.get('status') == 'pass' or
+                                      row.get('status') == 'recorded' and row.get('outcome') == 'pass')]
+                lines.append(f'Unresolved evidence count: {len(unresolved)}')
+                # Reserve the rest of the display for intake and the exact recovery
+                # paths. Whole rows keep identifiers and states readable in UTF-8.
+                remaining = max_bytes // 2
+                visible = 0
+                for row in unresolved:
+                    outcome = f" ({row.get('outcome')})" if row.get('status') == 'recorded' else ''
+                    line = f"Unresolved evidence: {row.get('id')}: {row.get('status')}{outcome}"
+                    size = len((line + '\n').encode('utf-8'))
+                    if size > remaining:
+                        break
+                    lines.append(line)
+                    remaining -= size
+                    visible += 1
+                if visible < len(unresolved):
+                    lines.append(f'Unresolved evidence hidden: {len(unresolved) - visible}; see Full evidence below.')
+                details.extend([f"Typed package: {documents['path']}",
+                                f"Spec digest: {documents['spec_digest']}",
+                                f"Requirements digest: {documents['requirements_digest']}"])
                 spec = documents['spec']
                 for item in [spec['objective'], *spec.get('acceptance_criteria', []),
                              *spec.get('invariants', []), *spec.get('forbidden_outcomes', [])]:
-                    lines.append(f"Typed {item['id']}: {item['statement']} (mapping is not completion)")
-                for row in documents['state'].get('evidence_accounting', {}).get('obligations', []):
-                    if row.get('status') != 'pass':
-                        lines.append(f"Unresolved evidence: {row.get('id')}: {row.get('status')}")
+                    details.append(f"Typed {item['id']}: {item['statement']} (mapping is not completion)")
             lines.extend(scope_gaps(root, route))
         except (OSError, ValueError, KeyError, TypeError) as error:
             lines.append('Typed authority unavailable: ' + str(error))
+    lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
+    for item in context.get('pending', []):
+        lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
+    lines.extend(details)
     recovery = f"Full stored intake: .getzilla/runtime/routes/{route['route_id']}.json; "
-    recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n'
+    recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n' + evidence_recovery
     raw = ('\n'.join(lines) + '\n').encode('utf-8')
     reserve = len(recovery.encode('utf-8')) + 160
     if len(raw) + len(recovery.encode('utf-8')) > max_bytes:

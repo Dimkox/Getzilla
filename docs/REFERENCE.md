@@ -667,6 +667,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
 | `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, checkpoints, watchdog, `progress-inspect` and one-shot `progress-recover` |
+| `evals` | `scripts/getzilla_evals.py` | [Offline agent replay](agent-evals.md), paired baseline comparison and explicit acceptance |
 | `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
 | `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` and the report's matching `--reviewed-context` marker |

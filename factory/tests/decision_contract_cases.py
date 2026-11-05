@@ -8,7 +8,7 @@ from getzilla_factory.decision_contracts import DecisionRecordV1, summarize_cost
 from getzilla_factory.migrations import discover_migrations
 from getzilla_factory.store import PostgresFactoryStore
 from factory.tests.decision_fixtures import decision_facts
-from tests.json_schema_subset import SubsetValidator
+from factory.tests.json_schema_subset import SubsetValidator
 
 
 def actual_cost_entry(amount=120):
