@@ -49,7 +49,7 @@ TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
 OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--baseline-release', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
 # Lint and coverage settings name the project's own paths and rules; Getzilla's copy is only a first default.
-PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc'})
+PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc', '.getzilla/config/optional-modules.json'})
 STEPS = {
     'core': 'update only Getzilla itself',
     'project': 'update only the project, on a new branch',

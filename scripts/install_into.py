@@ -73,6 +73,7 @@ MANAGED_FILES = (
     "scripts/getzilla_vulns.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
+    "scripts/getzilla_components.py",
     "scripts/getzilla_doctor.py",
     "scripts/getzilla_status.py",
     "scripts/getzilla_agent.py",
@@ -96,6 +97,9 @@ MANAGED_FILES = (
     "ruff.toml",
     "bandit.yaml",
     ".coveragerc",
+    "schemas/optional-module-v1.schema.json",
+    "schemas/optional-module-registry-v1.schema.json",
+    "docs/optional-modules.md",
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
@@ -123,7 +127,7 @@ ROOT_HOOK_SHIMS = frozenset(
     }
 )
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".getzilla/runtime/",)
+SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -644,6 +648,8 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
+                continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
                 metadata = fsx.lstat_at(descriptor, name)
             except OSError as exc:
@@ -862,7 +868,10 @@ def build_payload(
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
     if selection.engine_archive:
-        engine = [entry for entry in payload if entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+        engine_selection = PayloadSelection(selection.agents, factory=selection.factory, full=selection.full,
+                                            compliance=selection.compliance, extras=selection.extras,
+                                            root_shims=selection.root_shims, engine_archive=False)
+        engine = [entry for entry in payload if engine_selection.includes(entry.path) and entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
                   and "/__pycache__/" not in entry.path]
         chosen += (engine_archive_entry(engine),)
     if selection.compliance:
