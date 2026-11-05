@@ -120,9 +120,10 @@ def activate_owned_route(root: Path, route: dict) -> None:
 
 
 @contextlib.contextmanager
-def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
-    with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
+def project_copy(*, git: bool = False, minimal_runtime: bool = False,
+                 omit_tool_manifests: bool = False) -> Iterator[Path]:
+    """Copy real runtime; object-free CLI fixtures may omit two tool manifests."""
+    with _test_directory() as tmp, _scanner_environment(minimal_runtime or omit_tool_manifests), _session_environment():
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -140,9 +141,9 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
-                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/config':
-                    # This synthetic project omits the tool/scanner runtime.
-                    # Omit its two tool manifests before the initial commit;
+                if (minimal_runtime or omit_tool_manifests) and Path(directory) == PROJECT / '.getzilla/config':
+                    # Object-free fixtures omit exactly two tool manifests
+                    # before the initial commit, with or without full runtime;
                     # default/full copies retain and must check all seven pins.
                     omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
                 return omitted

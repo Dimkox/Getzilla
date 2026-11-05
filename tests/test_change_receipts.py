@@ -864,6 +864,24 @@ class SecuritySourceReceiptTests(unittest.TestCase):
             self.assertEqual(minimal['source_mode'], 'absent')
             self.assertTrue(minimal['inventory']['complete'])
 
+    def test_object_free_live_runtime_fixture_preserves_modules_and_zero_inventory(self):
+        import inspect
+        from getzilla import known_vulns
+        self.assertIn('omit_tool_manifests', inspect.signature(project_copy).parameters,
+                      'status subprocess fixtures must keep the actual runtime')
+        with project_copy(git=True, omit_tool_manifests=True) as root:
+            for relative in ('.getzilla/getzilla/package_status.py', '.getzilla/getzilla/known_vulns.py',
+                             '.getzilla/sast/rules/python.yaml'):
+                self.assertTrue((root / relative).is_file(), relative)
+            omitted = ['.getzilla/config/python-quality-requirements.txt',
+                       '.getzilla/config/python-test-requirements.txt']
+            self.assertEqual(subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', 'HEAD', '--', *omitted],
+                                                    cwd=root), b'')
+            proof = known_vulns.scan(root, environ={})
+            self.assertEqual(proof['dependencies'], 0)
+            self.assertEqual(proof['source_mode'], 'absent')
+            self.assertTrue(proof['inventory']['complete'])
+
     def test_modern_omitted_details_derives_actual_empty_proof(self):
         from getzilla import receipts
         from tests.test_verifier_recovery import routed_fixture

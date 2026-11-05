@@ -147,7 +147,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIn('no_active_package', self.codes(value['package_completeness']))
 
     def test_populated_status_is_additive_and_nonmutating_even_with_receipts(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, omit_tool_manifests=True) as root:
             self.install_cli(root)
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)
@@ -166,7 +166,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertEqual(self.inventory(root), before)
 
     def test_status_rejects_legacy_and_forged_review_source_receipts(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, omit_tool_manifests=True) as root:
             self.install_cli(root)
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)
@@ -876,7 +876,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertNotEqual(get_active_route(root)['status'], 'completed')
 
     def test_stop_does_not_hide_incomplete_package_behind_old_receipts(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, omit_tool_manifests=True) as root:
             route, _, _, package = self.prepare(root)
             self.update_state(package, status='implementing')
             review = prepare_review_source(root)
