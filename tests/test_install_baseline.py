@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,42 @@ from getzilla.component_state import MANIFEST, encode_manifest, mode_matches, re
 STABLE = '2bb417431f1e4b9494e4af71ebf27adb1d04d898'
 
 
+def historical_fixture(source, target, run, *, system, full_layout=False):
+    if system not in ('linux', 'win32', 'darwin'):
+        raise ValueError('unsupported historical fixture system')
+    selection = ['--full-layout'] if full_layout else ['--agents', 'qwen']
+    if system == 'darwin':
+        from getzilla.component_state import BoundRoot, matches_owned
+        from getzilla.install_baseline import load_baseline, restore_release_payload
+        # These two old Git anchors are separate from the common ZIP payload.
+        proofs = load_baseline(ROOT, 'v2.3.0', include_runtime_anchors=True)
+        anchors = {}
+        with BoundRoot(source) as bound:
+            for path in ('.getzilla/runtime/.gitignore', '.getzilla/runtime/.gitkeep'):
+                snapshot = bound.read(path)
+                if not matches_owned(snapshot, proofs[path]):
+                    raise ValueError(f'historical Git anchor differs from qualified bytes/mode: {path}')
+                anchors[path] = snapshot
+            bound.check()
+        result = restore_release_payload(ROOT, source, target)
+        with BoundRoot(target) as bound:
+            for path, snapshot in anchors.items():
+                bound.write(path, snapshot.content, proofs[path]['mode'], expected=None, before_publish=bound.check)
+        result['historical_materializer_create'] = 'unsupported'
+    else:
+        run([sys.executable, str(source/'scripts/install_into.py'), '--materialize-new', str(target), *selection])
+        result = {'baseline_mode': 'stock-materializer-create', 'historical_materializer_create': 'pass',
+                  'historical_installer_create': 'not_run'}
+    # Exercise actual supported historical existing-project planning, without
+    # claiming the networked user installer/bootstrap was run in this fixture.
+    run([sys.executable, str(source/'scripts/install_into.py'), '--plan', str(target), *selection])
+    return {**result, 'historical_plan': 'pass', 'historical_installer_bootstrap': 'not_run',
+            'fixture_platform': system, 'observed_platform': sys.platform}
+
+
 class HistoricalUpgradeTests(unittest.TestCase):
+    fixture_system = sys.platform
+
     @classmethod
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
@@ -39,8 +75,8 @@ class HistoricalUpgradeTests(unittest.TestCase):
         cls.fixture = cls.base / 'historical-install'
         mask = os.umask(0o022)
         try:
-            cls.run_process([sys.executable, str(source / 'scripts/install_into.py'),
-                             '--materialize-new', str(cls.fixture), '--agents', 'qwen'])
+            cls.fixture_info = historical_fixture(source, cls.fixture, cls.run_process,
+                                                   system=cls.fixture_system)
         finally:
             os.umask(mask)
 
@@ -50,8 +86,17 @@ class HistoricalUpgradeTests(unittest.TestCase):
 
     @classmethod
     def run_process(cls, args, cwd=None):
-        return subprocess.run(args, cwd=cwd, env=cls.environment, check=True,
-                              capture_output=True, text=True, timeout=90).stdout.strip()
+        result = subprocess.run(args, cwd=cwd, env=cls.environment, check=False,
+                                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90)
+        if result.returncode:
+            diagnostic = (result.stderr or result.stdout)[-2048:]
+            diagnostic = diagnostic.replace(str(cls.base), '<historical-fixture>').replace(str(ROOT), '<candidate>')
+            diagnostic = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', diagnostic)
+            diagnostic = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', diagnostic)
+            diagnostic = re.sub(r'(?i)\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*\S+',
+                                r'\1=[redacted]', diagnostic)
+            raise AssertionError(f'historical fixture command failed (exit {result.returncode}): {diagnostic}')
+        return result.stdout.strip()
 
     def setUp(self):
         self.project = self.base / self._testMethodName
@@ -73,6 +118,60 @@ class HistoricalUpgradeTests(unittest.TestCase):
     def update(self, **kwargs):
         with mock.patch.dict(os.environ, self.environment):
             return upgrade.sync_project(ROOT, self.project, baseline_release='v2.3.0', **kwargs)
+
+    def test_restored_fixture_uses_qualified_old_bytes_and_actual_old_plan(self):
+        from getzilla.install_baseline import load_baseline
+        target = self.base/'explicit-restored-fixture'
+        result = historical_fixture(self.source, target, self.run_process, system='darwin')
+        self.assertEqual(result['baseline_mode'], 'restored-v230-artifact')
+        self.assertEqual(result['historical_installer_create'], 'unsupported')
+        self.assertEqual(result['historical_installer_bootstrap'], 'not_run')
+        self.assertEqual(result['historical_plan'], 'pass')
+        self.assertFalse((target/MANIFEST).exists())
+        for path, proof in load_baseline(ROOT, 'v2.3.0', include_runtime_anchors=True).items():
+            with self.subTest(path=path):
+                self.assertEqual(hashlib.sha256((target/path).read_bytes()).hexdigest(), proof['sha256'])
+                self.assertTrue(mode_matches((target/path).stat().st_mode, proof['mode']))
+        self.assertEqual(self.run_process([sys.executable, '-c',
+            'import sys; sys.path.insert(0,".getzilla"); import getzilla; print(getzilla.__version__)'], target), '2.3.0')
+
+    def test_fixture_platform_modes_are_explicit_and_unknown_mode_refuses(self):
+        restored = self.fixture_system == 'darwin'
+        self.assertEqual(self.fixture_info['baseline_mode'],
+                         'restored-v230-artifact' if restored else 'stock-materializer-create')
+        self.assertEqual(self.fixture_info['historical_materializer_create'], 'unsupported' if restored else 'pass')
+        self.assertEqual(self.fixture_info['historical_installer_bootstrap'], 'not_run')
+        target = self.base/'unknown-fixture-system'
+        with self.assertRaisesRegex(ValueError, 'unsupported historical fixture system'):
+            historical_fixture(self.source, target, self.run_process, system='unknown')
+        self.assertFalse(target.exists())
+
+    def test_restored_fixture_rejects_altered_git_anchor_before_target_creation(self):
+        anchor = self.source/'.getzilla/runtime/.gitignore'
+        original, mode = anchor.read_bytes(), anchor.stat().st_mode
+        try:
+            for kind in ('bytes', 'mode'):
+                target = self.base/('tampered-anchor-'+kind)
+                anchor.write_bytes(b'# altered historical anchor\n' if kind == 'bytes' else original)
+                anchor.chmod(mode if kind == 'bytes' else 0o444)
+                with self.assertRaisesRegex(ValueError, 'historical Git anchor'):
+                    historical_fixture(self.source, target, self.run_process, system='darwin')
+                self.assertFalse(target.exists())
+                anchor.chmod(mode)
+        finally:
+            anchor.chmod(mode)
+            anchor.write_bytes(original)
+
+    def test_fixture_failure_diagnostics_are_bounded_and_redact_credentials(self):
+        script = self.project/'.getzilla/runtime/failing-fixture.py'
+        script.write_text('import sys\nsys.stderr.write("x"*5000 + " token=synthetic-private-value\\n")\n'
+                          'sys.exit(7)\n', encoding='utf-8', newline='\n')
+        with self.assertRaises(AssertionError) as caught:
+            self.run_process([sys.executable, str(script)])
+        self.assertIn('exit 7', str(caught.exception))
+        self.assertIn('token=[redacted]', str(caught.exception))
+        self.assertNotIn('synthetic-private-value', str(caught.exception))
+        self.assertLess(len(str(caught.exception)), 2200)
 
     def stock_ignored_runtime(self):
         # The stock install.sh --create route invokes this exact historical
@@ -343,22 +442,30 @@ class HistoricalUpgradeTests(unittest.TestCase):
                                                           self.project, command, installer)
         self.assertEqual(outcome['exit'], 0)
 
-    def test_restored_historical_vendor_bytes_match_actual_old_full_materializer(self):
+    def test_restored_historical_vendor_bytes_match_old_plan_and_supported_materializer(self):
         from getzilla.install_baseline import load_baseline, restore_release_payload
         actual = self.base/'actual-full-materializer'
         restored = self.base/'restored-old-artifact'
-        self.run_process([sys.executable, str(self.source/'scripts/install_into.py'),
-                          '--materialize-new', str(actual), '--full-layout'])
+        if self.fixture_system != 'darwin':
+            self.run_process([sys.executable, str(self.source/'scripts/install_into.py'),
+                              '--materialize-new', str(actual), '--full-layout'])
         result = restore_release_payload(ROOT, self.source, restored)
+        plan = json.loads(self.run_process([sys.executable, str(self.source/'scripts/install_into.py'),
+                                          '--plan', str(restored), '--full-layout']))
+        old_entries = {entry['path']: entry for entry in plan['entries']}
         self.assertEqual(result['baseline_mode'], 'restored-v230-artifact')
         self.assertEqual(result['vendor_files'], 695)
         for relative, proof in load_baseline(ROOT, 'v2.3.0').items():
             with self.subTest(path=relative):
-                self.assertEqual((restored/relative).read_bytes(), (actual/relative).read_bytes())
+                if self.fixture_system != 'darwin':
+                    self.assertEqual((restored/relative).read_bytes(), (actual/relative).read_bytes())
+                self.assertEqual(hashlib.sha256((restored/relative).read_bytes()).hexdigest(),
+                                 old_entries[relative]['sha256'])
                 self.assertEqual(hashlib.sha256((restored/relative).read_bytes()).hexdigest(), proof['sha256'])
                 self.assertTrue(mode_matches((restored/relative).stat().st_mode, proof['mode']))
+                self.assertTrue(mode_matches((restored/relative).stat().st_mode, old_entries[relative]['mode']))
         self.assertEqual((restored/'.getzilla/AGBP_SYNC.json').read_bytes(),
-                         (actual/'.getzilla/AGBP_SYNC.json').read_bytes())
+                         b'{"kept_local": [], "kept_local_sha256": {}, "schema_version": 1}\n')
         self.assertFalse((restored/MANIFEST).exists())
         self.assertEqual({path.relative_to(restored).as_posix() for path in restored.rglob('*') if path.is_file()},
                          set(load_baseline(ROOT, 'v2.3.0')) | {'.getzilla/AGBP_SYNC.json'})
