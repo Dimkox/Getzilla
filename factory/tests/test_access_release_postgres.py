@@ -472,6 +472,7 @@ class AccessReleasePostgresTests(unittest.TestCase):
             pending = pool.submit(self.release, identifier)
             try:
                 self.assertTrue(before_commit.wait(1))
+                self.assertEqual(self.access._queue._ready(), (), 'pending admission is not dispatch eligibility')
                 self.assertEqual(self.access.run_once(), 0)
                 self.assertEqual(self.received, [])
                 started = time.monotonic()

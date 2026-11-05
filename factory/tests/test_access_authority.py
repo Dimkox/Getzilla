@@ -99,6 +99,19 @@ class AccessAuthorityTests(unittest.TestCase):
             fresh = auth.access_session('Bearer synthetic-owned-rotated-credential-user-a', 'source:read')
             self.assertTrue(auth.access_authority.authorize(fresh, key('a'), 'v1', 'source:read'))
 
+    def test_generation_only_rotation_invalidates_the_old_native_session(self):
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, payload, key = authority_fixture(Path(directory))
+            auth = self.load_v2(path)
+            old = auth.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            admin = auth.access_session('Bearer synthetic-owned-credential-operator', 'factory:access-admin')
+            payload['revision'] = 2
+            payload['actors'][0]['credential_generation'] = 2
+            auth.access_authority.update(admin, 1, payload)
+            self.assertFalse(auth.access_authority.authorize(old, key('a'), 'v1', 'source:read'))
+            fresh = auth.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            self.assertTrue(auth.access_authority.authorize(fresh, key('a'), 'v1', 'source:read'))
+
     def test_hardlinked_operator_file_is_rejected_before_reading(self):
         # Break caught: parsing a private alias before admitting operator-file custody.
         import os
