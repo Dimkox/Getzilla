@@ -91,6 +91,7 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         return '.'.join((node.id, *reversed(parts))) if isinstance(node, ast.Name) else ''
 
     patch_calls = patch_names | {p + '.multiple' for p in patch_names}
+    object_patches = {p + '.object' for p in patch_names}
     replaced = set()
     for node in nodes:
         if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in patch_names:
@@ -108,6 +109,12 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         function = dotted(node.func)
         if function is None:
             return tree
+        if function in object_patches:
+            member = node.args[1] if len(node.args) > 1 else None
+            if not isinstance(member, ast.Constant) or type(member.value) is not str:
+                return tree
+            replaced.add(member.value)
+            continue
         if function not in patch_calls:
             continue
         target = node.args[0] if node.args else None

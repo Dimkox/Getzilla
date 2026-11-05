@@ -2111,6 +2111,17 @@ class ArchitectureFitnessTests(unittest.TestCase):
         report = self._evaluate(repo, base, shadowed)
         self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
 
+    def test_self_module_exception_patch_stays_governed(self):
+        prefix = ('import sample as own\nfrom queue import Empty\n'
+                  'from unittest.mock import patch\ndef f():\n    raise Empty()\n')
+        for member in ('"Empty"', 'unknown_member'):
+            with self.subTest(member=member):
+                tree = ast.parse(prefix + f'with patch.object(own, {member}, unknown_queue_constructor):\n    f()\n')
+                self.assertTrue(QUEUE_PROVENANCE.namespace_is_closed(tree, allow_instrumentation=True))
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(tree).signals)
+        unrelated = ast.parse(prefix + 'with patch.object(own, "unrelated", None):\n    f()\n')
+        self.assertEqual(FIT.analyze_queue_tree(unrelated).signals, ())
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
