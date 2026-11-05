@@ -208,7 +208,8 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
 
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
-    from .state import get_active_route, update_route
+    from .state import get_active_route, update_route, task_transition
+    from .change import synchronize_accounting
     from .verification import _git_range_selection
     route = get_active_route(root)
     if not route:
@@ -222,10 +223,15 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
             *(route.get('review_agents', []) if 'risk_assessment' not in route else []), *additional_reviewers])
     selection = selection if selection is not None else _git_range_selection(root, route, 'pr')
     updates = assess(root, selected, selection, fingerprint)
-    current = get_active_route(root)
-    if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
-        raise ValueError('route or source changed during reconciliation')
-    return update_route(root, expected_route=route, **updates)
+    with task_transition(root):
+        current = get_active_route(root)
+        if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
+            raise ValueError('route or source changed during reconciliation')
+        synchronize_accounting(root, route, updates['required_evidence'])
+        if (tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
+                or git_head(root) != updates['risk_assessment']['head']):
+            raise ValueError('source changed during accounting synchronization')
+        return update_route(root, expected_route=route, **updates)
 
 
 def validate_review_plan(root: Path, route: dict) -> list[str]:

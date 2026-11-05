@@ -23,6 +23,77 @@ FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self):
 
 @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
 class FactoryDiscoveryTests(unittest.TestCase):
+    def test_expected_failure_and_unexpected_success_keep_failure_evidence(self):
+        source = ("import unittest\nclass Probe(unittest.TestCase):\n"
+                  " @unittest.expectedFailure\n def test_expected(self): self.fail('public-sentinel')\n"
+                  " @unittest.expectedFailure\n def test_unexpected(self): self.assertTrue(True)\n")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {"test_problem.py": source})
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "fail")
+            report = result.details[0]
+            self.assertEqual(report["failures"], 2)
+            self.assertEqual(sorted(row["kind"] for row in report["problems"]),
+                             ["expected_failure", "unexpected_success"])
+            self.assertNotIn("public-sentinel", json.dumps(report["problems"]))
+
+    def test_complete_problem_inventory_keeps_class_and_module_fixture_errors(self):
+        for phase in ("setUpClass", "tearDownClass", "setUpModule", "tearDownModule"):
+            source = "import unittest\n"
+            if phase.endswith("Module"):
+                source += f"def {phase}(): raise RuntimeError('public-sentinel')\n"
+            source += "class Probe(unittest.TestCase):\n"
+            if phase.endswith("Class"):
+                source += f" @classmethod\n def {phase}(cls): raise RuntimeError('public-sentinel')\n"
+            source += " def test_probe(self): self.assertTrue(True)\n"
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                self.project(root, {"test_problem.py": source})
+                result = verification._factory_unit(root)[0]
+                self.assertEqual(result.status, "fail")
+                self.assertTrue(result.details, "fixture error lost its complete source-bound report")
+                report = result.details[0]
+                self.assertEqual(report["errors"], 1)
+                self.assertEqual(len(report["problems"]), 1)
+                problem = report["problems"][0]
+                self.assertEqual(problem["phase"], phase)
+                expected = "factory.tests.test_problem" + (".Probe" if phase.endswith("Class") else "")
+                self.assertEqual(problem["id"], expected)
+                self.assertNotIn("public-sentinel", json.dumps(problem))
+                factory_tests.validate_report(report, report["binding"])
+
+    def test_complete_problem_inventory_excludes_messages_and_subtest_values(self):
+        source = (
+            "import unittest\nclass Probe(unittest.TestCase):\n"
+            " def test_subtests(self):\n"
+            "  for value in (1,2):\n"
+            "   with self.subTest(raw='public-sentinel',value=value): self.fail('public-sentinel')\n"
+            " def test_error(self): raise ValueError('public-sentinel')\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            self.project(root, {"test_problem.py": source})
+            result = verification._factory_unit(root)[0]
+            self.assertEqual(result.status, "fail")
+            report = result.details[0]
+            self.assertIn("problems", report, "complete safe failure inventory was discarded")
+            problems = report["problems"]
+            self.assertEqual(len(problems), 3)
+            self.assertEqual(sorted(row["kind"] for row in problems), ["error", "failure", "failure"])
+            self.assertEqual({row["id"] for row in problems}, set(report["executed"]))
+            self.assertNotIn("public-sentinel", json.dumps(problems))
+            self.assertNotIn(str(root), json.dumps(problems))
+            self.assertTrue(all(row["frames"] for row in problems))
+            for row in problems:
+                for frame in row["frames"]:
+                    self.assertEqual(frame["path"], "factory/tests/test_problem.py")
+                    self.assertGreater(frame["line"], 0)
+            for changed in ({**report, "problems": []},
+                            {**report, "problems": [{**problems[0], "message": "untrusted"}, *problems[1:]]}):
+                with self.assertRaises(ValueError):
+                    factory_tests.validate_report(changed, report["binding"])
+
     def test_pytest_consumer_cannot_bypass_factory_discovery(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()

@@ -845,7 +845,7 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
         # The current contract binds every profile to its parser version and worker bytes.
         import json
         schema = json.loads((Path(live.__file__).parents[2]
-                             / "contracts/jsonschema/landing-backend-capability.v2.schema.json").read_text())
+                             / "contracts/jsonschema/landing-backend-capability.v3.schema.json").read_text())
         declared = {item["profile_id"]: item for item in schema["properties"]["profile"]["enum"]}
         self.assertEqual(set(HTTP_PROFILES), set(declared))
         for profile_id in HTTP_PROFILES:
