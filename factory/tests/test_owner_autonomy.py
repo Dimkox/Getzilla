@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from getzilla_factory import owner_autonomy as owner
 from getzilla_factory.contracts import ContractError
-from tests.json_schema_subset import SchemaValidationError, SubsetValidator
+from factory.tests.json_schema_subset import SchemaValidationError, SubsetValidator
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 10, 5, tzinfo=timezone.utc)
@@ -26,6 +26,18 @@ def synthetic_route():
             "allowed_agents": ["general_implementer", "code_reviewer", "test_reviewer", "repo_explorer"],
             "analysis_agents": ["repo_explorer"], "review_agents": ["code_reviewer", "test_reviewer"],
             "write_agent": "general_implementer", "required_evidence": ["verification", "code_review", "test_review"]}
+
+
+def synthetic_project_state(policy):
+    """Adapter fixture only; it does not activate or assert real owner readiness."""
+    return {"milestones": {"M8": {"completed_product_case": {
+        "status": "DONE", "repository": policy["product_repository"],
+        "release_source_sha": policy["product_source_sha"], "factory_source_sha": policy["factory_source_sha"],
+        "acceptance": {"evidence_kind": "explicit_owner_confirmation",
+                       "completed_working_factory_built_product": True},
+        "owner_readiness": {"evidence_kind": "explicit_owner_confirmation", "accounting_complete": True,
+                            "human_gate_complete": True, "cost_usd_micros": None, "human_intervention_count": None},
+    }}}}
 
 
 class OwnerAutonomyTests(unittest.TestCase):
@@ -47,7 +59,7 @@ class OwnerAutonomyTests(unittest.TestCase):
 
     def setUp(self):
         self.policy_data = json.loads((ROOT / "factory/runtime/owner-autonomy-policy.v1.json").read_text())
-        self.state = json.loads((ROOT / "PROJECT_STATE.json").read_text())
+        self.state = synthetic_project_state(self.policy_data)
         self.policy = owner.OwnerPolicyV1.from_dict(self.policy_data)
         self.case = owner.OwnerCaseV1.from_project_state(self.state)
         self.context = owner.OwnerContextV1("Dimkox/Getzilla", "a" * 64, "b" * 64, "c" * 64)

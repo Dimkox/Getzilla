@@ -33,6 +33,36 @@ def _request_race(root, binding, results):
         results.put(journal.consume_controlled_request(Path(root), binding, 1, 2))
 
 
+class ContinuationBindingValidationTest(unittest.TestCase):
+    def test_malformed_binding_is_refused_before_copying_or_creating_journal(self):
+        copied = []
+
+        class CopyTrap:
+            def __deepcopy__(self, memo):
+                copied.append('copy')
+                raise AssertionError('binding data must not be copied')
+
+        class StringCopyTrap(str, CopyTrap):
+            pass
+
+        cycle = []
+        cycle.append(cycle)
+        binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1',
+                                  'a' * 64, 'b' * 64, 'c' * 64)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for field in binding.__dataclass_fields__:
+                for case, value in (('cycle', cycle), ('copy', CopyTrap()),
+                                    ('string_subclass', StringCopyTrap(getattr(binding, field)))):
+                    with self.subTest(field=field, case=case):
+                        copied.clear()
+                        with self.assertRaisesRegex(journal.JournalError, '^invalid_binding$'):
+                            journal.create_chain(root, replace(binding, **{field: value}),
+                                                 journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+                        self.assertEqual(copied, [])
+                        self.assertFalse((root / '.getzilla').exists())
+
+
 @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
 class ContinuationJournalTest(unittest.TestCase):
     def setUp(self):

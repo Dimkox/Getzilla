@@ -24,6 +24,14 @@ def is_root_stop(payload: dict[str, Any], owner: str | None) -> bool:
     return not any(payload.get(key) not in (None, '', owner) for key in ('agent_id', 'agentId'))
 
 
+def unfinished_runs(package: dict[str, Any]) -> list[str]:
+    """Declared domain runs remain work; receipt accounting is advisory."""
+    return [f"Unresolved evidence: {row.get('id')}: {row.get('status')}" +
+            (f" ({row.get('outcome')})" if row.get('status') == 'recorded' else '')
+            for row in package.get('obligations', []) if row.get('kind') == 'run' and
+            not (row.get('status') == 'recorded' and row.get('outcome') == 'pass')]
+
+
 def observe_remaining(route: dict[str, Any], package: dict[str, Any] | None,
                       scope: list[str], evidence: list[str], *, unsafe: bool = False) -> dict[str, Any]:
     """Derive local obligations without granting authority or accepting imported status."""
@@ -32,6 +40,7 @@ def observe_remaining(route: dict[str, Any], package: dict[str, Any] | None,
     if route.get('delivery_expected') and route.get('status') not in TERMINAL:
         remaining.extend(scope)
         if package and not any(item['code'] == 'package_closed' for item in package['findings']):
+            remaining.extend(unfinished_runs(package))
             remaining.extend(f"{item['path']}: {item['code']}: {item['message']}"
                              for item in package['findings'] if item['severity'] in {'error', 'warning', 'expected'})
             if package['pending_tasks_count']:
