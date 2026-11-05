@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "runner_reference": "https://docs.github.com/en/actions/reference/runners/github-hosted-runners",
+  "checked_at": "2026-11-04",
+  "previous_stable": {
+    "tag": "v2.3.0",
+    "commit": "2bb417431f1e4b9494e4af71ebf27adb1d04d898",
+    "tag_object": "815aeabc5d215d65e72651692a6457920de9fa71"
+  },
+  "cells": [
+    {"id":"linux-x64","os":"linux","arch":"x64","runner":"ubuntu-24.04","supported":true,"required":true,"qualification":"native-run-required"},
+    {"id":"linux-arm64","os":"linux","arch":"arm64","runner":"ubuntu-24.04-arm","supported":true,"required":true,"qualification":"native-run-required"},
+    {"id":"macos-x64","os":"macos","arch":"x64","runner":"macos-15-intel","supported":true,"required":true,"qualification":"native-run-required"},
+    {"id":"macos-arm64","os":"macos","arch":"arm64","runner":"macos-15","supported":true,"required":true,"qualification":"native-run-required"},
+    {"id":"windows-x64","os":"windows","arch":"x64","runner":"windows-2025","supported":true,"required":true,"qualification":"native-run-required"},
+    {"id":"windows-arm64","os":"windows","arch":"arm64","runner":"windows-11-arm","supported":false,"required":false,"qualification":"unsupported","reason":"No pinned native OpenGrep ARM64 asset; Python bootstrap currently targets amd64."}
+  ]
+}

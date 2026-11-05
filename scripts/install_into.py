@@ -80,6 +80,8 @@ MANAGED_FILES = (
     "docs/deploy-preflight.md",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
+    "scripts/getzilla_platform_install.py",
+    "scripts/getzilla_update.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
@@ -1168,12 +1170,13 @@ def _make_plan(
     include_dependencies: bool,
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
+    full_payload: tuple[InstallEntry, ...] | None = None,
     selection: PayloadSelection | None = None,
     accepted_kept_digests: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    full_payload = build_payload(source)
+    full_payload = build_payload(source) if full_payload is None else full_payload
     selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
     if state == "absent" and payload is None:
@@ -1679,10 +1682,12 @@ def _materialize_new(
     include_dependencies: bool,
     include_optional: bool,
     selection: PayloadSelection | None = None,
+    prepared_payload: tuple[InstallEntry, ...] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    payload = with_fresh_sync_record(build_payload(source, selection=selection), selection)
+    payload = (with_fresh_sync_record(build_payload(source, selection=selection), selection)
+               if prepared_payload is None else prepared_payload)
     plan = _make_plan(
         source,
         target,
@@ -1690,6 +1695,7 @@ def _materialize_new(
         include_optional=include_optional,
         payload=payload,
         selection=selection,
+        full_payload=prepared_payload,
     )
     if plan["target_state"] != "absent":
         raise UnsafeInstallTarget("materialization requires an absent target")
