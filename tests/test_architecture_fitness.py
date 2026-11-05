@@ -2031,6 +2031,86 @@ class ArchitectureFitnessTests(unittest.TestCase):
             after,
         )
 
+    def test_stdlib_queue_exception_imports_are_not_background_jobs(self):
+        cases = (
+            'from queue import Empty\n',
+            'from queue import Full\nraise Full("public")\n',
+            'from queue import Empty, Full\ntry:\n    pass\nexcept (Empty, Full):\n    pass\n',
+            'from queue import Empty as Missing\ntry:\n    pass\nexcept Missing:\n    pass\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                tree = ast.parse(source)
+                before = ast.dump(tree)
+                observed = FIT.analyze_queue_tree(tree)
+                self.assertEqual(observed.signals, ())
+                self.assertEqual(observed.export_paths, frozenset())
+                self.assertFalse(observed.uncertain)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_exception_import_projection_keeps_real_and_unknown_queues_governed(self):
+        sources = (
+            'import queue\njobs = queue.Queue()\n',
+            *(f'from queue import {name}\njobs = {name}()\n'
+              for name in ('Queue', 'SimpleQueue', 'LifoQueue', 'PriorityQueue')),
+            'from queue import Empty, Queue\njobs = Queue()\n',
+            'from queue import Unknown\njobs = Unknown()\n',
+            'import queue\nqueue.unknown()\n',
+            'from queue import *\n',
+            'from .queue import Empty\n',
+            'from queue import Empty\nopaque(Empty)\n',
+            'from queue import Empty\nEmpty.enqueue(job)\n',
+            'from queue import Empty, Queue\nEmpty = Queue\nEmpty()\n',
+            'from queue import Empty as Missing\nMissing = unknown()\n',
+            'from queue import Empty\nEmpty.__call__ = unknown\n',
+            'from queue import Empty\nglobals()["Empty"] = unknown\n',
+            'from unittest.mock import patch\nfrom queue import Empty\nwith patch("example.Empty", new=unknown):\n    pass\n',
+            'import unittest\nfrom queue import Empty\nwith unittest.mock.patch("example.Empty", new=unknown):\n    pass\n',
+            'from unittest.mock import patch\nfrom queue import Empty\nmodify = patch\nmodify("example.Empty", new=unknown)\n',
+            'from unittest.mock import patch\nfrom queue import Empty\npatch.dict("example.__dict__", {"Empty": unknown})\n',
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                self.assertTrue(FIT.analyze_queue_tree(ast.parse(source)).signals)
+        for name in ('Queue', 'SimpleQueue', 'LifoQueue', 'PriorityQueue'):
+            source = f'from queue import Empty, {name}\njobs = {name}()\n'
+            with self.subTest(constructor=name):
+                self.assertIn(f'call:queue.{name}', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        # The repository resolver's existing local-shadow refusal must survive.
+        self.assertTrue(FIT.analyze_queue_tree(ast.parse('from queue import Empty\n'),
+                                               allow_local_ipc=False).signals)
+
+    def test_exception_only_queue_imports_do_not_trigger_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['type'] = 'worker'
+        system['nodes'][0]['repository_paths'] = ['src']
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        repo.write_text('src/consumer.py', 'from queue import Empty, Full\ntry:\n    pass\nexcept (Empty, Full):\n    pass\n')
+        head = repo.commit('exception-only dependency')
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+        self.assertNotIn('new_queue', report.triggers)
+        self.assertEqual(report.status, 'pass')
+        repo.write_text('src/consumer.py', 'import queue\n')
+        imported = repo.commit('existing module import')
+        repo.write_text('src/consumer.py', 'import queue\njobs = queue.SimpleQueue()\n')
+        constructed = repo.commit('new actual queue construction')
+        report = self._evaluate(repo, imported, constructed)
+        self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+        self.assertIn('new_queue', report.triggers)
+        repo.write_text('src/consumer.py', 'from queue import Empty\n')
+        repo.write_text('src/queue.py', 'class Empty:\n    pass\n')
+        shadowed = repo.commit('local queue module is not stdlib')
+        report = self._evaluate(repo, base, shadowed)
+        self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside

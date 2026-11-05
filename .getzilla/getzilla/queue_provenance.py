@@ -50,6 +50,110 @@ _CONTAINER_MUTATORS = {
 MAX_DOTTED_IMPORT_DEPTH = 256
 
 
+def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
+    """Classify only stable stdlib Empty/Full exception uses as non-queue.
+
+    Repository callers must first rule out a local queue module. Escapes,
+    rebinding, reflection and unknown mock replacement keep ordinary policy.
+    This projection never executes imports or modifies the caller's AST.
+    """
+    nodes = list(ast.walk(tree))
+    imports = [node for node in nodes if isinstance(node, ast.ImportFrom)
+               and not node.level and node.module == 'queue'
+               and any(alias.name in {'Empty', 'Full'} for alias in node.names)]
+    if not imports or not namespace_is_closed(tree, allow_instrumentation=True):
+        return tree
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    counts = Counter(event.name for event in binding_events(tree))
+    loads = {}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loads.setdefault(node.id, []).append(node)
+    patch_names = set()
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock' and not node.level:
+            patch_names.update(alias.asname or alias.name for alias in node.names if alias.name == 'patch')
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest' and not node.level:
+            patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'mock')
+        elif isinstance(node, ast.Import):
+            patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'unittest.mock')
+            patch_names.update((alias.asname or alias.name) + '.mock.patch' for alias in node.names if alias.name == 'unittest')
+    if any(counts[name.split('.')[0]] != 1 for name in patch_names):
+        return tree
+
+    def dotted(node):
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+            if len(parts) > MAX_DOTTED_IMPORT_DEPTH:
+                return None
+        return '.'.join((node.id, *reversed(parts))) if isinstance(node, ast.Name) else ''
+
+    patch_calls = patch_names | {p + '.multiple' for p in patch_names}
+    replaced = set()
+    for node in nodes:
+        if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in patch_names:
+            owner = parents.get(node)
+            if isinstance(owner, ast.Call) and owner.func is node:
+                pass
+            elif (isinstance(owner, ast.Attribute) and owner.value is node
+                  and owner.attr in {'object', 'multiple'}
+                  and isinstance(parents.get(owner), ast.Call) and parents[owner].func is owner):
+                pass
+            else:
+                return tree
+        if not isinstance(node, ast.Call):
+            continue
+        function = dotted(node.func)
+        if function is None:
+            return tree
+        if function not in patch_calls:
+            continue
+        target = node.args[0] if node.args else None
+        if (isinstance(target, ast.BinOp) and isinstance(target.op, ast.Add)
+                and isinstance(target.left, ast.Name) and target.left.id == '__name__'):
+            target = target.right
+        if not isinstance(target, ast.Constant) or type(target.value) is not str:
+            return tree
+        replaced.add(target.value.rsplit('.', 1)[-1])
+        replaced.update(k.arg for k in node.keywords)
+
+    selected = set()
+    for node in imports:
+        for alias in node.names:
+            name = alias.asname or alias.name
+            if alias.name not in {'Empty', 'Full'} or counts[name] != 1 or name in replaced:
+                continue
+            for reference in loads.get(name, ()):
+                use = reference
+                while isinstance(parents.get(use), ast.Tuple):
+                    use = parents[use]
+                owner = parents.get(use)
+                if isinstance(owner, ast.ExceptHandler) and owner.type is use:
+                    continue
+                if isinstance(owner, ast.Raise) and owner.exc is use:
+                    continue
+                if (isinstance(owner, ast.Call) and owner.func is reference
+                        and isinstance(parents.get(owner), ast.Raise) and parents[owner].exc is owner):
+                    continue
+                break
+            else:
+                selected.add(id(alias))
+    if not selected:
+        return tree
+    memo = {}
+    projected = copy.deepcopy(tree, memo)
+    selected = {id(memo[identity]) for identity in selected}
+
+    class Project(ast.NodeTransformer):
+        def visit_ImportFrom(self, node):
+            node.names = [alias for alias in node.names if id(alias) not in selected]
+            return node if node.names else ast.copy_location(ast.Pass(), node)
+
+    return Project().visit(projected)
+
+
 def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
     """Remove only proven bounded, non-escaping stdlib byte-channel operations.
 
@@ -1506,5 +1610,6 @@ def analyze_queue_tree(
     allow_local_ipc: bool = True,
 ) -> QueueTreeAnalysis:
     if allow_local_ipc:
+        tree = stdlib_exception_projection(tree)
         tree = local_byte_channel_projection(tree)
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
