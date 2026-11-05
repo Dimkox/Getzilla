@@ -42,6 +42,21 @@ def browser_dependencies() -> tuple[str | None, str | None]:
     return node, chrome
 
 
+def release_empty_browser_fixture_roots(cleanup: dict) -> None:
+    """The lab owner releases observed empty fixture roots after checking product reports."""
+    for report in cleanup['directories']:
+        directory = Path(report['directory'])
+        if not directory.exists():
+            continue
+        observed = directory.lstat()
+        expected = report['identity']
+        if (str(observed.st_dev), str(observed.st_ino), str(observed.st_uid)) != (
+                expected['dev'], expected['ino'], expected['uid']):
+            continue
+        if directory.is_dir() and not directory.is_symlink() and not list(directory.iterdir()):
+            directory.rmdir()  # no recursive fixture teardown or removal of replacements
+
+
 def markdown_section(text: str, heading: str) -> str:
     match = re.search(rf"^### {re.escape(heading)}.*?$(.*?)(?=^### |^## |\Z)", text, re.M | re.S)
     if match is None:
@@ -266,6 +281,8 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
                         output_dir,
                         "--chrome",
                         chrome,
+                        "--cleanup-python",
+                        sys.executable,
                     ],
                     capture_output=True,
                     text=True,
@@ -273,8 +290,19 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
                 )
                 report_path = Path(output_dir) / "browser-contract.json"
                 self.assertTrue(report_path.is_file(), result.stderr)
-                self.assertTrue(json.loads(report_path.read_text(encoding="utf-8"))["passed"])
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                self.assertTrue(report['passed'])
                 self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+                cleanup = report['cleanup']
+                self.assertEqual(cleanup['direct_child'], 'reaped')
+                self.assertEqual(len(cleanup['directories']), 2)
+                for item in cleanup['directories']:
+                    self.assertFalse(item['root_removed'])
+                    self.assertTrue(Path(item['directory']).is_dir())
+                    self.assertEqual(item['contents_cleaned'], os.name == 'posix' and shutil.rmtree.avoids_symlink_attacks)
+                    if item['contents_cleaned']:
+                        self.assertEqual(list(Path(item['directory']).iterdir()), [])
+                release_empty_browser_fixture_roots(cleanup)
         finally:
             server.terminate()
             server.wait(timeout=5)
@@ -314,7 +342,8 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
             chrome.chmod(0o700)
             started = time.monotonic()
             result = subprocess.run(
-                [node, str(BROWSER_RUNNER), '--url', 'http://127.0.0.1:1/', '--output', str(root / 'output'), '--chrome', str(chrome)],
+                [node, str(BROWSER_RUNNER), '--url', 'http://127.0.0.1:1/', '--output', str(root / 'output'), '--chrome', str(chrome),
+                 '--cleanup-python', sys.executable],
                 env={**os.environ, 'TMPDIR': str(inherited), 'TEMP': str(inherited), 'TMP': str(inherited)},
                 capture_output=True, text=True, timeout=8)
             self.assertLess(time.monotonic() - started, 8)
@@ -324,12 +353,103 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
             report = json.loads(observed.read_text())
             self.assertEqual(report['mode'], 0o700)
             self.assertLess(len(os.fsencode(report['temporary'] + '/com.google.Chrome.123456/SingletonSocket')), 108)
-            self.assertFalse(Path(report['temporary']).exists())
-            self.assertFalse(Path(report['profile']).exists())
+            cleanup = json.loads((root / 'output/browser-cleanup.json').read_text())
+            self.assertEqual(cleanup['direct_child'], 'reaped')
+            self.assertEqual({item['directory'] for item in cleanup['directories']}, {report['temporary'], report['profile']})
+            for item in cleanup['directories']:
+                self.assertFalse(item['root_removed'])
+                self.assertTrue(Path(item['directory']).is_dir())
+                if item['contents_cleaned']:
+                    self.assertEqual(list(Path(item['directory']).iterdir()), [])
+            release_empty_browser_fixture_roots(cleanup)
             self.assertEqual(list(inherited.iterdir()), [foreign])
             self.assertEqual(foreign.read_text(), 'preserve foreign bytes')
             with self.assertRaises(ProcessLookupError):
                 os.kill(report['pid'], 0)
+
+    @unittest.skipUnless(os.name == 'posix', 'native POSIX replacement schedule')
+    def test_chrome_cleanup_replacement_preserves_foreign_canary(self) -> None:
+        node = available_executable(('node', 'nodejs'), ('/usr/bin/node',))
+        if node is None:
+            self.skipTest('unavailable optional lab dependency: Node.js')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proof = root / 'proof.json'
+            preload = root / 'replace-before-cleanup.mjs'
+            preload.write_text('''import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire, syncBuiltinESMExports} from 'node:module';
+const require = createRequire(import.meta.url), children = require('node:child_process');
+const nativeRm = fs.promises.rm, nativeSpawn = children.spawn, nativeMkdtemp = fs.mkdtempSync;
+const state = {created: [], swapped: false};
+const save = () => fs.writeFileSync(process.env.CLEANUP_PROOF, JSON.stringify(state));
+fs.mkdtempSync = function(...args) {const result = nativeMkdtemp.apply(this, args); state.created.push(result); save(); return result;};
+function replace(directory) {
+  if (state.swapped || !path.basename(String(directory)).startsWith('seo-landing-browser-contract-')) return;
+  state.swapped = true; state.directory = String(directory); state.held = String(directory) + '.held';
+  fs.writeFileSync(path.join(directory, 'owned-marker'), 'owned inert bytes');
+  fs.renameSync(directory, state.held); fs.mkdirSync(directory, {mode: 0o700});
+  fs.writeFileSync(path.join(directory, 'foreign-canary'), 'preserve foreign replacement bytes'); save();
+}
+fs.promises.rm = async function(directory, options) {replace(directory); return nativeRm.call(this, directory, options);};
+children.spawn = function(command, args, options) {
+  if (args?.some(value => String(value).endsWith('cleanup-owned-directory.py'))) replace(args[args.indexOf('--directory') + 1]);
+  return nativeSpawn.call(this, command, args, options);
+};
+syncBuiltinESMExports();
+''')
+            try:
+                result = subprocess.run(
+                    [node, '--import', str(preload), str(BROWSER_RUNNER), '--url', 'http://127.0.0.1:1/',
+                     '--output', str(root / 'output'), '--chrome', '/bin/false', '--cleanup-python', sys.executable],
+                    env={**os.environ, 'TMPDIR': str(root), 'TEMP': str(root), 'TMP': str(root), 'CLEANUP_PROOF': str(proof)},
+                    capture_output=True, text=True, timeout=15)
+                self.assertNotEqual(result.returncode, 0)
+                observed = json.loads(proof.read_text())
+                self.assertTrue(observed['swapped'])
+                canary = Path(observed['directory']) / 'foreign-canary'
+                self.assertTrue(canary.is_file(), result.stderr)
+                self.assertEqual(canary.read_text(), 'preserve foreign replacement bytes')
+                self.assertTrue((Path(observed['held']) / 'owned-marker').is_file())
+                cleanup = json.loads((root / 'output/browser-cleanup.json').read_text())
+                refusal = next(item for item in cleanup['directories'] if item['directory'] == observed['directory'])
+                self.assertFalse(refusal['contents_cleaned'])
+                self.assertFalse(refusal['root_removed'])
+                self.assertEqual(refusal['path_state'], 'changed')
+                self.assertEqual(refusal['reason'], 'identity-or-private-owner-mismatch')
+            finally:
+                if proof.exists():
+                    observed = json.loads(proof.read_text())
+                    for created in observed['created']:
+                        candidate = Path(created)
+                        if candidate.parent == root:
+                            continue  # private fixture teardown owns these synthetic directories
+                        self.assertTrue(candidate.name.startswith('gzc-'))
+                        if candidate.exists():
+                            candidate.rmdir()  # only the observed inert, now-empty runtime root
+
+    @unittest.skipUnless(os.name == 'posix', 'native inert child executable')
+    def test_unavailable_cleanup_python_retains_and_reports_owned_namespaces(self) -> None:
+        node = available_executable(('node', 'nodejs'), ('/usr/bin/node',))
+        if node is None:
+            self.skipTest('unavailable optional lab dependency: Node.js')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [node, str(BROWSER_RUNNER), '--url', 'http://127.0.0.1:1/', '--output', str(root / 'output'),
+                 '--chrome', '/bin/false', '--cleanup-python', str(root / 'absent-python')],
+                env={**os.environ, 'TMPDIR': str(root), 'TMP': str(root), 'TEMP': str(root)},
+                capture_output=True, text=True, timeout=8)
+            self.assertNotEqual(result.returncode, 0)
+            cleanup = json.loads((root / 'output/browser-cleanup.json').read_text())
+            self.assertEqual(cleanup['direct_child'], 'reaped')
+            self.assertEqual(len(cleanup['directories']), 2)
+            for item in cleanup['directories']:
+                self.assertEqual(item['reason'], 'cleanup-helper-unavailable')
+                self.assertFalse(item['contents_cleaned'])
+                self.assertFalse(item['root_removed'])
+                self.assertTrue(Path(item['directory']).is_dir())
+            release_empty_browser_fixture_roots(cleanup)
 
 
 if __name__ == "__main__":

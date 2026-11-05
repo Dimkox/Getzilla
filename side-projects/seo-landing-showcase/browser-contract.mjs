@@ -5,6 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const option = (name) => {
@@ -15,9 +16,11 @@ const targetUrl = option("--url");
 const outputOption = option("--output");
 const suppliedCdp = option("--cdp-url");
 const suppliedChrome = option("--chrome");
+const cleanupPython = option("--cleanup-python") ?? (process.platform === "win32" ? "python" : "python3");
+const cleanupHelper = fileURLToPath(new URL("./cleanup-owned-directory.py", import.meta.url));
 
 if (!targetUrl || !outputOption) {
-  console.error("Usage: node browser-contract.mjs --url <http-url> --output <directory> [--chrome <path> | --cdp-url <url>]");
+  console.error("Usage: node browser-contract.mjs --url <http-url> --output <directory> [--chrome <path> | --cdp-url <url>] [--cleanup-python <python>]");
   process.exit(2);
 }
 const parsedTarget = new URL(targetUrl);
@@ -34,6 +37,9 @@ let chromeDiagnostic = "";
 let chromeStartupError;
 let chromeStopping;
 const ownedDirectories = [];
+const directoryCleanup = [];
+let browserReport;
+let cleanupPublished = false;
 
 function privateDirectory(parent, prefix) {
   const directory = fs.mkdtempSync(path.join(parent, prefix));
@@ -119,6 +125,73 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
+function cleanOwnedDirectory({ directory, identity }) {
+  const expected = Object.fromEntries(["dev", "ino", "uid"].map((key) => [key, String(identity[key])]));
+  const retained = (reason) => ({ schema_version: 1, directory, identity: expected,
+    contents_cleaned: false, root_removed: false, path_state: "unknown", reason });
+  return new Promise((resolve) => {
+    let child, timer, finished = false, stdout = "", size = 0, refusal;
+    const finish = (report) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(report);
+    };
+    try {
+      child = spawn(cleanupPython, ["-I", "-S", cleanupHelper, "--directory", directory,
+        ...Object.entries(expected).flatMap(([key, value]) => [`--${key}`, value])],
+      { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    } catch { finish(retained("cleanup-helper-unavailable")); return; }
+    child.once("error", () => { refusal = "cleanup-helper-unavailable"; });
+    child.stdout.on("data", (chunk) => {
+      size += chunk.length;
+      if (size <= 4096) stdout += chunk.toString("utf8");
+      else { refusal = "cleanup-helper-output-limit"; child.kill("SIGTERM"); }
+    });
+    child.once("close", (code) => {
+      if (refusal || code !== 0) { finish(retained(refusal ?? "cleanup-helper-failed")); return; }
+      try {
+        const report = JSON.parse(stdout);
+        const keys = ["schema_version", "directory", "identity", "contents_cleaned", "root_removed", "path_state", "reason"].sort();
+        if (!report || Object.keys(report).sort().join() !== keys.join()
+            || report.schema_version !== 1 || report.directory !== directory
+            || !report.identity || Object.keys(report.identity).sort().join() !== "dev,ino,uid"
+            || !Object.entries(expected).every(([key, value]) => report.identity[key] === value)
+            || typeof report.contents_cleaned !== "boolean" || report.root_removed !== false
+            || !["owned", "changed", "absent", "unknown"].includes(report.path_state)
+            || typeof report.reason !== "string" || report.reason.length > 100
+            || (report.contents_cleaned && report.reason !== "contents-cleaned-root-retained")) {
+          throw new Error("invalid cleanup result");
+        }
+        finish(report);
+      } catch { finish(retained("cleanup-helper-invalid-result")); }
+    });
+    timer = setTimeout(async () => {
+      refusal = "cleanup-helper-timeout";
+      child.kill("SIGTERM");
+      if (!await waitForExit(child, 1000)) {
+        child.kill("SIGKILL");
+        await waitForExit(child, 1000);
+      }
+      finish(retained(refusal));
+    }, 3000);
+  });
+}
+
+function publishCleanup() {
+  if (cleanupPublished) return;
+  cleanupPublished = true;
+  const directChild = !chromeProcess || chromeProcess.pid === undefined ? "not-owned"
+    : chromeProcess.exitCode !== null || chromeProcess.signalCode !== null ? "reaped" : "running-or-unknown";
+  const cleanup = { direct_child: directChild, directories: directoryCleanup };
+  fs.writeFileSync(path.join(outputDir, "browser-cleanup.json"), `${JSON.stringify(cleanup, null, 2)}\n`);
+  if (browserReport) {
+    browserReport.cleanup = cleanup;
+    fs.writeFileSync(path.join(outputDir, "browser-contract.json"), `${JSON.stringify(browserReport, null, 2)}\n`);
+    console.log(JSON.stringify(browserReport, null, 2));
+  }
+}
+
 function stopChrome() {
   chromeStopping ??= (async () => {
     try {
@@ -130,22 +203,9 @@ function stopChrome() {
         }
       }
     } finally {
-      const cleanupErrors = [];
-      for (const { directory, identity } of ownedDirectories.reverse()) {
-        try {
-          let current;
-          try { current = fs.lstatSync(directory, { bigint: true }); }
-          catch (error) { if (error.code === "ENOENT") continue; throw error; }
-          if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev
-              || current.ino !== identity.ino || current.uid !== identity.uid) {
-            throw new Error("Owned Chrome directory identity changed; refusing cleanup");
-          }
-          await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
+      for (const owned of ownedDirectories.reverse()) {
+        directoryCleanup.push(await cleanOwnedDirectory(owned));
       }
-      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Owned Chrome directory cleanup failed");
     }
   })();
   return chromeStopping;
@@ -154,7 +214,7 @@ function stopChrome() {
 const signalHandlers = new Map([["SIGINT", 130], ["SIGTERM", 143]].map(([signal, code]) => {
   const handler = () => {
     stopChrome().catch((error) => console.error(`Chrome cleanup failed: ${error.message}`))
-      .finally(() => process.exit(code));
+      .finally(() => { publishCleanup(); process.exit(code); });
   };
   process.once(signal, handler);
   return [signal, handler];
@@ -254,9 +314,7 @@ try {
     && keyboardFirstTab.visible
     && keyboardFirstTab.outlineStyle !== "none"
     && Number.parseFloat(keyboardFirstTab.outlineWidth) >= 2;
-  const report = { url: targetUrl, viewports, keyboardFirstTab, passed };
-  fs.writeFileSync(path.join(outputDir, "browser-contract.json"), `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify(report, null, 2));
+  browserReport = { url: targetUrl, viewports, keyboardFirstTab, passed };
   socket.close();
   if (!passed) process.exitCode = 1;
 } catch (error) {
@@ -268,6 +326,7 @@ try {
     if (!primaryError) throw error;
     console.error(`Chrome cleanup failed: ${error.message}`);
   } finally {
+    publishCleanup();
     for (const [signal, handler] of signalHandlers) process.off(signal, handler);
   }
 }
