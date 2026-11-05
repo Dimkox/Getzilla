@@ -303,10 +303,11 @@ class ReconcileAccountingTests(unittest.TestCase):
         before = path.read_bytes()
         active_path = state.active_change_path(self.root)
         active_bytes = active_path.read_bytes()
-        state.durable_json(self.root, active_path, dict(self.active, path='ordinary-outside/state.json'))
+        unsafe_path = 'ordinary-outside/state.json'
+        state.durable_json(self.root, active_path, dict(self.active, path=unsafe_path))
         read_package_file = package_status.read_package_file
         def guarded_read(root, relative, *args, **kwargs):
-            if relative == self.active['path'] + '/state.json':
+            if relative in {self.active['path'] + '/state.json', unsafe_path}:
                 raise AssertionError('unsafe target must not be opened')
             return read_package_file(root, relative, *args, **kwargs)
         with patch.object(package_status, 'read_package_file', side_effect=guarded_read):
