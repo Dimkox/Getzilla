@@ -1970,6 +1970,29 @@
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-LOCAL-CI-GATE",
+      "id": "EDGE-LOCAL-CI-GITHUB-VISIBILITY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -2221,6 +2244,24 @@
         "kind": "python_process",
         "lifecycle": "on_demand",
         "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LOCAL-CI-GATE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/ci_gate.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",

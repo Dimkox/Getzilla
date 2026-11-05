@@ -236,6 +236,48 @@ class VisibilityDetectionTests(unittest.TestCase):
         self.assertLessEqual(timeout, 30)
 
 
+class CiGateArchitectureTests(unittest.TestCase):
+    def test_selector_has_specific_network_ownership_without_changing_local_policy(self):
+        from getzilla.architecture import load_architecture
+        from getzilla.architecture_fitness import _owner_for_path
+        snapshot = load_architecture(ROOT)
+        owner = _owner_for_path(snapshot, '.getzilla/getzilla/ci_gate.py')
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner['id'], 'NODE-LOCAL-CI-GATE')
+        self.assertEqual(owner['repository_paths'], ['.getzilla/getzilla/ci_gate.py'])
+        self.assertEqual(owner['runtime']['network'], 'declared_egress')
+        policy = next(node for node in snapshot.system['nodes'] if node['id'] == 'NODE-LOCAL-ROUTE-POLICY')
+        self.assertEqual(policy['runtime']['network'], 'none')
+
+    def test_actual_https_import_requires_the_specific_declared_github_edge(self):
+        import ast
+        import copy
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from getzilla.architecture import load_architecture
+        from getzilla import architecture_fitness as fitness
+        source = '.getzilla/getzilla/ci_gate.py'
+        snapshot = load_architecture(ROOT)
+        tree = ast.parse((ROOT / source).read_bytes(), filename=source)
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path=source, status='modified'),))
+        inventory = SimpleNamespace(root=ROOT, tree=lambda path: tree if path == source else None)
+        # Only this actual source is in this bounded rule contrast. Do not load
+        # the whole repository's unrelated import-root inventory or run HTTP.
+        with mock.patch.object(fitness, '_repository_paths', return_value=(source,)):
+            result = fitness._network_clients(snapshot, diff, inventory)
+            self.assertEqual(result.status, 'pass', result.findings)
+            changed = copy.deepcopy(snapshot.system)
+            edge = next(edge for edge in changed['edges'] if edge['id'] == 'EDGE-LOCAL-CI-GITHUB-VISIBILITY')
+            self.assertEqual((edge['from'], edge['to'], edge['protocol'], edge['authentication']),
+                             ('NODE-LOCAL-CI-GATE', 'NODE-GITHUB', 'https', 'none'))
+            self.assertEqual(edge['failure_behavior']['timeout_ms'], int(ci_gate.HTTP_TIMEOUT_SECONDS * 1000))
+            self.assertEqual(edge['failure_behavior']['max_retries'], 0)
+            changed['edges'].remove(edge)
+            denied = fitness._network_clients(replace(snapshot, system=changed), diff, inventory)
+        self.assertEqual(denied.status, 'fail')
+        self.assertTrue(any('undeclared network client https' in finding for finding in denied.findings))
+
+
 class GateSelectionTests(unittest.TestCase):
     def test_visibility_selects_the_gate(self) -> None:
         self.assertEqual(ci_gate.select_gate('public'), 'github-actions')
