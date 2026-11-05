@@ -75,6 +75,18 @@ def agent_of(path: str) -> str | None:
     return next((name for name, prefixes in AGENT_COMPONENT_PATHS.items() if path.startswith(prefixes)), None)
 
 
+# Exact siblings used by Factory's published runtime and offline controls. Keep
+# their ownership with Factory without publishing unrelated source trees.
+FACTORY_SUPPORT_FILES = frozenset({
+    'engineering/contracts/openapi/factory-result-admission.v2.json',
+    'scripts/getzilla_m8.py',
+    'scripts/getzilla_landing_publish.py',
+    'delivery/src/getzilla_delivery/landing_filesystem.py',
+    'delivery/src/getzilla_delivery/landing_publication.py',
+    'delivery/src/getzilla_delivery/landing_publication_contracts.py',
+})
+
+
 def module_name(value: object) -> bool:
     return type(value) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,63}', value) is not None
 
@@ -133,7 +145,7 @@ def component_of(path: str) -> str:
     parts = path.split('/')
     if len(parts) >= 4 and parts[:2] == ['.getzilla', 'modules'] and module_name(parts[2]):
         return 'module:' + parts[2]
-    if path.startswith('factory/'):
+    if path.startswith('factory/') or path in FACTORY_SUPPORT_FILES:
         return 'factory'
     for name, markers in EXTRA_COMPONENT_PATHS.items():
         if any(marker in '/' + path for marker in markers):

@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .agent_evals import required_suites
 from .bitrix_checks import check_bitrix
 from .architecture import (
     ArchitectureError, architecture_inputs_present, load_architecture,
@@ -78,6 +79,11 @@ class CheckResult:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+def _agent_eval_checks(root: Path, mode: str) -> list[CheckResult]:
+    """Use the optional replay suites inside the existing verification gate."""
+    return [CheckResult(**item) for item in required_suites(root, mode)]
 
 
 class VerificationCancelled(SystemExit):
@@ -1998,21 +2004,46 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
 
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
-    factory_modules = [
-        f'factory.tests.test_{name}'
-        for name in ('contracts', 'state', 'migrations', 'service')
-        if (factory_tests / f'test_{name}.py').is_file()
-    ]
-    if (root / 'factory' / 'pyproject.toml').is_file() and factory_modules:
-        return [
-            _command_check(
-                root,
-                'factory-unit',
-                [sys.executable, '-m', 'unittest', *factory_modules],
-                300,
-            )
-        ]
-    return []
+    if not (root / 'factory/pyproject.toml').is_file():
+        return []
+    if not factory_tests.is_dir():
+        return [CheckResult('factory-unit', 'fail', 'Factory unit source directory is missing')]
+    if sys.version_info < (3, 11):
+        return [CheckResult('factory-unit', 'fail',
+                            'Factory units require Python >=3.11; Core source checks support Python >=3.10')]
+    from . import STACK_DIR
+    from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_matches, validate_report
+    environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
+                   'PYTHONPATH': os.pathsep.join((str(STACK_DIR), str(root), str(root / 'factory/src')))}
+    with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
+        cache = Path(temporary) / 'pycache'
+        cache.mkdir(mode=0o700)
+        # Select the private cache before child startup; -B alone still reads old bytecode.
+        environment['PYTHONPYCACHEPREFIX'] = str(cache)
+        report = Path(temporary) / 'results.json'
+        request = Path(temporary) / 'request.json'
+        try:
+            binding = invocation(root, path=environment['PATH'])
+        except (OSError, ValueError, RuntimeError, SyntaxError) as exc:
+            return [CheckResult('factory-unit', 'fail', 'Factory invocation unavailable: ' + str(exc))]
+        request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8', newline='\n')
+        result = _command_check(
+            root, 'factory-unit', [sys.executable, '-P', '-m', 'getzilla.factory_tests',
+                                  '--root', str(root), '--request', str(request), '--report', str(report)],
+            300, env=environment,
+        )
+        try:
+            if report.stat().st_size > MAX_REPORT_BYTES:
+                raise ValueError('Factory result exceeds evidence bound')
+            evidence = decode_document(report.read_text(encoding='utf-8'))
+            validate_report(evidence, binding)
+            if evidence['status'] != result.status or not source_matches(root, binding):
+                raise ValueError('Factory result does not match subprocess outcome or current source')
+            result.details.append(evidence)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            result.status = 'fail'
+            result.summary += '; Factory result missing or invalid: ' + str(exc)
+        return [result]
 
 
 def _focused_python(
@@ -2092,9 +2123,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
 
 
 def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
-    if (root / 'factory/pyproject.toml').is_file() and any(
-        (root / f'factory/tests/test_{name}.py').is_file() for name in ('contracts', 'state', 'migrations', 'service')
-    ):
+    if (root / 'factory/pyproject.toml').is_file():
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
@@ -2137,9 +2166,9 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # An installed project runs source and unit checks only: the factory's container/database exit
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
+    _dispatch_factory_unit(root, dispatch)
     if uses_pytest_runner:
         return results
-    _dispatch_factory_unit(root, dispatch)
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
@@ -2870,6 +2899,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
         dispatch.add(workflow_check)
     report.update(governance=governance_metadata, workflow_artifacts=workflow_metadata)
+    cancellation.check()
+    if not dispatch.blocked_by:
+        for check in _agent_eval_checks(root, mode):
+            dispatch.add(check)
     cancellation.check()
 
     results = state.results
