@@ -3100,6 +3100,7 @@ class PostgresFactoryStore:
             limits["max_cost_usd_micros"],
             limits["max_token_units"],
             tuple(body["provider"]["capabilities"]),
+            allowed_tools=tuple(body["capability_policy"]["allowed_tools"]),
         )
 
     def proposal_context(self, grant: LeaseGrant, packet_digest: str) -> ProposalContext:
