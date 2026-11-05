@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import multiprocessing
+import queue
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from dataclasses import replace
@@ -24,8 +26,70 @@ def _race(root, binding, results):
 
 
 def _controlled_race(root, binding, results):
-    with patch.object(journal.time, 'time', return_value=1000):
-        results.put(journal.consume_controlled_send(Path(root), binding, 1, 1))
+    try:
+        with patch.object(journal.time, 'time', return_value=1000):
+            result = journal.consume_controlled_send(Path(root), binding, 1, 1)
+    except Exception as error:
+        code = 'worker_exception'
+        if isinstance(error, journal.JournalError):
+            code = {'lock_busy': 'journal_lock_busy', 'storage_unavailable': 'journal_storage_unavailable'}.get(
+                str(error), 'journal_error')
+        results.put({'status': 'error', 'pid': os.getpid(), 'error': code})
+    else:
+        results.put({'status': 'success', 'pid': os.getpid(), 'result': result})
+
+
+def _controlled_claim_results(children, results):
+    deadline = time.monotonic() + 15
+    pending = {child.pid for child in children}
+    claims = []
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError('controlled worker result timed out')
+        try:
+            envelope = results.get(timeout=min(0.05, remaining))
+        except queue.Empty:
+            for child in children:
+                if child.exitcode not in (None, 0):
+                    print('controlled-worker ' + json.dumps({'pid': child.pid, 'exitcode': child.exitcode}), flush=True)
+                    raise AssertionError(f'controlled worker exit: {child.exitcode}') from None
+            if all(child.exitcode == 0 for child in children):
+                raise AssertionError('controlled worker returned no result') from None
+            continue
+        if (type(envelope) is not dict or type(envelope.get('pid')) is not int
+                or envelope['pid'] not in pending):
+            raise AssertionError('invalid controlled worker result')
+        if envelope.get('status') == 'error' and set(envelope) == {'status', 'pid', 'error'}:
+            if (type(envelope['error']) is not str or envelope['error'] not in {
+                    'journal_lock_busy', 'journal_storage_unavailable', 'journal_error', 'worker_exception'}):
+                raise AssertionError('invalid controlled worker result')
+            print('controlled-worker ' + json.dumps(envelope, sort_keys=True), flush=True)
+            raise AssertionError('controlled worker error: ' + envelope['error'])
+        if (envelope.get('status') != 'success' or set(envelope) != {'status', 'pid', 'result'}
+                or type(envelope['result']) is not dict
+                or type(envelope['result'].get('claimed')) is not bool
+                or envelope['result'].get('dispatch_permitted') is not False):
+            raise AssertionError('invalid controlled worker result')
+        pending.remove(envelope['pid'])
+        claims.append(envelope['result'])
+    return claims
+
+
+_ordinary_controlled_race = _controlled_race
+
+
+def _controlled_journal_fault(root, binding, results):
+    with patch.object(journal, 'consume_controlled_send', side_effect=journal.JournalError('lock_busy')):
+        _ordinary_controlled_race(root, binding, results)
+
+
+def _controlled_abrupt_exit(root, binding, results):
+    os._exit(7)
+
+
+def _controlled_malformed_envelope(root, binding, results):
+    results.put({'status': 'error', 'pid': os.getpid(), 'error': ['public-marker']})
 
 
 def _request_race(root, binding, results):
@@ -235,17 +299,50 @@ class ContinuationJournalTest(unittest.TestCase):
         try:
             for child in children:
                 child.start()
-            results = [queue.get(timeout=15) for _ in children]
+            results = _controlled_claim_results(children, queue)
             for child in children:
                 child.join(timeout=15)
                 self.assertEqual(child.exitcode, 0)
             self.assertEqual(sum(result['claimed'] for result in results), 1)
+            self.assertEqual(sorted(result['claimed'] for result in results), [False, True])
         finally:
             for child in children:
+                if child.pid is None:
+                    continue
                 if child.is_alive():
                     child.terminate()
+                child.join(timeout=5)
+                if child.is_alive():
+                    child.kill()
                     child.join(timeout=5)
+                self.assertFalse(child.is_alive(), 'controlled worker was not reaped')
+                child.close()
             queue.close()
+            queue.join_thread()
+
+    def test_controlled_claim_worker_error_is_reported_before_queue_timeout(self):
+        with patch(__name__ + '._controlled_race', _controlled_journal_fault):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^controlled worker error: journal_lock_busy$'):
+                    self.test_controlled_claim_race_between_processes()
+            except queue.Empty:
+                self.fail('child journal error was masked by queue.Empty')
+
+    def test_controlled_claim_abrupt_worker_exit_is_reported_before_queue_timeout(self):
+        with patch(__name__ + '._controlled_race', _controlled_abrupt_exit):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^controlled worker exit: 7$'):
+                    self.test_controlled_claim_race_between_processes()
+            except queue.Empty:
+                self.fail('child exit was masked by queue.Empty')
+
+    def test_controlled_claim_rejects_malformed_worker_error_without_echoing_it(self):
+        with patch(__name__ + '._controlled_race', _controlled_malformed_envelope):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^invalid controlled worker result$'):
+                    self.test_controlled_claim_race_between_processes()
+            except TypeError:
+                self.fail('malformed worker error escaped the closed result decoder')
 
     def test_controlled_claim_publish_failure_does_not_reissue(self):
         journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
