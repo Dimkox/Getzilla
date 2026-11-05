@@ -284,9 +284,10 @@ class Backend:
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ)
             execution._register_managed(root, admission, instance, process.pid, start)
-            def release():
+            def release(check_deadline):
                 # A fresh empty pipe accepts one byte without waiting for the child.
                 os.set_blocking(process.stdin.fileno(), False)
+                check_deadline()
                 if os.write(process.stdin.fileno(), b'R') != 1:
                     raise OSError('gate write failed')
                 process.stdin.close()

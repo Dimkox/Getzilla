@@ -13,9 +13,111 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
+import copy
 
 from getzilla import execution, execution_store as store, state
-from tests.test_execution import owned_route
+from tests.test_execution import FakeClock, owned_route
+
+
+class ManagedReleaseDeadlineTests(unittest.TestCase):
+    """Inert ordering controls: no process, handle, gate byte or physical effect."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.clock = FakeClock()
+        self.enterContext(patch.dict(os.environ, {'GETZILLA_SESSION_ID': 'owner'}))
+        self.addCleanup(state.bind_session, None)
+        route = owned_route(self.root)
+        self.record = {'execution_id': '1' * 32, 'execution_generation': 'inert-fixture',
+                       'execution_status': 'running', 'revision': 1,
+                       'owner': {'route_id': route['route_id']}, 'source': {},
+                       'admission_binding': {'store_generation': 'fixture-generation', 'control_revision': 0},
+                       'launch': {'phase': 'registered'}}
+        self.control = {'revision': 0, 'stopped': False}
+        self.registry = {'generation': 'fixture-generation', 'records': {self.record['execution_id']: self.record}}
+        self.admission = SimpleNamespace(execution_id=self.record['execution_id'])
+        self.publications, self.releases = [], []
+        self.delay_publication = False
+        def publish(root, update):
+            update(self.registry)
+            self.publications.append(copy.deepcopy(self.record))
+            if self.delay_publication and len(self.publications) == 1:
+                self.clock.sleep(2)
+            return self.registry, None
+        self.enterContext(patch.object(store, 'mutate_registry', side_effect=publish))
+        self.enterContext(patch.object(execution, '_managed_record', return_value=self.record))
+        self.enterContext(patch.object(execution, '_required_registry', return_value=(self.registry, self.control)))
+        self.enterContext(patch.object(execution, '_source', return_value={}))
+        self.enterContext(patch.object(execution, '_view', side_effect=lambda root, record: copy.deepcopy(record)))
+        self.enterContext(patch.dict(execution._LIVE, {
+            (str(self.root.resolve()), self.record['execution_id']): (self.clock, 101, 'inert-fixture')}))
+
+    def release(self, guard=lambda: None):
+        guard()
+        self.releases.append(self.clock.monotonic())
+
+    def test_recheck_cannot_release_after_the_original_absolute_deadline(self):
+        with self.assertRaises(execution.ExecutionError) as error:
+            execution._release_managed(self.root, self.admission, 'inert', lambda: self.clock.sleep(2), self.release)
+        self.assertEqual(error.exception.code, 'execution_deadline_elapsed')
+        self.assertEqual(self.releases, [])
+        self.assertEqual(self.record['launch']['phase'], 'registered')
+
+    def test_publication_cannot_release_after_the_original_absolute_deadline(self):
+        self.delay_publication = True
+        with self.assertRaises(execution.ExecutionError) as error:
+            execution._release_managed(self.root, self.admission, 'inert', lambda: None, self.release)
+        self.assertEqual(error.exception.code, 'execution_deadline_elapsed')
+        self.assertEqual(self.releases, [])
+        self.assertEqual(self.record['launch']['phase'], 'registered')
+        self.assertTrue(self.publications)
+        self.assertTrue(all(item['launch']['phase'] != 'released' for item in self.publications))
+
+    def test_on_time_release_is_recorded_only_after_the_callback(self):
+        def release(guard=lambda: None):
+            self.assertEqual(self.record['launch']['phase'], 'registered')
+            self.release(guard)
+        result = execution._release_managed(self.root, self.admission, 'inert', lambda: None, release)
+        self.assertEqual(self.releases, [100])
+        self.assertEqual(result['launch']['phase'], 'released')
+
+    def test_gate_setup_uses_the_same_deadline_before_the_byte(self):
+        def release(guard=lambda: None):
+            self.clock.sleep(2)
+            guard()
+            self.releases.append(self.clock.monotonic())
+        with self.assertRaises(execution.ExecutionError) as error:
+            execution._release_managed(self.root, self.admission, 'inert', lambda: None, release)
+        self.assertEqual(error.exception.code, 'execution_deadline_elapsed')
+        self.assertEqual(self.releases, [])
+        self.assertEqual(self.record['launch']['phase'], 'registered')
+
+    def test_stop_and_cancel_keep_the_inert_gate_closed(self):
+        for stopped, status in ((True, 'running'), (False, 'cancel_requested')):
+            self.control['stopped'], self.record['execution_status'] = stopped, status
+            with self.assertRaises(execution.ExecutionError) as error:
+                execution._release_managed(self.root, self.admission, 'inert', lambda: None, self.release)
+            self.assertEqual(error.exception.code, 'execution_stopped')
+        self.assertEqual(self.releases, [])
+
+    def test_post_gate_publication_failure_remains_uncertain(self):
+        key = (str(self.root.resolve()), self.record['execution_id'])
+        self.addCleanup(execution._UNCERTAIN.discard, key)
+        original = store.mutate_registry
+        count = 0
+        def lose_receipt(*arguments, **keywords):
+            nonlocal count
+            count += 1
+            if count == 2:
+                raise OSError('synthetic post-gate publication failure')
+            return original(*arguments, **keywords)
+        with patch.object(store, 'mutate_registry', side_effect=lose_receipt):
+            with self.assertRaises(OSError):
+                execution._release_managed(self.root, self.admission, 'inert', lambda: None, self.release)
+        self.assertEqual(self.releases, [100])
+        self.assertIn(key, execution._UNCERTAIN)
 
 
 @unittest.skipUnless(hasattr(os, 'pidfd_open'), 'Linux owned pidfd launch is required')

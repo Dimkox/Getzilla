@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from . import continuity, state
 from . import execution_store as store
 from .execution_output import normalize_output, RESPONSE_BYTES, utf8_tail
-from .package_status import InspectionError, _git_read, read_package_file, validate_public_source_root
+from .package_status import MAX_PUBLIC_SOURCE_BYTES, InspectionError, _git_read, read_package_file, validate_public_source_root
 from .spec import _bounded_walk
 from .util import tree_fingerprint
 
@@ -283,11 +283,11 @@ def _source(root, route):
                     pending.append(path)
                 elif entry.is_file(follow_symlinks=False):
                     try:
-                        raw = read_package_file(root, relative, limit=2 * 1024 * 1024, public_source=True)
+                        raw = read_package_file(root, relative, limit=MAX_PUBLIC_SOURCE_BYTES - total, public_source=True)
                     except (InspectionError, OSError):
                         raise ExecutionError('source_inventory_unavailable') from None
                     total += len(raw)
-                    if total > 16 * 1024 * 1024:
+                    if total > MAX_PUBLIC_SOURCE_BYTES:
                         raise ExecutionError('source_inventory_unavailable')
                     entries.append((relative, entry.stat(follow_symlinks=False).st_mode, hashlib.sha256(raw).hexdigest()))
                 else:
@@ -648,16 +648,40 @@ def _register_managed(root, admission, instance, process_id, start_identity):
 def _release_managed(root, admission, instance, recheck, release):
     # Only the owning adapter passes these callbacks; no model/request callback is admitted.
     # The one-byte gate write is bounded. No lock spans spawn or process lifetime.
+    lifetime = None
+    def check_deadline():
+        if lifetime is None or lifetime[0].monotonic() >= lifetime[1]:
+            raise ExecutionError('execution_deadline_elapsed')
     def ready(registry):
+        nonlocal lifetime
         record = _managed_record(root, registry, admission, instance)
         if record['launch']['phase'] != 'registered':
             raise ExecutionError('admission_fenced')
         _managed_admitted(root, registry, record)
+        lifetime = _LIVE.get((str(root.resolve()), record['execution_id']))
         recheck()
-        record['launch']['phase'] = 'released'
+        check_deadline()
         record['revision'] += 1
     registry, _ = store.mutate_registry(root, ready)
-    release()
+    check_deadline()
+    try:
+        release(check_deadline)
+    except ExecutionError:
+        raise  # The owning callback's deadline guard precedes the gate byte.
+    except BaseException:
+        _UNCERTAIN.add((str(root.resolve()), admission.execution_id))
+        raise
+    def released(registry):
+        record = _managed_record(root, registry, admission, instance)
+        if record['launch']['phase'] != 'registered':
+            raise ExecutionError('admission_fenced')
+        record['launch']['phase'] = 'released'
+        record['revision'] += 1
+    try:
+        registry, _ = store.mutate_registry(root, released)
+    except BaseException:
+        _UNCERTAIN.add((str(root.resolve()), admission.execution_id))
+        raise
     return _view(root, registry['records'][admission.execution_id])
 
 

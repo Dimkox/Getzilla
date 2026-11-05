@@ -8,10 +8,62 @@ import tempfile
 import subprocess
 import sys
 import unittest
+import importlib.util
+import textwrap
 from unittest.mock import patch
 
 from getzilla import continuity, execution, execution_store as store, policy, state
 from tests.test_execution import CountingBackend, owned_route
+
+
+@unittest.skipIf(os.name == 'nt', 'public source ACL custody is not qualified on Windows')
+class InstalledExecutionRecoveryTests(unittest.TestCase):
+    def test_real_file_and_compressed_installs_provision_stop_and_recover(self):
+        repository = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location('trust_recovery_installer', repository / 'scripts/install_into.py')
+        installer = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        sys.modules[spec.name] = installer
+        spec.loader.exec_module(installer)
+        code = textwrap.dedent('''
+            import json,os
+            from pathlib import Path
+            from getzilla import execution,state
+            from getzilla.router import build_route
+            root=Path.cwd();session=os.environ['GETZILLA_SESSION_ID']
+            state.bind_session(session)
+            state.set_active_route(root,build_route(root,'Fix a README typo.',session).to_dict())
+            caller=execution.trusted_caller(root)
+            execution.provision(root,caller)
+            stopped=execution.stop(root,caller,reason='rollback')
+            observed=execution.control_status(root,caller)
+            assert observed['source_fingerprint'] is not None, 'installed source could not be observed'
+            recovered=execution.recover(root,caller,expected_revision=observed['control_revision'],
+                                        expected_source=observed['source_fingerprint'])
+            assert not recovered['stopped']
+            print(json.dumps({'engine_origin':execution.__file__,'source_observed':True,'recovered':True}))
+        ''')
+        for compressed in (False, True):
+            with self.subTest(compressed=compressed), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary) / 'consumer'
+                previous_umask = os.umask(0o022)
+                try:
+                    installer.materialize_new(repository, target,
+                        selection=installer.PayloadSelection(('codex',), engine_archive=compressed))
+                finally:
+                    os.umask(previous_umask)
+                environment = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'PYTHONPATH': str(target / '.getzilla'),
+                               'PYTHONDONTWRITEBYTECODE': '1',
+                               'GETZILLA_SESSION_ID': '01a1a6ba-10e8-7bc1-81b1-684978be3580'}
+                result = subprocess.run([sys.executable, '-B', '-c', code], cwd=target, env=environment,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                facts = json.loads(result.stdout)
+                self.assertTrue(facts['source_observed'])
+                self.assertTrue(facts['recovered'])
+                self.assertEqual('getzilla.zip' in facts['engine_origin'], compressed)
+                if compressed:
+                    self.assertGreater((target / '.getzilla/getzilla.zip').stat().st_size, 0)
 
 
 class ExecutionStopTests(unittest.TestCase):

@@ -188,9 +188,11 @@ class SQLiteLandingJobStore:
             if result is None:
                 raise LandingServiceError('not_found', 404, 'landing job not found')
             return result
-        except Exception:
+        except BaseException as error:
             if previous is not None and self._connection.in_transaction:
                 self._connection.execute('ROLLBACK')
+            if not isinstance(error, Exception):
+                raise
             raise LandingServiceError('store_observation_unavailable', 503, 'landing observation unavailable') from None
         finally:
             try:

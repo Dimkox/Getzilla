@@ -531,6 +531,51 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'source_inventory_unavailable')
         self.assertEqual(store.load_registry(self.root)['records'], {})
 
+    def test_aggregate_oversize_source_refuses_the_next_file_before_read(self):
+        first, excessive = self.root / 'a-source.bin', self.root / 'z-source.bin'
+        for path, size in ((first, 8 * 1024 * 1024), (excessive, 8 * 1024 * 1024 + 1)):
+            with path.open('wb') as stream:
+                stream.truncate(size)
+            path.chmod(0o644)
+        identities = {(path.stat().st_dev, path.stat().st_ino): path.name for path in (first, excessive)}
+        counts = {first.name: 0, excessive.name: 0}
+        read = os.read
+        def observe(descriptor, maximum):
+            info = os.fstat(descriptor)
+            value = read(descriptor, maximum)
+            name = identities.get((info.st_dev, info.st_ino))
+            if name is not None:
+                counts[name] += len(value)
+            return value
+        with patch.object(os, 'read', side_effect=observe):
+            with self.assertRaises(execution.ExecutionError) as error:
+                self.submit()
+        self.assertEqual(error.exception.code, 'source_inventory_unavailable')
+        self.assertEqual(counts[first.name], 8 * 1024 * 1024)
+        self.assertEqual(counts[excessive.name], 0)
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_public_source_growth_never_reads_past_its_supplied_budget(self):
+        from getzilla.package_status import InspectionError, read_package_file
+        path = self.root / 'source.bin'
+        path.write_bytes(b'x' * 16)
+        path.chmod(0o644)
+        identity = (path.stat().st_dev, path.stat().st_ino)
+        read, counts = os.read, []
+        def grow_between_check_and_read(descriptor, maximum):
+            info = os.fstat(descriptor)
+            if (info.st_dev, info.st_ino) == identity and not counts:
+                with path.open('ab') as stream:
+                    stream.write(b'y')
+            value = read(descriptor, maximum)
+            if (info.st_dev, info.st_ino) == identity:
+                counts.append(len(value))
+            return value
+        with patch.object(os, 'read', side_effect=grow_between_check_and_read):
+            with self.assertRaises(InspectionError):
+                read_package_file(self.root, path.name, limit=16, public_source=True)
+        self.assertLessEqual(sum(counts), 16)
+
     def test_deadline_consumed_by_admission_never_dispatches_after_publication(self):
         clock = FakeClock()
         backend = CountingBackend()

@@ -18,6 +18,7 @@ from .state import CLOSED_CHANGE_STATUSES
 from .util import now_utc
 
 MAX_FILE_BYTES = 262_144
+MAX_PUBLIC_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 1_048_576
 MAX_FILES = 64
 MAX_FINDINGS = 100
@@ -127,7 +128,7 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
     parts = _relative(relative)
     if type(public_source) is not bool or (public_source and fsx.WINDOWS):
         raise InspectionError('file_unavailable', 'public source custody is unavailable on this platform')
-    if public_source and (type(limit) is not int or not 0 <= limit <= 2 * 1024 * 1024):
+    if public_source and (type(limit) is not int or not 0 <= limit <= MAX_PUBLIC_SOURCE_BYTES):
         raise InspectionError('file_unsafe', 'public source byte limit is unqualified')
     if not fsx.WINDOWS and (
         any(not hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'O_CLOEXEC'))
@@ -179,7 +180,9 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
         while True:
             if public_source:
                 public_unchanged()
-            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
+                if total == limit:
+                    break
+            chunk = os.read(descriptor, min(65_536, limit + (0 if public_source else 1) - total))
             if not chunk:
                 break
             chunks.append(chunk)

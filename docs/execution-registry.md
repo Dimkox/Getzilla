@@ -100,7 +100,10 @@ regular file with public mode0444/0644/0555/0755. Anchored no-follow root and
 directory checks reject writable ancestry, except a root-owned sticky system
 parent. File and named-path identities are rechecked before each chunk and after
 reading. Private, foreign, linked, oversized or changed input rejects the whole
-snapshot. The existing4096-entry,16MiB-total and2MiB-file bounds remain in force.
+snapshot. The4096-entry and16MiB aggregate bounds remain in force. Each file's
+read limit is the remaining aggregate budget, with a16MiB maximum for this opt-in
+reader. Oversized metadata refuses before bytes; growth cannot consume bytes past
+the supplied budget. Archives receive the same public custody checks as other files.
 
 This POSIX metadata eligibility does not classify arbitrary content as nonsecret
 or authenticate a customer. Known secret names remain refused. Windows public
@@ -114,7 +117,11 @@ managed source or executable policy.
 After admission consumption, the attempt records `starting`. A fixed launcher
 waits on a parent-owned pipe. The owner spawns outside task locks and records its
 live Linux pidfd/start identity before the release check. The brief release
-transaction persists `released` and writes one byte to the gate. A stop committed
+transaction persists a checked intent while retaining `registered`. The original
+absolute deadline is checked after revalidation and durable intent publication,
+then inside the owning callback immediately before the gate byte. `released` is
+recorded only after that callback succeeds. Post-gate publication failure remains
+uncertain and cannot replay the consumed intent. A stop committed
 before this cut prevents the managed command, including late handle registration.
 A stop after the cut requires cleanup and does not undo earlier effects. No task
 lock spans child lifetime. Pipe drains are bounded; independent checks observe
