@@ -8,11 +8,13 @@ NVD-derived records. Two sources, never both, and never implicit network:
 * ``GETZILLA_OSV_DB=<dir>``: an offline mirror made by ``download_database``
   (``<dir>/<Ecosystem>/snapshot.json`` binds exact public OSV bytes). This is what a
   network-less sandbox such as Trust CI uses.
-* ``GETZILLA_OSV_ONLINE=1``: currently refuses before acquisition; a qualified
-  online transcript source remains required. ``query_online`` is an observation
-  helper, not a final scan or receipt proof.
+* ``GETZILLA_OSV_ONLINE=1`` with that directory: read an inventory-bound query
+  transcript previously acquired by the explicit CLI ``--online --db DIR``.
+  Scans and receipt consumers never refresh. ``query_online`` remains a
+  separate observation helper, not a final scan or receipt proof.
 
-Without either the check is skipped and says so. Findings can be accepted
+Without a source the observation API says unconfigured; final CLI/receipt
+consumers refuse applicable unchecked dependencies. Findings can be accepted
 for a limited time in ``.getzilla/config/known-vulnerabilities.json``.
 """
 from __future__ import annotations
@@ -734,41 +736,137 @@ def load_config(root: Path) -> dict[str, Any]:
     return {'exclude': exclude, 'accept': accept}
 
 
-def _version_key(version: str) -> tuple[Any, ...]:
-    parts = re.split(r'[.\-+_]', version.lstrip('vV'))
-    key: list[Any] = []
-    for part in parts:
-        match = re.match(r'^(\d+)(.*)$', part)
-        if match:
-            key.append((1, int(match.group(1)), match.group(2)))
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """SemVer2 precedence: prereleases precede final, builds do not order."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported SemVer version')
+    match = re.fullmatch(
+        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
+    if match is None:
+        raise VulnerabilityError('unsupported SemVer version')
+    prerelease = []
+    if match[4] is not None:
+        for part in match[4].split('.'):
+            if part.isdigit():
+                if len(part) > 1 and part[0] == '0':
+                    raise VulnerabilityError('unsupported SemVer prerelease')
+                prerelease.append((0, int(part)))
+            else:
+                prerelease.append((1, part))
+    return (int(match[1]), int(match[2]), int(match[3]),
+            (0, tuple(prerelease)) if match[4] is not None else (1, ()))
+
+
+def _pypi_key(version: str) -> tuple[Any, ...]:
+    """Qualified canonical PEP440 subset; other forms remain explicit unknown."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP440 subset)')
+    match = re.fullmatch(
+        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
+        r'(?:(?P<pre>a|b|rc|c)(?P<pre_n>[0-9]+))?'
+        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
+        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
+    if match is None:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP440 subset)')
+    release = [int(part) for part in match['release'].split('.')]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if match['pre']:
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2, 'c': 2}[match['pre']], int(match['pre_n']))
+    elif match['dev'] is not None and match['post'] is None:
+        pre = (-1, 0, 0)
+    else:
+        pre = (1, 0, 0)
+    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
+    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
+    local = (0, ()) if match['local'] is None else (1, tuple(
+        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
+    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+
+
+def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'SEMVER':
+        return _semver_key(version)
+    if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
+        return _pypi_key(version)
+    raise VulnerabilityError('unsupported OSV range comparator for ecosystem')
+
+
+def _range_contains(version: str, item: dict[str, Any], *, ecosystem: str) -> bool:
+    if not isinstance(item, dict):
+        raise VulnerabilityError('malformed OSV range')
+    kind = item.get('type')
+    target = _range_key(version, kind=kind, ecosystem=ecosystem)
+    events = item.get('events')
+    if not isinstance(events, list) or not events:
+        raise VulnerabilityError('malformed OSV range: nonempty events required')
+    timeline, limits, roles, previous = [], [], set(), None
+    for event in events:
+        if not isinstance(event, dict) or len(event) != 1:
+            raise VulnerabilityError('malformed OSV event: one role required')
+        role, value = next(iter(event.items()))
+        if role not in {'introduced', 'fixed', 'last_affected', 'limit'} or not isinstance(value, str) or not value:
+            raise VulnerabilityError('malformed OSV event')
+        roles.add(role)
+        if role == 'limit' and '*' in value:
+            key = (2, ())
+            limits.append(None)
+        elif role == 'introduced' and value == '0':
+            key = (0, ())
         else:
-            key.append((0, 0, part))
-    return tuple(key)
+            key = (1, _range_key(value, kind=kind, ecosystem=ecosystem))
+            if role == 'limit':
+                limits.append(key[1])
+        # OSV's general algorithm sorts input. This native qualified profile
+        # instead refuses unsorted/ambiguous data rather than guessing clean.
+        if previous is not None and key <= previous:
+            raise VulnerabilityError('unsupported unsorted or ambiguous OSV events')
+        previous = key
+        if role != 'limit':
+            timeline.append((key, role))
+    if 'introduced' not in roles or {'fixed', 'last_affected'} <= roles:
+        raise VulnerabilityError('malformed OSV range roles')
+    included = False
+    for key, role in timeline:
+        if role == 'introduced' and (key[0] == 0 or key[1] <= target):
+            included = True
+        elif role == 'fixed' and key[1] <= target:
+            included = False
+        elif role == 'last_affected' and key[1] < target:
+            included = False
+    return included and (not limits or any(limit is None or target < limit for limit in limits))
 
 
-def _in_ranges(version: str, affected: dict[str, Any]) -> bool:
-    if version in (affected.get('versions') or []):
+def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None = None) -> bool:
+    if not isinstance(affected, dict) or not isinstance(version, str) or not version:
+        raise VulnerabilityError('malformed OSV affected entry or target version')
+    versions = affected.get('versions', [])
+    if not isinstance(versions, list) or not all(isinstance(value, str) and value for value in versions):
+        raise VulnerabilityError('malformed OSV enumerated versions')
+    package = affected.get('package', {})
+    if not isinstance(package, dict):
+        raise VulnerabilityError('malformed OSV package')
+    ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
+    ranges = affected.get('ranges', [])
+    if not isinstance(ranges, list) or not ranges and not versions:
+        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    # Validate ALL coverage before matching: a positive or accepted finding
+    # must not erase an unsupported range in the same affected entry.
+    matches = [_range_contains(version, item, ecosystem=ecosystem) for item in ranges]
+    if version in versions:
         return True
-    target = _version_key(version)
-    for item in affected.get('ranges') or []:
-        if item.get('type') not in {'SEMVER', 'ECOSYSTEM'}:
-            continue
-        introduced = None
-        for event in item.get('events') or []:
-            if 'introduced' in event:
-                introduced = event['introduced']
-            elif introduced is not None and ('fixed' in event or 'last_affected' in event):
-                low = introduced == '0' or _version_key(str(introduced)) <= target
-                if 'fixed' in event:
-                    high = target < _version_key(str(event['fixed']))
-                else:
-                    high = target <= _version_key(str(event['last_affected']))
-                if low and high:
-                    return True
-                introduced = None
-        if introduced is not None and (introduced == '0' or _version_key(str(introduced)) <= target):
-            return True
-    return False
+    if versions:
+        if ecosystem == 'PyPI':
+            key = _pypi_key
+        elif ranges and all(item['type'] == 'SEMVER' for item in ranges):
+            key = _semver_key
+        else:
+            raise VulnerabilityError('unsupported enumerated-version normalization')
+        target = key(version)
+        matches.extend(target == key(value) for value in versions)
+    return any(matches)
 
 
 def _osv_aliases(record: dict[str, Any]) -> list[str]:
@@ -894,7 +992,7 @@ def query_offline(dependencies: list[Dependency], database: Path, *, now: dateti
                     if package.get('ecosystem') != ecosystem:
                         continue
                     for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
-                        if _in_ranges(dependency.version, affected):
+                        if _in_ranges(dependency.version, affected, ecosystem=ecosystem):
                             findings.append(_describe(record, dependency))
     if proofs:
         try:
@@ -921,6 +1019,29 @@ def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS,
     return written
 
 
+def query_snapshot(inventory: dict[str, Any], database: Path, *, now: datetime | None = None,
+                   source_evidence: list[dict[str, Any]]) -> list[Finding]:
+    from .security_data import SecurityDataError, confirm_snapshots, read_snapshot
+    from .security_osv_query import SOURCE_ID, portable_inventory, validate_transcript
+    try:
+        portable = portable_inventory(inventory)
+        scopes = {row['ecosystem'] for row in portable['objects']}
+        payload, proof = read_snapshot(database, SOURCE_ID, now=now, required_scope=scopes)
+        replay = validate_transcript(payload, expected_inventory=inventory)
+        findings = []
+        for hit in replay['hits']:
+            for index in replay['plan'][hit['query_index']]['objects']:
+                dependency = Dependency(**portable['objects'][index])
+                # A validated API positive verdict is a finding; local range
+                # comparison cannot erase it or make incomplete coverage clean.
+                findings.append(_describe(replay['records'][hit['id']], dependency))
+        confirm_snapshots(database, [proof], now=now)
+        source_evidence.append(proof)
+        return findings
+    except SecurityDataError:
+        raise VulnerabilityError('current qualified query snapshot is unavailable, incomplete or changed') from None
+
+
 def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _default_fetch,
          today: date | None = None, now: datetime | None = None) -> dict[str, Any]:
     env = os.environ if environ is None else environ
@@ -934,11 +1055,16 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
         report.update(status='skip', source=None, summary='no pinned dependencies in lockfiles or requirements')
         return report
     if database:
-        source = f'offline OSV mirror {database}'
-        report['source_mode'] = 'offline'
-        findings = query_offline(dependencies, Path(database), now=now, source_evidence=report['source_evidence'])
+        if online:
+            source = f'qualified OSV query snapshot {database}'
+            report['source_mode'] = 'query'
+            findings = query_snapshot(inventory, Path(database), now=now, source_evidence=report['source_evidence'])
+        else:
+            source = f'offline OSV mirror {database}'
+            report['source_mode'] = 'offline'
+            findings = query_offline(dependencies, Path(database), now=now, source_evidence=report['source_evidence'])
     elif online:
-        raise VulnerabilityError('qualified online source coverage is unavailable; use a qualified offline snapshot')
+        raise VulnerabilityError('qualified online query source requires an explicitly selected database')
     else:
         report['source_mode'] = 'unconfigured'
         report.update(status='skip', source=None,
@@ -971,7 +1097,7 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
     # A query may take time: the initial inventory is not a final witness.
     if dependency_inventory(root, load_config(root))[2] != inventory:
         raise VulnerabilityError('security policy or inventory changed during the query')
-    if report['source_mode'] == 'offline':
+    if report['source_mode'] in {'offline', 'query'}:
         from .security_data import SecurityDataError, confirm_snapshots
         try:
             confirm_snapshots(Path(database), report['source_evidence'], now=now)
@@ -983,13 +1109,13 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
 def recheck_report(root: Path, report: dict[str, Any], *, environ: dict[str, str] | None = None,
                    now: datetime | None = None) -> None:
     """Re-derive native offline evidence from current configured inputs, never report paths."""
-    if not isinstance(report, dict) or report.get('source_mode') not in {'offline', 'absent'}:
+    if not isinstance(report, dict) or report.get('source_mode') not in {'offline', 'query', 'absent'}:
         raise VulnerabilityError('current source revalidation is unavailable for this report mode')
     current_environment = os.environ if environ is None else environ
-    if report['source_mode'] == 'offline' and not current_environment.get('GETZILLA_OSV_DB', '').strip():
+    if report['source_mode'] in {'offline', 'query'} and not current_environment.get('GETZILLA_OSV_DB', '').strip():
         raise VulnerabilityError('current configured offline source is unavailable')
-    # A final consumer never falls back to online acquisition.
-    current_environment = {**current_environment, 'GETZILLA_OSV_ONLINE': '0'}
+    # scan is read-only in every source mode. Resolve the current configured
+    # selection, never a source kind or path supplied by this report.
     current = scan(root, environ=current_environment, now=now)
     stable = ('status', 'source_mode', 'inventory', 'dependencies', 'manifests', 'findings', 'accepted')
     if any(key not in report or report[key] != current[key] for key in stable):

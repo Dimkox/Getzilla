@@ -218,15 +218,17 @@ class OfflineTests(unittest.TestCase):
 
     def test_range_edges(self) -> None:
         affected = {'ranges': [{'type': 'ECOSYSTEM', 'events': [
-            {'introduced': '1.0'}, {'fixed': '1.5'}, {'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
+            {'introduced': '1.0'}, {'fixed': '1.5'}]}, {'type': 'ECOSYSTEM', 'events': [
+            {'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
-                self.assertEqual(KV._in_ranges(version, affected), expected)
+                self.assertEqual(KV._in_ranges(version, affected, ecosystem='PyPI'), expected)
         open_ended = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '3.0.0'}]}]}
         self.assertTrue(KV._in_ranges('9.9.9', open_ended))
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
-        self.assertFalse(KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}))
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]})
 
 
 class OnlineTests(unittest.TestCase):
@@ -796,6 +798,93 @@ class QualifiedNativeTests(unittest.TestCase):
                 runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
         self.assertEqual(stopped.exception.code, 0)
         self.assertTrue(called, 'CLI emitted evidence without final source consumption check')
+
+class QualifiedQueryNativeTests(unittest.TestCase):
+    def setUp(self):
+        temporary, self.root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        self.addCleanup(temporary.cleanup)
+        self.database = self.root / 'public-query-store'
+
+    @staticmethod
+    def transport(method, url, body, deadline, maximum):
+        from getzilla.security_osv_query import QueryResponse
+        answer = {'results': [{} for _ in json.loads(body)['queries']]}
+        return QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
+
+    def test_current_query_scan_and_recheck_are_read_only(self):
+        from unittest.mock import patch
+        from getzilla import security_acquisition
+        result = security_acquisition.refresh_query(self.root, self.database, transport=self.transport)
+        self.assertEqual(result['status'], 'pass', result)
+        environment = {'GETZILLA_OSV_DB': str(self.database), 'GETZILLA_OSV_ONLINE': '1'}
+        with patch.object(security_acquisition, 'refresh_query', side_effect=AssertionError('implicit acquisition')):
+            try:
+                report = KV.scan(self.root, environ=environment)
+            except KV.VulnerabilityError:
+                self.fail('native scan cannot consume the current qualified query snapshot')
+            self.assertEqual(report['source_mode'], 'query')
+            self.assertEqual(report['status'], 'pass')
+            KV.recheck_report(self.root, report, environ=environment)
+        with self.assertRaises(KV.VulnerabilityError):
+            KV.recheck_report(self.root, report, environ={**environment, 'GETZILLA_OSV_ONLINE': '0'})
+        (self.root / 'requirements.txt').write_text('public-package==2.0.0\n', encoding='utf-8')
+        with self.assertRaises(KV.VulnerabilityError):
+            KV.scan(self.root, environ=environment)
+
+    def test_explicit_cli_acquires_then_uses_same_read_only_consumer(self):
+        import contextlib
+        import runpy
+        from unittest.mock import patch
+        from getzilla import security_acquisition, util
+        actual, calls = security_acquisition.refresh_query, []
+        def refresh(root, database):
+            calls.append((root, database))
+            return actual(root, database, transport=self.transport)
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(security_acquisition, 'refresh_query', refresh), \
+                patch.object(util, 'find_root', return_value=self.root), \
+                patch.object(sys, 'argv', ['getzilla_vulns.py', '--online', '--db', str(self.database), '--json']), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+        self.assertEqual(stopped.exception.code, 0, errors.getvalue())
+        self.assertEqual(calls, [(self.root, self.database)])
+        self.assertEqual(json.loads(output.getvalue())['source_mode'], 'query')
+
+    def test_configured_query_cli_reads_without_explicit_refresh(self):
+        import contextlib
+        import os
+        import runpy
+        from unittest.mock import patch
+        from getzilla import security_acquisition, util
+        self.assertEqual(security_acquisition.refresh_query(self.root, self.database, transport=self.transport)['status'], 'pass')
+        output = io.StringIO()
+        with patch.object(security_acquisition, 'refresh_query', side_effect=AssertionError('implicit CLI refresh')), \
+                patch.dict(os.environ, {'GETZILLA_OSV_DB': str(self.database), 'GETZILLA_OSV_ONLINE': '1'}), \
+                patch.object(util, 'find_root', return_value=self.root), \
+                patch.object(sys, 'argv', ['getzilla_vulns.py', '--json']), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertEqual(json.loads(output.getvalue())['source_mode'], 'query')
+
+    def test_query_positive_cannot_be_range_filtered_into_clean(self):
+        from unittest.mock import patch
+        from getzilla import security_acquisition
+        from getzilla.security_osv_query import QueryResponse
+        from tests.test_security_osv_query import detail, ID, MODIFIED
+        def transport(method, url, body, deadline, maximum):
+            answer = {'results': [{'vulns': [{'id': ID, 'modified': MODIFIED}]}]} if method == 'POST' else detail()
+            return QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
+        self.assertEqual(security_acquisition.refresh_query(self.root, self.database, transport=transport)['status'], 'pass')
+        with patch.object(KV, '_in_ranges', return_value=False):
+            try:
+                report = KV.scan(self.root, environ={'GETZILLA_OSV_DB': str(self.database), 'GETZILLA_OSV_ONLINE': '1'})
+            except KV.VulnerabilityError:
+                self.fail('native scan does not admit a qualified query finding')
+        self.assertEqual(report['status'], 'fail')
+        self.assertEqual([finding['id'] for finding in report['findings']], [ID])
+
 
 if __name__ == '__main__':
     unittest.main()

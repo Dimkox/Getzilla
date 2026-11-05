@@ -224,3 +224,81 @@ def provision_tools(destination: Path, *, fetch: Callable[[str], FetchResult] = 
         except (OSError, ValueError, RuntimeError, tarfile.TarError) as exc:
             output.append({'tool': name, 'status': 'fail', 'reason': str(exc)})
     return output
+
+
+class _NoQueryRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        raise SecurityDataError('qualified OSV query redirects are unsupported')
+
+
+def fetch_osv_request(method: str, url: str, request_body: bytes, deadline: float,
+                      maximum: int):
+    """One fixed query request with remaining time/body bounds; no retries."""
+    from .security_osv_query import (DETAIL_URL, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
+                                     QUERY_URL, QueryResponse, _identifier, check_deadline)
+    if (method == 'POST' and url != QUERY_URL or method == 'GET' and not url.startswith(DETAIL_URL)
+            or method not in {'POST', 'GET'} or type(request_body) is not bytes
+            or len(request_body) > MAX_REQUEST_BYTES or method == 'GET' and request_body
+            or type(maximum) is not int or not 0 < maximum <= MAX_RESPONSE_BYTES):
+        raise SecurityDataError('qualified OSV request is outside the closed protocol')
+    if method == 'GET':
+        _identifier(url.removeprefix(DETAIL_URL))
+    check_deadline(deadline)
+    remaining_time = min(10.0, deadline - time.monotonic())
+    if remaining_time <= 0:
+        raise SecurityDataError('query acquisition deadline exceeded')
+    request = urllib.request.Request(url, data=request_body if method == 'POST' else None, method=method,
+        headers={'User-Agent': 'getzilla-qualified-osv-query/1', 'Accept-Encoding': 'identity',
+                 'Content-Type': 'application/json'})
+    opener = urllib.request.build_opener(_NoQueryRedirects())
+    try:
+        with opener.open(request, timeout=remaining_time) as response:
+            check_deadline(deadline)
+            if response.status != 200 or response.geturl() != url:
+                raise SecurityDataError('qualified OSV response identity or status differs')
+            declared = response.headers.get('Content-Length')
+            if (response.headers.get('Content-Encoding', 'identity') != 'identity'
+                    or declared is not None and (type(declared) is not str or len(declared) > 20
+                    or not declared.isdecimal() or int(declared) > maximum)):
+                raise SecurityDataError('qualified OSV response exceeds its remaining body bound or encoding')
+            chunks, remaining = [], maximum + 1
+            while remaining:
+                check_deadline(deadline)
+                chunk = response.read1(min(65536, remaining))
+                check_deadline(deadline)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b''.join(chunks)
+            if not body or len(body) > maximum or declared is not None and len(body) != int(declared):
+                raise SecurityDataError('qualified OSV response is empty, incomplete or exceeds bound')
+            return QueryResponse(method, url, request_body, body, response.status, response.geturl())
+    except http.client.HTTPException:
+        raise SecurityDataError('qualified OSV HTTP response is incomplete or malformed') from None
+
+
+def refresh_query(root: Path, database: Path, *, transport=None,
+                  now: datetime | None = None) -> dict:
+    """Explicit producer; read-only scans and receipt consumers never call it."""
+    from .known_vulns import dependency_inventory, load_config
+    from .security_osv_query import MAX_SECONDS, SOURCE_ID, acquire_transcript, check_deadline
+    deadline = time.monotonic() + MAX_SECONDS
+    try:
+        inventory = dependency_inventory(root, load_config(root))[2]
+        if not inventory['objects']:
+            return {'source_id': SOURCE_ID, 'status': 'skip', 'reason': 'actual structural absence; no acquisition'}
+        payload, acquisition, coverage = acquire_transcript(inventory, transport=fetch_osv_request if transport is None else transport,
+                                                           now=now, deadline=deadline)
+        def current_inputs():
+            check_deadline(deadline)
+            if dependency_inventory(root, load_config(root))[2] != inventory:
+                raise SecurityDataError('query policy or inventory changed before publication')
+            check_deadline(deadline)
+        current_inputs()
+        proof = publish_snapshot(database, SOURCE_ID, payload, acquisition=acquisition,
+                                 coverage=coverage, now=now, before_commit=current_inputs)
+        return {'source_id': SOURCE_ID, 'status': 'pass', 'snapshot': proof}
+    except (OSError, ValueError, RuntimeError):
+        return {'source_id': SOURCE_ID, 'status': 'fail',
+                'reason': 'qualified query acquisition or publication unavailable; possible commits require checked reconciliation'}

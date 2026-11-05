@@ -324,3 +324,89 @@ class SnapshotTests(unittest.TestCase):
         proof = self.data.osv_coverage(archive([item]), 'npm')
         self.assertEqual(proof['scopes'], ['npm'])
         self.assertEqual(proof['record_count'], 1)
+
+
+class QueryStoreTests(unittest.TestCase):
+    def setUp(self):
+        from getzilla import known_vulns, security_data, security_osv_query
+        from tests.test_known_vulns import _repo
+        self.data, self.query = security_data, security_osv_query
+        temporary, self.root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        self.addCleanup(temporary.cleanup)
+        self.database = self.root / 'public-store'
+        inventory = known_vulns.dependency_inventory(self.root, known_vulns.load_config(self.root))[2]
+        def transport(method, url, body, deadline, maximum):
+            return self.query.QueryResponse(method, url, body, b'{"results":[{}]}', 200, url)
+        self.payload, self.acquisition, self.coverage = self.query.acquire_transcript(inventory, transport=transport, now=NOW)
+
+    def publish(self, **kwargs):
+        return self.data.publish_snapshot(self.database, self.query.SOURCE_ID, self.payload,
+            acquisition=self.acquisition, coverage=self.coverage, now=NOW, **kwargs)
+
+    def test_zero_hit_query_source_publishes_reads_confirms_and_copies(self):
+        try:
+            self.publish()
+        except self.data.SecurityDataError:
+            self.fail('qualified zero-hit query source is not registered in the same guarded store')
+        payload, proof = self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW, required_scope={'PyPI'})
+        self.assertEqual(payload, self.payload)
+        self.assertEqual(proof['coverage']['record_count'], 0)
+        self.data.confirm_snapshots(self.database, [proof], now=NOW)
+        destination = self.root / 'public-copy'
+        self.data.copy_snapshot(self.database, destination, self.query.SOURCE_ID, now=NOW)
+        self.assertEqual(self.data.read_snapshot(destination, self.query.SOURCE_ID, now=NOW)[1]['acquisition'], self.acquisition)
+        self.assertFalse((self.database / 'queries/native/all.zip').exists())
+
+    def test_current_input_callback_runs_at_pointer_boundary_and_preserves_old(self):
+        import inspect
+        self.assertIn('before_commit', inspect.signature(self.data.publish_snapshot).parameters,
+                      'query publication needs a current input/deadline fence at actual pointer replacement')
+        self.publish()
+        pointer = self.database / 'queries/native/snapshot.json'
+        before = pointer.read_bytes()
+        calls = []
+        def guard():
+            calls.append(True)
+            raise self.data.SecurityDataError('public current inventory changed')
+        with self.assertRaises(self.data.SecurityDataError):
+            self.publish(before_commit=guard)
+        self.assertEqual(calls, [True])
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertEqual(self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW)[0], self.payload)
+
+    def test_query_acquisition_cannot_relabel_earliest_request_time(self):
+        acquisition = {**self.acquisition, 'last_verified_sync_utc': (NOW - timedelta(seconds=1)).isoformat()}
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.publish_snapshot(self.database, self.query.SOURCE_ID, self.payload,
+                acquisition=acquisition, coverage=self.coverage, now=NOW)
+
+    def test_query_source_keeps_exact_age_and_refuses_future_completion(self):
+        from tests.test_security_osv_query import rewrite
+        self.publish()
+        self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW + timedelta(seconds=259200))
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW + timedelta(seconds=259201))
+        def future(members):
+            metadata = json.loads(members['transcript.json'])
+            metadata['completed_at_utc'] = (NOW + timedelta(seconds=1)).isoformat()
+            members['transcript.json'] = self.query.canonical(metadata)
+        payload = rewrite(self.payload, future)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.publish_snapshot(self.database, self.query.SOURCE_ID, payload,
+                acquisition=self.acquisition, coverage=self.coverage, now=NOW)
+
+    def test_pointer_parent_is_reconfirmed_after_current_input_callback(self):
+        self.publish()
+        original, targets = self.data.fsx.replace_at, []
+        moved = self.root / 'public-owned-moved'
+        def guard():
+            self.database.rename(moved)
+            self.database.mkdir(mode=0o700)
+            (self.database / 'public-replacement-sentinel').write_bytes(b'public unchanged')
+        def replace(source_parent, source, target_parent, target):
+            targets.append(target)
+            return original(source_parent, source, target_parent, target)
+        with patch.object(self.data.fsx, 'replace_at', replace), self.assertRaises(self.data.SecurityDataError):
+            self.publish(before_commit=guard)
+        self.assertNotIn('snapshot.json', targets, 'pointer switched after its held parent was replaced during input I/O')
+        self.assertEqual((self.database / 'public-replacement-sentinel').read_bytes(), b'public unchanged')

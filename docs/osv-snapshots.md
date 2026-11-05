@@ -73,13 +73,59 @@ Report-selected filesystem paths and caller-supplied JSON do not select a
 trusted source. Other receipt kinds and failed receipts retain their semantics.
 Legacy receipt reading does not establish fresh required source evidence.
 
-`--online` / `GETZILLA_OSV_ONLINE=1` with applicable dependencies currently
-refuses before acquisition. The low-level `query_online` observation helper
-retains its existing API, but its responses lack qualified immutable whole-query
-coverage and cannot establish a final scan or modern verification PASS. This
-is an explicit compatibility limitation, not a network or account failure.
-A separate qualified online transcript design and implementation remain
-required; they are not silently introduced as another source kind here.
+## Qualified package queries
+
+Explicit `--online --db DIR` acquires an inventory-bound query snapshot from
+the official OSV API, then uses the same read-only consumer. It sends normalized
+package names and exact versions; it does not send source files or credentials.
+The selected store retains the transcript and root-relative inventory binding.
+Missing an explicit store refuses before acquisition. A bare command with
+`GETZILLA_OSV_DB=DIR GETZILLA_OSV_ONLINE=1` reads the existing query snapshot;
+the environment variable alone never triggers a refresh. Scans, the verifier
+and receipt consumption also read only. Without the query selector the store
+is read as per-ecosystem catalogs; a report cannot select a fallback source.
+
+The fixed `osv-query:native` source uses `queries/native/snapshot.json` and the
+same immutable objects, publisher lock, pending-marker outcome and descriptor
+guards as catalogs. Its closed ZIP transcript preserves every exact request
+and response, method/URL/status/body hash, all per-object cursor chains and
+all returned details. Only fixed POST querybatch and GET validated advisory IDs
+at api.osv.dev are allowed, with no redirects. Missing results, unfinished or
+repeated cursors, inconsistent IDs/full modified timestamps, malformed aliases,
+unsupported consumed ranges or an over-cap detail census refuse the complete
+refresh. No advisory placeholder is substituted after the existing300-detail
+limit. Query-positive IDs remain findings after validation, even if a local
+comparator would return false; ordinary explicit acceptance policy still applies.
+
+Complete negative replies for every submitted object can legitimately have
+zero details. That is query coverage, distinct from an empty global ZIP. Only
+actually queried records are consumed; unrelated malformed global catalog
+records are neither dropped nor repaired. A malformed queried advisory still
+refuses. The source does not claim a globally atomic OSV service snapshot.
+
+Source scope binds exact objects, input paths/content hashes/modes and policy
+semantics/raw bytes. Its portable digest excludes only machine-local inode
+custody; every consumer independently derives fresh local physical custody.
+Copying a source to an otherwise identical offline checkout can work, while a
+different policy, dependency, declaration or input mode refuses. Acquisition
+uses the earliest request clock, not completion time, and copies keep that time.
+Current policy/inventory, held store identity and the cooperative deadline are
+rechecked at pointer publication. Current configured source and proof are
+rechecked at actual final report/receipt write and get, including spills.
+
+The query profile bounds4096 objects,500 per batch,32 pages per object,
+128 page requests,300 unique details,1MiB request/metadata,16MiB per response and
+64MiB aggregate raw bodies. Central-directory bounds precede member allocation;
+remaining response bytes precede transport reads. One cooperative180s deadline
+spans acquisition, validation and pre-pointer publication, with socket timeouts
+of at most10s or the remaining budget. These do not preempt OS name resolution
+or CPU execution; observed deadline overruns cannot publish a fresh result.
+No retries or arbitrary caller-provided endpoints are introduced.
+
+The low-level `query_online` observation helper retains its original API and
+does not qualify its responses as a transcript. Existing native updater catalog
+operations stay separate. Retained inactive expanded-profile consumers are not
+activated by this source kind, and their closed source descriptors are unchanged.
 
 ## Bounds and platforms
 
@@ -111,7 +157,7 @@ ZIP is not assumed to repair it. Records must not be silently removed or
 normalized. Exact-package acquisition would require a separately specified
 whole-inventory coverage contract.
 
-Native refresh/consumer integration, current platform checks, real public feed
+Full native refresh/consumer integration, current platform checks, real public feed
 qualification, independent authority, and final local/external gates remain
 required. Original EPSS prediction-date and other-feed obligations remain open;
 retained inactive helper APIs do not activate or qualify KEV, EPSS, Trivy or an

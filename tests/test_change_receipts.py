@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import contextlib
 import json
 import os
 import subprocess
@@ -902,6 +903,69 @@ class SecuritySourceReceiptTests(unittest.TestCase):
             path.write_text(json.dumps(document), encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'source|proof'):
                 receipts.get_receipt(root, route['route_id'], 'verification')
+
+
+class QuerySourceReceiptTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def ready(self):
+        from getzilla import known_vulns, security_acquisition, security_osv_query
+        from getzilla.review_plan import reconcile_route
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import synchronize_fixture_scope
+        with routed_fixture() as (root, _route):
+            (root / 'requirements.txt').write_text('public-package==1.0.0\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=root, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-qm', 'public query fixture'], cwd=root, check=True, capture_output=True)
+            start_change(root, 'Public qualified query control')
+            synchronize_fixture_scope(root)
+            route = reconcile_route(root)
+            database = root.parent / 'public-query-store'
+            def transport(method, url, body, deadline, maximum):
+                answer = {'results': [{} for _ in json.loads(body)['queries']]}
+                return security_osv_query.QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
+            with patch.dict(os.environ, {'GETZILLA_OSV_DB': str(database), 'GETZILLA_OSV_ONLINE': '1'}):
+                self.assertEqual(security_acquisition.refresh_query(root, database, transport=transport)['status'], 'pass')
+                proof = known_vulns.scan(root)
+                self.assertEqual(proof['status'], 'pass')
+                yield root, route, database, proof
+
+    def test_modern_query_receipt_and_spill_recheck_current_mode_and_clock_without_network(self):
+        from datetime import timedelta
+        from getzilla import receipts, security_acquisition, security_data
+        from tests._support import observed_context
+        for spill in (False, True):
+            with self.subTest(spill=spill), self.ready() as (root, route, database, proof):
+                details = {'security_sources': proof, **({'captured': 'x' * receipts.MAX_RECEIPT_BYTES} if spill else {})}
+                write_receipt(root, 'verification', 'pass', expected_context=observed_context(root), details=details)
+                with patch.object(security_acquisition, 'refresh_query', side_effect=AssertionError('receipt acquired')):
+                    receipt = receipts.get_receipt(root, route['route_id'], 'verification')
+                self.assertEqual(receipt['details']['security_sources'], proof)
+                with patch.dict(os.environ, {'GETZILLA_OSV_ONLINE': '0'}), self.assertRaises(RuntimeError):
+                    receipts.get_receipt(root, route['route_id'], 'verification')
+                future = security_data._timestamp(proof['source_evidence'][0]['acquisition']['last_verified_sync_utc']) + timedelta(seconds=259201)
+                original = security_data._clock
+                with patch.object(security_data, '_clock', side_effect=lambda now: original(future if now is None else now)), \
+                        self.assertRaises(RuntimeError):
+                    receipts.get_receipt(root, route['route_id'], 'verification')
+
+    def test_actual_post_receipt_source_replacement_retires_new_pass(self):
+        from getzilla import receipts
+        from tests._support import observed_context
+        with self.ready() as (root, route, database, proof):
+            pointer = database / 'queries/native/snapshot.json'
+            before = pointer.read_bytes()
+            original = receipts._publish_receipt
+            def publish(*args, **kwargs):
+                result = original(*args, **kwargs)
+                replacement = pointer.with_name('.public-replacement')
+                replacement.write_bytes(before)
+                os.replace(replacement, pointer)
+                return result
+            with patch.object(receipts, '_publish_receipt', publish), self.assertRaises((RuntimeError, ValueError)):
+                write_receipt(root, 'verification', 'pass', expected_context=observed_context(root),
+                              details={'security_sources': proof})
+            self.assertFalse((receipts.receipt_dir(root, route['route_id']) / 'verification.json').exists())
+            self.assertEqual(pointer.read_bytes(), before)
 
 
 if __name__ == '__main__':

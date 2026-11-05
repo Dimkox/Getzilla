@@ -56,8 +56,10 @@ DESCRIPTOR_IO_AVAILABLE = (
 )
 OSV_ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
 OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
+OSV_QUERY_SOURCE = 'osv-query:native'
 SOURCE_URLS = {f'osv:{ecosystem}': f'{OSV_BUCKET}/{ecosystem}/all.zip' for ecosystem in OSV_ECOSYSTEMS}
 SOURCE_URLS.update({
+    OSV_QUERY_SOURCE: 'https://api.osv.dev/v1/querybatch',
     'kev': 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',
     'epss': 'https://epss.empiricalsecurity.com/epss_scores-current.csv.gz',
     'malicious-packages': 'https://github.com/ossf/malicious-packages',
@@ -90,6 +92,8 @@ def _source_directory(database: Path, source_id: str) -> Path:
         raise SecurityDataError(f'unsupported security source: {source_id!r}')
     if source_id.startswith('osv:'):
         return Path(database) / source_id.removeprefix('osv:')
+    if source_id == OSV_QUERY_SOURCE:
+        return Path(database) / 'queries' / 'native'
     return Path(database) / 'feeds' / source_id
 
 
@@ -172,15 +176,22 @@ def _git_supplement(item: dict) -> bool:
     return True
 
 
-def _archive_census(payload: bytes) -> None:
+def _archive_census(payload: bytes, *, max_members: int = MAX_ARCHIVE_MEMBERS,
+                    max_expanded: int = MAX_UNCOMPRESSED_BYTES,
+                    max_directory: int = MAX_CENTRAL_DIRECTORY_BYTES) -> None:
     """Bound central-directory entries before ZipFile allocates its member list."""
     try:
+        if any(type(value) is not int or value < 0 for value in (max_members, max_expanded, max_directory)):
+            raise ValueError('invalid archive census bound')
+        max_members = min(max_members, MAX_ARCHIVE_MEMBERS)
+        max_expanded = min(max_expanded, MAX_UNCOMPRESSED_BYTES)
+        max_directory = min(max_directory, MAX_CENTRAL_DIRECTORY_BYTES)
         end = zipfile._EndRecData(io.BytesIO(payload))
         if end is None:
             raise ValueError('missing ZIP directory')
         count, size = end[zipfile._ECD_ENTRIES_TOTAL], end[zipfile._ECD_SIZE]
         if (end[zipfile._ECD_DISK_NUMBER] != 0 or end[zipfile._ECD_DISK_START] != 0
-                or count > MAX_ARCHIVE_MEMBERS or size > MAX_CENTRAL_DIRECTORY_BYTES):
+                or count > max_members or size > max_directory):
             raise ValueError('archive census exceeds bound')
         start = end[zipfile._ECD_LOCATION] - size
         if end[zipfile._ECD_SIGNATURE] == zipfile.stringEndArchive64:
@@ -190,14 +201,14 @@ def _archive_census(payload: bytes) -> None:
         position, observed, expanded = start, 0, 0
         while position < start + size:
             observed += 1
-            if observed > MAX_ARCHIVE_MEMBERS:
+            if observed > max_members:
                 raise ValueError('archive census exceeds bound')
             header = payload[position:position + 46]
             if len(header) != 46 or header[:4] != b'PK\x01\x02':
                 raise ValueError('invalid ZIP central record')
             expanded += int.from_bytes(header[24:28], 'little')
             if (int.from_bytes(header[24:28], 'little') > MAX_MEMBER_BYTES
-                    or expanded > MAX_UNCOMPRESSED_BYTES):
+                    or expanded > max_expanded):
                 raise ValueError('archive expanded bytes exceed bound')
             position += 46 + sum(int.from_bytes(header[a:a + 2], 'little') for a in (28, 30, 32))
         if observed != count or position != start + size:
@@ -373,6 +384,14 @@ def _validate(document: dict[str, Any], payload: bytes, source_id: str, *, now: 
         if actual != coverage:
             raise SecurityDataError('OSV payload coverage does not match its manifest')
         payload_validation = 'osv-archive'
+    elif source_id == OSV_QUERY_SOURCE:
+        from .security_osv_query import validate_transcript
+        replay = validate_transcript(payload)
+        if replay['coverage'] != coverage or replay['started_at_utc'] != acquisition['last_verified_sync_utc']:
+            raise SecurityDataError('query coverage or earliest request clock differs from its manifest')
+        if _timestamp(replay['completed_at_utc']) > now:
+            raise SecurityDataError('query completion clock is in the future')
+        payload_validation = 'osv-query-transcript'
     return {**document, 'acquisition': acquisition, 'coverage': coverage,
             'age_seconds': age, 'checked_at_utc': now.isoformat(), 'payload_validation': payload_validation}
 
@@ -651,6 +670,7 @@ class _SnapshotStore:
                     raise SecurityDataError('snapshot target appeared during publication')
             if self.before_replace is not None:
                 self.before_replace()
+                self.confirm()
             fsx.replace_at(parent.descriptor, temporary, parent.descriptor, name)
             self.last_replaced = parts
             temporary = None
@@ -680,7 +700,7 @@ class _SnapshotStore:
 
 
 def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisition: dict[str, Any],
-                     coverage: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+                     coverage: dict[str, Any], now: datetime | None = None, before_commit=None) -> dict[str, Any]:
     """Commit the authoritative pointer after its object; pre-commit failures keep the old pointer."""
     folder = _source_directory(database, source_id)
     current = _clock(now)
@@ -720,7 +740,12 @@ def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisit
                                  'next_manifest_sha256': hashlib.sha256(serialized).hexdigest()}).encode('utf-8')
             store.write(pending, staged)
             try:
-                store.before_replace = lambda: _freshness(document['acquisition'], source_id, _clock(now))
+                def final_inputs():
+                    _freshness(document['acquisition'], source_id, _clock(now))
+                    if before_commit is not None:
+                        before_commit()
+                    _freshness(document['acquisition'], source_id, _clock(now))
+                store.before_replace = final_inputs
                 store.write(pointer, serialized)
             except BaseException as error:
                 if store.last_replaced == pointer:
@@ -816,7 +841,7 @@ def confirm_snapshots(database: Path, evidence: list[dict[str, Any]], *, now: da
                 if not isinstance(proof, dict):
                     raise SecurityDataError('final snapshot evidence is invalid')
                 source_id = proof.get('source_id')
-                if source_id not in {f'osv:{name}' for name in OSV_ECOSYSTEMS} or source_id in seen:
+                if source_id not in {OSV_QUERY_SOURCE, *(f'osv:{name}' for name in OSV_ECOSYSTEMS)} or source_id in seen:
                     raise SecurityDataError('final snapshot source is invalid or repeated')
                 seen.add(source_id)
                 store = stack.enter_context(_SnapshotStore(database))
@@ -851,7 +876,7 @@ def copy_snapshot(source_database: Path, destination_database: Path, source_id: 
                   now: datetime | None = None, required_scope: set[str] | None = None) -> dict[str, Any]:
     """Copy a valid snapshot without refreshing its original acquisition time."""
     payload, evidence = read_snapshot(source_database, source_id, now=now, required_scope=required_scope)
-    if source_id.startswith('osv:'):
+    if source_id.startswith('osv:') or source_id == OSV_QUERY_SOURCE:
         confirm_snapshots(source_database, [evidence], now=now)
     return publish_snapshot(destination_database, source_id, payload, acquisition=evidence['acquisition'],
                             coverage=evidence['coverage'], now=now)
