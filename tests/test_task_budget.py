@@ -282,10 +282,6 @@ class BudgetEdgeTests(BudgetFixture, unittest.TestCase):
                 budget.execute_local(root, 'two', [sys.executable, '-c', 'open("marker","w").close()'], timeout=1)
             self.assertFalse((root / 'marker').exists())
 
-
-if __name__ == '__main__':
-    unittest.main()
-
 class BudgetCancellationTests(BudgetFixture, unittest.TestCase):
     def test_owner_can_cancel_while_child_runs_and_process_stops(self):
         import time
@@ -343,3 +339,145 @@ class BudgetEpochWithdrawalTests(BudgetFixture, unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already-claimed-or-stale'):
                 budget.execute_local(root, 'one', argv, timeout=5)
             self.assertEqual(budget.inspect(root)['calls'], 1)
+
+class BudgetReviewRegressionTests(BudgetFixture, unittest.TestCase):
+    def test_task_switch_with_two_real_children_never_settles_foreign_operation(self):
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+        with project_copy(git=True) as root:
+            budget = self.setup_budget(root)
+            original = state.get_active_route(root)
+            def command(name):
+                return [sys.executable, '-c',
+                    'from pathlib import Path; import time; '
+                    f'Path("{name}-started").touch(); '\
+                    f'\nwhile not Path("{name}-release").exists(): time.sleep(.01)\n'\
+                    f'Path("{name}-done").touch()']
+            def run(argv):
+                state.bind_session('budget-owner')
+                return budget.execute_local(root, 'shared', argv, timeout=4)
+            def started(name):
+                deadline = time.monotonic() + 2
+                while not (root / (name + '-started')).exists() and time.monotonic() < deadline:
+                    time.sleep(.005)
+                self.assertTrue((root / (name + '-started')).exists())
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                old = pool.submit(run, command('old'))
+                other = None
+                try:
+                    started('old')
+                    foreign = submit(root, 'Run a distinct local check.', 'budget-owner', new_task=True)
+                    limits = {'calls': 3, 'failures': 2, 'repeat_failures': 2,
+                              'deadline_epoch': 2000000000, 'tokens': None, 'cpu_ms': None,
+                              'cost_micros': None, 'elapsed_ms': 10000}
+                    budget.initialize(root, limits, foreign['authority_epoch'], foreign['state_revision'], task_id=foreign['logical_task_id'])
+                    other = pool.submit(run, command('new'))
+                    started('new')
+                    path = root / '.getzilla/runtime/routes' / (foreign['route_id'] + '.json')
+                    before = path.read_bytes()
+                    (root / 'old-release').touch()
+                    outcome = old.result(timeout=2)
+                    self.assertFalse((root / 'new-done').exists(), 'Foreign child must still be running')
+                    self.assertEqual(path.read_bytes(), before, 'Old effect changed the foreign canonical bytes/revision')
+                    self.assertEqual(outcome['outcome'], 'unknown')
+                    original_row = state.canonical_route(root, original['route_id'])['task_budget']['operations']['shared']
+                    foreign_row = state.canonical_route(root, foreign['route_id'])['task_budget']['operations']['shared']
+                    self.assertNotEqual(original_row['key'], foreign_row['key'])
+                    self.assertEqual(original_row['state'], 'running')
+                    self.assertIsNone(original_row['actual'])
+                finally:
+                    (root / 'old-release').touch()
+                    (root / 'new-release').touch()
+                    old.result(timeout=5)
+                    if other is not None:
+                        result = other.result(timeout=5)
+                self.assertEqual(result['outcome'], 'succeeded')
+                self.assertEqual(budget.inspect(root)['calls'], 1)
+
+class BudgetPublicAuthorityRegressionTests(BudgetFixture, unittest.TestCase):
+    def test_all_public_mutations_refuse_invalid_required_authority_without_writes(self):
+        for action in ('initialize', 'reserve', 'claim', 'reconcile'):
+            for invalid in ('null-both', 'null-epoch', 'null-revision', 'bool-epoch',
+                            'bool-revision', 'wrong-task', 'null-task', 'missing-task'):
+                with self.subTest(action=action, invalid=invalid), project_copy(git=True) as root:
+                    from getzilla import task_budget as budget
+                    route = submit(root, 'Run a bounded check.', 'budget-owner')
+                    limits = {'calls': 3, 'failures': 2, 'repeat_failures': 2,
+                              'deadline_epoch': 2000000000, 'tokens': None, 'cpu_ms': None,
+                              'cost_micros': None, 'elapsed_ms': 10000}
+                    usage = {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 100}
+                    def authority():
+                        current = state.get_active_route(root)
+                        return current['authority_epoch'], current['state_revision'], {'task_id': current['logical_task_id']}
+                    if action != 'initialize':
+                        epoch, revision, task = authority()
+                        budget.initialize(root, limits, epoch, revision, **task)
+                    if action in ('claim', 'reconcile'):
+                        epoch, revision, task = authority()
+                        budget.reserve(root, 'one', 'a' * 64, usage, epoch, revision, **task)
+                    if action == 'reconcile':
+                        epoch, revision, task = authority()
+                        budget.claim(root, 'one', epoch, revision, **task)
+                    epoch, revision, task = authority()
+                    if invalid == 'null-both':
+                        epoch, revision, task = None, None, {'task_id': 'task:foreign'}
+                    elif invalid == 'null-epoch':
+                        epoch, task = None, {'task_id': 'task:foreign'}
+                    elif invalid == 'null-revision':
+                        revision = None
+                    elif invalid == 'bool-epoch':
+                        epoch = False
+                    elif invalid == 'bool-revision':
+                        revision = False
+                    elif invalid == 'wrong-task':
+                        task = {'task_id': 'task:foreign'}
+                    elif invalid == 'null-task':
+                        task = {'task_id': None}
+                    else:
+                        task = {}
+                    path = root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')
+                    before = path.read_bytes()
+                    arguments = {'initialize': (limits,), 'reserve': ('one', 'a' * 64, usage),
+                                 'claim': ('one',), 'reconcile': ('one', 'succeeded', usage)}[action]
+                    with self.assertRaises((ValueError, TypeError)):
+                        getattr(budget, action)(root, *arguments, epoch, revision, **task)
+                    self.assertEqual(path.read_bytes(), before)
+
+class BudgetOperationBindingTests(BudgetFixture, unittest.TestCase):
+    def test_changed_running_operation_key_keeps_unknown_without_settlement(self):
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+        with project_copy(git=True) as root:
+            budget = self.setup_budget(root)
+            def run():
+                state.bind_session('budget-owner')
+                return budget.execute_local(root, 'one', [sys.executable, '-c',
+                    'from pathlib import Path; import time; Path("started").touch(); '\
+                    '\nwhile not Path("release").exists(): time.sleep(.01)'], timeout=3)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(run)
+                try:
+                    deadline = time.monotonic() + 2
+                    while not (root / 'started').exists() and time.monotonic() < deadline:
+                        time.sleep(.005)
+                    self.assertTrue((root / 'started').exists())
+                    current = state.get_active_route(root)
+                    changed = current['task_budget']
+                    changed['operations']['one']['key'] = 'b' * 64
+                    # get_active_route returns a detached document; keep CAS original intact.
+                    original = state.get_active_route(root)
+                    state.update_route(root, expected_route=original, task_budget=changed)
+                    path = root / '.getzilla/runtime/routes' / (current['route_id'] + '.json')
+                    before = path.read_bytes()
+                    (root / 'release').touch()
+                    result = future.result(timeout=2)
+                    self.assertEqual(result['outcome'], 'unknown')
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(budget.inspect(root)['unresolved'], 1)
+                finally:
+                    (root / 'release').touch()
+                    future.result(timeout=4)
+
+
+if __name__ == '__main__':
+    unittest.main()

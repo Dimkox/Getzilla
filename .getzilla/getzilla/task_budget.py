@@ -50,12 +50,21 @@ def _clock(now=None):
     return int(value)
 
 
-def _owned(root, epoch=None, revision=None, task_id=None):
+def _owned(root):
     route = state.require_route_owner(root)
     if not has_task_context(route) or route.get('status') in {'completed', 'cancelled', 'released', 'archived'}:
         raise ValueError('inactive-budget-authority')
-    if (epoch is not None and (type(epoch) is not int or epoch != route['authority_epoch'] or task_id != route['logical_task_id'])
-            or revision is not None and (type(revision) is not int or revision != route['state_revision'])):
+    return route
+
+
+def _expected(root, epoch, revision, task_id):
+    # Public mutation arguments are mandatory exact values, never sentinels.
+    if (type(epoch) is not int or epoch < 0 or type(revision) is not int or revision < 0
+            or type(task_id) is not str or not task_id):
+        raise ValueError('stale-budget-authority')
+    route = _owned(root)
+    if (epoch != route['authority_epoch'] or revision != route['state_revision']
+            or task_id != route['logical_task_id']):
         raise ValueError('stale-budget-authority')
     return route
 
@@ -94,7 +103,7 @@ def _save(root, route, budget):
 
 @state.serialized_task
 def initialize(root: Path, limits: dict, epoch: int, revision: int, *, task_id: str):
-    route = _owned(root, epoch, revision, task_id)
+    route = _expected(root, epoch, revision, task_id)
     limits = _limits(limits)
     if 'task_budget' in route:
         if _read(route)['limits'] != limits:
@@ -134,7 +143,7 @@ def inspect(root: Path):
 
 @state.serialized_task
 def reserve(root: Path, operation_id: str, key: str, usage: dict, epoch: int, revision: int, *, task_id: str, now=None):
-    route = _owned(root, epoch, revision, task_id)
+    route = _expected(root, epoch, revision, task_id)
     budget, usage, now = _read(route), _usage(usage), _clock(now)
     if not isinstance(operation_id, str) or not _ID.fullmatch(operation_id) or not isinstance(key, str) or not _HEX.fullmatch(key):
         raise ValueError('invalid-budget-operation')
@@ -173,7 +182,7 @@ def reserve(root: Path, operation_id: str, key: str, usage: dict, epoch: int, re
 
 @state.serialized_task
 def claim(root: Path, operation_id: str, epoch: int, revision: int, *, task_id: str, now=None):
-    route = _owned(root, epoch, revision, task_id)
+    route = _expected(root, epoch, revision, task_id)
     budget, now = _read(route), _clock(now)
     row = budget['operations'].get(operation_id)
     if row is None or row['state'] != 'reserved' or row['owner_epoch'] != epoch:
@@ -189,7 +198,7 @@ def claim(root: Path, operation_id: str, epoch: int, revision: int, *, task_id: 
 @state.serialized_task
 def reconcile(root: Path, operation_id: str, outcome: str, actual: dict, epoch: int, revision: int, *, task_id: str, failure=None):
     """Trusted adapter observation only. No CLI accepts caller-authored outcomes."""
-    route = _owned(root, epoch, revision, task_id)
+    route = _expected(root, epoch, revision, task_id)
     budget, actual = _read(route), _usage(actual)
     if outcome not in {'succeeded', 'failed'} or (outcome == 'failed') != (failure is not None):
         raise ValueError('invalid-budget-outcome')
@@ -214,14 +223,17 @@ def reconcile(root: Path, operation_id: str, outcome: str, actual: dict, epoch: 
     return inspect(root)
 
 
-def _same_authority(root, original):
-    """Read the original canonical record, never another session's projection."""
+def _same_authority(root, original, operation_id, key):
+    """The current canonical selection must still own the original exact effect."""
     try:
-        current = state.canonical_route(root, original['route_id'])
-        return (all(current[key] == original[key] for key in
+        current = _owned(root)
+        budget = _read(current)
+        operation = budget['operations'].get(operation_id)
+        return (all(current[field] == original[field] for field in
                     ('route_id', 'logical_task_id', 'session_id', 'authority_epoch', 'workspace'))
-                and current.get('status') not in {'cancelled', 'completed', 'released', 'archived'}
-                and not _read(current)['stopped'])
+                and not budget['stopped'] and operation is not None
+                and operation['state'] == 'running' and operation['key'] == key
+                and operation['owner_epoch'] == original['authority_epoch'])
     except (OSError, ValueError, KeyError, TypeError):
         return False
 
@@ -275,7 +287,7 @@ def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: fl
                                 stderr=subprocess.DEVNULL, start_new_session=True)  # nosec B603 - policy-checked argv, no shell
     try:
         while True:
-            if not _same_authority(root, route):
+            if not _same_authority(root, route, operation_id, key):
                 withdrawn = True
                 break
             observed = os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
@@ -294,12 +306,12 @@ def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: fl
         proc.wait()
     elapsed = math.ceil((time.monotonic() - started) * 1000)
     with state.task_transition(root):
-        if withdrawn or not _same_authority(root, route):
+        if withdrawn or not _same_authority(root, route, operation_id, key):
             return {'outcome': 'unknown', 'replayed': False, 'coverage': 'limited-managed-command',
                     'stopped_for': 'authority-withdrawn', 'escalation': 'needs-review'}
         outcome = 'failed' if timed_out or proc.returncode else 'succeeded'
         failure = hashlib.sha256(('timeout' if timed_out else 'exit:' + str(proc.returncode)).encode()).hexdigest() if outcome == 'failed' else None
-        current = _owned(root)
+        current = state.canonical_route(root, route['route_id'])
         reconcile(root, operation_id, outcome, {**usage, 'elapsed_ms': elapsed},
-                  current['authority_epoch'], current['state_revision'], task_id=current['logical_task_id'], failure=failure)
+                  route['authority_epoch'], current['state_revision'], task_id=route['logical_task_id'], failure=failure)
     return {'outcome': outcome, 'replayed': False, 'coverage': 'limited-managed-command'}
