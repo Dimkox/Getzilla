@@ -59,34 +59,45 @@ def _scope(binding, route):
                    'requirements_digest': binding['requirements_digest']})
 
 
-def prepare_transition(root, route, previous):
+def prepare_transition(root, route, previous, *, native_claim=None):
     """Called under the existing native owner/CAS cut before canonical publish."""
-    if previous is None or 'sprint' not in route:
+    if previous is None or not ('sprint' in route or 'observation_publication' in route):
         return route
     from .continuity import context_binding, assert_finishable
     state.require_route_owner(root, previous)
     binding = context_binding(root, previous)
     scope = _scope(binding, route)
     kinds = []
-    if 'sprint' not in previous:
+    if 'sprint' in route and 'sprint' not in previous:
         kinds.append('selected')
     if previous['context']['revision'] != route['context']['revision']:
         kinds.append('scope_changed')
     if previous.get('status') != route.get('status') and route.get('status') in {'completed', 'cancelled'}:
         assert_finishable(root, previous, cancel=route['status'] == 'cancelled')
         kinds.append('task_completed' if route['status'] == 'completed' else 'task_cancelled')
-    publication = copy.deepcopy(previous.get('observation_publication',
-                            {'version': 1, 'coverage': 'censored', 'events': [], 'delivery': {}, 'dropped': 0}))
-    if (set(publication) != {'version', 'coverage', 'events', 'delivery', 'dropped'}
+    publication = copy.deepcopy(previous.get('observation_publication', route.get('observation_publication',
+                            {'version': 1, 'coverage': 'censored', 'events': [], 'delivery': {}, 'dropped': 0})))
+    if (set(publication) - {'version', 'coverage', 'events', 'delivery', 'dropped', 'enrolled_at', 'enrollment_revision'}
             or publication['version'] != 1 or not isinstance(publication['events'], list)
             or len(publication['events']) > MAX_PENDING):
         raise ValueError('invalid_native_publication')
     for existing in publication['events']:
         validate_v3(existing)
     native = local_identity(root)
-    if not kinds:
+    if not kinds and native_claim is None:
         return route
     at = datetime.fromisoformat(route.get('updated_at') or now_utc()).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    publication.setdefault('enrolled_at', at)
+    publication.setdefault('enrollment_revision', previous['state_revision'])
+    if native_claim is not None:
+        from .trace_observation import claimed_row
+        claim = claimed_row(route, previous, native_claim)
+        if claim['scope_digest'] != scope or any(claim[key] != value for key, value in native.items()):
+            raise ValueError('native_claim_mismatch')
+        if len(publication['events']) < MAX_PENDING:
+            publication['events'].append(claim)
+        else:
+            publication['dropped'] += 1
     evidence = None
     if 'task_completed' in kinds:
         from .receipts import get_receipt
@@ -118,9 +129,33 @@ def prepare_transition(root, route, previous):
 
 
 @state.serialized_task
+def enroll_trace(root, *, expected_epoch, expected_revision):
+    """Explicit local metadata purpose; this cannot authorize a product effect."""
+    route = state.require_route_owner(root)
+    if (type(expected_epoch) is not int or type(expected_revision) is not int
+            or route['authority_epoch'] != expected_epoch
+            or route.get('status') in {'completed', 'cancelled', 'archived', 'released'}):
+        raise ValueError('stale_trace_enrollment')
+    existing = route.get('observation_publication')
+    if existing and expected_revision in {route['state_revision'], existing.get('enrollment_revision')}:
+        return route
+    if existing or route['state_revision'] != expected_revision:
+        raise ValueError('stale_trace_enrollment')
+    initialize_private(root)
+    changed = copy.deepcopy(route)
+    changed['observation_publication'] = {'version': 1, 'coverage': 'enrolled', 'events': [],
+        'delivery': {}, 'dropped': 0, 'enrolled_at': now_utc(), 'enrollment_revision': expected_revision}
+    changed['state_revision'] += 1
+    changed['updated_at'] = now_utc()
+    return state._commit_route(root, changed, expected=route)
+
+
+@state.serialized_task
 def ack_delivery(root, expected, identities):
     """Native CAS proves availability BY an upper bound, not first visibility."""
     state.require_route_owner(root, expected)
+    if state.canonical_route(root, expected['route_id']) != expected:
+        return False
     publication = copy.deepcopy(expected['observation_publication'])
     rows = {row['event_id']: row for row in publication['events']}
     until = datetime.fromisoformat(now_utc()).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -137,7 +172,7 @@ def ack_delivery(root, expected, identities):
     changed['observation_publication'] = publication
     changed['state_revision'] += 1
     changed['updated_at'] = until
-    state._commit_route(root, changed, expected=expected)
+    state._commit_route(root, changed, expected=expected, observation_only=True)
     return True
 
 

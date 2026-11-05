@@ -97,7 +97,16 @@ def _read(route):
     return value
 
 
-def _save(root, route, budget):
+def _save(root, route, budget, *, native_claim=None, observation_failed=False):
+    if native_claim is not None or observation_failed:
+        from .util import now_utc
+        changed = copy.deepcopy(route)
+        changed['task_budget'] = budget
+        changed['state_revision'] += 1
+        changed['updated_at'] = now_utc()
+        if observation_failed:
+            changed['observation_capture_failed'] = True
+        return state._commit_route(root, changed, expected=route, native_claim=native_claim)
     return state.update_route(root, expected_route=route, task_budget=budget)
 
 
@@ -128,6 +137,11 @@ def _total(budget, dimension):
 @state.serialized_task
 def inspect(root: Path):
     route = _owned(root)
+    return project_budget(route)
+
+
+def project_budget(route: dict):
+    """Pure validated projection; callers must authorize snapshot read separately."""
     budget = _read(route)
     rows = budget['operations'].values()
     return {'version': 1, 'coverage': 'limited-managed-command', 'task_id': budget['task_id'],
@@ -191,7 +205,13 @@ def claim(root: Path, operation_id: str, epoch: int, revision: int, *, task_id: 
         raise ValueError('budget-clock-or-deadline')
     row['state'] = 'running'
     budget['last_epoch'] = now
-    _save(root, route, budget)
+    from .trace_observation import capture_claim
+    captured, failed = None, False
+    try:
+        captured = capture_claim(root, route, operation_id, row['key'])
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+        failed = True
+    _save(root, route, budget, native_claim=captured, observation_failed=failed)
     return copy.deepcopy(row)
 
 
@@ -238,6 +258,17 @@ def _same_authority(root, original, operation_id, key):
         return False
 
 
+def _observe(function, *args, **kwargs):
+    """Non-authoritative observer failure cannot abandon or repeat owned work."""
+    from concurrent.futures import CancelledError
+    try:
+        return function(*args, **kwargs)
+    except CancelledError:
+        raise
+    except Exception:
+        return None
+
+
 def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: float):
     """Policy-checked POSIX process group with a short claim/spawn fence.
 
@@ -253,6 +284,7 @@ def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: fl
     import subprocess
 
     from .parallel import policy_refusal
+    from .trace_observation import committed_claim, capture_phase, publish_observations
 
     if (os.name != 'posix' or not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'P_PID'))
             or not hasattr(os, 'killpg')):
@@ -263,29 +295,33 @@ def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: fl
             or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 60):
         raise ValueError('invalid-budget-command')
     proc, withdrawn, timed_out = None, False, False
-    with state.task_transition(root):
-        route = _owned(root)
-        budget = _read(route)
-        command = shlex.join(argv)
-        if policy_refusal(root, command, cwd=root):
-            raise ValueError('budget-command-policy-refused')
-        key = hashlib.sha256(json.dumps(argv, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
-        usage = {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': math.ceil(timeout * 1000)}
-        prior = budget['operations'].get(operation_id)
-        reserve(root, operation_id, key, usage, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
-        if prior is not None and prior['state'] == 'settled':
-            return {'outcome': prior['outcome'], 'replayed': True, 'coverage': 'limited-managed-command'}
-        route = _owned(root)
-        claim(root, operation_id, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
-        remaining = budget['limits']['deadline_epoch'] - time.time()
-        if remaining <= 0:
-            raise ValueError('budget-clock-or-deadline')
-        duration = min(timeout, remaining)
-        started = time.monotonic()
-        # The owner/epoch cannot change between durable claim and spawn.
-        proc = subprocess.Popen(argv, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True)  # nosec B603 - policy-checked argv, no shell
     try:
+        with state.task_transition(root):
+            route = _owned(root)
+            budget = _read(route)
+            command = shlex.join(argv)
+            if policy_refusal(root, command, cwd=root):
+                raise ValueError('budget-command-policy-refused')
+            key = hashlib.sha256(json.dumps(argv, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
+            usage = {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': math.ceil(timeout * 1000)}
+            prior = budget['operations'].get(operation_id)
+            reserve(root, operation_id, key, usage, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
+            if prior is not None and prior['state'] == 'settled':
+                return {'outcome': prior['outcome'], 'replayed': True, 'coverage': 'limited-managed-command'}
+            route = _owned(root)
+            claim(root, operation_id, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
+            observation = _observe(committed_claim, root, route['route_id'], operation_id, key)
+            enrolled = 'observation_publication' in route
+            remaining = budget['limits']['deadline_epoch'] - time.time()
+            if remaining <= 0:
+                raise ValueError('budget-clock-or-deadline')
+            duration = min(timeout, remaining)
+            started = time.monotonic()
+            started_ns = time.monotonic_ns()
+            # Cleanup is armed before Popen and every observer call after spawn.
+            proc = subprocess.Popen(argv, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)  # nosec B603 - policy-checked argv, no shell
+            started_observation = _observe(capture_phase, observation, 'operation_started')
         while True:
             if not _same_authority(root, route, operation_id, key):
                 withdrawn = True
@@ -299,19 +335,28 @@ def execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: fl
             time.sleep(min(0.01, duration))
     finally:
         # Child PID is still owned (unreaped); never signal a reused PID.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
     elapsed = math.ceil((time.monotonic() - started) * 1000)
+    elapsed_ns = time.monotonic_ns()-started_ns
+    trace_outcome = ('timeout' if timed_out else 'cancelled' if withdrawn and proc.returncode == -signal.SIGKILL
+                     else 'unknown' if withdrawn else 'failed' if proc.returncode else 'succeeded')
+    finished_observation = _observe(capture_phase, observation, 'operation_finished', outcome=trace_outcome, elapsed_ns=elapsed_ns)
     with state.task_transition(root):
         if withdrawn or not _same_authority(root, route, operation_id, key):
-            return {'outcome': 'unknown', 'replayed': False, 'coverage': 'limited-managed-command',
+            result = {'outcome': 'unknown', 'replayed': False, 'coverage': 'limited-managed-command',
                     'stopped_for': 'authority-withdrawn', 'escalation': 'needs-review'}
-        outcome = 'failed' if timed_out or proc.returncode else 'succeeded'
-        failure = hashlib.sha256(('timeout' if timed_out else 'exit:' + str(proc.returncode)).encode()).hexdigest() if outcome == 'failed' else None
-        current = state.canonical_route(root, route['route_id'])
-        reconcile(root, operation_id, outcome, {**usage, 'elapsed_ms': elapsed},
-                  route['authority_epoch'], current['state_revision'], task_id=route['logical_task_id'], failure=failure)
-    return {'outcome': outcome, 'replayed': False, 'coverage': 'limited-managed-command'}
+        else:
+            outcome = 'failed' if timed_out or proc.returncode else 'succeeded'
+            failure = hashlib.sha256(('timeout' if timed_out else 'exit:' + str(proc.returncode)).encode()).hexdigest() if outcome == 'failed' else None
+            current = state.canonical_route(root, route['route_id'])
+            reconcile(root, operation_id, outcome, {**usage, 'elapsed_ms': elapsed},
+                      route['authority_epoch'], current['state_revision'], task_id=route['logical_task_id'], failure=failure)
+            result = {'outcome': outcome, 'replayed': False, 'coverage': 'limited-managed-command'}
+    delivered = _observe(publish_observations, root, observation, [started_observation, finished_observation])
+    result['observation_coverage'] = 'native_delivered' if delivered else 'partial' if enrolled else 'not_enrolled'
+    return result

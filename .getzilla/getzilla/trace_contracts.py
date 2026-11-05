@@ -17,7 +17,7 @@ COMMON = frozenset({'schema_version', 'event_id', 'at', 'captured_at', 'event', 
 KINDS = {
     'task': frozenset({'selected', 'task_started', 'task_completed', 'task_cancelled',
         'scope_changed', 'removed', 'blocker_changed'}),
-    'operation': frozenset({'operation_started', 'operation_finished'}),
+    'operation': frozenset({'budget_claimed', 'operation_started', 'operation_finished'}),
     'span': frozenset({'stage_started', 'stage_finished'}),
     'policy': frozenset({'policy_observed'}),
     'evidence': frozenset({'evidence_linked'}),
@@ -106,7 +106,7 @@ def _validate(row):
             raise ValueError
         if row['elapsed_ns'] is not None and not _number(row['elapsed_ns']):
             raise ValueError
-        if kind.endswith('_started'):
+        if kind.endswith('_started') or kind == 'budget_claimed':
             if row['outcome'] is not None or row['elapsed_ns'] is not None:
                 raise ValueError
         elif not isinstance(row['outcome'], str) or row['outcome'] not in OUTCOMES:

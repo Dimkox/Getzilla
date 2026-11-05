@@ -523,8 +523,20 @@ def _publish_route_projections(root: Path, route: dict[str, Any]) -> None:
 
 
 @serialized_task
-def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any] | None) -> dict[str, Any]:
+def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any] | None,
+                  observation_only: bool = False, native_claim=None) -> dict[str, Any]:
     from .continuity import validate_route
+    if observation_only:
+        if expected is None or native_claim is not None:
+            raise ValueError('observation metadata requires canonical authority')
+        require_route_owner(root, expected)
+        allowed = {'observation_publication', 'observation_capture_failed', 'state_revision', 'updated_at'}
+        if ({key: value for key, value in route.items() if key not in allowed}
+                != {key: value for key, value in expected.items() if key not in allowed}
+                or route.get('state_revision') != expected.get('state_revision', -1)+1):
+            raise ValueError('observation metadata cannot change task authority')
+        from .observation_privacy import local_identity
+        local_identity(root)
     validate_route(root, route)
     with runtime_lock(root, 'route'):
         path = _runtime(root) / 'routes' / f"{route['route_id']}.json"
@@ -532,16 +544,17 @@ def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any]
         actual = canonical_route(root, route['route_id']) if exists else None
         if actual != expected:
             raise ValueError('route changed before atomic update')
-        if 'sprint' in route:
+        if ('sprint' in route or 'observation_publication' in route) and not observation_only:
             from .sprint_lifecycle import prepare_transition
             try:
-                route = prepare_transition(root, copy.deepcopy(route), actual)
+                route = prepare_transition(root, copy.deepcopy(route), actual, native_claim=native_claim)
             except (OSError, ValueError, RuntimeError, TypeError, KeyError):
-                if actual is None or 'sprint' not in actual:
+                if actual is None or not ('sprint' in actual or 'observation_publication' in actual):
                     raise ValueError('native_sprint_capture_unavailable') from None
                 route['observation_capture_failed'] = True
         durable_json(root, path, route)
-        _publish_route_projections(root, route)
+        if not observation_only:
+            _publish_route_projections(root, route)
     if route.get('observation_publication'):
         from .sprint_lifecycle import deliver
         deliver(root, route['route_id'])

@@ -18,12 +18,21 @@ Select the current owned task explicitly through the existing route command:
 
 ```sh
 python3 scripts/getzilla_route.py --sprint-select UTC_START --expected-epoch EPOCH --expected-revision REVISION --session SESSION --json
+python3 scripts/getzilla_route.py --trace-enroll --expected-epoch EPOCH --expected-revision REVISION --session SESSION --json
 ```
 
 This uses the native canonical task, current owner and exact state revision. It
 does not create another task ID. The first request initializes private storage
 only for an actually owned, safe local journal. It never upgrades old observations
 into native evidence. Do not change shared or foreign storage to bypass refusal.
+
+For an enrolled task, the existing managed local budget executor records an actual
+`budget_claimed` cut separately from successful process spawn and owned child reap.
+It keeps the original task, epoch, operation key and execution source binding.
+Process phases freeze in memory and publish after reap, outside control and
+settlement locks. A collector failure leaves a partial trace and does not repeat
+the command. Interrupt and cancellation propagate after owned child cleanup.
+Tokens, CPU, money, currency, model stages and TTFT remain unknown when unmeasured.
 
 Native observations keep the original task, scope, context and source binding.
 Their `captured_at` timestamp describes the native cut. Separate acknowledgements
@@ -47,7 +56,7 @@ eight backtest origins is a display floor, not proof of an 80% probability. Curr
 real history has no qualified cohorts, so the report exposes no numerical forecast.
 Synthetic tests do not supply real calibration evidence.
 
-This initial vertical does not complete issues #152 or #159. Native operation and
+This initial vertical does not complete issues #152 or #159. Additional native
 retrieval collectors, full source ACL/revocation and sanitizer contracts, retention,
 optional export lifecycle and backend deletion conformance remain tracked in the
 full typed runtime package. Missing local implementation is work, not an account

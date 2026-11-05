@@ -16,6 +16,25 @@ class TaskBudgetTests(unittest.TestCase):
     def tearDown(self):
         state.bind_session(None)
 
+    def test_pure_historical_projection_validates_unknown_exposure_without_owner_mutation(self):
+        with project_copy(git=True) as root:
+            route = submit(root, 'Run a bounded local check.', 'budget-owner')
+            from getzilla import task_budget as budget
+            limits = {'calls': 3, 'failures': 2, 'repeat_failures': 2, 'deadline_epoch': 2000000000,
+                      'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 10000}
+            budget.initialize(root, limits, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
+            current = state.get_active_route(root)
+            budget.reserve(root, 'one', 'a'*64, {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 100},
+                           current['authority_epoch'], current['state_revision'], task_id=current['logical_task_id'])
+            captured = state.get_active_route(root)
+            before = (root/'.getzilla/runtime/routes'/f"{route['route_id']}.json").read_bytes()
+            state.bind_session(None)
+            self.assertTrue(hasattr(budget, 'project_budget'), 'No pure validated historical budget projection exists')
+            result = budget.project_budget(captured)
+            self.assertEqual((result['calls'], result['unresolved'], result['charged']['elapsed_ms']), (1, 1, 100))
+            self.assertIsNone(result['observed']['cost_micros'])
+            self.assertEqual((root/'.getzilla/runtime/routes'/f"{route['route_id']}.json").read_bytes(), before)
+
     def test_unknown_token_bound_refuses_before_reservation(self):
         # Bug caught: treating missing usage as zero admits a capped operation.
         with project_copy(git=True) as root:

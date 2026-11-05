@@ -145,6 +145,52 @@ class ProducerTests(unittest.TestCase):
             self.assertIsNone(result['counts']['observed_selected'])
             self.assertIn('native_journal_gap', result['coverage']['gaps'])
 
+    def test_late_a_delivery_never_changes_the_selected_b_task(self):
+        from getzilla.continuity import submit
+        from getzilla import task_budget
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route_a = self.route(root)
+            limits = {'calls': 3, 'failures': 2, 'repeat_failures': 2, 'deadline_epoch': 2000000000,
+                      'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 10000}
+            task_budget.initialize(root, limits, 0, route_a['state_revision'], task_id=route_a['logical_task_id'])
+            route_a = state.get_active_route(root)
+            task_budget.reserve(root, 'reserved', 'a'*64, {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 100},
+                                0, route_a['state_revision'], task_id=route_a['logical_task_id'])
+            route_a = state.get_active_route(root)
+            with patch('getzilla.sprint_lifecycle.append_native', return_value=False):
+                selected = self.select(root, route_a)
+            route_b = submit(root, 'Fix another README typo.', SESSION, new_task=True)
+            before_b = (root/'.getzilla/runtime/routes'/f"{route_b['route_id']}.json").read_bytes()
+            active_before = (root/'.getzilla/runtime/active-route.json').read_bytes()
+            pointer_before = (root/'.getzilla/runtime/sessions'/f'{SESSION}.json').read_bytes()
+            self.assertTrue(sprint_lifecycle.deliver(root, route_a['route_id']))
+            self.assertEqual(state.get_active_route(root)['route_id'], route_b['route_id'])
+            self.assertEqual((root/'.getzilla/runtime/routes'/f"{route_b['route_id']}.json").read_bytes(), before_b)
+            self.assertEqual((root/'.getzilla/runtime/active-route.json').read_bytes(), active_before)
+            self.assertEqual((root/'.getzilla/runtime/sessions'/f'{SESSION}.json').read_bytes(), pointer_before)
+            updated_a = state.canonical_route(root, route_a['route_id'])
+            self.assertEqual(updated_a['task_budget'], selected['task_budget'])
+            self.assertEqual(updated_a['observation_publication']['events'], selected['observation_publication']['events'])
+            proof = updated_a['observation_publication']['delivery']
+            self.assertTrue(sprint_lifecycle.deliver(root, route_a['route_id']))
+            self.assertEqual(state.canonical_route(root, route_a['route_id'])['observation_publication']['delivery'], proof)
+
+    def test_observation_only_cas_cannot_mutate_authority_or_accept_stale_epoch(self):
+        import copy
+        with project_copy(git=True, minimal_runtime=True) as root:
+            current = self.select(root, self.route(root))
+            changed = copy.deepcopy(current)
+            changed.update(status='completed', state_revision=current['state_revision']+1)
+            with self.assertRaises(ValueError):
+                state._commit_route(root, changed, expected=current, observation_only=True)
+            stale = copy.deepcopy(current)
+            stale['authority_epoch'] += 1
+            self.assertFalse(sprint_lifecycle.ack_delivery(root, stale, []))
+            state.bind_session('00000000-0000-4000-8000-000000000002')
+            with self.assertRaises(ValueError):
+                sprint_lifecycle.deliver(root, current['route_id'])
+            self.assertEqual(state.canonical_route(root, current['route_id']), current)
+
 
 if __name__ == '__main__':
     unittest.main()

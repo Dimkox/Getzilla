@@ -70,6 +70,7 @@ only an aggregate unqualified count, never identities or a reconstructed edge.
     rows = sorted((r for key, r in indexed.items() if key not in conflicts and r.get('operation_id') == operation_id),
         key=lambda r: (r['at'], r['state_revision'], r['event_id']))
     starts = [r for r in rows if r['event'] == 'operation' and r['kind'] == 'operation_started']
+    claims = [r for r in rows if r['event'] == 'operation' and r['kind'] == 'budget_claimed']
     anchor = starts[0] if starts else None
     bound = _binding(anchor) if anchor else None
     if not anchor:
@@ -154,6 +155,9 @@ only an aggregate unqualified count, never identities or a reconstructed edge.
     policies = [{'decision': r['decision'], 'policy_digest': r['policy_digest'],
         'reason_code': r['reason_code']} for r in accepted if r['event'] == 'policy' and anchor]
     result = {'authority': 'observations_only', 'operation_id': operation_id, 'cutoff': cutoff,
+        'claim_observed': len(claims) == 1, 'claim_binding': _binding(claims[0]) if len(claims) == 1 else None,
+        'execution_state_revision': anchor['state_revision'] if anchor else None,
+        'terminal_workspace_state': None,
         'binding': bound, 'observations': len(rows), 'legacy_observations': legacy,
         'outcome': terminal['outcome'] if terminal else 'unknown',
         'elapsed_ns': terminal['elapsed_ns'] if terminal else None,
