@@ -416,6 +416,70 @@ class ComponentTransactionTests(unittest.TestCase):
 
 
 class FreshSelectionTests(unittest.TestCase):
+    def test_git_backed_adapter_removal_readd_and_empty_selection_in_both_layouts(self) -> None:
+        from getzilla.component_state import agent_of, read_state
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import getzilla_upgrade
+        environment = {**os.environ, 'GIT_AUTHOR_NAME': 'public fixture',
+                       'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                       'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid',
+                       'PYTHONDONTWRITEBYTECODE': '1'}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, environment):
+            for archive in (False, True):
+                with self.subTest(archive=archive):
+                    target = Path(tmp) / str(archive)
+                    INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                             selection=INSTALL.PayloadSelection(('codex', 'qwen'), engine_archive=archive))
+                    foreign = target / '.codex/foreign.txt'
+                    foreign.write_bytes(b'public unknown file\n')
+                    old_helper = target / '.grok/hooks/custom.py'
+                    old_helper.parent.mkdir(parents=True, exist_ok=True)
+                    old_helper.write_bytes(b'# retained custom helper\n')
+                    deep = target / 'src/deep'
+                    deep.mkdir(parents=True)
+
+                    def git(*args):
+                        return subprocess.run(['git', '-C', str(target), *args], env=environment,
+                                              check=True, capture_output=True, text=True).stdout.strip()
+
+                    git('init', '--quiet', '--initial-branch=main')
+                    git('add', '-A')
+                    git('commit', '--quiet', '-m', 'installed public fixture')
+                    original = git('rev-parse', 'HEAD')
+                    engine = target / INSTALL.ENGINE_ARCHIVE if archive else target / '.getzilla/getzilla/harnesses.py'
+                    engine_before = engine.read_bytes()
+                    for arguments in (('remove', 'agent:qwen'), ('uninstall',)):
+                        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/getzilla_components.py'), *arguments],
+                                                cwd=deep, env=environment, capture_output=True, text=True, timeout=30)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(json.loads(result.stdout)['live_client_state'], 'unverified')
+                    self.assertEqual(read_state(target).require_selection(), ())
+                    self.assertEqual(foreign.read_bytes(), b'public unknown file\n')
+                    self.assertEqual(old_helper.read_bytes(), b'# retained custom helper\n')
+                    self.assertIn('entire hooks codex', (target / '.codex/hooks.json').read_text())
+                    self.assertEqual(engine.read_bytes(), engine_before)
+                    head = git('rev-parse', 'HEAD')
+                    again = getzilla_upgrade.remove_adapters(ROOT, target)
+                    self.assertEqual(again['configuration'], 'unchanged')
+                    self.assertEqual(git('rev-parse', 'HEAD'), head)
+                    generated = subprocess.run([sys.executable, '-B', str(target / 'scripts/getzilla_harness.py'), '--write'],
+                                               cwd=deep, env=environment, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+                    self.assertFalse((target / '.qwen/settings.json').exists())
+                    updates = getzilla_upgrade.planned_changes(getzilla_upgrade.load_installer(ROOT), ROOT, target)
+                    self.assertFalse(any(agent_of(path) for path, _, _ in updates))
+                    ensure_components(target, ['agent:codex', 'agent:qwen'], source=ROOT)
+                    self.assertEqual(read_state(target).require_selection(), ('codex', 'qwen'))
+                    commands = (target / '.codex/hooks.json').read_text()
+                    self.assertIn('.getzilla/hooks/', commands)
+                    self.assertEqual(commands.count('entire hooks codex stop'), 1)
+                    self.assertTrue((target / '.qwen/settings.json').exists())
+                    git('add', '-A')
+                    git('commit', '--quiet', '-m', 're-add adapters')
+                    git('switch', '--quiet', 'main')
+                    self.assertEqual(git('rev-parse', 'HEAD'), original)
+                    self.assertEqual(read_state(target).require_selection(), ('codex', 'qwen'))
+
     def test_installed_harness_from_a_subdirectory_uses_selected_zip_engine(self) -> None:
         from getzilla.component_state import read_state
         source_manifest = (ROOT / MANIFEST).read_bytes()
@@ -615,6 +679,40 @@ class OnDemandTests(unittest.TestCase):
         self.assertFalse((self.target / '.codex/hooks.json').exists())
         self.assertEqual((self.target / MANIFEST).read_bytes(), before)
         self.assertIn('[my_settings]', config.read_text())
+
+    def test_stock_codex_reactivation_refuses_custom_or_kept_remainders(self) -> None:
+        from getzilla.adapter_removal import codex_retained_configuration
+        from getzilla.component_state import read_state
+        hooks = self.target / '.codex/hooks.json'
+        hooks.parent.mkdir()
+        overlay = (ROOT / '.getzilla/config/codex-hooks.json').read_bytes()
+        stock = codex_retained_configuration((ROOT / '.getzilla/config/hooks.json').read_bytes(), overlay)
+        config = self.target / '.codex/config.toml'
+        config.write_bytes(b'[features]\ncodex_hooks = true\n')
+        config.chmod(0o644)
+        for scenario in ('foreign-group', 'mode', 'kept', 'custom-overlay'):
+            with self.subTest(scenario=scenario):
+                hooks.write_bytes(stock)
+                hooks.chmod(0o644)
+                if scenario == 'foreign-group':
+                    data = json.loads(stock)
+                    data['hooks']['Stop'].append({'hooks': [{'command': 'echo public foreign'}]})
+                    hooks.write_text(json.dumps(data))
+                elif scenario == 'mode':
+                    hooks.chmod(0o755)
+                elif scenario == 'kept':
+                    (self.target / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                        'schema_version': 1, 'kept_local': ['.codex/hooks.json']}))
+                else:
+                    (self.target / '.getzilla/AGBP_SYNC.json').unlink()
+                    (self.target / '.getzilla/config/codex-hooks.json').write_bytes(overlay + b'\n')
+                before = (self.target / MANIFEST).read_bytes()
+                saved = hooks.read_bytes()
+                with self.assertRaisesRegex(ValueError, 'Codex'):
+                    ensure_components(self.target, ['agent:codex'], source=ROOT)
+                self.assertEqual(hooks.read_bytes(), saved)
+                self.assertEqual((self.target / MANIFEST).read_bytes(), before)
+                self.assertEqual(read_state(self.target).require_selection(), ('qwen',))
 
     def test_interrupted_addition_keeps_old_selection_and_reports_partial_files(self) -> None:
         from getzilla.component_state import ComponentTransaction, read_state

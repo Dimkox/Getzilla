@@ -316,6 +316,13 @@ _GENERATED_PATH = re.compile(
 )
 
 
+def is_generated_policy(path: str) -> bool:
+    """Native role/rule outputs carry permissions, independently of local ownership."""
+    return bool(re.fullmatch(
+        r'(?:\.(?:qwen|claude|gemini)/agents/[^/]+\.md|\.codex/agents/[^/]+\.toml|'
+        r'\.github/agents/[^/]+\.agent\.md|\.cursor/rules/getzilla/[^/]+\.mdc)', path))
+
+
 def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestState,
                      selected: tuple[str, ...]) -> tuple[list[str], list[tuple], list[tuple], dict]:
     expected = _render(binding, selected)

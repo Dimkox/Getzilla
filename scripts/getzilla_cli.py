@@ -53,7 +53,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
-    'components': ('getzilla_components.py', 'managed selection: status, add agent:<name>|factory, adopt --agents <complete-list>'),
+    'components': ('getzilla_components.py', 'managed selection: status, add, remove agent:<name>, uninstall, adopt'),
+    'uninstall': ('getzilla_components.py', 'remove selected adapters in a clean Git consumer; shared engine stays'),
     'compliance': ('getzilla_compliance.py', 'scaffold optional compliance adapters for a registered AI system'),
     'baseline': ('getzilla_baseline.py', 'mandatory pinned baseline: status, apply to a project'),
     'risk-terms': ('getzilla_risk_terms.py', 'risk vocabulary language packs: check, scaffold, languages'),
@@ -122,6 +123,9 @@ def main(argv: list[str]) -> int:
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
+    if command == 'uninstall':
+        return subprocess.run([project_python(HOME), str(HOME / 'scripts/getzilla_components.py'),
+                               'uninstall', *rest], check=False).returncode
     # `update` changes the project from the Getzilla installation, never from the project's own copy.
     script = HOME / 'scripts' / COMMANDS[command][0] if command == 'update' else script_path(COMMANDS[command][0])
     return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode

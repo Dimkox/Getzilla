@@ -97,6 +97,42 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(current['sha256'], hashlib.sha256(target.read_bytes()).hexdigest())
         self.assertEqual(target.read_bytes(), (ROOT / 'scripts/getzilla_route.py').read_bytes())
 
+    def test_generated_policy_requires_vendor_identity_independent_of_local_proof(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        path = '.codex/agents/general_implementer.toml'
+        (self.project / '.getzilla/runtime/.gitignore').chmod(0o644)
+        vendor = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        self.assertIn(b'sandbox_mode = "workspace-write"', vendor)
+        for canonical in ('.grok/agents/', '.getzilla/agents/'):
+            for customized in ('stock', 'read-only', 'mode'):
+                with self.subTest(canonical=canonical, customized=customized):
+                    manifest = self.select(('codex',))
+                    source = self.project / canonical / 'general_implementer.toml'
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(vendor)
+                    source.chmod(0o644)
+                    record_owned(manifest, source.relative_to(self.project).as_posix(), vendor, 0o644)
+                    target = self.project / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"') if customized == 'read-only' else vendor
+                    mode = 0o755 if customized == 'mode' else 0o644
+                    target.write_bytes(content)
+                    target.chmod(mode)
+                    record_owned(manifest, path, content, mode)
+                    (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                    self.commit('generated policy ' + customized)
+                    before = git(self.project, 'rev-parse', 'HEAD')
+                    if customized == 'stock':
+                        plan = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                        self.assertNotIn(path, [p for p, _, _ in plan])
+                    else:
+                        with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
+                            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                    self.assertEqual(target.read_bytes(), content)
+                    self.assertEqual(target.stat().st_mode & 0o777, mode)
+                    self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                    self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+
     def test_ignored_uncommitted_selection_cannot_authorize_an_update(self) -> None:
         from getzilla.component_state import MANIFEST
         git(self.project, 'rm', '--cached', '--quiet', MANIFEST)

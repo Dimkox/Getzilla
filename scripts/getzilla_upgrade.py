@@ -43,7 +43,7 @@ from getzilla.component_state import (
     owned_proof, read_state, record_owned, read_keep_contract, match_kept_local, kept_file_state,
     validate_manifest_publication,
 )
-from getzilla.harnesses import render_codex_hooks
+from getzilla.harnesses import is_generated_policy, render_codex_hooks
 from getzilla.spec import MAX_SPEC_BYTES, SpecError, _parse_canonical_json
 
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
@@ -390,6 +390,9 @@ def planned_changes(installer, home: Path, project: Path,
             if kept_configs is not None and (current is None or current.content != content):
                 kept_configs.append(entry.path)
             continue
+        if (current is not None and is_generated_policy(entry.path)
+                and (current.content != content or not mode_matches(current.mode, entry.mode))):
+            raise UpdateError(f'custom generated policy requires reconciliation before updating: {entry.path}')
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
                 and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
@@ -682,6 +685,16 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
         return '\n'.join([f'{project.name} is up to date', *notes])
     version = version_of(home)
     branch = BRANCH_PREFIX + version
+    _publish_changes(project, transaction, changes, observations, expected_head, branch,
+                     f'chore: update Getzilla to {version}', check_current)
+    kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
+    return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
+                      'review it and open a pull request', *notes])
+
+
+def _publish_changes(project: Path, transaction: ComponentTransaction, changes: list, observations: dict,
+                     expected_head: str, branch: str, message: str, check_current) -> str:
+    """Shared guarded Git publication; no direct deletion or new recovery ledger."""
     _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
         raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
@@ -691,7 +704,7 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     if ignored:
         raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
     check_current()
-    commit = commit_changes(project, changes, f'chore: update Getzilla to {version}', expected_head=expected_head)
+    commit = commit_changes(project, changes, message, expected_head=expected_head)
     check_current()
     # Verify the pinned parent and create an absent branch in one Git ref
     # transaction. A concurrent writer cannot replace an existing update branch.
@@ -727,9 +740,53 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
             raise UpdateError('HEAD or branch changed while checking the checkout')
     except (UpdateError, ValueError, OSError) as exc:
         raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}') from exc
-    kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
-    return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
-                      'review it and open a pull request', *notes])
+    return commit
+
+
+def remove_adapters(home: Path, project: Path, agents: tuple[str, ...] | None = None) -> dict:
+    """Remove selected adapters in one guarded Git commit; never operate a live client."""
+    from getzilla.adapter_removal import plan_removal
+    from getzilla.on_demand import is_installed_project, is_source_checkout
+    project = Path(fsx.system_canonical(project))
+    try:
+        if is_source_checkout(project) or not is_installed_project(project):
+            raise UpdateError('adapter removal requires an installed consumer project, not a source checkout')
+        # Refuse before even taking the administrative guard when the plan is unsafe.
+        with BoundRoot(project) as binding:
+            _require_clean_project(project)
+            head = _git_out(project, 'rev-parse', 'HEAD')
+            _committed_manifest(project, binding, head, head_tree(project, head))
+            plan_removal(home, binding, agents)
+        with component_transaction(project) as transaction:
+            _require_clean_project(project)
+            expected_head = _git_out(project, 'rev-parse', 'HEAD')
+            expected_branch = git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
+            _committed_manifest(project, transaction, expected_head, head_tree(project, expected_head))
+            plan = plan_removal(home, transaction, agents)
+
+            def check_current() -> None:
+                transaction.check()
+                if (_git_out(project, 'rev-parse', 'HEAD') != expected_head
+                        or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != expected_branch):
+                    raise UpdateError('project HEAD or branch changed during adapter removal')
+                _require_clean_project(project)
+                for path, snapshot in plan.observations.items():
+                    if transaction.read(path) != snapshot:
+                        raise UpdateError(f'project file changed during adapter removal: {path}')
+
+            check_current()
+            branch = None
+            commit = expected_head
+            if plan.changes:
+                branch = 'getzilla-remove-' + expected_head[:12] + '-' + '-'.join(sorted(plan.removed_agents))
+                commit = _publish_changes(project, transaction, plan.changes, plan.observations, expected_head,
+                                          branch, 'chore: remove Getzilla adapters ' + ', '.join(plan.removed_agents),
+                                          check_current)
+            return {'removed_agents': list(plan.removed_agents), 'selection': plan.manifest['agents'],
+                    'configuration': 'removed' if plan.changes else 'unchanged', 'branch': branch,
+                    'commit': commit, 'retained': plan.retained, 'live_client_state': plan.native_state}
+    except (ComponentStateError, OSError, ValueError) as exc:
+        raise UpdateError(str(exc)) from exc
 
 
 def run_tools(home: Path, args: list[str]) -> int:

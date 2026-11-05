@@ -10,8 +10,24 @@ Old shared source files retire only when the ledger records their exact current 
 
 Relocated canonical agent and Cursor TOML inputs must match incoming source bytes and mode. A local ownership proof does not establish vendor provenance. Any differing source requires reconciliation, even when the ledger owns its exact bytes. A mismatch stops migration before publication and names both paths. This prevents a local role policy from being replaced by broader generated permissions. Grok Markdown extensions remain local adapter files.
 
+The same rule applies independently to generated native role and Cursor policy outputs. An owned generated read-only policy or a changed mode stops an update before publication. An unchanged canonical legacy input does not authorize replacing that separate local policy. Reconcile the generated policy before retrying.
+
 Rollback uses the update commit's original parent: return to the original branch before merging the update. This restores old sources and their manifest together. After integration, revert the whole update commit through the normal PR checks. Do not restore only a hook declaration or only its scripts.
 
-Package checks cover the source archive and the lean engine archive. The shared hooks remain ordinary files beside the engine archive so launchers work from subdirectories. Linux runs locally; native Windows and macOS checks run through the existing required CI jobs. Their smoke commands use the neutral paths. There is no consumer uninstall command in this version; the ownership ledger is the file inventory for a later removal operation. Do not recursively remove `.grok` during migration or removal.
+Package checks cover the source archive and the lean engine archive. The shared hooks remain ordinary files beside the engine archive so launchers work from subdirectories. Linux runs locally; native Windows and macOS acceptance requires the exact-head CI results. Their smoke commands use the neutral paths.
+
+## Remove adapters
+
+Run `getzilla components remove agent:codex` inside the installed consumer, or name several `agent:<name>` components. Run `getzilla uninstall` or `getzilla components uninstall` to remove all selected adapters. These commands use the existing nearest installed-root binding. They accept no project-path option. The project must be a clean Git root with a committed v2 component manifest. Non-Git folders and source checkouts refuse. This command does not recursively uninstall the shared engine.
+
+Removal makes one reviewable commit on a `getzilla-remove-<parent>-<agents>` branch through the existing private Git index and guarded checkout. It removes only known generated outputs whose current bytes and mode match their ownership proof and the current stock renderer. Unknown files, shared sources, legacy helpers and user directories remain. A changed, unowned, kept or customized generated output requires reconciliation before any publication. Native settings lose only exact stock Getzilla hook groups. Unknown fields, Entire hooks and custom groups stay; modified or duplicated Getzilla groups refuse. A kept component manifest also refuses selection changes.
+
+Codex retains `features.codex_hooks = true` when Entire or custom hooks remain. Retained settings receive no new ownership claim that could authorize a later replacement. Stock Entire-only Codex settings can be reactivated with `getzilla components add agent:codex`; arbitrary custom or kept activation pairs still require reconciliation. After the last removal the committed selection is `[]`. Retained directories and hook files do not select an adapter again. Repeated removal is a no-op. Explicit re-add remains available.
+
+The result names the retained paths, commit and recovery branch. Before branch publication, a refusal leaves product files unchanged. A checkout failure reports the retained commit; inspect it and switch to the named branch explicitly. Return to the original branch to roll back the whole removal. After integration, revert the whole commit through the normal PR checks. Do not restore only the manifest or only a native declaration. Configuration removal reports `live_client_state: unverified`: it does not stop or inspect running clients and does not prove native deactivation. No customer uninstall is run by these fixture checks.
+
+## Required results
+
+Issue234 still requires neutral namespace and all six harnesses, Grok compatibility, fresh/source/archive installs, update, removal, re-add, interruption recovery, rollback, explicit selection, custom/Entire preservation, route/session/grant fail-closed behavior, permissions and exact-head independent reviews. Local public fixtures cover the supported Git-backed configuration boundary. Native Windows/macOS and actual live-client outcomes remain unqualified until observed. Neither a historical review nor a local source-only observation closes those requirements.
 
 Historical rename scripts and hash-bound evidence retain their original paths. Provider names and deployed infrastructure identities retain their original names.
