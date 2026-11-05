@@ -282,15 +282,36 @@ def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: C
             yield handle
 
 
-def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
+def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT,
+            inherited_fds: tuple[int, ...] = (), stdin_fd: int | None = None) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
+    # Transport only: trusted callers retain admission/lifetime of public tool or
+    # fixture handles. No JSON selector, descriptor number or hash grants access.
+    if (type(inherited_fds) is not tuple or len(inherited_fds) > 16
+            or any(type(value) is not int or value < 3 for value in inherited_fds)
+            or len(set(inherited_fds)) != len(inherited_fds)
+            or (stdin_fd is not None and (type(stdin_fd) is not int or stdin_fd < 3))
+            or len(set(inherited_fds) | ({stdin_fd} if stdin_fd is not None else set())) > 16
+            or ((inherited_fds or stdin_fd is not None) and (os.name != 'posix' or fsx.WINDOWS))):
+        raise RunnerError('invalid public descriptor transport')
+    try:
+        for descriptor in inherited_fds:
+            os.fstat(descriptor)
+        if stdin_fd is not None:
+            os.fstat(stdin_fd)
+    except OSError:
+        raise RunnerError('invalid public descriptor transport') from None
+    descriptor_options = {'pass_fds': inherited_fds} if inherited_fds else {}
+    if stdin_fd is not None:
+        descriptor_options['stdin'] = stdin_fd
     started = time.monotonic()
     retained: dict[str, ProcessResult] = {}
     with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled) as stdout, \
             _output_file(retained, 'stderr', cancelled) as stderr:
         cancelled.check(ProcessResult(command, 128 + (cancelled() or 0), terminal_state='cancelled'))
         try:
-            process = fsx.owned_popen(command, cwd=root, env=environment, stdout=stdout, stderr=stderr)
+            process = fsx.owned_popen(command, cwd=root, env=environment, stdout=stdout, stderr=stderr,
+                                      **descriptor_options)
         except OSError as exc:
             detail = str(exc)
             if command and command[0] not in detail:

@@ -1853,70 +1853,24 @@ def _unpinned_opengrep(executable: Path) -> str | None:
 
 
 def _opengrep(root: Path) -> CheckResult:
-    """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
+    """Require source/rule coverage and compatible parsing before a clean result."""
+    from .security_opengrep import scan_source
+
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
     executable = find_tool('opengrep')
     if executable is None:
         return CheckResult('opengrep', 'skip', 'opengrep not available')
-    refusal = _unpinned_opengrep(Path(executable))
-    if refusal:
-        return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
-               '--disable-version-check', '--timeout', '30']
-    for pattern in OPENGREP_EXCLUDES:
-        command.extend(('--exclude', pattern))
-    command.append('.')
-    result = run(command, cwd=root, timeout=900, encoding='utf-8', errors='replace')
-    try:
-        report = json.loads(result.stdout or '{}', object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
-    except (ValueError, TypeError, RecursionError):
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without a JSON report',
-                           command=command, stderr=result.stderr[-4000:])
-    if result.returncode not in {0, 1}:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
-                           stderr=result.stderr[-4000:])
-    if (not isinstance(report, dict) or not isinstance(report.get('results'), list)
-            or not isinstance(report.get('errors'), list)
-            or not all(isinstance(item, dict) for item in report['results'])
-            or not all(isinstance(item, dict) for item in report['errors'])):
-        return CheckResult('opengrep', 'fail', 'opengrep returned an incomplete report', command=command)
-    if 'paths' in report:
-        paths = report['paths']
-        if (not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list)
-                or not all(isinstance(path, str) and path for path in paths['scanned'])):
-            return CheckResult('opengrep', 'fail', 'opengrep returned malformed declared coverage', command=command)
-        # This is reported shape, not an independent expected-target census.
-    findings, errors = report['results'], report['errors']
-    if errors:
-        # A finding disposition must not erase incomplete analysis. Preserve
-        # no finding details on this path, regardless of diagnostic level/exit.
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} analysis diagnostics',
-                           command=command, stderr=json.dumps(errors[:20])[-4000:])
-    for item in findings:
-        if (not isinstance(item.get('check_id'), str) or not item['check_id']
-                or not isinstance(item.get('path'), str) or not item['path']
-                or not isinstance(item.get('start'), dict)
-                or type(item['start'].get('line')) is not int or item['start']['line'] < 1
-                or not isinstance(item.get('extra', {}), dict)):
-            return CheckResult('opengrep', 'fail', 'opengrep returned a malformed finding', command=command)
-    details = [
-        {
-            'rule': str(item.get('check_id', '')),
-            'path': str(item.get('path', '')),
-            'line': str((item.get('start') or {}).get('line', '')),
-            'severity': str((item.get('extra') or {}).get('severity', '')),
-            'message': str((item.get('extra') or {}).get('message', ''))[:300],
-        }
-        for item in findings[:200]
-    ]
-    if findings:
-        return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
-                           command=command, details=details)
-    if result.returncode:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without findings', command=command)
-    return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
+    observed = scan_source(root, rules_root=rules, executable=Path(executable), profile='native')
+    command = observed.get('command')
+    if observed['outcome'] == 'finding':
+        return CheckResult('opengrep', 'fail',
+                           f"{observed['finding_count']} taint findings from Getzilla OpenGrep rules",
+                           command=command, details=observed['findings'])
+    if observed['outcome'] in {'pass', 'not_applicable'}:
+        return CheckResult('opengrep', 'pass', observed['summary'], command=command)
+    return CheckResult('opengrep', 'fail', observed['summary'], command=command)
 
 
 def _trivy_config_present(root: Path) -> bool:

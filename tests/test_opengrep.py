@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
 import shutil
@@ -60,6 +61,7 @@ class OpengrepCheckTests(unittest.TestCase):
         shutil.copytree(RULES, self.root / V.OPENGREP_RULES)
         self.bin = Path(self._tmp.name) / 'bin'
         self.bin.mkdir()
+        (self.root / 'app.py').write_text('print("inert source")\n', encoding='utf-8')
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -79,9 +81,56 @@ class OpengrepCheckTests(unittest.TestCase):
         digest = _fake_opengrep(self.bin, payload, exit_code, delay=delay) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
         # Hide both resolver additions, so only this fixture PATH can supply opengrep.
+        if payload is not None and (not sys.platform.startswith('linux') or not hasattr(os, 'memfd_create')):
+            self.skipTest('the real sealed-core fixture profile is explicitly unavailable on this platform')
+        from getzilla import security_opengrep as scanner
+        original_run = scanner._run
+
+        def fixture_core(command, root, environment, deadline, **options):
+            if '-json_nodots' not in command:
+                return original_run(command, root, environment, deadline, **options)
+            # The inert worker supplies untrusted report bytes. Real installed
+            # launcher/cache/core custody is exercised in ActualPinnedAdapterTests.
+            result = V.run([str(self.bin / FAKE_NAME)], cwd=root, timeout=900, encoding='utf-8', errors='replace')
+            if result.returncode == 124:
+                raise scanner.OpenGrepError('scanner_timeout')
+            if isinstance(payload, dict):
+                report = copy.deepcopy(payload)
+                report.setdefault('version', '1.30.1')
+                source = command[-1]
+                declared = [rule.identifier for rule in scanner.rule_catalog((RULES / 'python.yaml').read_bytes())]
+                report.setdefault('rules_by_engine', [[identifier, 'OSS'] for identifier in declared])
+                report.setdefault('engine_requested', 'OSS')
+                report.setdefault('interfile_languages_used', [])
+                report.setdefault('skipped_rules', [])
+                if 'paths' not in report:
+                    report['paths'] = {'scanned': [source]}
+                elif isinstance(report['paths'], dict) and isinstance(report['paths'].get('scanned'), list):
+                    report['paths']['scanned'] = [source if value == 'app.py' else value for value in report['paths']['scanned']]
+                if isinstance(report.get('results'), list):
+                    for finding in report['results']:
+                        if not isinstance(finding, dict):
+                            continue
+                        if finding.get('path') == 'app.py':
+                            finding['path'] = source
+                        if isinstance(finding.get('start'), dict):
+                            finding['start'].setdefault('col', 1)
+                            finding['start'].setdefault('offset', 0)
+                            finding.setdefault('end', {'line': finding['start'].get('line', 1), 'col': 2, 'offset': 1})
+                        if isinstance(finding.get('extra', {}), dict):
+                            finding['extra'] = {'metavars': {}, 'engine_kind': 'OSS', 'is_ignored': False,
+                                                **finding.get('extra', {})}
+                result.stdout = json.dumps(report)
+                # CLI uses1 for findings; the demonstrated direct core uses0.
+                if result.returncode == 1 and report.get('results') and report.get('errors') == []:
+                    result.returncode = 0
+            return result
+
         with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64), \
              mock.patch('getzilla.util.user_tool_dirs', return_value=[]), \
-             mock.patch('getzilla.util.environment_scripts_dir', return_value=None):
+             mock.patch('getzilla.util.environment_scripts_dir', return_value=None), \
+             mock.patch.object(scanner, '_bootstrap_core', return_value=Path('/usr/bin/true').read_bytes()), \
+             mock.patch.object(scanner, '_run', side_effect=fixture_core):
             return V._opengrep(self.root)
 
     def test_binary_on_path_that_does_not_match_the_pin_is_refused_unexecuted(self) -> None:
@@ -98,8 +147,13 @@ class OpengrepCheckTests(unittest.TestCase):
         result = self._run({'results': [], 'errors': []})
         self.assertEqual(result.status, 'pass')
         self.assertTrue((self.bin / 'ran').exists())
-        self.assertEqual(Path(result.command[0]), self.bin / FAKE_NAME)
-        self.assertIn('--strict', result.command)
+        self.assertTrue(result.command[0].startswith('/proc/self/fd/'))
+        self.assertIn('-strict', result.command)
+
+    def test_missing_independent_source_target_cannot_be_clean(self) -> None:
+        (self.root / 'app.py').write_text('print("required target")\n', encoding='utf-8')
+        result = self._run({'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': []}})
+        self.assertEqual(result.status, 'fail', 'an empty scanner list cannot erase actual source')
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
@@ -111,10 +165,10 @@ class OpengrepCheckTests(unittest.TestCase):
                    'extra': {'severity': 'ERROR', 'message': 'Untrusted input reaches a SQL string.'}}
         failed = self._run({'results': [finding], 'errors': []}, exit_code=1)
         self.assertEqual(failed.status, 'fail')
-        self.assertEqual(failed.details[0]['rule'], 'getzilla.python.sql-injection')
+        self.assertEqual(failed.details[0]['rule'], 'getzilla.sast.rules.getzilla.python.sql-injection')
         self.assertEqual(failed.details[0]['line'], '12')
-        self.assertIn('--taint-intrafile', failed.command)
-        self.assertIn(V.OPENGREP_RULES, failed.command)
+        self.assertIn('-taint_intrafile', failed.command)
+        self.assertIn('-rules', failed.command)
         self.assertEqual(self._run({'results': [], 'errors': []}).status, 'pass')
 
     def test_crashes_and_scan_errors_fail_closed(self) -> None:
@@ -161,7 +215,7 @@ class OpengrepCheckTests(unittest.TestCase):
         with mock.patch.object(V, 'run', side_effect=bounded):
             result = self._run({'results': [], 'errors': []}, delay=10)
         self.assertEqual(result.status, 'fail')
-        self.assertIn('124', result.summary)
+        self.assertIn('scanner_timeout', result.summary)
 
     def test_malformed_nested_findings_and_declared_paths_fail_without_crashing(self) -> None:
         payloads = [[], None, {'results': [7], 'errors': []},
