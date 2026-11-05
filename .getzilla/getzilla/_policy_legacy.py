@@ -10,6 +10,7 @@ import os
 import posixpath
 import re
 import shlex
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -2797,7 +2798,7 @@ def _secret_reference(
     rel = safe_relative_path(root, raw)
     resolved = os.path.realpath(os.path.join(str(root), os.path.expanduser(raw)))
     public = (_secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns))
-              and _secret_exception(resolved, patterns))
+              and (not _secret_path_match(resolved, patterns) or _secret_exception(resolved, patterns)))
     if not public:
         if rel is not None and _secret_path_match(rel, patterns):
             return True
@@ -2824,35 +2825,54 @@ def _resolve_under_root(root: Path, word: str, *, execution_cwd: Path | None = N
     return str(root) if rel in ('', '.') else os.path.join(str(root), rel)
 
 
+def _read_target(raw: str, directory: Path, budget: _Budget) -> tuple[str, bool]:
+    """Resolve a current recursive-read target, including targets outside policy root."""
+    budget.tick()
+    full = os.path.abspath(os.path.join(str(directory), os.path.expanduser(raw)))
+    try:
+        metadata = os.stat(full)
+    except FileNotFoundError:
+        # A proven absent target has no contents to inspect. Other errors are unknown.
+        return full, False
+    except (OSError, ValueError):
+        raise _BudgetExceeded from None
+    if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+        raise _BudgetExceeded
+    return full, stat.S_ISDIR(metadata.st_mode)
+
+
 def _walk_for_secret(
     root: Path, directory: str, patterns: list[str], budget: _Budget, glob_filter: str | None = None,
     *, skip_hidden: bool = False,
 ) -> str | None:
-    """First secret file in ``directory`` (recursively, skipping ``.git``), under ``budget``.
-
-    ``skip_hidden`` models ripgrep's default of not descending into dotfiles/dot-dirs,
-    so a plain ``Grep`` of the tree is not flagged for a hidden ``.env`` it would never
-    open (review S59-8); an explicit glob clears it so a glob targeting secrets still hits.
-    """
+    """Inspect metadata under a bounded recursive scope; unknown scope refuses."""
     stack = [directory]
+    visited: set[tuple[int, int]] = set()
     while stack:
         current = stack.pop()
         try:
+            budget.tick()
+            metadata = os.stat(current)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity in visited:
+                raise _BudgetExceeded
+            visited.add(identity)
             with os.scandir(current) as entries:
                 for entry in entries:
                     budget.tick()
-                    if entry.name == '.git':
+                    if entry.name == '.git' or (skip_hidden and entry.name.startswith('.')):
                         continue
-                    if skip_hidden and entry.name.startswith('.'):
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
+                    metadata = entry.stat(follow_symlinks=True)
+                    if stat.S_ISDIR(metadata.st_mode):
                         stack.append(entry.path)
+                    elif not stat.S_ISREG(metadata.st_mode):
+                        raise _BudgetExceeded
                     elif (not glob_filter or any(fnmatch.fnmatch(entry.name, g) for g in _brace_expand(glob_filter))) and _secret_reference(
-                        root, entry.path, patterns, expand=False,
+                        root, entry.path, patterns, expand=False, budget=budget,
                     ):
                         return entry.path
-        except OSError:
-            continue
+        except (OSError, ValueError):
+            raise _BudgetExceeded from None
     return None
 
 
@@ -2896,7 +2916,7 @@ def _git_path_words(rest: list[str]) -> list[str]:
     return words
 
 
-def _grep_path_words(rest: list[str]) -> list[str]:
+def _grep_path_words(rest: list[str], *, pattern_files: bool = True) -> list[str]:
     words: list[str] = []
     have_pattern = False
     index = 0
@@ -2917,13 +2937,14 @@ def _grep_path_words(rest: list[str]) -> list[str]:
             index += 1
             continue
         if token in {'-f', '--file'}:  # a pattern file is itself a path to read
-            if index + 1 < len(rest):
+            if pattern_files and index + 1 < len(rest):
                 words.append(rest[index + 1])
             have_pattern = True
             index += 2
             continue
         if token.startswith('--file='):
-            words.append(token.split('=', 1)[1])
+            if pattern_files:
+                words.append(token.split('=', 1)[1])
             have_pattern = True
             index += 1
             continue
@@ -3101,7 +3122,15 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:
-        return _grep_path_words(rest)
+        # ripgrep's file listing does not read file contents. Pattern files still do.
+        if name == 'rg' and '--files' in rest and not any(
+            word in {'-f', '--file'} or word.startswith('--file=') for word in rest
+        ):
+            return None
+        words = _grep_path_words(rest)
+        if _is_recursive_reader(argv) and not _grep_path_words(rest, pattern_files=False):
+            words.append('.')
+        return words
     if name in {'jq', 'yq'}:
         return _skip_first_positional(rest, frozenset({'--arg', '--argjson', '--slurpfile', '--rawfile', '-L'}))
     if name == 'awk':
@@ -3209,12 +3238,11 @@ def _argv_secret_reference(
     for word in words:
         for variant in _brace_expand(word):
             if recursive:
-                full = _resolve_under_root(root, variant, execution_cwd=execution_cwd)
-                if full is None and _GLOB_META.search(variant):
-                    # `findstr /s PAT deploy\*` / `grep -r PAT deploy/*`: walk the literal prefix dir.
-                    prefix = _literal_pattern_prefix(variant)
-                    full = _resolve_under_root(root, prefix, execution_cwd=execution_cwd) if prefix else None
-                if full and os.path.isdir(full):
+                target = _literal_pattern_prefix(variant) if _GLOB_META.search(variant) else variant
+                if not target:
+                    raise _BudgetExceeded
+                full, is_directory = _read_target(target, execution_cwd or root, budget)
+                if is_directory:
                     hit = _walk_for_secret(root, full, patterns, budget)
                     if hit is not None:
                         rel = safe_relative_path(root, hit)
@@ -3279,14 +3307,23 @@ def read_secret_reference(
     budget = _Budget()
     try:
         if is_grep and glob_filter:
-            search_inputs.extend(_brace_expand(glob_filter))
+            for variant in _brace_expand(glob_filter):
+                if _secret_reference(root, variant, patterns, budget=budget, execution_cwd=directory):
+                    return variant
         for raw in search_inputs:
             if not isinstance(raw, str) or not raw:
                 continue
             if _secret_reference(root, raw, patterns, budget=budget, execution_cwd=directory):
                 return raw
-            folder = _resolve_under_root(root, raw, execution_cwd=directory)
-            if folder and os.path.isdir(folder):
+            if is_grep:
+                target = _literal_pattern_prefix(raw) if _GLOB_META.search(raw) else raw
+                if not target:
+                    raise _BudgetExceeded
+                folder, is_directory = _read_target(target, directory or root, budget)
+            else:
+                folder = os.path.abspath(os.path.join(str(directory or root), os.path.expanduser(raw)))
+                is_directory = os.path.isdir(folder)
+            if is_directory:
                 hit = _walk_for_secret(root, folder, patterns, budget, glob_filter,
                                        skip_hidden=is_grep and glob_filter is None)
                 if hit is not None:
@@ -3298,6 +3335,75 @@ def read_secret_reference(
 
 _SECRET_SCAN_CACHE: dict[tuple[str, str, str, tuple[str, ...], bool, bytes], str | None] = {}
 _GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
+
+
+
+_READ_CWD_CHANGERS = frozenset({'cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'chroot', 'nsenter'})
+
+
+def _read_cwd_uncertain(command: str, depth: int = 0) -> bool:
+    """Flattened argv cannot prove cwd across directory changes or cwd wrappers.
+
+    Refuse that read scope rather than treating an operand as initial-cwd relative.
+    Operators, subshells and nested wrapper payloads share this conservative rule.
+    """
+    if depth > 4:
+        return True
+    try:
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
+    except ValueError:
+        return True
+    current: list[str] = []
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if not token.operator:
+            current.append(token.value)
+            continue
+        if '<' in token.value or '>' in token.value:
+            continue
+        if not current:
+            continue
+        # Inspect options before ordinary normalization discards wrapper metadata.
+        for index, word in enumerate(current):
+            name = _executable_name(word)
+            if name in {'env', 'sudo'} and any(
+                value in {'-C', '-D', '--chdir'} or value.startswith(('--chdir=', '-C', '-D'))
+                for value in current[index + 1:]
+            ):
+                return True
+        argv = _strip_wrappers(current)
+        current = []
+        if not argv:
+            continue
+        argv = [_executable_name(argv[0]), *argv[1:]]
+        if argv[0] in _READ_CWD_CHANGERS:
+            return True
+        nested = _nested_commands(argv)
+        if argv[0] not in _DATA_ARGUMENT_EXECUTABLES:
+            nested.extend(word for word in argv[1:] if any(char.isspace() for char in word))
+        for payload in nested:
+            if payload is None:
+                return True
+            if isinstance(payload, list):
+                payload = shlex.join(payload)
+            if _read_cwd_uncertain(payload, depth + 1):
+                return True
+    return False
+
+
+
+def _cwd_dependent_read(argv: list[str] | None) -> bool:
+    if argv is None:
+        return True
+    name = argv[0]
+    if name in _READ_CWD_CHANGERS:
+        return False
+    # Nested commands are checked separately. A shell payload is not a file operand.
+    if name in (_SHELL_EXECUTABLES | _WINDOWS_SHELL_EXECUTABLES) and _nested_commands(argv):
+        return False
+    # Push authority has its own exact target/grant checks; ref names are not read paths.
+    if name == 'git' and _git_subcommand([word.lower() for word in argv])[0] == 'push':
+        return False
+    return bool(_secret_path_words(argv))
 
 
 def shell_secret_reference(
@@ -3316,6 +3422,11 @@ def shell_secret_reference(
     directory = _read_directory(root, execution_cwd)
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
         return _BUDGET_MARKER
+    commands = _simple_commands(command)
+    if _read_cwd_uncertain(command) and any(
+        _cwd_dependent_read(argv) for argv in commands
+    ):
+        return _UNKNOWN_READ_CWD
     if directory is None:
         # Explicit unknown native cwd must never become a public root-relative read.
         return _UNKNOWN_READ_CWD if any(
@@ -3328,7 +3439,10 @@ def shell_secret_reference(
     except OSError:
         owner = b''
     key = (str(root), str(directory), command, tuple(patterns), _windows_reading(), owner)
-    if key in _SECRET_SCAN_CACHE:
+    # Recursive scope needs current target metadata, not an earlier directory verdict.
+    cacheable = not any(argv and _is_recursive_reader(argv) and _secret_path_words(argv) is not None
+                        for argv in commands)
+    if cacheable and key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
         _SECRET_SCAN_CACHE[key] = _BUDGET_MARKER
@@ -3351,7 +3465,7 @@ def shell_secret_reference(
                 break
     except _BudgetExceeded:
         result = _BUDGET_MARKER
-    if len(_SECRET_SCAN_CACHE) < 256:
+    if cacheable and len(_SECRET_SCAN_CACHE) < 256:
         _SECRET_SCAN_CACHE[key] = result
     return result
 
