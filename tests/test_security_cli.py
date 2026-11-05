@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import copy
+import os
+import subprocess
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
 
 from getzilla.security_cli import REQUIRED_CHECKS, finalize_report
 from getzilla.security_licenses import ALLOWED, _select_expression
@@ -10,6 +15,76 @@ from getzilla.expanded_security import CHECK_FAMILIES
 from getzilla.security_data import SOURCE_URLS
 
 NOW = datetime(2026, 11, 3, tzinfo=timezone.utc)
+
+
+def _public_git(root, *arguments):
+    return subprocess.run(
+        ['git', '-C', str(root), *arguments], check=True, capture_output=True,
+        timeout=10, env={'PATH': os.defpath, 'LANG': 'C', 'LC_ALL': 'C',
+                         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+                         'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                         'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'})
+
+
+def _public_source_repo(root):
+    root.mkdir(parents=True, exist_ok=True)
+    _public_git(root, 'init', '-q')
+    _public_git(root, 'remote', 'add', 'origin', 'https://github.com/Dimkox/Getzilla.git')
+    _public_git(root, 'add', '.')
+    _public_git(root, 'commit', '--allow-empty', '-qm', 'public source fixture')
+
+
+class SecuritySourceBindingTests(unittest.TestCase):
+    def test_ignored_nested_source_refuses_before_absence(self):
+        from getzilla import security_cli as cli
+        from getzilla.security_data import SecurityDataError
+        from getzilla.security_inventory import collect_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            parent = base / 'parent'
+            parent.mkdir()
+            (parent / '.gitignore').write_text('ignored-candidate/\n', encoding='utf-8', newline='\n')
+            _public_source_repo(parent)
+            nested = parent / 'ignored-candidate'
+            nested.mkdir()
+            (nested / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8', newline='\n')
+            scratch = base / 'scratch'
+            scratch.mkdir()
+            with mock.patch.object(cli, 'TRUSTED_ROOT', parent):
+                report = cli.evaluate(nested, base / 'db', base / 'artifacts', base / 'tools')
+            self.assertEqual(report['status'], 'fail')
+            self.assertTrue(report['qualification_gaps'])
+            self.assertTrue(any('Git worktree root' in check['summary'] for check in report['checks']))
+            with self.assertRaisesRegex(SecurityDataError, 'Git worktree root'):
+                cli.source_binding(nested, parent, scratch)
+            inventory = collect_inventory(nested)
+            self.assertFalse(inventory['complete'])
+            self.assertTrue(any(gap['code'] == 'source-root-unverified' for gap in inventory['gaps']))
+            # The same selected directory becomes visible when it is a genuine root.
+            _public_source_repo(nested)
+            self.assertEqual(len(collect_inventory(nested)['dependencies']), 1)
+            with mock.patch.object(cli, 'TRUSTED_ROOT', parent):
+                root_report = cli.evaluate(nested, base / 'db', base / 'artifacts', base / 'tools')
+            self.assertEqual(root_report['status'], 'fail')
+            self.assertTrue(root_report['qualification_gaps'])
+
+    def test_standalone_linked_and_unicode_roots_remain_bound(self):
+        from getzilla.security_cli import source_binding
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / 'source-λ'
+            _public_source_repo(root)
+            linked = base / 'linked-source'
+            _public_git(root, 'worktree', 'add', '--quiet', '--detach', str(linked), 'HEAD')
+            scratch = base / 'scratch'
+            scratch.mkdir()
+            for selected in (root, linked):
+                with self.subTest(root=selected.name):
+                    binding = source_binding(selected, root, scratch)
+                    self.assertTrue(binding['candidate_clean'])
+                    self.assertTrue(binding['checker_clean'])
+                    self.assertTrue(binding['same_project'])
+                    self.assertEqual(binding['head_sha'], binding['checker_sha'])
 
 
 class SecurityCliTests(unittest.TestCase):

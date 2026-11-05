@@ -20,6 +20,7 @@ from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _cov
 from .security_inventory import collect_inventory
 from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity
+from .security_osv_snapshot import VulnerabilityError, _source_git_root
 from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, scan_source
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
@@ -45,6 +46,11 @@ def _git(root: Path, arguments: list[str], scratch: Path) -> str:
 def source_binding(root: Path, checker: Path, scratch: Path) -> dict:
     values = []
     for project in (root, checker):
+        try:
+            if not _source_git_root(project):
+                raise VulnerabilityError('selected security source must be the exact Git worktree root')
+        except VulnerabilityError as exc:
+            raise SecurityDataError('selected security source must be the exact Git worktree root') from exc
         identity = _git(project, ['rev-parse', 'HEAD', 'HEAD^{tree}'], scratch).splitlines()
         if len(identity) != 2 or not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in identity):
             raise SecurityDataError('exact commit and tree identity required')

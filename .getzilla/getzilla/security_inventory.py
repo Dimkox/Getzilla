@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .security_osv_snapshot import _cargo_manifest, _cargo_lock_pairs, MAX_MANIFEST_BYTES, REQUIREMENTS_RE, _manifest_parser, _tracked_files, normalize_name
+from .security_osv_snapshot import _cargo_manifest, _cargo_lock_pairs, MAX_MANIFEST_BYTES, REQUIREMENTS_RE, VulnerabilityError, _manifest_parser, _tracked_files, normalize_name
 
 MAX_FILES = 100_000
 MAX_YAML_BYTES = 1024 * 1024
@@ -298,7 +298,11 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                 if not set(definition) & {'uses', 'run'}:
                     gap('unsupported-ci-composition', relative, 'Actions step has no covered run/uses operation')
 
-    files = _tracked_files(root)
+    try:
+        files = _tracked_files(root)
+    except (VulnerabilityError, OSError, ValueError):
+        gap('source-root-unverified', '.', 'cannot establish complete inventory for the exact selected Git worktree root')
+        files = []
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []

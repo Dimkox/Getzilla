@@ -20,7 +20,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import urllib.error
 import urllib.request
 import zipfile
@@ -30,6 +29,9 @@ from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
+from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES, _git_command,
+                                _git_environment, _run_capped)
+from .package_status import _git_read
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
                             osv_aliases, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
@@ -337,14 +339,41 @@ def _excluded(path: str, patterns: Iterable[str]) -> bool:
     return any(pure.match(pattern) or fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
-def _tracked_files(root: Path) -> list[str]:
+def _source_git_root(root: Path) -> bool:
+    """Prove the selected root without decoding or substituting a parent path.
+
+    False permits only the existing non-Git filesystem discovery fallback.
+    A completed Git observation of a nested selection is always a refusal.
+    """
     try:
-        proc = subprocess.run(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=root,
-                              capture_output=True, timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        proc = None
-    if proc is not None and proc.returncode == 0:
-        return sorted({item for item in proc.stdout.decode('utf-8', 'surrogateescape').split('\0') if item})
+        code, output = _git_read(root, ['rev-parse', '--show-prefix', '--is-inside-work-tree'])
+    except (OSError, ValueError) as exc:
+        raise VulnerabilityError('cannot establish the exact selected Git worktree root') from exc
+    if code:
+        return False
+    if output != b'\ntrue\n':
+        raise VulnerabilityError('selected security source must be the exact Git worktree root')
+    return True
+
+
+def _tracked_files(root: Path) -> list[str]:
+    root_proven = _source_git_root(root)
+    try:
+        code, output, _ = _run_capped(
+            _git_command(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], safe_directory=root),
+            cwd=root, env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
+            stderr_limit=4096, timeout=60,
+        )
+    except (ArchitectureError, OSError) as exc:
+        raise VulnerabilityError('bounded security Git inventory did not complete') from exc
+    if code == 0:
+        if not root_proven or not _source_git_root(root):
+            raise VulnerabilityError('selected security source must be the exact Git worktree root')
+        if output and not output.endswith(b'\0'):
+            raise VulnerabilityError('security Git inventory is incomplete')
+        return sorted({item for item in output.decode('utf-8', 'surrogateescape').split('\0') if item})
+    if root_proven:
+        raise VulnerabilityError('security Git inventory did not complete for the selected root')
     files = []
     for path in root.rglob('*'):
         if path.is_file() and not path.is_symlink() and '.git' not in path.relative_to(root).parts:

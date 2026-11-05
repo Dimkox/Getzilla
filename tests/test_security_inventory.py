@@ -24,6 +24,47 @@ def forbidden_yaml_constructor():
     return {}
 
 
+class SelectedRootInventoryTests(unittest.TestCase):
+    def test_nested_git_selection_is_incomplete_not_absent(self):
+        from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
+        from tests.test_security_cli import _public_git, _public_source_repo
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / 'parent'
+            parent.mkdir()
+            (parent / '.gitignore').write_text('ignored/\n', encoding='utf-8', newline='\n')
+            _public_source_repo(parent)
+            for name in ('ignored', 'ordinary'):
+                selected = parent / name
+                selected.mkdir()
+                (selected / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8', newline='\n')
+                if name == 'ordinary':
+                    _public_git(parent, 'add', name)
+                    _public_git(parent, 'commit', '-qm', 'public nested manifest')
+                with self.subTest(selection=name):
+                    with self.assertRaisesRegex(VulnerabilityError, 'Git worktree root'):
+                        _tracked_files(selected)
+                    result = collect_inventory(selected)
+                    self.assertFalse(result['complete'])
+                    self.assertTrue(any(item['code'] == 'source-root-unverified' for item in result['gaps']))
+
+    def test_git_listing_does_not_borrow_an_ambient_repository(self):
+        from tests.test_security_cli import _public_source_repo
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            decoy = base / 'decoy'
+            _public_source_repo(decoy)
+            source = base / 'source'
+            source.mkdir()
+            (source / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8', newline='\n')
+            _public_source_repo(source)
+            # Only fixture-local paths are supplied; the fixed Git backend must
+            # use its closed environment instead of inheriting these values.
+            with mock.patch.dict(os.environ, {'GIT_DIR': str(decoy / '.git'), 'GIT_WORK_TREE': str(decoy)}):
+                result = collect_inventory(source)
+            self.assertTrue(result['complete'])
+            self.assertEqual(len(result['dependencies']), 1)
+
+
 class InventoryTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='security-inventory-')

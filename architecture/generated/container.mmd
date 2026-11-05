@@ -1,7 +1,9 @@
 flowchart LR
   node_8938bd3db1932751["NODE-CHANGE-SPEC-EVIDENCE | repository | repository engineering"]
+  node_662c15ead8b897ee["NODE-CISA-SECURITY-FEED | external_system | public CISA feed endpoints"]
   node_4e78270f61d78ed8["NODE-DOCKER-ENGINE | service | Trust CI operators; compose-described TCP/2375 local executor"]
   node_0456afc65ddefc44["NODE-ENTIRE | external_system | Entire"]
+  node_57e24ded05c6433e["NODE-EPSS-SECURITY-FEED | external_system | public EPSS feed endpoint"]
   node_2e8a7072de3f3743["NODE-EXACT-SHA-WORKSPACE | repository | Trust CI operators"]
   node_0a0fe2f046a648e9["NODE-EXTERNAL-HOLDOUT | policy_bundle | external Trust CI policy operators"]
   node_a6c166e55f8e1784["NODE-FACTORY-CONTROL | local_component | local factory operators"]
@@ -32,6 +34,7 @@ flowchart LR
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
+  node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
   node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
   node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
   node_22df40caedcff532["NODE-PILOT-CODEX-SUPERVISOR | worker | single local pilot operator"]
@@ -40,6 +43,7 @@ flowchart LR
   node_69f0245ef987c48b["NODE-PILOT-MODEL-PROVIDER | external_system | external model provider"]
   node_dd1c01e42bec9cba["NODE-PILOT-SANDBOX | runner | single local pilot operator"]
   node_814a7fe70af9f16d["NODE-PILOT-SQLITE | datastore | single local pilot operator"]
+  node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
   node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
   node_e1da543fa66b0086["NODE-STAGED-DELIVERY-SOURCE | local_component | repository engineering"]
   node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
@@ -84,6 +88,12 @@ flowchart LR
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-CISA | dependency | https"| node_662c15ead8b897ee
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-EPSS | dependency | https"| node_57e24ded05c6433e
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS | dependency | https"| node_8b8a8cd21b180532
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-API | dependency | https"| node_8acae282d21dd9c2
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-BUCKET | dependency | https"| node_7b13ed12e8efab1c
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-PYPI | dependency | https"| node_ed77fd8e957c8e8c
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https"| node_8b8a8cd21b180532
