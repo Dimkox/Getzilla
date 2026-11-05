@@ -4,7 +4,7 @@ globs: **/*.sql,**/migrations/**,**/contracts/**,schemas/**,**/openapi*,**/async
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/30-contracts-data.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/30-contracts-data.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Contracts, migrations and integrations
 

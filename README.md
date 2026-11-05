@@ -186,9 +186,9 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 ## What is inside
 
 - `scripts/`: the commands you run, such as `getzilla_route.py` and `getzilla_verify.py`
-- `.grok/` and `.agents/skills/`: instructions and skills for the AI agents (the canonical source)
-- `.grok/skills/`, `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/hooks/`, `.github/agents/`: the same hooks, agents and skills for Qwen Code, Claude Code, Codex, Gemini CLI and Copilot CLI. Regenerate this source checkout with `python3 scripts/getzilla_harness.py --repository-all --write`; installed projects generate only their selected adapters.
-- `.cursor/rules/getzilla/`: prompt-only Cursor rules from `.grok/cursor-rules/`. The installer delivers canonical inputs; a consumer that selects Cursor can generate its rules with `getzilla harness --write`. Cursor also reads `AGENTS.md` and `.agents/skills/` itself.
+- `.getzilla/hooks/`, `.getzilla/config/`, `.getzilla/agents/` and `.agents/skills/`: shared hooks, configuration, agent roles and skills (the canonical sources)
+- `.grok/`, `.qwen/`, `.claude/`, `.codex/`, `.gemini/`, `.github/hooks/`, `.github/agents/`: the same hooks, agents and skills for Qwen Code, Claude Code, Codex, Gemini CLI and Copilot CLI. Regenerate this source checkout with `python3 scripts/getzilla_harness.py --repository-all --write`; installed projects generate only their selected adapters.
+- `.cursor/rules/getzilla/`: prompt-only Cursor rules from `.getzilla/cursor-rules/`. The installer delivers canonical inputs; a consumer that selects Cursor can generate its rules with `getzilla harness --write`. Cursor also reads `AGENTS.md` and `.agents/skills/` itself.
 - `.getzilla/`: the engine that sorts tasks, runs checks and saves the evidence
 - `.getzilla/runtime/`: ignored task state, plans, analyses and reviews; `engineering/changes/` retains historical packages. Change packages are created on demand at `.getzilla/runtime/changes/<id>/`.
 - In current source, an admitted low-risk diff of at most 50 added plus deleted code lines needs no package or report-only commit. Sensitive paths are checked before ordinary tests and prose are excluded. One ordinary code review is the floor; configured or explicitly retained extra reviews still apply. Final local qualification uses `getzilla verify --mode fast`, which can still discover the full test suite. Full CI remains required.
@@ -217,3 +217,5 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 Getzilla grew out of an [earlier project](https://github.com/Dimkox/adaptive-grok-build-pro/tree/c4e506f3d3a45e000f5b9f9121f698c1d16814e3) and was renamed. Older pull-request numbers and releases mentioned in the docs belong to that project.
 
 Current version: [VERSION](VERSION). License: [MIT](LICENSE).
+
+Shared hook code lives in `.getzilla/hooks/`. Harness sources live in `.getzilla/config/hooks.json`, `.getzilla/config/codex-hooks.json`, `.getzilla/agents/`, and `.getzilla/cursor-rules/`. `.grok/` contains only the Grok Build adapter. See [the migration contract](engineering/runbooks/getzilla-neutral-hooks.md).

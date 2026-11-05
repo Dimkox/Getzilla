@@ -435,9 +435,9 @@ class ProgressHookTests(unittest.TestCase):
             activate_owned_route(root, {'route_id': 'progress-errors', 'session_id': 'progress-errors'})
             payload = {'cwd': str(root), 'session_id': 'progress-errors', 'tool_name': 'Bash',
                        'tool_input': {'command': 'python3 -m unittest tests.example'}, 'tool_response': {'exit_code': 1}}
-            with patch.object(sys, 'path', [str(root / '.grok/hooks'), *sys.path]):
-                pre = runpy.run_path(str(root / '.grok/hooks/pre_tool_use.py'))
-                post = runpy.run_path(str(root / '.grok/hooks/post_tool_use.py'))
+            with patch.object(sys, 'path', [str(root / '.getzilla/hooks'), *sys.path]):
+                pre = runpy.run_path(str(root / '.getzilla/hooks/pre_tool_use.py'))
+                post = runpy.run_path(str(root / '.getzilla/hooks/post_tool_use.py'))
             for command, decision in (('python3 -m unittest tests.example', 'allow'), ('git push origin main', 'deny')):
                 results, stderr = [], io.StringIO()
                 with patch.object(progress, 'refusal', side_effect=RuntimeError('PRIVATE-OBSERVER')), \

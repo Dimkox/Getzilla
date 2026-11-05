@@ -61,11 +61,11 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertTrue(high_effort_agents <= seen)
 
     def test_legacy_toml_files_do_not_define_a_conflicting_effort(self) -> None:
-        for path in sorted((ROOT / '.grok/agents').glob('*.toml')):
+        for path in sorted((ROOT / '.getzilla/agents').glob('*.toml')):
             text = path.read_text(encoding='utf-8')
             match = re.search(r'(?m)^effort\s*=\s*"([^"]+)"\s*$', text)
             if match:
-                md = agent_frontmatter(path.with_suffix('.md'))
+                md = agent_frontmatter(ROOT / '.grok/agents' / (path.stem + '.md'))
                 self.assertEqual(match.group(1), md['effort'], path.as_posix())
 
 

@@ -250,7 +250,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse((self.root / 'fresh').exists())
 
     def test_no_hook_or_installer_runs_updates_without_a_person(self) -> None:
-        for rel in ('.grok/hooks/session_start.py', '.grok/hooks/user_prompt_submit.py', '.grok/hooks/stop_gate.py'):
+        for rel in ('.getzilla/hooks/session_start.py', '.getzilla/hooks/user_prompt_submit.py', '.getzilla/hooks/stop_gate.py'):
             text = (ROOT / rel).read_text(encoding='utf-8')
             self.assertNotIn('run_all', text, rel)
             self.assertNotIn('getzilla_update.py', text, rel)

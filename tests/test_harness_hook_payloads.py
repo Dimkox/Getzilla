@@ -140,7 +140,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
         import copy
         import importlib.util
         import sys
-        spec = importlib.util.spec_from_file_location('cmd_hook_fixture', PROJECT / '.grok/hooks/_lib.py')
+        spec = importlib.util.spec_from_file_location('cmd_hook_fixture', PROJECT / '.getzilla/hooks/_lib.py')
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -161,7 +161,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
         import importlib.util
         import sys
         import tempfile
-        spec = importlib.util.spec_from_file_location('root_probe_fixture', PROJECT / '.grok/hooks/_lib.py')
+        spec = importlib.util.spec_from_file_location('root_probe_fixture', PROJECT / '.getzilla/hooks/_lib.py')
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -210,7 +210,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertEqual(allowed.returncode, 0, allowed.stderr)
                 self.assertNotEqual(json.loads(allowed.stdout or '{}').get('hookSpecificOutput', {}).get('permissionDecision'),
                                     'deny', allowed.stdout)
-                prompt_hook = consumer / '.grok/hooks/user_prompt_submit.py'
+                prompt_hook = consumer / '.getzilla/hooks/user_prompt_submit.py'
                 prompt_hook.write_text(prompt_hook.read_text().replace(
                     '    emit({', "    emit({'source_identity': __file__,"))
                 prompt = subprocess.run(hooks['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'],
@@ -376,7 +376,7 @@ class GeneratedHookCommandTests(unittest.TestCase):
         with project_copy() as root:
             for rel in ('.claude', '.qwen', '.codex'):
                 shutil.copytree(PROJECT / rel, root / rel)
-            planted = root / 'src/deep/.grok/hooks'
+            planted = root / 'src/deep/.getzilla/hooks'
             planted.mkdir(parents=True)
             (planted / 'pre_tool_use.py').write_text('print("{}")\n', encoding='utf-8')
             for settings in ('.claude/settings.json', '.qwen/settings.json', '.codex/hooks.json'):
@@ -400,9 +400,9 @@ class GeneratedHookCommandTests(unittest.TestCase):
             inner = outer / '.getzilla/runtime/worktrees/inner'
             subprocess.run(['git', 'worktree', 'add', '--detach', str(inner), 'HEAD'],
                            cwd=outer, check=True, capture_output=True)
-            inner_hook = inner / '.grok/hooks/user_prompt_submit.py'
+            inner_hook = inner / '.getzilla/hooks/user_prompt_submit.py'
             inner_hook.write_text(inner_hook.read_text().replace('    emit({', "    emit({'source_identity': __file__,"))
-            outer_hook = outer / '.grok/hooks/user_prompt_submit.py'
+            outer_hook = outer / '.getzilla/hooks/user_prompt_submit.py'
             outer_hook.write_text('print(' + repr(json.dumps({'outer-hook': True})) + ')\n')
             config = json.loads((inner / '.codex/hooks.json').read_text())['hooks']
             environment = {key: value for key, value in os.environ.items()
@@ -437,7 +437,7 @@ class GeneratedHookCommandTests(unittest.TestCase):
 
     def test_nested_harness_directories_are_protected(self) -> None:
         with project_copy() as root:
-            for rel in ('src/.grok/hooks/pre_tool_use.py', 'src/.claude/settings.json', '_lib.py'):
+            for rel in ('src/.getzilla/hooks/pre_tool_use.py', 'src/.claude/settings.json', '_lib.py'):
                 _, data, _ = run_hook(root, 'pre_tool_use.py', {
                     'cwd': str(root), 'tool_name': 'Write',
                     'tool_input': {'file_path': str(root / rel), 'content': 'x'},

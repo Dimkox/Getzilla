@@ -46,8 +46,8 @@ class InstallExtrasTests(unittest.TestCase):
         self.assertFalse([p for p in chosen if '/skills/bitrix-development/' in p or '/skills/seo-landing/' in p])
         self.assertFalse(chosen & MODULE.ROOT_HOOK_SHIMS)
         self.assertIn('.agents/skills/getzilla-delivery/SKILL.md', chosen)
-        self.assertIn('.grok/hooks/pre_tool_use.py', chosen)
-        self.assertFalse([p for p in chosen if p.startswith('.grok/cursor-rules/')])
+        self.assertIn('.getzilla/hooks/pre_tool_use.py', chosen)
+        self.assertFalse([p for p in chosen if p.startswith('.getzilla/cursor-rules/')])
 
     def test_bitrix_folders_bring_the_bitrix_skill_for_the_chosen_agent_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,7 +70,7 @@ class InstallExtrasTests(unittest.TestCase):
         self.assertEqual(chosen & MODULE.ROOT_HOOK_SHIMS, MODULE.ROOT_HOOK_SHIMS)
 
     def test_cursor_rules_belong_to_the_cursor_agent_and_full_layout_keeps_everything(self) -> None:
-        self.assertEqual(MODULE.component_of('.grok/cursor-rules/10-rule.toml'), 'agent:cursor')
+        self.assertEqual(MODULE.component_of('.getzilla/cursor-rules/10-rule.toml'), 'agent:cursor')
         self.assertEqual(MODULE.component_of('.qwen/skills/seo-landing/SKILL.md'), 'extra:seo-landing')
         full = paths(MODULE.PayloadSelection.full_layout())
         self.assertTrue(full >= MODULE.ROOT_HOOK_SHIMS)
@@ -108,7 +108,7 @@ class InstallExtrasTests(unittest.TestCase):
         plain = paths(MODULE.PayloadSelection(('qwen',)))
         self.assertFalse([p for p in plain if '/agents/bitrix_' in p])
         bitrix = paths(MODULE.PayloadSelection(('qwen',), extras=('bitrix',)))
-        self.assertIn('.grok/agents/bitrix_implementer.toml', bitrix)
+        self.assertIn('.getzilla/agents/bitrix_implementer.toml', bitrix)
         self.assertIn('.qwen/agents/bitrix_implementer.md', bitrix)
         self.assertFalse([p for p in bitrix if p.startswith('.claude/agents/bitrix_')])
 
@@ -248,10 +248,10 @@ print(json.dumps({'module': runner.__file__, 'rows': rows}))
 
     def test_grok_agent_briefs_belong_to_grok_and_toml_stay_core(self) -> None:
         self.assertEqual(MODULE.component_of('.grok/agents/code_reviewer.md'), 'agent:grok')
-        self.assertEqual(MODULE.component_of('.grok/agents/code_reviewer.toml'), 'core')
+        self.assertEqual(MODULE.component_of('.getzilla/agents/code_reviewer.toml'), 'core')
         plain = paths(MODULE.PayloadSelection(('qwen',)))
         self.assertFalse([p for p in plain if p.startswith('.grok/agents/') and p.endswith('.md')])
-        self.assertIn('.grok/agents/code_reviewer.toml', plain)
+        self.assertIn('.getzilla/agents/code_reviewer.toml', plain)
         self.assertIn('.grok/agents/code_reviewer.md', paths(MODULE.PayloadSelection(('grok',))))
 
     def test_eu_audit_and_compliance_scripts_ship_only_with_the_eu_component(self) -> None:

@@ -22,7 +22,7 @@
       "security_reviewer",
       "release_reviewer"
     ],
-    "enforcement": "Agent effort is declared in .grok/agents/*.md. Model-facing subagent spawn does not provide a per-call reasoning override."
+    "enforcement": "Routing declares requested effort; native adapters enforce their supported controls. Model-facing subagent spawn does not provide a per-call reasoning override."
   },
   "max_parallel_analysis": 10,
   "write_roles": [

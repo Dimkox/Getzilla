@@ -82,9 +82,9 @@ Every `python3 scripts/...` command below also runs through the launcher, for ex
    cd /path/to/repo
    qwen      # or: codex, claude, gemini, copilot, grok
    ```
-   Each selected agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Add an adapter with `getzilla components add agent:codex`; use `getzilla harness --write` inside the project to regenerate selected outputs. An empty managed selection does not disable shared/native Grok hooks. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
+   Each selected agent loads the same Getzilla hooks, agents and skills from `.qwen/`, `.codex/`, `.claude/`, `.gemini/`, `.github/hooks/` + `.github/agents/` or `.grok/`. Add an adapter with `getzilla components add agent:codex`; use `getzilla harness --write` inside the project to regenerate selected outputs. An empty selection does not prove native hooks are disabled in an existing repository. Trust the project folder when the agent asks; Grok Build also needs `/hooks-trust` once.
 
-   A project gets only what it uses. Domain skills come with their domain: the Bitrix skill when the project has `bitrix/`, `local/modules` or `local/components`, and the SEO-landing skill when it has `side-projects/seo-landings/`. Add one later with `getzilla components add extra:bitrix` or `extra:seo-landing`, or choose at install time with `--extras`. Hook entry scripts stay inside `.grok/hooks/`; only an older installation keeps its copies in the repository root.
+   A project gets only what it uses. Domain skills come with their domain: the Bitrix skill when the project has `bitrix/`, `local/modules` or `local/components`, and the SEO-landing skill when it has `side-projects/seo-landings/`. Add one later with `getzilla components add extra:bitrix` or `extra:seo-landing`, or choose at install time with `--extras`. Hook entry scripts stay inside `.getzilla/hooks/`; only an older installation keeps its copies in the repository root.
    Prompt example: `Добавь обработчик события OnAfterUserAdd в local-модуль`
 
    If hooks did not create a route, create one explicitly:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Cwd-relative hook entry used by older adaptive.json files.
 
-Dispatches into .grok/hooks/<this-file-name>. Does not import a root _lib
+Dispatches into .getzilla/hooks/<this-file-name>. Does not import a root _lib
 (that would point the stack at the parent of the repo). Missing canonical script
-emits empty JSON and exits 0 so Grok does not deny tools or loop on Stop.
+denies PreToolUse and leaves observation-only events empty.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 NAME = Path(__file__).name
 ROOT = Path(__file__).resolve().parent
 def main(name: str = NAME, root: Path = ROOT) -> None:
-    canonical = root / '.grok' / 'hooks' / name
+    canonical = root / '.getzilla' / 'hooks' / name
     if canonical.is_file():
         hook_dir = str(canonical.parent)
         if hook_dir not in sys.path:
@@ -23,7 +23,7 @@ def main(name: str = NAME, root: Path = ROOT) -> None:
         runpy.run_path(str(canonical), run_name='__main__')
         return
     if name == 'pre_tool_use.py':
-        sys.stdout.write('{"decision":"allow"}\n')
+        sys.stdout.write('{"decision":"deny","reason":"Getzilla canonical policy hook is missing"}\n')
     else:
         sys.stdout.write('{}\n')
 

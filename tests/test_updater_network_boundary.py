@@ -21,7 +21,7 @@ from tests import test_architecture_fitness as fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 UPDATER = ".getzilla/getzilla/updater.py"
-HOOK = ".grok/hooks/pre_tool_use.py"
+HOOK = ".getzilla/hooks/pre_tool_use.py"
 POLICY_ENGINE = ".getzilla/getzilla/_policy_legacy.py"
 
 
