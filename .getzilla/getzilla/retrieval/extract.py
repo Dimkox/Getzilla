@@ -5,6 +5,7 @@ import ast
 
 from .budget import Budget, RetrievalError
 from .contracts import Chunk, Generation, hex_digest, sha
+from .lines import physical_lines
 
 
 def build_generation(source, *, budget=None, window_counter=None):
@@ -36,8 +37,8 @@ def build_generation(source, *, budget=None, window_counter=None):
         except (SyntaxError, ValueError, RecursionError, MemoryError):
             gaps.add('python_parse_unavailable')
             continue
-        original = document.original.splitlines(keepends=True)
-        representation = document.representation.splitlines(keepends=True)
+        original = physical_lines(document.original)
+        representation = physical_lines(document.representation)
 
         def visit(node, parents=()):
             nonlocal overloads

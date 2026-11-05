@@ -65,6 +65,31 @@ class RetrievalContextTests(unittest.TestCase):
             validator.validate(facts)
             self.contract().from_dict(facts)
 
+    def test_v2_supports_both_git_hash_formats_without_changing_v1(self):
+        import json
+        from tests.json_schema_subset import SubsetValidator
+        validator = SubsetValidator(json.loads(
+            (ROOT / 'factory/contracts/jsonschema/context-manifest.v2.schema.json').read_text()))
+        for width in (40, 64):
+            facts = context_facts()
+            facts['schema_version'] = 2
+            facts['source_snapshot'] = {'kind': 'git', 'base_sha': '1' * width,
+                'head_sha': '2' * width, 'dirty_fingerprint': None}
+            validator.validate(facts)
+            self.contract().from_dict(facts)
+        legacy = context_facts()
+        legacy['source_snapshot']['base_sha'] = '1' * 64
+        legacy['source_snapshot']['head_sha'] = '2' * 64
+        with self.assertRaises(ContractError):
+            ContextManifestV1.from_dict(legacy)
+        for bad in ('A' * 64, '1' * 63, 'main', True):
+            facts = context_facts()
+            facts['schema_version'] = 2
+            facts['source_snapshot']['kind'] = 'git'
+            facts['source_snapshot']['head_sha'] = bad
+            with self.assertRaises(ContractError):
+                self.contract().from_dict(facts)
+
 
 if __name__ == '__main__':
     unittest.main()

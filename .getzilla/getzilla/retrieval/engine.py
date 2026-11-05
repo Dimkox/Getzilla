@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from .budget import Budget, RetrievalError
 from .contracts import sha
+from .lines import physical_lines
 from .ranking import rank
 
 
@@ -30,8 +31,8 @@ def verify_citation(source, chunk, *, budget=None):
     document = next((d for d in source.documents if d.key == chunk.key and d.path == chunk.path), None)
     if document is None or document.version != chunk.version or document.representation_identity != chunk.representation_identity:
         raise RetrievalError('stale_citation')
-    lines = document.original.splitlines(keepends=True)
-    represented = document.representation.splitlines(keepends=True)
+    lines = physical_lines(document.original)
+    represented = physical_lines(document.representation)
     if (type(chunk.start) is not int or type(chunk.end) is not int or not 1 <= chunk.start <= chunk.end <= len(lines)
             or document.original_sha256 != chunk.file_sha256
             or sha(b''.join(lines[chunk.start - 1:chunk.end])) != chunk.chunk_sha256
@@ -80,14 +81,14 @@ def pack_context(source, hits, token_counter, token_budget, *, mandatory='', bud
         budget.check()
         chunk = hit.chunk
         citation = verify_citation(source, chunk, budget=budget)
-        lines = chunk.text.splitlines(keepends=True)
+        lines = physical_lines(chunk.text.encode('utf-8'))
         fresh = [(number, line) for number, line in enumerate(lines, chunk.start)
             if (chunk.key, chunk.path, number) not in seen]
         if not fresh:
             continue
         header = f'[{chunk.path}:{chunk.start}-{chunk.end} sha256={chunk.file_sha256} source-lines='
         header += ','.join(str(number) for number, _ in fresh) + ']\n'
-        piece = header + ''.join(line for _, line in fresh) + '\n---\n'
+        piece = header + b''.join(line for _, line in fresh).decode('utf-8') + '\n---\n'
         prospective = context + piece
         if len(prospective.encode()) > 262144 or count(prospective) > token_budget:
             continue

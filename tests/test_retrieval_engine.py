@@ -189,6 +189,32 @@ class RetrievalEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^index_bytes_exceeded$'):
             self.build(snapshot(document()), budget=b)
 
+    def test_unicode_literals_keep_physical_citation_lines_and_following_declaration(self):
+        from getzilla.retrieval.engine import pack_context, verify_citation
+        from getzilla.retrieval.ranking import RankedHit
+        for separator in ('\u2028', '\u2029', '\u0085', '\v', '\f', '\x1c'):
+            for newline in ('\n', '\r\n', '\r'):
+                with self.subTest(separator=ascii(separator), newline=ascii(newline)):
+                    text = newline.join(('def hello():', f'    return "hello{separator}world"',
+                        'def next_item():', '    return 2', ''))
+                    source = snapshot(document(path='hello.py', text=text))
+                    generation = self.build(source)
+                    chunks = sorted(generation.chunks, key=lambda chunk: chunk.start)
+                    self.assertEqual([(c.symbol, c.start, c.end) for c in chunks],
+                        [('hello', 1, 2), ('next_item', 3, 4)])
+                    for chunk in chunks:
+                        verify_citation(source, chunk)
+                    hits = tuple(RankedHit(c, 1.0, i) for i, c in enumerate(chunks, 1))
+                    packed = pack_context(source, hits, len, 2048)
+                    headers = [line for line in packed.text.split('\n') if line.startswith('[')]
+                    self.assertEqual(len(headers), 2)
+                    self.assertIn('source-lines=1,2]', headers[0])
+                    self.assertIn('source-lines=3,4]', headers[1])
+                    self.assertIn('def next_item():', packed.text)
+                    self.assertIn(f'hello{separator}world', packed.text)
+                    self.assertIn(newline.join(('def hello():', f'    return "hello{separator}world"', '')),
+                        packed.text)
+
 
 if __name__ == '__main__':
     unittest.main()

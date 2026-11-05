@@ -13,6 +13,7 @@ import re
 from types import MappingProxyType
 
 from .budget import RetrievalError
+from .lines import physical_lines
 
 
 def digest(value):
@@ -100,7 +101,7 @@ class SourceDocument:
             raise RetrievalError('source_encoding_unavailable') from None
         # The initial profile supports line-preserving transformations only.
         # Other transforms need an independently validated range mapping.
-        if len(self.original.splitlines()) != len(self.representation.splitlines()):
+        if len(physical_lines(self.original)) != len(physical_lines(self.representation)):
             raise RetrievalError('transform_mapping_unavailable')
         object.__setattr__(self, 'original_sha256', sha(self.original))
         object.__setattr__(self, 'transformed_sha256', sha(self.representation))
