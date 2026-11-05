@@ -11,7 +11,9 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import stat
+import struct
 import subprocess
+import sys
 import tempfile
 import tomllib
 import zipfile
@@ -23,23 +25,52 @@ PROFILE = "ubuntu-24.04-x86_64-cpython312"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 GIT_HEX = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 CANONICAL_TIME = (1980, 1, 1, 0, 0, 0)
+TARGET_MARKERS = {"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
+                  "platform_machine": "x86_64", "implementation_name": "cpython",
+                  "platform_python_implementation": "CPython", "python_version": "3.12"}
 
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _host_supported() -> bool:
+def _validated_environment(value: object) -> dict[str, str]:
+    if (not isinstance(value, dict) or set(value) != {*TARGET_MARKERS, "python_full_version"}
+            or any(value.get(name) != expected for name, expected in TARGET_MARKERS.items())
+            or not isinstance(value.get("python_full_version"), str)
+            or not re.fullmatch(r"3\.12\.(?:0|[1-9][0-9]{0,5})", value["python_full_version"])):
+        raise InstallerError("UNSUPPORTED_TARGET_PROFILE")
+    return dict(value)
+
+
+def _host_environment() -> dict[str, str] | None:
     try:
         values = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
-        version = subprocess.run(["/usr/bin/python3.12", "--version"], capture_output=True, text=True,
-                                 timeout=5, check=False, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-        return (platform.system() == "Linux" and platform.machine() == "x86_64"
-                and values.get("ID", "").strip('"') == "ubuntu"
-                and values.get("VERSION_ID", "").strip('"') == "24.04"
-                and version.returncode == 0 and version.stdout.startswith("Python 3.12."))
-    except (OSError, subprocess.SubprocessError):
-        return False
+        if values.get("ID", "").strip('"') != "ubuntu" or values.get("VERSION_ID", "").strip('"') != "24.04":
+            return None
+        result = subprocess.run(["/usr/bin/python3.12", "-E", "-s", "-S", "-B",
+                                 str(Path(__file__).resolve()), "--describe-target"],
+                                capture_output=True, text=True, timeout=5, check=False,
+                                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        if result.returncode or result.stderr or len(result.stdout) > 4096:
+            return None
+        record = json.loads(result.stdout)
+        if (not isinstance(record, dict) or set(record) != {"environment", "pointer_bits", "releaselevel"}
+                or type(record["pointer_bits"]) is not int or record["pointer_bits"] != 64
+                or record["releaselevel"] != "final"):
+            return None
+        return _validated_environment(record["environment"])
+    except (OSError, subprocess.SubprocessError, ValueError, InstallerError):
+        return None
+
+
+def _host_supported() -> bool:
+    return _host_environment() is not None
+
+
+def _target_environment(value: dict[str, str] | None) -> dict[str, str]:
+    selected = _host_environment() if value is None else value
+    return _validated_environment(selected)
 
 
 def _selected_wheel(package: dict) -> dict:
@@ -76,16 +107,13 @@ def _comparison(left: str, operator: str, right: str, *, version: bool = False) 
             "<=": left <= right, ">": left > right, ">=": left >= right}[operator]
 
 
-def _marker_matches(marker: str, extras: set[str]) -> bool:
+def _marker_matches(marker: str, extras: set[str], environment: dict[str, str]) -> bool:
     """Closed marker subset for the single supported Linux/CPython3.12 profile.
 
     New compound expressions or variables need reviewed support, never an
     assumed-true fallback. Optional dependency tables propagate active extras.
     """
-    values = {"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
-              "platform_machine": "x86_64", "implementation_name": "cpython",
-              "platform_python_implementation": "CPython", "python_version": "3.12",
-              "python_full_version": "3.12.0"}
+    values = environment
     match = re.fullmatch(r"([a-z_]+)\s*(==|!=|<=|>=|<|>)\s*(['\"])([^'\"]{1,128})\3", marker)
     if not match or match[1] not in {*values, "extra"}:
         raise InstallerError("LOCK_PROFILE_UNRESOLVED")
@@ -95,7 +123,7 @@ def _marker_matches(marker: str, extras: set[str]) -> bool:
     return _comparison(values[name], operator, value, version=name.startswith("python_"))
 
 
-def _runtime_packages(data: dict) -> list[dict]:
+def _runtime_packages(data: dict, environment: dict[str, str]) -> list[dict]:
     packages = data["package"]
     if (data.get("version") != 1 or data.get("revision") not in {3, 5}
             or not isinstance(packages, list) or not 1 <= len(packages) <= 512):
@@ -125,7 +153,7 @@ def _runtime_packages(data: dict) -> list[dict]:
                 or any(not isinstance(extra, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", extra) for extra in extras)):
             raise InstallerError("LOCK_PROFILE_UNRESOLVED")
         marker = edge.get("marker")
-        if marker is not None and (not isinstance(marker, str) or not _marker_matches(marker, parent_extras)):
+        if marker is not None and (not isinstance(marker, str) or not _marker_matches(marker, parent_extras, environment)):
             if not isinstance(marker, str):
                 raise InstallerError("LOCK_PROFILE_UNRESOLVED")
             continue
@@ -153,7 +181,8 @@ def _runtime_packages(data: dict) -> list[dict]:
     return [indexed[name] for name in sorted(active)]
 
 
-def derive_inventory(lock: Path) -> dict:
+def derive_inventory(lock: Path, *, target_environment: dict[str, str] | None = None) -> dict:
+    environment = _target_environment(target_environment)
     content = Path(lock).read_bytes()
     try:
         if len(content) > 8 * 1024 * 1024:
@@ -163,9 +192,9 @@ def derive_inventory(lock: Path) -> dict:
             raise InstallerError("INVALID_LOCK")
         for bound in data["requires-python"].split(","):
             match = re.fullmatch(r"\s*(==|!=|<=|>=|<|>)\s*(\d+(?:\.\d+){0,2})\s*", bound)
-            if not match or not _comparison("3.12.0", match[1], match[2], version=True):
+            if not match or not _comparison(environment["python_full_version"], match[1], match[2], version=True):
                 raise InstallerError("LOCK_PROFILE_UNRESOLVED")
-        packages = [_selected_wheel(package) for package in _runtime_packages(data)]
+        packages = [_selected_wheel(package) for package in _runtime_packages(data, environment)]
     except (KeyError, TypeError, ValueError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise InstallerError("INVALID_LOCK") from exc
     return {"schema_version": "factory-runtime-wheels/v1", "profile": PROFILE,
@@ -196,8 +225,8 @@ def _load_inventory(path: Path) -> dict:
     return value
 
 
-def validate_committed_inventory(lock: Path, inventory: Path) -> None:
-    if _load_inventory(inventory) != derive_inventory(lock):
+def validate_committed_inventory(lock: Path, inventory: Path, *, target_environment: dict[str, str] | None = None) -> None:
+    if _load_inventory(inventory) != derive_inventory(lock, target_environment=target_environment):
         raise InstallerError("WHEEL_INVENTORY_DRIFT")
 
 
@@ -241,18 +270,23 @@ def _git(repository: Path, *arguments: str) -> str:
 
 
 def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inventory: Path,
-                  output: Path, product_version: str, enforce_host: bool = True) -> dict:
+                  output: Path, product_version: str, enforce_host: bool = True,
+                  target_environment: dict[str, str] | None = None) -> dict:
     repository = Path(repository).resolve()
     wheelhouse = Path(wheelhouse).resolve()
     output = Path(output).resolve()
-    if enforce_host and not _host_supported():
+    observed = _host_environment() if enforce_host else None
+    if enforce_host and observed is None:
         raise InstallerError("UNSUPPORTED_HOST")
+    environment = _target_environment(target_environment if target_environment is not None else observed)
+    if enforce_host and environment != observed:
+        raise InstallerError("TARGET_PROFILE_MISMATCH")
     if not GIT_HEX.fullmatch(expected_head) or _git(repository, "rev-parse", "HEAD").strip() != expected_head:
         raise InstallerError("SOURCE_HEAD_MISMATCH")
     if _git(repository, "status", "--porcelain=v1", "--untracked-files=all"):
         raise InstallerError("SOURCE_NOT_CLEAN")
     lock = repository / "factory/uv.lock"
-    validate_committed_inventory(lock, inventory)
+    validate_committed_inventory(lock, inventory, target_environment=environment)
     wheels = _load_inventory(inventory)["wheels"]
     entries = list(wheelhouse.iterdir())
     if any(entry.is_symlink() or not entry.is_file() for entry in entries):
@@ -322,10 +356,20 @@ def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inv
             raise InstallerError("OUTPUT_PUBLICATION_FAILED") from exc
     return {"archive": str(archive_path), "manifest": str(manifest_path),
             "sidecar": str(sidecar_path), "archive_sha256": archive_sha, "manifest_sha256": manifest_sha,
-            "source_head": expected_head, "profile": PROFILE}
+            "source_head": expected_head, "profile": PROFILE,
+            "target_environment": environment, "host_enforced": enforce_host}
 
 
 def main(argv: list[str] | None = None) -> int:
+    if (sys.argv[1:] if argv is None else argv) == ["--describe-target"]:
+        environment = {"sys_platform": sys.platform, "os_name": os.name, "platform_system": platform.system(),
+                       "platform_machine": platform.machine(), "implementation_name": sys.implementation.name,
+                       "platform_python_implementation": platform.python_implementation(),
+                       "python_version": '.'.join(map(str, sys.version_info[:2])),
+                       "python_full_version": '.'.join(map(str, sys.version_info[:3]))}
+        print(json.dumps({"environment": environment, "pointer_bits": struct.calcsize('P') * 8,
+                          "releaselevel": sys.version_info.releaselevel}, sort_keys=True))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--expected-head", required=True)
