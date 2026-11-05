@@ -1,0 +1,20 @@
+{
+  "assertions": [
+    {
+      "expected": "detected",
+      "id": "expected-finding",
+      "op": "equals",
+      "path": [
+        "finding"
+      ]
+    }
+  ],
+  "id": "body-text-faulty",
+  "input": {
+    "fault_family": "body-text",
+    "qualification": "handwritten-algorithm-only",
+    "variant": "faulty"
+  },
+  "schema_version": 1,
+  "source": "synthetic:incident-154"
+}
