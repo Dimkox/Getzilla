@@ -127,10 +127,25 @@ def _contradicts(left: dict, right: dict) -> bool:
             y == 'at_least' and x == 'at_most' and b > a)
 
 
+def _comparable(left: dict, right: dict) -> bool:
+    operators = {left['operator'],right['operator']}
+    if operators & {'at_least','at_most'}:
+        return (operators <= {'equals','at_least','at_most'} and
+                type(left['value']) is int and type(right['value']) is int)
+    return (type(left['value']) is type(right['value']) and
+            (operators <= {'requires','forbids'} or operators == {'equals'}))
+
+
 def project_requirements(snapshot: dict, prior: dict | None = None) -> dict:
     data = validate_intake(snapshot)
     draft = digest(data, 'substantive-draft-v1')
     conflicts, unknown = [], set()
+    source_versions = {}
+    for source in data['sources']:
+        key = (source['uri'],canonical_json(source['locator']))
+        source_versions.setdefault(key,set()).add((source['version'],source['sha256']))
+    if any(len(versions)>1 for versions in source_versions.values()):
+        unknown.add('ambiguous_source_version')
     facts = [(row, fact) for row in data['requirements'] for fact in row['facts']]
     if any(fact['unit'] not in {None, 'count', 'days', 'hours', 'bytes'} for _, fact in facts):
         unknown.add('unsupported_unit')
@@ -142,6 +157,9 @@ def project_requirements(snapshot: dict, prior: dict | None = None) -> dict:
             continue
         if a['unit'] not in {None, 'count', 'days', 'hours', 'bytes'}:
             unknown.add('unsupported_unit')
+            continue
+        if not _comparable(a,b):
+            unknown.add('incomparable_values')
             continue
         if _contradicts(a, b):
             refs = sorted({left['id'], right['id']})
@@ -161,6 +179,14 @@ def project_requirements(snapshot: dict, prior: dict | None = None) -> dict:
         actions[identity] = {'id': identity, 'source_id': row['source_id'], 'action_key': row['action_key'],
                              'external': copy.deepcopy(old['external']) if old else {'status': 'planned', 'resource': None},
                              'create_eligible': False}
+    # Source edits/removal do not prove an earlier external operation had no
+    # effect. Keep unmatched UNKNOWN correspondence in this same projection
+    # until its actual operation owner can reconcile it.
+    for identity, old in previous.items():
+        if identity not in actions and old['external'].get('status') == 'unknown':
+            actions[identity] = {'id':identity,'source_id':old['source_id'],'action_key':old['action_key'],
+                                 'external':copy.deepcopy(old['external']),'create_eligible':False}
+            unknown.add('unresolved_mapping')
     stale = ['stale_draft'] if prior and prior.get('draft_digest') != draft and prior.get('decisions') else []
     conflicts = sorted({canonical_json(row): row for row in conflicts}.values(), key=canonical_json)
     result = {'version': 1, 'draft_digest': draft, 'input': data,

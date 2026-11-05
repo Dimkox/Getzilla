@@ -81,6 +81,55 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(result['actions'][0]['external']['status'], 'unknown')
         self.assertFalse(result['actions'][0]['create_eligible'])
 
+    def test_unknown_external_binding_survives_anchor_change_null_and_removal(self):
+        from getzilla.intake_readiness import assess_readiness
+        original=snapshot()
+        prior=project_requirements(original)
+        old_id=prior['actions'][0]['id']
+        prior['actions'][0]['external']={'status':'unknown','resource':'operation:unresolved'}
+        for change in ('changed','null','removed'):
+            with self.subTest(change=change):
+                data=copy.deepcopy(original)
+                if change=='removed':
+                    data['requirements']=[]
+                else:
+                    data['requirements'][0]['action_key']='replacement-anchor' if change=='changed' else None
+                result=project_requirements(data,prior)
+                retained={row['id']:row for row in result['actions']}
+                self.assertIn(old_id,retained)
+                self.assertEqual(retained[old_id]['external'],{'status':'unknown','resource':'operation:unresolved'})
+                self.assertIn('unresolved_mapping',result['unknown'])
+                self.assertTrue(all(row['create_eligible'] is False for row in result['actions']))
+                replay=project_requirements(data,result)
+                self.assertEqual(replay['actions'],result['actions'])
+                self.assertIn('unresolved_mapping',replay['unknown'])
+                self.assertEqual(assess_readiness(data['spec'],result,data['policy'])['status'],'missing')
+
+    def test_mixed_scalar_numeric_bounds_are_unassessed_in_both_orders(self):
+        for unit in ('days',None):
+            for bound in ('at_least','at_most'):
+                data=self.pair(bound,10,unit)
+                data['requirements'][0]['facts'][0].update(value='seven',unit=unit)
+                for reverse in (False,True):
+                    with self.subTest(unit=unit,bound=bound,reverse=reverse):
+                        if reverse:
+                            data['requirements'].reverse()
+                        result=project_requirements(data)
+                        self.assertIn('incomparable_values',result['unknown'])
+                        self.assertEqual(result['conflicts'],[])
+                        self.assertEqual(len(result['input']['requirements']),2)
+
+    def test_current_source_alias_versions_remain_ambiguous(self):
+        data=snapshot()
+        alias=copy.deepcopy(data['sources'][0])
+        alias.update(id='source-two',version='2',sha256='c'*64)
+        data['sources'].append(alias)
+        result=project_requirements(data)
+        self.assertIn('ambiguous_source_version',result['unknown'])
+        self.assertEqual(len(result['input']['sources']),2)
+        data['sources'][1].update(version='1',sha256=data['sources'][0]['sha256'])
+        self.assertEqual(project_requirements(data)['unknown'],[])
+
     def test_unknown_correspondence_never_creates_guessed_action(self):
         data = snapshot()
         data['requirements'][0]['action_key'] = None

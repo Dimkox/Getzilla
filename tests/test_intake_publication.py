@@ -61,6 +61,94 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(require_intake_ready(root)['assessment']['status'], 'ready')
             self.assertEqual(result, self.publish(root, intent))
 
+    def test_staged_retry_cannot_substitute_committed_previous_state(self):
+        from getzilla import intake_publication as publisher
+        for change in ('control','withdrawn','events','rounds','null','expected_raw_files'):
+            with self.subTest(change=change),project_copy() as root:
+                package,intent=self.fixture(root)
+                first=self.publish(root,intent)
+                intent['event']={'id':'withdraw-two','kind':'withdraw'}
+                second=prepare_intake(root,intent,cut_digest(first['cut']),first['cut']['M'])
+                intent['event']={'id':'record-three','kind':'record'}
+                expected=cut_digest(second['cut'])
+                with patch.object(publisher,'_boundary',side_effect=lambda p: (_ for _ in ()).throw(RuntimeError()) if p=='staged' else None):
+                    with self.assertRaises(RuntimeError):
+                        prepare_intake(root,intent,expected,second['cut']['M'])
+                transaction=publisher.publication_id(root,intent,expected,second['cut']['M'])
+                path=package/(publisher.BASE+'publications/'+transaction+'.json')
+                saved=json.loads(path.read_text())
+                if change=='withdrawn':
+                    saved['old_state']['withdrawn']=False
+                elif change=='events':
+                    saved['old_state']['events']=[]
+                elif change=='rounds':
+                    saved['old_state']['rounds']+=1
+                elif change=='null':
+                    saved['old_state']=None
+                elif change=='expected_raw_files':
+                    saved['old_files']['requirements.md']='0'*64
+                path.write_bytes(publisher.canonical_json(saved))
+                retained=path.read_bytes()
+                before_route=state.require_route_owner(root)
+                before=(package/publisher.ACTIVE).read_bytes()
+                inode=(package/publisher.ACTIVE).stat().st_ino
+                if change=='control':
+                    third=prepare_intake(root,intent,expected,second['cut']['M'])
+                    self.assertEqual(third['cut']['generation'],3)
+                    current=json.loads((package/publisher.ACTIVE).read_text())
+                    self.assertTrue(current['withdrawn'])
+                    self.assertEqual([event['id'] for event in current['events']],['event-one','withdraw-two','record-three'])
+                else:
+                    with self.assertRaises(IntakeError):
+                        prepare_intake(root,intent,expected,second['cut']['M'])
+                    self.assertEqual(state.require_route_owner(root),before_route)
+                    self.assertEqual((package/publisher.ACTIVE).read_bytes(),before)
+                    self.assertEqual((package/publisher.ACTIVE).stat().st_ino,inode)
+                self.assertEqual(path.read_bytes(),retained)
+                with self.assertRaisesRegex(IntakeError,'intake_withdrawn'):
+                    require_intake_ready(root)
+
+    def test_initial_staged_retry_requires_null_previous_state(self):
+        from getzilla import intake_publication as publisher
+        with project_copy() as root:
+            package,intent=self.fixture(root)
+            with patch.object(publisher,'_boundary',side_effect=lambda p: (_ for _ in ()).throw(RuntimeError()) if p=='staged' else None):
+                with self.assertRaises(RuntimeError):
+                    self.publish(root,intent)
+            transaction=publisher.publication_id(root,intent,None,'0'*64)
+            path=package/(publisher.BASE+'publications/'+transaction+'.json')
+            saved=json.loads(path.read_text())
+            saved['old_state']={'withdrawn':False}
+            path.write_bytes(publisher.canonical_json(saved))
+            before=state.require_route_owner(root)
+            with self.assertRaises(IntakeError):
+                self.publish(root,intent)
+            self.assertEqual(state.require_route_owner(root),before)
+
+    def test_native_mixed_scalar_bound_and_alias_versions_cannot_admit(self):
+        for case in ('mixed','alias'):
+            with self.subTest(case=case),project_copy() as root:
+                _,intent=self.fixture(root)
+                data=intent['snapshot']
+                other=copy.deepcopy(data['requirements'][0])
+                other.update(id='REQ-002',action_key='second')
+                if case=='mixed':
+                    data['requirements'][0]['facts'][0]['value']='seven'
+                    other['facts'][0].update(operator='at_least',value=10)
+                else:
+                    alias=copy.deepcopy(data['sources'][0])
+                    alias.update(id='source-two',version='2')
+                    data['sources'].append(alias)
+                    other['source_id']='source-two'
+                data['requirements'].append(other)
+                self.publish(root,intent)
+                observed=read_intake_cut(root)
+                self.assertEqual(observed['assessment']['status'],'missing')
+                reasons={row['reason'] for row in observed['assessment']['missing']}
+                self.assertIn('incomparable_values' if case=='mixed' else 'ambiguous_source_version',reasons)
+                with self.assertRaisesRegex(IntakeError,'intake_not_ready'):
+                    require_intake_ready(root)
+
     def test_vague_native_draft_commits_missing_questions_without_coding_admission(self):
         with project_copy() as root:
             _,intent=self.fixture(root)

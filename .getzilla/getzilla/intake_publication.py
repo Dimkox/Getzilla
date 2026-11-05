@@ -272,6 +272,21 @@ def _validate_intent(root, route, package, transaction, saved):
             saved['version'] != 1 or saved['publication_id'] != transaction or digest(saved['core'],'publication-v1') != transaction or
             saved['core']['identity'] != native_identity(root,route) or saved['core']['route_id'] != route['route_id']):
         raise IntakeError('invalid_saved_intent')
+    # Before pending, the retained intent is untrusted data. Its prior payload
+    # must rederive the real previous M, including withdrawal/history/counters.
+    # Hashing the requested core alone does not bind these reducer inputs.
+    core, old = saved['core'], saved['old_state']
+    expected = core['expected_state']
+    if old is None:
+        if expected != ZERO or core['old_cut'] is not None or core['old_generation'] != 0:
+            raise IntakeError('invalid_previous_state')
+    elif (not isinstance(old,dict) or not _hex(expected) or _hash(canonical_json(old)) != expected or
+          not _cut(core['old_cut']) or core['old_cut']['M'] != expected or
+          core['old_cut']['generation'] != core['old_generation'] or
+          old.get('identity') != core['identity'] or _result(old)['cut'] != core['old_cut']):
+        raise IntakeError('invalid_previous_state')
+    if saved['old_files'].get(ACTIVE) != expected:
+        raise IntakeError('invalid_previous_state')
     data = _json(root,package,BASE+'versions/'+saved['core']['D']+'.json')
     projection = project_requirements(data)
     from .spec import _parse_canonical_json, canonical_spec_digest
@@ -319,7 +334,8 @@ def prepare_intake(root, intent, expected_cut_digest, expected_state_digest):
         existing = _json(root,package,intent_path,missing=True)
         if existing is not None:
             _validate_intent(root,route,package,transaction,existing)
-            if existing['core'] != saved['core'] or existing['event'] != saved['event']:
+            if (existing['core'] != saved['core'] or existing['event'] != saved['event'] or
+                    existing['old_files'] != saved['old_files']):
                 raise IntakeError('publication_collision')
             saved = existing
         raw = canonical_json(saved)

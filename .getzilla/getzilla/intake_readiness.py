@@ -9,7 +9,7 @@ from .workflow_artifacts import PLACEHOLDER
 
 def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
     # Recompute typed conflicts and D; a stored label cannot turn into readiness.
-    current = project_requirements(provenance['input'])
+    current = project_requirements(provenance['input'],provenance)
     data = current['input']
     clean_spec = {key: value for key, value in spec.items() if key != 'intake'}
     stale = (normalized(clean_spec) != data['spec'] or
