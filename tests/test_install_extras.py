@@ -139,7 +139,7 @@ class InstallExtrasTests(unittest.TestCase):
             result = subprocess.run([sys.executable, '-B', '-c', probe], cwd=project, capture_output=True, text=True, check=True)
             module_file, stack_dir = result.stdout.splitlines()
             self.assertIn('getzilla.zip', module_file)
-            self.assertTrue(module_file.endswith('.pyc'), module_file)
+            self.assertTrue(module_file.endswith('.py'), module_file)
             self.assertEqual(Path(stack_dir), (project / '.getzilla').resolve())
             from getzilla.doctor import run_doctor
             items = {item.name: item for item in run_doctor(project)}
@@ -157,6 +157,32 @@ class InstallExtrasTests(unittest.TestCase):
             _, data, error = run_hook(project, 'pre_tool_use.py', payload)
             self.assertIn('exact tool invocation was denied again', data.get('reason', ''), error)
             self.assertNotIn('Denial recording unavailable', data.get('reason', ''))
+
+    def test_archive_doctor_distinguishes_source_and_legacy_bytecode(self) -> None:
+        import importlib.util
+        from importlib import _bootstrap_external
+        import zipfile
+        from getzilla.doctor import _engine_archive_item
+        pyc = bytes(_bootstrap_external._code_to_hash_pyc(
+            compile(b'value = 42\n', 'getzilla/policy.py', 'exec'), importlib.util.source_hash(b'value = 42\n'), False))
+        cases = [({'getzilla/policy.py': b'value = 42\n'}, 'pass'),
+                 ({'getzilla/policy.py': b'def broken('}, 'fail'),
+                 ({'getzilla/policy.py': b''}, 'fail'),
+                 ({'getzilla/other.py': b'value = 1\n'}, 'fail'),
+                 ({'getzilla/policy.pyc': pyc}, 'pass'),
+                 ({'getzilla/policy.pyc': pyc[:4]}, 'fail'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:], 'getzilla/policy.py': b'value = 42\n'}, 'warn'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:]}, 'fail'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:], 'getzilla/policy.py': b'def broken('}, 'fail'),
+                 ({'getzilla/policy.py': b'value = 42\n', 'getzilla/other.pyc': pyc}, 'fail')]
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / 'engine.zip'
+            for members, status in cases:
+                with self.subTest(members=list(members), status=status):
+                    with zipfile.ZipFile(archive, 'w') as bundle:
+                        for name, body in members.items():
+                            bundle.writestr(name, body)
+                    self.assertEqual(status, _engine_archive_item(archive).status)
 
     def test_archived_engine_runs_real_nonempty_and_empty_counted_collections(self) -> None:
         selection = MODULE.PayloadSelection(('qwen',), engine_archive=True)
