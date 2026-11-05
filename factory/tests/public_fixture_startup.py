@@ -24,8 +24,8 @@ sys.stderr.flush()
 '''
 _GUARD = '''    sys.stderr.write('PUBLIC_GUARD ' + json.dumps({
         'canonical_request': raw_request == canonical_request,
-        'unexpected_environment_names': sorted(set(runtime_environment) - {'LC_CTYPE'}),
-        'locale_admitted': runtime_environment.get('LC_CTYPE') in {None, 'C.UTF-8', 'C.utf8', 'UTF-8'},
+        'unexpected_environment_names': sorted(runtime_environment_names - allowed_environment_names),
+        'locale_admitted': locale_admitted,
     }, sort_keys=True) + '\\n')
     sys.stderr.flush()
     raise SystemExit(32)'''

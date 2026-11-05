@@ -12,7 +12,7 @@ from queue import Empty
 from dataclasses import replace
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -54,8 +54,8 @@ def _controlled_claim_results(children, results):
                 if child.exitcode not in (None, 0):
                     print('controlled-worker ' + json.dumps({'pid': child.pid, 'exitcode': child.exitcode}), flush=True)
                     raise AssertionError(f'controlled worker exit: {child.exitcode}') from None
-            if all(child.exitcode == 0 for child in children):
-                raise AssertionError('controlled worker returned no result') from None
+            # Producers can flush/exit after the timed empty read. Recheck only
+            # observation data under the original deadline, never claim again.
             continue
         if (type(envelope) is not dict or type(envelope.get('pid')) is not int
                 or envelope['pid'] not in pending):
@@ -343,6 +343,27 @@ class ContinuationJournalTest(unittest.TestCase):
                     self.test_controlled_claim_race_between_processes()
             except TypeError:
                 self.fail('malformed worker error escaped the closed result decoder')
+
+    def test_controlled_claim_rechecks_late_results_after_successful_child_exits(self):
+        children = [Mock(pid=101, exitcode=0), Mock(pid=102, exitcode=0)]
+        results = Mock()
+        results.get.side_effect = [Empty(),
+            {'status': 'success', 'pid': 101, 'result': {'claimed': True, 'dispatch_permitted': False}},
+            {'status': 'success', 'pid': 102, 'result': {'claimed': False, 'dispatch_permitted': False}}]
+        with patch.object(time, 'monotonic', return_value=0):
+            claims = _controlled_claim_results(children, results)
+        self.assertEqual([c['claimed'] for c in claims], [True, False])
+        self.assertEqual(results.get.call_count, 3)
+        self.assertTrue(all(c['dispatch_permitted'] is False for c in claims))
+
+    def test_controlled_claim_missing_results_keep_original_deadline(self):
+        children = [Mock(pid=101, exitcode=0), Mock(pid=102, exitcode=0)]
+        results = Mock()
+        results.get.side_effect = Empty
+        with patch.object(time, 'monotonic', side_effect=[0, 0, 14.99, 15]), \
+                self.assertRaisesRegex(AssertionError, '^controlled worker result timed out$'):
+            _controlled_claim_results(children, results)
+        self.assertEqual(results.get.call_count, 2)
 
     def test_controlled_claim_publish_failure_does_not_reissue(self):
         journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)

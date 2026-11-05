@@ -84,3 +84,51 @@ class PublicFixtureStartupTests(unittest.TestCase):
         self.assertEqual([row['start_error'] for row in observed['cases']], ['os_error'] * 3)
         self.assertEqual([row['returncode'] for row in observed['cases']], [None] * 3)
         self.assertNotIn('public-exception-marker', json.dumps(observed))
+
+    @unittest.skipUnless(os.name == 'posix', 'canonical executable fixture requires POSIX shebang support')
+    def test_observed_darwin_runtime_name_is_platform_specific_and_not_a_guard_bypass(self):
+        configured, request_bytes = self._request()
+        bootstrap = ('import json,os,runpy,sys;os.environ.clear();'
+                     'os.environ.update(json.loads(sys.argv[1]));sys.platform=sys.argv[2];'
+                     'sys.argv=sys.argv[3:];runpy.run_path(sys.argv[0],run_name="__main__")')
+        cases = (
+            ('darwin', {'__CF_USER_TEXT_ENCODING': 'public-marker'}, request_bytes, 0),
+            ('darwin', {'__CF_USER_TEXT_ENCODING': 'public-marker', 'LC_CTYPE': 'UTF-8'}, request_bytes, 0),
+            ('linux', {'__CF_USER_TEXT_ENCODING': 'public-marker'}, request_bytes, 32),
+            ('darwin', {'__CF_USER_TEXT_ENCODING': 'public-marker', 'UNKNOWN': 'public-marker'}, request_bytes, 32),
+            ('darwin', {'__CF_USER_TEXT_ENCODING': 'public-marker'}, request_bytes + b' ', 32),
+            ('darwin', {'__CF_USER_TEXT_ENCODING': 'public-marker', 'LC_CTYPE': 'en_US.UTF-8'}, request_bytes, 32),
+        )
+        for platform, environment, raw, code in cases:
+            with self.subTest(platform=platform, keys=sorted(environment), canonical=(raw == request_bytes)):
+                result = subprocess.run([sys.executable, '-I', '-c', bootstrap, json.dumps(environment),
+                    platform, configured.executable, '--mode=normal'], input=raw,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={}, timeout=2)
+                self.assertEqual(result.returncode, code)
+                self.assertNotIn(b'public-marker', result.stderr)
+
+    @unittest.skipUnless(os.name == 'posix', 'canonical executable fixture requires POSIX shebang support')
+    def test_diagnostic_guard_shares_current_canonical_darwin_predicates(self):
+        configured, request_bytes = self._request()
+        actual_popen = subprocess.Popen
+        bootstrap = ('import os,runpy,sys;os.environ.clear();'
+                     'os.environ["__CF_USER_TEXT_ENCODING"]="public-marker";'
+                     'sys.platform="darwin";sys.argv=sys.argv[1:];'
+                     'runpy.run_path(sys.argv[0],run_name="__main__")')
+
+        def start(command, **kwargs):
+            if command[1:3] == ['-I', '-c']:
+                command = [*command[:3], 'import sys;sys.platform="darwin";' + command[3], *command[4:]]
+            else:
+                command = [sys.executable, '-I', '-c', bootstrap, *command]
+            return actual_popen(command, **kwargs)
+
+        with patch('subprocess.Popen', side_effect=start):
+            observed = observe_fixture_startup(Path(configured.executable), request_bytes + b' ')
+        for row in observed['cases'][1:]:
+            self.assertEqual(row['returncode'], 32)
+            self.assertEqual(row['guard_facts'][-1], {
+                'canonical_request': False, 'locale_admitted': True,
+                'unexpected_environment_names': [],
+            })
+            self.assertNotIn('public-marker', row['stderr_public'])

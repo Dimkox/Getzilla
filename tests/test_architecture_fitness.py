@@ -2122,6 +2122,53 @@ class ArchitectureFitnessTests(unittest.TestCase):
         unrelated = ast.parse(prefix + 'with patch.object(own, "unrelated", None):\n    f()\n')
         self.assertEqual(FIT.analyze_queue_tree(unrelated).signals, ())
 
+    def test_expanded_and_getter_derived_mock_replacements_stay_governed(self):
+        prefix = 'from queue import Empty\nfrom unittest.mock import patch\ndef f():\n    raise Empty()\n'
+        for statement in (
+            'patch.multiple("sample", **{"Empty": unknown})',
+            'patch.multiple("sample", **members)',
+            'patch.multiple("sample", **{unknown_member: unknown})',
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(prefix + statement + '\n')).signals)
+        capabilities = (
+            'modify=getattr(mock,"patch")\nmodify("sample.Empty",unknown)\n',
+            'modify=getattr(mock,member)\nmodify("sample.Empty",unknown)\n',
+            'modify=mock\nopaque(modify)\n',
+            'opaque(mock)\n',
+        )
+        for use in capabilities:
+            with self.subTest(use=use):
+                source = 'from queue import Empty\nfrom unittest import mock\n' + use
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        for use in ('m=getattr(unit,"mock")\nmodify=getattr(m,"patch")\nmodify("sample.Empty",unknown)\n',
+                    'opaque(unit)\n'):
+            with self.subTest(root_namespace=use):
+                source = 'from queue import Empty\nimport unittest as unit\n' + use
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        self.assertEqual(FIT.analyze_queue_tree(ast.parse(prefix + 'patch.multiple("sample", **{"unrelated": None})\n')).signals, ())
+
+    def test_expanded_mock_members_fail_real_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['type'] = 'worker'
+        system['nodes'][0]['repository_paths'] = ['src']
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        prefix = 'from queue import Empty\nfrom unittest.mock import patch\ndef f():\n    raise Empty()\n'
+        for members in ('**{"Empty":unknown}', '**members'):
+            with self.subTest(members=members):
+                repo.write_text('src/sample.py', prefix + f'with patch.multiple("sample",{members}):\n    f()\n')
+                head = repo.commit('unproved expanded replacement')
+                report = self._evaluate(repo, base, head)
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside

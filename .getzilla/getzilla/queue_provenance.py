@@ -70,6 +70,7 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             loads.setdefault(node.id, []).append(node)
     patch_names = set()
+    instrumentation_roots = set()
     for node in nodes:
         if isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock' and not node.level:
             patch_names.update(alias.asname or alias.name for alias in node.names if alias.name == 'patch')
@@ -78,6 +79,8 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         elif isinstance(node, ast.Import):
             patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'unittest.mock')
             patch_names.update((alias.asname or alias.name) + '.mock.patch' for alias in node.names if alias.name == 'unittest')
+            instrumentation_roots.update(alias.asname or alias.name.split('.')[0] for alias in node.names
+                                         if alias.name in {'unittest', 'unittest.mock'})
     if any(counts[name.split('.')[0]] != 1 for name in patch_names):
         return tree
 
@@ -92,8 +95,18 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
 
     patch_calls = patch_names | {p + '.multiple' for p in patch_names}
     object_patches = {p + '.object' for p in patch_names}
+    mock_namespaces = {p.rsplit('.', 1)[0] for p in patch_names if '.' in p}
     replaced = set()
     for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in instrumentation_roots:
+            owner = parents.get(node)
+            if not isinstance(owner, ast.Attribute) or owner.value is not node:
+                return tree
+        if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in mock_namespaces:
+            owner = parents.get(node)
+            if not isinstance(owner, ast.Attribute) or owner.value is not node or owner.attr != 'patch':
+                # A getter, alias or opaque consumer may recover mock.patch.
+                return tree
         if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in patch_names:
             owner = parents.get(node)
             if isinstance(owner, ast.Call) and owner.func is node:
@@ -124,7 +137,17 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         if not isinstance(target, ast.Constant) or type(target.value) is not str:
             return tree
         replaced.add(target.value.rsplit('.', 1)[-1])
-        replaced.update(k.arg for k in node.keywords)
+        for keyword in node.keywords:
+            if keyword.arg is not None:
+                replaced.add(keyword.arg)
+                continue
+            mapping = keyword.value
+            if not isinstance(mapping, ast.Dict):
+                return tree
+            for key in mapping.keys:
+                if not isinstance(key, ast.Constant) or type(key.value) is not str:
+                    return tree
+                replaced.add(key.value)
 
     selected = set()
     for node in imports:
