@@ -104,6 +104,21 @@ class ExecutionStopTests(unittest.TestCase):
         with self.assertRaises(execution.ExecutionError):
             execution.submit(self.root, self.caller, self.request, backend=CountingBackend())
 
+    def test_legacy_unknown_operation_cannot_be_provisioned_as_a_running_control(self):
+        from tests.test_execution_store import record
+        legacy = store.empty_registry()
+        item = record(self.root)
+        item.update(execution_status='orphaned', cleanup_status='confirmed', operation_outcome='unknown',
+                    operation_id='synthetic-operation', dispatch_claim='consumed', terminal_reason='worker_lost')
+        legacy['records'][item['execution_id']] = item
+        legacy['intents'][item['input']['intent_digest']] = item['execution_id']
+        saved = store.commit_registry(self.root, None, legacy)
+        with self.assertRaises(execution.ExecutionError) as error:
+            execution.provision(self.root, self.caller)
+        self.assertEqual(error.exception.code, 'legacy_reconciliation_required')
+        self.assertEqual(store.load_registry(self.root), saved)
+        self.assertNotIn('execution_store_required', state.require_route_owner(self.root))
+
     def test_stop_latches_before_any_new_submission_and_is_idempotent(self):
         execution.provision(self.root, self.caller)
         stopped = execution.stop(self.root, self.caller, reason='operator_stop')

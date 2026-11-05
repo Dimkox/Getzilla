@@ -377,6 +377,7 @@ def provision(root: Path, caller: CallerContext):
     if previous is not None and previous['schema_version'] == 1:
         if any(item['execution_status'] not in store.TERMINAL
                or item['cleanup_status'] not in {'not_required', 'confirmed'}
+               or item['operation_outcome'] == 'unknown'
                for item in previous['records'].values()):
             raise ExecutionError('legacy_reconciliation_required')
     value = copy.deepcopy(previous) if previous is not None else store.empty_registry()

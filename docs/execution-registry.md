@@ -44,7 +44,8 @@ canonical task. The binding is monotone and survives task amendments and handoff
 An interrupted initial arm can resume with that same generation. Once armed,
 missing, corrupt or mismatched state cannot recreate an empty running store.
 Historical version 1 migration requires terminal attempts with confirmed or
-unneeded cleanup. Stop controls and intent tombstones are never silently removed.
+unneeded cleanup and no unknown operation outcome. Stop controls and intent
+tombstones are never silently removed.
 The version 2 machine contract is `schemas/execution-registry.v2.schema.json`.
 
 `getzilla trust stop --reason operator_stop --json` commits the stop before any
@@ -153,6 +154,29 @@ POST. Its offline path remains available. The programmatic synthetic Qwen probe
 also requires a real capability for its exact synthetic source. The public probe
 CLI has no authenticated capability issuer and therefore refuses live execution.
 No deployment or real-provider qualification is implied by source tests.
+
+## Rollback and recovery
+
+Stop the owning local task with reason `rollback` and inspect every existing
+attempt. Keep its required-store generation, stopped control, intent tombstones
+and unknown outcomes. A missing registry is an outage, not a fresh installation.
+Do not replay a consumed intent or treat accepted cancellation as cleanup proof.
+
+Restore tool declarations, dependencies or binaries through normal reviewed
+delivery while retaining this stop-aware hook, admission and version2 reader.
+Downgrading to a client that ignores the required store is unsupported. Source
+restore does not remove runtime state or create a new attempt ledger. Recheck
+pins, policy, task context and cleanup. Only then use the exact current stopped
+revision and current source fingerprint with `trust recover`. Stale revisions,
+unknown operations, pending attempts and unconfirmed cleanup refuse recovery.
+
+For Factory, its authorized operator must retain the existing global/repository
+kill while a compatible source change is qualified. Keep migration026 and its
+revision-aware claim/provider consumers; do not restore an older live path that
+ignores the stop fence. New capabilities require the current canonical task,
+creator and source after the operator's new revision. A local source rollback
+cannot reverse a sent provider effect or revoke a provider credential. Any real
+credential revocation remains a separate authorized operator action.
 
 Cleanup kills the owned process group while its leader remains unreaped, then
 waits for the child and observes group disappearance. The live pidfd belongs only
