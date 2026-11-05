@@ -72,6 +72,23 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(result['events'], [])
         self.assertIn('project_binding_mismatch', result['gaps'])
 
+    def test_revocation_and_replacement_invalidate_captured_read_before_disclosure(self):
+        source = self.load()
+        self.assertTrue(observation_privacy.revalidate_local(self.root, source))
+        self.path.chmod(0o644)
+        self.assertFalse(observation_privacy.revalidate_local(self.root, source))
+        self.path.chmod(0o600)
+        replacement = self.path.with_name('replacement')
+        replacement.write_bytes(self.path.read_bytes())
+        replacement.chmod(0o600)
+        os.replace(replacement, self.path)
+        self.assertFalse(observation_privacy.revalidate_local(self.root, source))
+
+    def test_payload_principal_or_foreign_root_cannot_replace_native_read_capability(self):
+        source = self.load()
+        forged = {**source, 'read_token': {'uid': os.getuid(), 'role': 'owner'}}
+        self.assertFalse(observation_privacy.revalidate_local(self.root, forged))
+
 
 if __name__ == '__main__':
     unittest.main()

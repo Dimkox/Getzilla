@@ -7,6 +7,11 @@ import json
 import subprocess
 import tempfile
 import hashlib
+import importlib.util
+import contextlib
+import io
+import os
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
@@ -131,6 +136,36 @@ class SprintReportTests(unittest.TestCase):
             self.assertEqual(summary['outcome'], 'unknown')
             self.assertTrue(all(value == 'unsupported' for value in summary['stages'].values()))
             self.assertEqual(journal.read_text(), '')
+
+    def test_cli_revocation_during_projection_censors_counts_before_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root/'.getzilla/runtime'
+            runtime.mkdir(parents=True, mode=0o700)
+            (root/'.getzilla').chmod(0o755)
+            journal = runtime/'metrics.jsonl'
+            journal.write_text(json.dumps({'event': 'route', 'at': START})+'\n')
+            journal.chmod(0o600)
+            script = Path(__file__).resolve().parents[1]/'scripts/getzilla_report.py'
+            definition = importlib.util.spec_from_file_location('report_revocation_fixture', script)
+            module = importlib.util.module_from_spec(definition)
+            definition.loader.exec_module(module)
+            original = sprint_report.summarize_sprint
+            def revoke(*args, **kwargs):
+                value = original(*args, **kwargs)
+                runtime.chmod(0o755)
+                return value
+            prior = Path.cwd()
+            output = io.StringIO()
+            try:
+                os.chdir(root)
+                with patch('getzilla.sprint_report.summarize_sprint', side_effect=revoke), contextlib.redirect_stdout(output):
+                    self.assertEqual(module.main(['--sprint-start', START, '--as-of', CUTOFF, '--json']), 0)
+            finally:
+                os.chdir(prior)
+            result = json.loads(output.getvalue())
+            self.assertIsNone(result['legacy_observations'])
+            self.assertIn('disclosure_revalidation_failed', result['coverage']['gaps'])
 
 
 if __name__ == '__main__':

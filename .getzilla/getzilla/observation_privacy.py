@@ -7,9 +7,30 @@ import os
 import re
 import stat
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from contextlib import contextmanager
 
 from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, EVENTS, digest
+
+
+@dataclass(frozen=True)
+class _ReadToken:
+    uid: int
+    binding: tuple
+    fingerprint: tuple
+
+
+class _LocalRead(dict):
+    """Native ephemeral read cut; the token is not a serialized payload field."""
+
+    def __init__(self, value, token):
+        super().__init__(value)
+        self._token = token
+
+
+def _fingerprint(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def _directory(parent, name, uid, *, private=False):
@@ -28,7 +49,8 @@ def _directory(parent, name, uid, *, private=False):
 @contextmanager
 def owned_journal(root, *, private=True, writable=False):
     """Yield an actually owned no-follow descriptor, never a payload principal."""
-    if os.name != 'posix' or not hasattr(os, 'getuid'):
+    if (os.name != 'posix' or not hasattr(os, 'getuid')
+            or os.getuid() != os.geteuid()):
         raise ValueError('local_owner_unavailable')
     handles = []
     descriptor = None
@@ -164,11 +186,13 @@ def load_local(root):
     try:
         with owned_journal(root) as (descriptor, _, binding):
             raw = os.read(descriptor, MAX_BYTES + 1)
+            token = _ReadToken(os.getuid(), tuple(sorted(binding.items())), _fingerprint(os.fstat(descriptor)))
     except (OSError, ValueError):
         private = False
         try:
             with owned_journal(root, private=False) as (descriptor, _, binding):
                 raw = os.read(descriptor, MAX_BYTES + 1)
+                token = _ReadToken(os.getuid(), tuple(sorted(binding.items())), _fingerprint(os.fstat(descriptor)))
         except (OSError, ValueError):
             return denied
     try:
@@ -210,8 +234,20 @@ def load_local(root):
         if private:
             proofs, proof_gaps = _delivery_proofs(root, rows)
             gaps += proof_gaps
-        return {'access': 'local_owner' if private else 'metadata_only', 'events': rows,
+        return _LocalRead({'access': 'local_owner' if private else 'metadata_only', 'events': rows,
                 'input_digest': hashlib.sha256(raw).hexdigest(),
-                'scope': 'canonical_root_only', 'delivery_proofs': proofs, 'gaps': sorted(set(gaps))}
+                'scope': 'canonical_root_only', 'delivery_proofs': proofs, 'gaps': sorted(set(gaps))}, token)
     except (OSError, ValueError, ImportError):
         return denied
+
+
+def revalidate_local(root, captured):
+    """Check actual current access and source cut again immediately before output."""
+    if type(captured) is not _LocalRead or type(captured._token) is not _ReadToken:
+        return False
+    fresh = load_local(root)
+    return (type(fresh) is _LocalRead and fresh._token == captured._token
+            and fresh['access'] == captured['access']
+            and fresh['input_digest'] == captured['input_digest']
+            and fresh['events'] == captured['events']
+            and fresh['delivery_proofs'] == captured['delivery_proofs'])

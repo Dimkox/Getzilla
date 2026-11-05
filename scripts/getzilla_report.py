@@ -24,6 +24,11 @@ from getzilla.util import find_root  # noqa: E402
 MAX_GAP_ROUTES = 10
 
 
+def _disclosure_refusal():
+    return {'access': 'metadata_only', 'events': [], 'input_digest': None,
+            'scope': 'canonical_root_only', 'gaps': ['disclosure_revalidation_failed']}
+
+
 def _since(value: str) -> datetime | None:
     if value == 'all':
         return None
@@ -56,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.trace_operation is not None:
         if args.sprint_start is not None or args.as_of is None or args.import_observations:
             parser.error('trace mode requires cutoff and cannot select a sprint or import')
-        from getzilla.observation_privacy import load_local
+        from getzilla.observation_privacy import load_local, revalidate_local
         from getzilla.trace_report import reconstruct
         from getzilla.trace_contracts import utc
         from getzilla.metrics_journal import digest
@@ -76,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
             summary = reconstruct(visible, args.trace_operation, args.as_of)
         except ValueError:
             parser.error('invalid trace input')
+        if not revalidate_local(root, source):
+            source = _disclosure_refusal()
+            summary = reconstruct([], args.trace_operation, args.as_of)
         summary['access'] = source['access']
         summary['source_scope'] = source['scope']
         summary['coverage']['gaps'] = sorted(set(summary['coverage']['gaps'] + source['gaps']))
@@ -93,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.sprint_start is not None or args.as_of is not None:
         if args.sprint_start is None or args.as_of is None or args.import_observations:
             parser.error('sprint mode requires start and cutoff and cannot import observations')
-        from getzilla.observation_privacy import load_local
+        from getzilla.observation_privacy import load_local, revalidate_local
         from getzilla.sprint_report import summarize_sprint
         source = load_local(root)
         try:
@@ -101,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
                                        as_of=args.as_of, source_manifest=source)
         except ValueError:
             parser.error('invalid sprint input')
+        if not revalidate_local(root, source):
+            source = _disclosure_refusal()
+            summary = summarize_sprint([], start=args.sprint_start, as_of=args.as_of,
+                                       source_manifest=source)
         summary['access'] = source['access']
         summary['journal_digest'] = source['input_digest']
         if args.json:
