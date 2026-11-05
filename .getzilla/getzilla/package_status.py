@@ -299,6 +299,65 @@ def obligation_reference(row: Any, ids: set[str], receipt_kinds: set[str], *, ob
     return reference
 
 
+class _PackageReadClosure:
+    """The inspector's bounded unique-file read set, reused for prospective state."""
+
+    def __init__(self, root: Path, relative: str, finding):
+        self.root, self.relative, self.finding = root, relative, finding
+        self.cache: dict[str, bytes | None] = {}
+        self.limits: dict[str, int] = {}
+        self.total_bytes = 0
+
+    @staticmethod
+    def _capacity(count: int, total: int) -> None:
+        if count >= MAX_FILES or total >= MAX_TOTAL_BYTES:
+            raise InspectionError('inspection_limit', 'package file or aggregate byte limit exceeded')
+
+    @staticmethod
+    def _aggregate(total: int) -> None:
+        if total > MAX_TOTAL_BYTES:
+            raise InspectionError('inspection_limit', 'package aggregate byte limit exceeded')
+
+    @property
+    def remaining_bytes(self) -> int:
+        return max(0, MAX_TOTAL_BYTES - self.total_bytes)
+
+    def read(self, name: str, limit: int = MAX_FILE_BYTES) -> bytes | None:
+        if name in self.cache:
+            return self.cache[name]
+        try:
+            self._capacity(len(self.cache), self.total_bytes)
+        except InspectionError as exc:
+            self.finding(exc.code, self.relative, str(exc))
+            return None
+        self.cache[name] = None
+        self.limits[name] = limit
+        try:
+            raw = read_package_file(self.root, f'{self.relative}/{name}', limit)
+            self.total_bytes += len(raw)
+            self._aggregate(self.total_bytes)
+            self.cache[name] = raw
+            return raw
+        except InspectionError as exc:
+            self.finding(exc.code, f'{self.relative}/{name}', str(exc))
+            return None
+
+    def validate_state_replacement(self, encoded: bytes) -> None:
+        """Admit the proposed bytes in the same read order, without another read."""
+        if self.cache.get('state.json') is None:
+            raise InspectionError('file_unavailable', 'package state is unavailable')
+        if len(encoded) > self.limits['state.json']:
+            raise InspectionError('file_too_large', 'proposed state exceeds its caller byte bound')
+        count, total = 0, 0
+        for name, observed in self.cache.items():
+            self._capacity(count, total)
+            if observed is None:
+                raise InspectionError('file_unavailable', 'package input is unavailable')
+            total += len(encoded if name == 'state.json' else observed)
+            self._aggregate(total)
+            count += 1
+
+
 def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, Any] | None) -> dict[str, Any]:
     """Inspect only the selected package and explicitly referenced current records."""
     result: dict[str, Any] = {
@@ -331,27 +390,7 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
         return result
     relative = '/'.join(parts)
     result.update(change_id=change_id, path=relative)
-    cache: dict[str, bytes | None] = {}
-    total_bytes = 0
-
-    def read(name: str, limit: int = MAX_FILE_BYTES) -> bytes | None:
-        nonlocal total_bytes
-        if name in cache:
-            return cache[name]
-        if len(cache) >= MAX_FILES or total_bytes >= MAX_TOTAL_BYTES:
-            add('inspection_limit', relative, 'package file or aggregate byte limit exceeded')
-            return None
-        cache[name] = None
-        try:
-            raw = read_package_file(root, f'{relative}/{name}', limit)
-            total_bytes += len(raw)
-            if total_bytes > MAX_TOTAL_BYTES:
-                raise InspectionError('inspection_limit', 'package aggregate byte limit exceeded')
-            cache[name] = raw
-            return raw
-        except InspectionError as exc:
-            add(exc.code, f'{relative}/{name}', str(exc))
-            return None
+    read = _PackageReadClosure(root, relative, add).read
 
     state: dict[str, Any] = {}
     raw = read('state.json')

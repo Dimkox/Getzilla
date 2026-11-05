@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import inspect as introspect
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,7 @@ from getzilla.change import start_change
 from getzilla.package_status import inspect_package
 from getzilla.review_plan import reconcile_route
 from getzilla import change
+from getzilla import package_status
 from tests import test_review_plan as fixtures
 from tests._support import synchronize_fixture_scope
 
@@ -44,6 +46,92 @@ class ReconcileAccountingTests(unittest.TestCase):
         for path in ('auth/public.py', 'schemas/public.json', '.github/workflows/public.yml'):
             self.fixture.write(path, 'ordinary public classifier fixture\n')
         self.fixture.commit()
+
+    def aggregate_package(self, headroom, *, markdown_reference=False, empty_last=False):
+        """Reuse the reviewer's exact public64/4096-headroom consumer probe."""
+        path = self.package / 'state.json'
+        document = json.loads(path.read_text())
+        rows = document['evidence_accounting']['obligations']
+        for i in range(2):
+            rows.append({'id': f'public-run-{i}', 'kind': 'run'})
+        for i, row in enumerate(rows):
+            row.update(status='recorded', outcome='fail', recorded_at='2026-01-01T00:00:00Z',
+                       reference='evidence/README.md' if markdown_reference and i == 0 else f'evidence/public-report-{i}.md')
+            row.pop('reason', None)
+            if row['kind'] == 'run':
+                row['command'] = ['public-fixture-command']
+            (self.package / row['reference']).write_text('x')
+        if empty_last:
+            (self.package / 'evidence/README.md').write_bytes(b'')
+        path.write_bytes((json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode())
+        _, total = self.inspect_bytes()
+        target = package_status.MAX_TOTAL_BYTES - headroom
+        extra = target - total
+        for i, row in enumerate(rows):
+            size = extra // len(rows) + (1 if i < extra % len(rows) else 0) + 1
+            self.assertLessEqual(size, package_status.MAX_FILE_BYTES)
+            (self.package / row['reference']).write_text('x' * size)
+        inspected, total = self.inspect_bytes()
+        self.assertEqual(total, target)
+        self.assertEqual(inspected['findings'], [])
+        return path, copy.deepcopy(document)
+
+    def inspect_bytes(self):
+        sizes = {}
+        reader = package_status.read_package_file
+        def observe(root, relative, *args, **kwargs):
+            raw = reader(root, relative, *args, **kwargs)
+            if any(frame.function == 'read' and frame.filename.endswith('/package_status.py')
+                   for frame in introspect.stack()[:8]):
+                sizes[relative] = len(raw)
+            return raw
+        with patch.object(package_status, 'read_package_file', side_effect=observe):
+            result = inspect_package(self.root, state.get_active_route(self.root), state.get_active_change(self.root))
+        return result, sum(sizes.values())
+
+    def test_prospective_whole_package_growth_refuses_before_both_publications(self):
+        path, _ = self.aggregate_package(64)
+        before = path.read_bytes()
+        route = state.get_active_route(self.root)
+        self.expanded_source()
+        with self.assertRaisesRegex(ValueError, 'aggregate'):
+            reconcile_route(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(state.get_active_route(self.root), route)
+        inspected, total = self.inspect_bytes()
+        self.assertEqual(inspected['findings'], [])
+        self.assertEqual(total, 1048512)
+
+    def test_prospective_whole_package_headroom_preserves_readable_expansion(self):
+        path, before = self.aggregate_package(4096)
+        self.expanded_source()
+        route = reconcile_route(self.root)
+        inspected, total = self.inspect_bytes()
+        self.assertEqual(inspected['findings'], [])
+        self.assertEqual(total, 1045166)
+        after = json.loads(path.read_text())
+        self.assertEqual(after['evidence_accounting']['obligations'][:4], before['evidence_accounting']['obligations'])
+        self.assertTrue(all(row['status'] == 'not_run' for row in after['evidence_accounting']['obligations'][4:]))
+        self.assertEqual(len(route['required_evidence']), 5)
+
+    def test_exact_aggregate_boundary_and_markdown_reference_count_once(self):
+        path, _ = self.aggregate_package(686, markdown_reference=True)
+        self.expanded_source()
+        reconcile_route(self.root)
+        inspected, total = self.inspect_bytes()
+        self.assertEqual(inspected['findings'], [])
+        self.assertEqual(total, package_status.MAX_TOTAL_BYTES)
+        self.assertEqual(len(json.loads(path.read_text())['evidence_accounting']['obligations']), 7)
+
+    def test_exact_aggregate_before_unread_empty_member_still_refuses(self):
+        path, _ = self.aggregate_package(686, empty_last=True)
+        before = path.read_bytes()
+        route = state.get_active_route(self.root)
+        self.expanded_source()
+        with self.assertRaisesRegex(ValueError, 'aggregate'):
+            reconcile_route(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(state.get_active_route(self.root), route)
 
     def test_reconcile_expansion_adds_only_missing_package_obligations(self):
         path = self.package / 'state.json'

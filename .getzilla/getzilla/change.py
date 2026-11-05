@@ -148,10 +148,10 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
     receipt authority and are retained for an idempotent retry, never rolled back.
     """
     from .continuity import validate_package_state
-    from .package_status import (MAX_FILE_BYTES, MAX_TOTAL_BYTES, accounting_rows,
-                                 obligation_reference)
+    from .package_status import (MAX_FILE_BYTES, PACKAGE_MARKDOWN, InspectionError,
+                                 _PackageReadClosure, accounting_rows, obligation_reference)
     from .receipts import RECEIPT_KINDS
-    from .spec import _parse_canonical_json
+    from .spec import MAX_SPEC_BYTES, _parse_canonical_json
     from .state import get_active_change, CLOSED_CHANGE_STATUSES
     from .workflow_storage import valid_package_path
     require_route_owner(root, route)
@@ -169,7 +169,12 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
             or not valid_package_path(active['path'], active['change_id'])):
         raise ValueError('selected accounting package does not match task')
     relative = active['path'] + '/state.json'
-    raw = read_package_file(root, relative, MAX_FILE_BYTES)
+    def refuse(code, _path, message):
+        raise InspectionError(code, message)
+    inputs = _PackageReadClosure(root, active['path'], refuse)
+    def read_input(name, limit=MAX_FILE_BYTES):
+        return inputs.read(name, min(limit, inputs.remaining_bytes))
+    raw = read_input('state.json')
     document = _parse_canonical_json(raw, root / relative)
     validate_package_state(document, route, active['change_id'])
     if document['status'] in CLOSED_CHANGE_STATUSES:
@@ -178,16 +183,17 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
     ids: set[str] = set()
     kinds: set[str] = set()
     references = set()
-    total = len(raw)
+    read_input('change-spec.yaml', MAX_SPEC_BYTES)
     for row in rows:
         reference = obligation_reference(row, ids, kinds)
         if reference is not None and reference not in references:
-            report = read_package_file(root, active['path'] + '/' + reference, min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
-            total += len(report)
-            if total > MAX_TOTAL_BYTES or not report.strip():
-                raise ValueError('accounting report unavailable or exceeds aggregate bound')
+            report = read_input(reference)
+            if not report.strip():
+                raise ValueError('accounting report unavailable')
             report.decode('utf-8', 'strict')
             references.add(reference)
+    for name in PACKAGE_MARKDOWN:
+        read_input(name).decode('utf-8', 'strict')
     missing = sorted(set(required) - kinds)
     if not missing:
         return
@@ -203,6 +209,7 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
     encoded = (json.dumps(changed, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
     if len(encoded) > MAX_FILE_BYTES:
         raise ValueError('accounting state exceeds consumer byte bound')
+    inputs.validate_state_replacement(encoded)
     if (get_active_route(root) != route or get_active_change(root) != active
             or read_package_file(root, relative, MAX_FILE_BYTES) != raw):
         raise ValueError('package or route changed before accounting publication')
