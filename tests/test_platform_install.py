@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -226,6 +227,97 @@ class CollectedArtifactTests(unittest.TestCase):
     def test_matching_bounded_regular_logs_pass_structural_control(self):
         result = self.run_aggregate()
         self.assertEqual(result.returncode, 0, result.stdout)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'requires YAML')
+    def test_own_macos_witness_upload_is_separate_from_strict_installer_artifacts(self):
+        import fnmatch
+        import glob
+        from unittest.mock import patch
+        import yaml
+        document = yaml.safe_load((ROOT / '.github/workflows/getzilla.yml').read_text())
+        steps = document['jobs']['platform-install']['steps']
+        probe = next(s for s in steps if s.get('name') == 'Observe canonical public fixture startup on macOS')
+        installer = next(s for s in steps if s.get('name') == 'Retain actual install and upgrade observations')
+        witness = next((s for s in steps if s.get('name') == 'Retain canonical public fixture startup observations'), None)
+        download = next(s for s in document['jobs']['platform-install-results']['steps']
+                        if s.get('name') == "Download only this run and attempt's platform observations")
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = Path(temporary)
+
+            def expand(value, cell):
+                for key, replacement in {'runner.temp': str(runner), 'matrix.id': cell,
+                        'github.run_id': '123', 'github.run_attempt': '2'}.items():
+                    value = value.replace('${{ ' + key + ' }}', replacement)
+                return value
+
+            artifacts = runner / 'artifacts'
+            artifacts.mkdir()
+            for cell in (c['id'] for c in acceptance.load_matrix(ROOT) if c['required']):
+                shutil.copytree(self.root / cell, runner / ('platform-' + cell))
+                if cell.startswith('macos-'):
+                    def public_child(command, **kwargs):
+                        kwargs['stdout'].write(b'public synthetic fixture witness\n')
+                        return subprocess.CompletedProcess(command, 0)
+                    with patch.dict(os.environ, {'RUNNER_TEMP': str(runner), 'GETZILLA_PLATFORM_CELL': cell}, clear=True), \
+                            patch.object(subprocess, 'run', side_effect=public_child), self.assertRaises(SystemExit) as stopped:
+                        exec(compile(probe['run'], '<own-workflow-public-probe>', 'exec'), {})
+                    self.assertEqual(stopped.exception.code, 0)
+                folder = artifacts / expand(installer['with']['name'], cell)
+                folder.mkdir()
+                for pattern in installer['with']['path'].splitlines():
+                    for name in glob.glob(expand(pattern, cell)):
+                        shutil.copyfile(name, folder / Path(name).name)
+                if cell.startswith('macos-') and witness:
+                    folder = artifacts / expand(witness['with']['name'], cell)
+                    folder.mkdir()
+                    log = Path(expand(witness['with']['path'], cell))
+                    self.assertTrue(log.is_file(), 'witness upload path was not produced')
+                    shutil.copyfile(log, folder / 'public-fixture-startup.log')
+            collected = runner / 'collected'
+            collected.mkdir()
+            pattern = expand(download['with']['pattern'], 'unused')
+            for folder in artifacts.iterdir():
+                if fnmatch.fnmatchcase(folder.name, pattern):
+                    shutil.copytree(folder, collected / folder.name)
+            original = self.root
+            self.root = collected
+            try:
+                result = self.run_aggregate()
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIsNotNone(witness)
+                self.assertEqual(witness['if'], "${{ always() && matrix.os == 'macos' }}")
+                self.assertEqual(witness['uses'], installer['uses'])
+                self.assertEqual(witness['with']['retention-days'], 30)
+                self.assertEqual(witness['with']['if-no-files-found'], 'error')
+                self.assertEqual(len(list(collected.iterdir())), 5)
+                for cell in ('macos-x64', 'macos-arm64'):
+                    name = expand(witness['with']['name'], cell)
+                    self.assertFalse(fnmatch.fnmatchcase(name, pattern))
+                    self.assertEqual((artifacts / name / 'public-fixture-startup.log').read_bytes(),
+                                     b'public synthetic fixture witness\n')
+                folder = collected / expand(installer['with']['name'], 'macos-x64')
+                log = folder / '001.log'
+                raw = log.read_bytes()
+                for mutation in ('missing', 'corrupt', 'extra', 'nested', 'old-co-location'):
+                    with self.subTest(mutation=mutation):
+                        if mutation == 'missing':
+                            log.unlink()
+                        elif mutation == 'corrupt':
+                            log.write_bytes(b'changed')
+                        elif mutation == 'nested':
+                            (folder / 'nested').mkdir()
+                            (folder / 'nested/extra.log').write_bytes(b'x')
+                        else:
+                            (folder / ('public-fixture-startup.log' if mutation == 'old-co-location' else 'extra.log')).write_bytes(b'x')
+                        refused = self.run_aggregate()
+                        self.assertEqual(refused.returncode, 1, refused.stdout)
+                        self.assertIn('platform', json.loads(refused.stdout)['error'])
+                        for extra in ('extra.log', 'public-fixture-startup.log'):
+                            (folder / extra).unlink(missing_ok=True)
+                        shutil.rmtree(folder / 'nested', ignore_errors=True)
+                        log.write_bytes(raw)
+            finally:
+                self.root = original
 
     def test_missing_or_changed_log_refuses_despite_complete_claim(self):
         log = self.folder/'001.log'

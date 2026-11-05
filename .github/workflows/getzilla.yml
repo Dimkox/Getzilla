@@ -90,8 +90,8 @@ jobs:
         shell: python
         run: |
           import os, pathlib, subprocess, sys
-          workspace = pathlib.Path(os.environ['RUNNER_TEMP']) / ('platform-' + os.environ['GETZILLA_PLATFORM_CELL'])
-          workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+          workspace = pathlib.Path(os.environ['RUNNER_TEMP']) / ('public-fixture-startup-' + os.environ['GETZILLA_PLATFORM_CELL'])
+          workspace.mkdir(mode=0o700)
           target = 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear'
           bootstrap = (
               "import pathlib,sys,unittest\n"
@@ -118,6 +118,15 @@ jobs:
           path: |
             ${{ runner.temp }}/platform-${{ matrix.id }}/result.json
             ${{ runner.temp }}/platform-${{ matrix.id }}/*.log
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Retain canonical public fixture startup observations
+        if: ${{ always() && matrix.os == 'macos' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-public-fixture-startup-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/public-fixture-startup-${{ matrix.id }}/public-fixture-startup.log
           retention-days: 30
           if-no-files-found: error
 

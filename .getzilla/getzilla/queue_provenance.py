@@ -72,7 +72,11 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
     patch_names = set()
     instrumentation_roots = set()
     for node in nodes:
-        if isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock' and not node.level:
+        if isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock':
+            # Only this absolute capability has the member-mutation proof below.
+            # Other instrumentation imports can expose the same mutation power.
+            if node.level or any(alias.name != 'patch' for alias in node.names):
+                return tree
             patch_names.update(alias.asname or alias.name for alias in node.names if alias.name == 'patch')
         elif isinstance(node, ast.ImportFrom) and node.module == 'unittest' and not node.level:
             patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'mock')

@@ -2169,6 +2169,42 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
                 self.assertIn('new_queue', report.triggers)
 
+    def test_unproved_direct_instrumentation_imports_keep_exception_provenance(self):
+        for capability in ('_patch_multiple', '_patch_object', 'future_capability', 'Mock'):
+            source = ('from queue import Empty\n'
+                      f'from unittest.mock import {capability} as modify\n'
+                      'def f():\n    raise Empty()\n'
+                      'def apply(replacement):\n    modify("sample", Empty=replacement)\n')
+            with self.subTest(capability=capability):
+                tree = ast.parse(source)
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+        relative = ast.parse('from queue import Empty\nfrom .unittest.mock import patch\n'
+                             'def f():\n    raise Empty()\npatch("sample.Empty", unknown)\n')
+        self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(relative).signals)
+
+    def test_unproved_direct_instrumentation_imports_fail_real_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        for capability in ('_patch_multiple', '_patch_object', 'future_capability'):
+            with self.subTest(capability=capability):
+                repo.write_text('src/sample.py', 'from queue import Empty\n'
+                    f'from unittest.mock import {capability} as modify\n'
+                    'def f():\n    raise Empty()\n'
+                    'def apply(replacement):\n    modify("sample", Empty=replacement)\n')
+                report = self._evaluate(repo, base, repo.commit('unproved instrumentation capability'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
