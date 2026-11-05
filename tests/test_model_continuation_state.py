@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import multiprocessing
-import queue
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from queue import Empty
 from dataclasses import replace
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -49,7 +49,7 @@ def _controlled_claim_results(children, results):
             raise AssertionError('controlled worker result timed out')
         try:
             envelope = results.get(timeout=min(0.05, remaining))
-        except queue.Empty:
+        except Empty:
             for child in children:
                 if child.exitcode not in (None, 0):
                     print('controlled-worker ' + json.dumps({'pid': child.pid, 'exitcode': child.exitcode}), flush=True)
@@ -325,7 +325,7 @@ class ContinuationJournalTest(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(AssertionError, '^controlled worker error: journal_lock_busy$'):
                     self.test_controlled_claim_race_between_processes()
-            except queue.Empty:
+            except Empty:
                 self.fail('child journal error was masked by queue.Empty')
 
     def test_controlled_claim_abrupt_worker_exit_is_reported_before_queue_timeout(self):
@@ -333,7 +333,7 @@ class ContinuationJournalTest(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(AssertionError, '^controlled worker exit: 7$'):
                     self.test_controlled_claim_race_between_processes()
-            except queue.Empty:
+            except Empty:
                 self.fail('child exit was masked by queue.Empty')
 
     def test_controlled_claim_rejects_malformed_worker_error_without_echoing_it(self):
