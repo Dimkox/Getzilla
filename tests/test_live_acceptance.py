@@ -69,6 +69,37 @@ class ComponentAdmissionTests(unittest.TestCase):
                     (root / "factory-restart.json").write_text(json.dumps(r))
                     self.assertFalse(module.validate_components(root, "factory"))
 
+    def test_factory_conditional_skip_keeps_a_complete_disjoint_census(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            suite, _restart = self.factory(root)
+            skipped = {
+                "id": "factory.tests.test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable",
+                "reason": "pypdf present; unavailable branch cannot run",
+            }
+            suite["tests_run"] = 3
+            suite["skipped"] = [skipped]
+            (root / "factory-suite.json").write_text(json.dumps(suite))
+            self.assertTrue(module.validate_components(root, "factory"))
+            for change in ("duplicate", "overlap", "partial", "required", "unknown"):
+                changed = json.loads(json.dumps(suite))
+                if change == "duplicate":
+                    changed["skipped"].append(skipped)
+                    changed["tests_run"] = 4
+                elif change == "overlap":
+                    changed["executed"].append(skipped["id"])
+                    changed["tests_run"] = 4
+                elif change == "partial":
+                    changed["tests_run"] = 4
+                elif change == "required":
+                    changed["skipped"][0]["id"] = "factory.tests.test_postgres_integration.Required.test_database"
+                else:
+                    changed["skipped"][0]["id"] = "factory.tests.public_unknown.test_skipped"
+                with self.subTest(change=change):
+                    (root / "factory-suite.json").write_text(json.dumps(changed))
+                    self.assertFalse(module.validate_components(root, "factory"))
+
     def test_trust_ci_requires_complete_ten_and_restart_identity(self):
         module = self.module()
         with tempfile.TemporaryDirectory() as raw:

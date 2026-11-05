@@ -36,10 +36,19 @@ def validate_components(output, cell):
     try:
         if cell == "factory":
             suite, restart = read("factory-suite.json"), read("factory-restart.json")
-            skipped = {row["id"] for row in suite.get("skipped", [])}
+            skip_rows = suite.get("skipped", [])
+            skipped = {row["id"] for row in skip_rows}
             executed = suite.get("executed", [])
+            conditional_skip = {
+                "id": "factory.tests.test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable",
+                "reason": "pypdf present; unavailable branch cannot run",
+            }
             return (suite.get("status") == "pass" and suite.get("tests_run", 0) > 0
-                    and suite.get("tests_run") == len(executed) == len(set(executed)) and suite.get("failures") == 0 and suite.get("errors") == 0
+                    and len(executed) == len(set(executed)) and len(skip_rows) == len(skipped)
+                    and not skipped.intersection(executed)
+                    and suite.get("tests_run") == len(executed) + len(skipped)
+                    and all(row == conditional_skip for row in skip_rows)
+                    and suite.get("failures") == 0 and suite.get("errors") == 0
                     and any("FreshClusterArtifactAttestorMigrationTests." in item and item not in skipped for item in executed)
                     and any("test_postgres_integration." in item and item not in skipped for item in executed)
                     and not any("DATABASE_URL" in row["reason"] or "test_postgres_integration." in row["id"]
