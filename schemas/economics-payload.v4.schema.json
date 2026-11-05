@@ -1,0 +1,2050 @@
+{
+  "$comment": "Closed17variant economics_observation payload contract allocated byroot2026-11-05. Semantic validation inroute_metrics is mandatory; payload references confer no source/access authority. Envelope belongs to metrics_journal integration owner.",
+  "$defs": {
+    "Allocation": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "allocation"
+        },
+        "method": {
+          "enum": [
+            "native_measured",
+            "explicit_attestation"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/OperationRef"
+        },
+        "shares": {
+          "items": {
+            "$ref": "#/$defs/Share"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "operation",
+        "shares",
+        "supersedes",
+        "method",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "AttemptRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "attempt_relation"
+        },
+        "from_attempt": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        },
+        "relation": {
+          "enum": [
+            "retry",
+            "repair"
+          ]
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "to_attempt": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "from_attempt",
+        "to_attempt",
+        "relation",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "CachePair": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "actual_pair",
+            "explicit_scenario"
+          ]
+        },
+        "candidate_kind": {
+          "const": "cache_pair"
+        },
+        "long_config_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "long_operations": {
+          "items": {
+            "$ref": "#/$defs/OperationRef"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "model_revision_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "normal_config_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "normal_operations": {
+          "items": {
+            "$ref": "#/$defs/OperationRef"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "quality_criteria_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "workload_source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "normal_operations",
+        "long_operations",
+        "workload_source_digest",
+        "model_revision_digest",
+        "quality_criteria_digest",
+        "normal_config_digest",
+        "long_config_digest",
+        "basis",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "CachePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_instance_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "none",
+            "normal",
+            "long",
+            "unknown"
+          ]
+        },
+        "policy_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ttl_seconds": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "policy_digest",
+        "ttl_seconds",
+        "cache_instance_digest"
+      ],
+      "type": "object"
+    },
+    "Charge": {
+      "additionalProperties": false,
+      "properties": {
+        "adjusts_charge_event": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "candidate_kind": {
+          "const": "charge"
+        },
+        "direction": {
+          "enum": [
+            "debit",
+            "credit"
+          ]
+        },
+        "external_line_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_account_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "service_period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_fact_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "source_fact_digest",
+        "source_proof_ref",
+        "operation",
+        "service_period",
+        "provider_account_digest",
+        "external_line_digest",
+        "direction",
+        "adjusts_charge_event",
+        "amount"
+      ],
+      "type": "object"
+    },
+    "CiUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "ci_usage"
+        },
+        "head": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "job_attempt": {
+          "maximum": 1000000000000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "job_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_kind": {
+          "enum": [
+            "managed",
+            "self_hosted",
+            "unknown"
+          ]
+        },
+        "runner_time": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "runner_ns"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "service_period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_fact_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "source_fact_digest",
+        "source_proof_ref",
+        "operation",
+        "service_period",
+        "job_digest",
+        "job_attempt",
+        "head",
+        "runner_kind",
+        "runner_time"
+      ],
+      "type": "object"
+    },
+    "Completion": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "completion"
+        },
+        "criteria_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "effective_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "evidence_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_scope_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "completed",
+            "not_completed",
+            "unknown"
+          ]
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "effective_at",
+        "decision_id",
+        "source_proof_ref",
+        "supersedes",
+        "result",
+        "original_scope_digest",
+        "criteria_digest",
+        "evidence_digest"
+      ],
+      "type": "object"
+    },
+    "Disposition": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "task_disposition"
+        },
+        "criteria_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "abandoned",
+            "revoked",
+            "reopened",
+            "unknown"
+          ]
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "effective_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "evidence_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence_version": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "effective_at",
+        "decision_id",
+        "source_proof_ref",
+        "supersedes",
+        "decision",
+        "criteria_digest",
+        "evidence_digest",
+        "evidence_version"
+      ],
+      "type": "object"
+    },
+    "Fx": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "fx"
+        },
+        "denominator": {
+          "maximum": 1000000000000000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "from_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "numerator": {
+          "maximum": 1000000000000000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_published_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "to_currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "validity": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "from_currency",
+        "to_currency",
+        "numerator",
+        "denominator",
+        "validity",
+        "source_digest",
+        "source_published_at",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "HumanDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "enum": [
+            "review",
+            "approval",
+            "unblocking"
+          ]
+        },
+        "candidate_kind": {
+          "const": "human_decision"
+        },
+        "decision": {
+          "enum": [
+            "approved",
+            "rejected",
+            "acknowledged",
+            "unknown"
+          ]
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "related_request_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "decision_id",
+        "activity",
+        "decision",
+        "source_proof_ref",
+        "related_request_digest"
+      ],
+      "type": "object"
+    },
+    "HumanUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "enum": [
+            "review",
+            "approval",
+            "unblocking"
+          ]
+        },
+        "actor_scope_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "basis": {
+          "enum": [
+            "measured",
+            "explicit_attestation"
+          ]
+        },
+        "candidate_kind": {
+          "const": "human_usage"
+        },
+        "human_time": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "human_ns"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service_period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_fact_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "source_fact_digest",
+        "source_proof_ref",
+        "operation",
+        "service_period",
+        "activity",
+        "actor_scope_digest",
+        "basis",
+        "human_time"
+      ],
+      "type": "object"
+    },
+    "LocalUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "local_usage"
+        },
+        "cpu": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "cpu_ns"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "elapsed": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "elapsed_ns"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "energy": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "microjoule"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "gpu": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "gpu_ns"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "measurement_method": {
+          "enum": [
+            "native_direct_child",
+            "native_process_group",
+            "native_backend_operation",
+            "native_energy_counter",
+            "unavailable"
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "peak_rss": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "byte"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "service_period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_fact_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "source_fact_digest",
+        "source_proof_ref",
+        "operation",
+        "service_period",
+        "measurement_method",
+        "cpu",
+        "elapsed",
+        "gpu",
+        "energy",
+        "peak_rss"
+      ],
+      "type": "object"
+    },
+    "Merge": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "merge"
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "effective_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "merge_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "pr_number": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "repository_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_head": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "effective_at",
+        "decision_id",
+        "source_proof_ref",
+        "supersedes",
+        "repository_digest",
+        "pr_number",
+        "source_head",
+        "merge_commit"
+      ],
+      "type": "object"
+    },
+    "ModelUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_policy": {
+          "$ref": "#/$defs/CachePolicy"
+        },
+        "cache_read": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "cache_write": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "candidate_kind": {
+          "const": "model_usage"
+        },
+        "input_semantics": {
+          "enum": [
+            "exclusive_buckets",
+            "total_includes_read",
+            "total_includes_read_and_write",
+            "unknown"
+          ]
+        },
+        "input_total": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_origin": {
+          "enum": [
+            "local_measurement",
+            "provider_export"
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "output_semantics": {
+          "enum": [
+            "includes_reasoning",
+            "excludes_reasoning",
+            "unknown"
+          ]
+        },
+        "provider_account_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_output": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        },
+        "service_period": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_fact_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "uncached_input": {
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "unknown_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_observed",
+                    "unsupported",
+                    "not_applicable",
+                    "redacted",
+                    "ambiguous",
+                    "conflicted",
+                    "source_unqualified",
+                    "tariff_missing",
+                    "currency_missing",
+                    "capture_gap",
+                    "history_gap"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "unit",
+            "unknown_reason"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "source_fact_digest",
+        "source_proof_ref",
+        "operation",
+        "service_period",
+        "provider_id",
+        "model_id",
+        "provider_account_digest",
+        "observation_origin",
+        "cache_policy",
+        "input_semantics",
+        "output_semantics",
+        "input_total",
+        "uncached_input",
+        "cache_write",
+        "cache_read",
+        "output",
+        "reasoning_output"
+      ],
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decimal_scale": {
+          "maximum": 9,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_observed",
+                "unsupported",
+                "not_applicable",
+                "redacted",
+                "ambiguous",
+                "conflicted",
+                "source_unqualified",
+                "tariff_missing",
+                "currency_missing",
+                "capture_gap",
+                "history_gap"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "currency",
+        "decimal_scale",
+        "unknown_reason"
+      ],
+      "type": "object"
+    },
+    "OperationRef": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claim_event_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        },
+        "physical_operation_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "producer_binding_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_event_digest",
+        "operation_id",
+        "attempt_id",
+        "producer_binding_digest",
+        "physical_operation_digest"
+      ],
+      "type": "object"
+    },
+    "ReviewPush": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "review_for_push"
+        },
+        "push_event_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "push_head": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "review_event_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "round_index": {
+          "maximum": 4096,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "push_event_digest",
+        "push_head",
+        "round_index",
+        "review_event_digest",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "Share": {
+      "additionalProperties": false,
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "weight_ppm": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task",
+        "weight_ppm"
+      ],
+      "type": "object"
+    },
+    "Tariff": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_policy_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidate_kind": {
+          "const": "tariff"
+        },
+        "category": {
+          "enum": [
+            "uncached_input",
+            "cache_write",
+            "cache_read",
+            "output",
+            "reasoning_output",
+            "ci_runner",
+            "cpu",
+            "gpu",
+            "energy",
+            "human_review",
+            "human_approval",
+            "human_unblocking"
+          ]
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "decimal_scale": {
+          "maximum": 9,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rate_denominator": {
+          "maximum": 1000000000000000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rate_numerator": {
+          "maximum": 1000000000000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_published_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "token",
+            "runner_ns",
+            "cpu_ns",
+            "gpu_ns",
+            "microjoule",
+            "human_ns"
+          ]
+        },
+        "validity": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "provider_id",
+        "model_id",
+        "category",
+        "unit",
+        "cache_policy_digest",
+        "currency",
+        "decimal_scale",
+        "rate_numerator",
+        "rate_denominator",
+        "validity",
+        "source_digest",
+        "source_published_at",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "TaskPrLink": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "task_pr_link"
+        },
+        "mapping_evidence_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pr_number": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "repository_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "validity": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "repository_digest",
+        "pr_number",
+        "mapping_evidence_digest",
+        "validity",
+        "supersedes",
+        "source_proof_ref"
+      ],
+      "type": "object"
+    },
+    "TaskRef": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "core_native"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^task:[0-9a-f]{32}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "factory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "domain": {
+          "enum": [
+            "core_native",
+            "factory"
+          ]
+        },
+        "project_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain",
+        "project_digest",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_exclusive": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "start": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end_exclusive"
+      ],
+      "type": "object"
+    },
+    "WorkflowEnd": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_kind": {
+          "const": "workflow_end"
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "effective_at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "source_proof_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "candidate_kind",
+        "task",
+        "effective_at",
+        "decision_id",
+        "source_proof_ref",
+        "supersedes",
+        "result"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:getzilla:metrics:economics-payload:v4",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ModelUsage"
+    },
+    {
+      "$ref": "#/$defs/LocalUsage"
+    },
+    {
+      "$ref": "#/$defs/CiUsage"
+    },
+    {
+      "$ref": "#/$defs/HumanUsage"
+    },
+    {
+      "$ref": "#/$defs/Charge"
+    },
+    {
+      "$ref": "#/$defs/Tariff"
+    },
+    {
+      "$ref": "#/$defs/Fx"
+    },
+    {
+      "$ref": "#/$defs/Allocation"
+    },
+    {
+      "$ref": "#/$defs/WorkflowEnd"
+    },
+    {
+      "$ref": "#/$defs/Completion"
+    },
+    {
+      "$ref": "#/$defs/Merge"
+    },
+    {
+      "$ref": "#/$defs/Disposition"
+    },
+    {
+      "$ref": "#/$defs/AttemptRelation"
+    },
+    {
+      "$ref": "#/$defs/ReviewPush"
+    },
+    {
+      "$ref": "#/$defs/TaskPrLink"
+    },
+    {
+      "$ref": "#/$defs/CachePair"
+    },
+    {
+      "$ref": "#/$defs/HumanDecision"
+    }
+  ]
+}
