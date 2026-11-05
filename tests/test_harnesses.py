@@ -118,9 +118,10 @@ class SelectedHarnessTests(unittest.TestCase):
                     self.assertEqual(target.read_bytes(), vendor)
                     continue
                 content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"') if scenario == 'read-only' else vendor
-                mode = 0o755 if scenario == 'mode' else 0o644
+                mode = 0o444 if scenario == 'mode' else 0o644
                 target.write_bytes(content)
                 target.chmod(mode)
+                observed_mode = stat.S_IMODE(target.stat().st_mode)
                 manifest = read_state(root).manifest
                 record_owned(manifest, '.codex/agents/general_implementer.toml', content, mode)
                 (root / MANIFEST).write_bytes(encode_manifest(manifest))
@@ -133,7 +134,7 @@ class SelectedHarnessTests(unittest.TestCase):
                         write(root)
                 publish.assert_not_called()
                 self.assertEqual(target.read_bytes(), content)
-                self.assertEqual(stat.S_IMODE(target.stat().st_mode), mode)
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), observed_mode)
                 self.assertEqual((root / MANIFEST).read_bytes(), before)
                 self.assertEqual(canonical.read_bytes(), vendor)
                 self.assertFalse(pending.exists())

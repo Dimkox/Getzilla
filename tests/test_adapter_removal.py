@@ -91,11 +91,12 @@ class RemovalPlanTests(unittest.TestCase):
         original = (self.project / path).read_bytes()
         for scenario in ('bytes', 'mode', 'proof', 'owned-custom-policy', 'kept'):
             with self.subTest(scenario=scenario):
+                (self.project / path).chmod(0o644)  # reset only the preceding owned fixture case
                 self.put(path, original)
                 if scenario == 'bytes':
                     self.put(path, original + b'\n# changed', owned=False)
                 elif scenario == 'mode':
-                    (self.project / path).chmod(0o755)
+                    (self.project / path).chmod(0o444)
                 elif scenario == 'proof':
                     self.manifest['components']['agent:codex']['owned'].pop(path)
                 elif scenario == 'owned-custom-policy':
@@ -104,9 +105,13 @@ class RemovalPlanTests(unittest.TestCase):
                     self.put('.getzilla/AGBP_SYNC.json', json.dumps({'schema_version': 1, 'kept_local': [path]}).encode(), owned=False)
                 self.save()
                 manifest_before = (self.project / MANIFEST).read_bytes()
+                content_before = (self.project / path).read_bytes()
+                mode_before = (self.project / path).stat().st_mode
                 with self.assertRaises(ValueError):
                     self.plan(('codex',))
                 self.assertEqual((self.project / MANIFEST).read_bytes(), manifest_before)
+                self.assertEqual((self.project / path).read_bytes(), content_before)
+                self.assertEqual((self.project / path).stat().st_mode, mode_before)
 
     def test_modified_duplicate_and_invalid_native_groups_refuse(self) -> None:
         path = '.qwen/settings.json'

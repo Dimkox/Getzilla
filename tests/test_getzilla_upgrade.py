@@ -114,10 +114,13 @@ class ProjectSyncTests(unittest.TestCase):
                     record_owned(manifest, source.relative_to(self.project).as_posix(), vendor, 0o644)
                     target = self.project / path
                     target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        target.chmod(0o644)  # reset only the preceding owned fixture case
                     content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"') if customized == 'read-only' else vendor
-                    mode = 0o755 if customized == 'mode' else 0o644
+                    mode = 0o444 if customized == 'mode' else 0o644
                     target.write_bytes(content)
                     target.chmod(mode)
+                    observed_mode = target.stat().st_mode & 0o777
                     record_owned(manifest, path, content, mode)
                     (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
                     self.commit('generated policy ' + customized)
@@ -129,7 +132,7 @@ class ProjectSyncTests(unittest.TestCase):
                         with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
                             upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
                     self.assertEqual(target.read_bytes(), content)
-                    self.assertEqual(target.stat().st_mode & 0o777, mode)
+                    self.assertEqual(target.stat().st_mode & 0o777, observed_mode)
                     self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
                     self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
