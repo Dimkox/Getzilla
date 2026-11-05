@@ -104,7 +104,7 @@ class AdmissionTests(unittest.TestCase):
             execution.submit(self.root, self.caller, self.request, backend=backend)
         self.assertEqual(caught.exception.code, 'unsupported_admission_fence')
         self.assertEqual(backend.calls, 0)
-        self.assertFalse((self.root / store.REGISTRY_PATH).exists())
+        self.assertEqual(store.load_registry(self.root)['records'], {})
 
     def test_concurrent_cancel_reserves_once_without_holding_global_lock_over_adapter(self):
         entered, release = threading.Event(), threading.Event()

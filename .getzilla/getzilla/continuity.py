@@ -121,6 +121,13 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
         return
     if not isinstance(route.get('task'), str):
         raise ValueError('invalid original task text')
+    if 'execution_store_required' in route:
+        binding = route['execution_store_required']
+        if (not isinstance(binding, dict) or set(binding) != {'version', 'generation'}
+                or type(binding['version']) is not int or binding['version'] != 1
+                or not isinstance(binding['generation'], str)
+                or not re.fullmatch(r'[0-9a-f]{32}', binding['generation'])):
+            raise ValueError('invalid canonical execution store binding')
     if type(route.get('task_context_version')) is not int or route['task_context_version'] != 1:
         raise ValueError('unsupported task context version; explicit recovery required')
     origin = route.get('origin_session_id')
@@ -539,6 +546,8 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'package_path': documents['path'] if documents else None,
              'spec_digest': documents['spec_digest'] if documents else None,
              'requirements_digest': documents['requirements_digest'] if documents else None}
+    if 'execution_store_required' in route:
+        value['execution_store_required'] = route['execution_store_required']
     return {**value, 'digest': digest(value)}
 
 

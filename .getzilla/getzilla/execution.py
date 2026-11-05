@@ -360,12 +360,207 @@ def _backend(backend):
     return backend.kind
 
 
-def _dispatch_ready(root, record):
+@state.serialized_task
+def provision(root: Path, caller: CallerContext):
+    """Persist the one store first, then arm its canonical task requirement."""
+    route = _caller(root, caller)
+    if caller.agent_id is not None or caller._observation_id is not None:
+        raise ExecutionError('execution_control_forbidden')
+    state.require_route_owner(root, route)
+    required = route.get('execution_store_required')
+    try:
+        previous = store.load_registry(root)
+    except store.RegistryError as error:
+        if required is not None or error.code != 'registry_not_found':
+            raise ExecutionError('execution_store_unavailable') from None
+        previous = None
+    if previous is not None and previous['schema_version'] == 1:
+        if any(item['execution_status'] not in store.TERMINAL
+               or item['cleanup_status'] not in {'not_required', 'confirmed'}
+               for item in previous['records'].values()):
+            raise ExecutionError('legacy_reconciliation_required')
+    value = copy.deepcopy(previous) if previous is not None else store.empty_registry()
+    if value['schema_version'] == 1:
+        value.update(schema_version=2, generation=secrets.token_hex(16), controls={})
+    if required is not None and value['generation'] != required['generation']:
+        raise ExecutionError('execution_store_unavailable')
+    control = value['controls'].get(route['route_id'])
+    if required is not None and control is None:
+        raise ExecutionError('execution_store_unavailable')
+    if control is not None and control['logical_task_id'] != caller.logical_task_id:
+        raise ExecutionError('execution_forbidden')
+    if control is None:
+        value['controls'][route['route_id']] = {
+            'version': 1, 'logical_task_id': caller.logical_task_id, 'revision': 0,
+            'stopped': False, 'reason': None, 'session_id': caller.session_id,
+            'authority_epoch': caller.authority_epoch,
+        }
+    saved = store.commit_registry(root, previous['revision'] if previous is not None else None, value)
+    state.arm_execution_store(root, expected_route=route, generation=saved['generation'])
+    return {'status': 'provisioned', 'generation': saved['generation'],
+            'control_revision': saved['controls'][route['route_id']]['revision'],
+            'stopped': saved['controls'][route['route_id']]['stopped'], 'evidence_authority': False}
+
+
+def _required_registry(root, route, registry=None):
+    binding = route.get('execution_store_required')
+    if (not isinstance(binding, dict) or set(binding) != {'version', 'generation'}
+            or type(binding.get('version')) is not int or binding['version'] != 1
+            or not isinstance(binding.get('generation'), str)
+            or not re.fullmatch(r'[0-9a-f]{32}', binding['generation'])):
+        raise ExecutionError('execution_not_provisioned')
+    if registry is None:
+        try:
+            registry = store.load_registry(root)
+        except store.RegistryError:
+            raise ExecutionError('execution_store_unavailable') from None
+    if registry.get('schema_version') != 2 or registry.get('generation') != binding['generation']:
+        raise ExecutionError('execution_store_unavailable')
+    control = registry['controls'].get(route['route_id'])
+    if control is None or control['logical_task_id'] != continuity.task_identity(route):
+        raise ExecutionError('execution_store_unavailable')
+    return registry, control
+
+
+def hook_stop_reason(root, event):
+    """Observe the same control for new native requests; grant no execution right.
+
+    This can refuse later hook requests. It cannot kill a host-owned operation
+    or authenticate a user against arbitrary same-UID tool or shell bypass.
+    """
+    try:
+        route = state.get_active_route(root)
+        if not route or 'execution_store_required' not in route:
+            return None
+        tool = event.get('tool_name')
+        if tool in {'Read', 'Glob', 'Grep', 'LS', 'ListDirectory'}:
+            return None  # Existing secret/path policy still applies after this observation.
+        if tool == 'Bash' and _control_command(root, event.get('tool_input')):
+            return None
+        _, control = _required_registry(root, route)
+        return 'execution_stopped: provisioned task refuses new work.' if control['stopped'] else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return 'execution_store_unavailable: required task control cannot be observed.'
+
+
+def _control_command(root, value):
+    import shlex
+    if not isinstance(value, dict) or not isinstance(value.get('command'), str):
+        return False
+    try:
+        argv = shlex.split(value['command'])
+    except ValueError:
+        return False
+    if argv[:1] == ['getzilla']:
+        argv = argv[1:]
+    elif (len(argv) >= 2 and argv[0] in {'python3', 'python', str(Path(os.sys.executable).resolve())}
+          and argv[1] in {'scripts/getzilla_trust.py', str(root / 'scripts/getzilla_trust.py')}):
+        argv = ['trust', *argv[2:]]
+    else:
+        return False
+    if argv in (['status'], ['status', '--json']):
+        return True
+    if argv[:1] != ['trust']:
+        return False
+    argv = argv[1:]
+    if argv and argv[-1] == '--json':
+        argv = argv[:-1]
+    if argv in (['audit'], ['status'], ['stop'], ['provision']):
+        return True
+    if (len(argv) == 3 and argv[:2] == ['stop', '--reason']
+            and argv[2] in {'operator_stop', 'compromised_tool', 'tool_unavailable', 'rollback'}):
+        return True
+    if len(argv) == 2 and argv[0] in {'get', 'cancel'} and re.fullmatch(r'[0-9a-f]{32}', argv[1]):
+        return True
+    return (len(argv) == 5 and argv[0:2] == ['recover', '--expected-revision']
+            and re.fullmatch(r'[0-9]{1,16}', argv[2]) is not None
+            and argv[3] == '--expected-source' and re.fullmatch(r'[0-9a-f]{64}', argv[4]) is not None)
+
+
+def _controller(root, caller):
+    route = _caller(root, caller)
+    if caller.agent_id is not None or caller._observation_id is not None:
+        raise ExecutionError('execution_control_forbidden')
+    state.require_route_owner(root, route)
+    return route
+
+
+def _control_view(registry, route):
+    control = registry['controls'][route['route_id']]
+    attempts = [item for item in registry['records'].values()
+                if item['owner']['logical_task_id'] == continuity.task_identity(route)]
+    return {'generation': registry['generation'], 'control_revision': control['revision'],
+            'stopped': control['stopped'], 'reason': control['reason'],
+            'unconfirmed_attempts': sum(item['execution_status'] not in store.TERMINAL
+                                       or item['cleanup_status'] not in {'confirmed', 'not_required'}
+                                       or item['operation_outcome'] == 'unknown' for item in attempts),
+            'evidence_authority': False}
+
+
+@state.serialized_task
+def control_status(root, caller):
+    route = _controller(root, caller)
+    registry, _ = _required_registry(root, route)
+    try:
+        fingerprint = _digest(_source(root.resolve(), route))
+    except (OSError, ValueError, KeyError):
+        fingerprint = None
+    return {**_control_view(registry, route), 'source_fingerprint': fingerprint,
+            'source_state': 'observed' if fingerprint is not None else 'unavailable'}
+
+
+@state.serialized_task
+def stop(root, caller, *, reason='operator_stop'):
+    """Durably latch stop. An owning launcher must confirm actual process cleanup."""
+    route = _controller(root, caller)
+    if not isinstance(reason, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,80}', reason):
+        raise ExecutionError('invalid_stop_reason')
+    def latch(registry):
+        _, control = _required_registry(root, route, registry)
+        if not control['stopped']:
+            control.update(stopped=True, reason=reason, revision=control['revision'] + 1,
+                           session_id=caller.session_id, authority_epoch=caller.authority_epoch)
+    registry, _ = store.mutate_registry(root, latch)
+    return _control_view(registry, route)
+
+
+@state.serialized_task
+def recover(root, caller, *, expected_revision, expected_source):
+    """Explicit local recovery; uncertain effects and cleanup cannot be cleared."""
+    route = _controller(root, caller)
+    if (type(expected_revision) is not int or expected_revision < 0 or not isinstance(expected_source, str)
+            or not re.fullmatch(r'[0-9a-f]{64}', expected_source)):
+        raise ExecutionError('invalid_recovery')
+    if continuity.scope_gaps(root, route):
+        raise ExecutionError('recovery_scope_unqualified')
+    source = _digest(_source(root.resolve(), route))
+    def release(registry):
+        _, control = _required_registry(root, route, registry)
+        if control['revision'] != expected_revision or source != expected_source or not control['stopped']:
+            raise ExecutionError('recovery_fenced')
+        if _control_view(registry, route)['unconfirmed_attempts']:
+            raise ExecutionError('execution_cleanup_unconfirmed')
+        if _digest(_source(root.resolve(), route)) != source:
+            raise ExecutionError('recovery_fenced')
+        control.update(stopped=False, reason=None, revision=control['revision'] + 1,
+                       session_id=caller.session_id, authority_epoch=caller.authority_epoch)
+    registry, _ = store.mutate_registry(root, release)
+    return _control_view(registry, route)
+
+
+def _dispatch_ready(root, record, registry=None):
     live = _LIVE.get((str(root.resolve()), record['execution_id']))
     if (not live or live[2] != record['execution_generation'] or live[0].monotonic() >= live[1]
             or record['execution_status'] != 'running' or record['dispatch_claim'] != 'pending'):
         raise ExecutionError('admission_fenced')
     _owner_current(root, record)
+    route = state.canonical_route(root, record['owner']['route_id'])
+    registry, control = _required_registry(root, route, registry)
+    if control['stopped']:
+        raise ExecutionError('execution_stopped')
+    if record.get('admission_binding') != {'store_generation': registry['generation'],
+                                          'control_revision': control['revision']}:
+        raise ExecutionError('admission_fenced')
 
 
 @state.serialized_task
@@ -374,7 +569,7 @@ def _consume_dispatch(root, admission, request):
         raise ExecutionError('unsupported_admission_fence')
     def consume(registry):
         record = _find(registry, admission.execution_id)
-        _dispatch_ready(root, record)
+        _dispatch_ready(root, record, registry)
         if (record['execution_generation'] != admission.execution_generation
                 or record['revision'] != admission.revision
                 or not secrets.compare_digest(record['backend']['token_digest'], hashlib.sha256(admission.token.encode()).hexdigest())
@@ -383,6 +578,101 @@ def _consume_dispatch(root, admission, request):
         record.update(dispatch_claim='consumed', revision=record['revision'] + 1)
     registry, _ = store.mutate_registry(root, consume)
     return _view(root, registry['records'][admission.execution_id])
+
+
+def _managed_record(root, registry, admission, instance=None):
+    record = _find(registry, admission.execution_id)
+    _owner_current(root, record)
+    if (record['backend']['kind'] != 'managed-local' or record['dispatch_claim'] != 'consumed'
+            or record['execution_generation'] != admission.execution_generation
+            or not secrets.compare_digest(record['backend']['token_digest'],
+                                          hashlib.sha256(admission.token.encode()).hexdigest())
+            or record['execution_status'] not in {'running', 'cancel_requested'}
+            or instance is not None and (record.get('launch') is None
+                                        or record['launch']['owner_instance'] != instance)):
+        raise ExecutionError('admission_fenced')
+    return record
+
+
+def _managed_admitted(root, registry, record):
+    route = state.canonical_route(root, record['owner']['route_id'])
+    registry, control = _required_registry(root, route, registry)
+    live = _LIVE.get((str(root.resolve()), record['execution_id']))
+    if not live or live[2] != record['execution_generation'] or live[0].monotonic() >= live[1]:
+        raise ExecutionError('execution_deadline_elapsed')
+    if control['stopped'] or record['execution_status'] == 'cancel_requested':
+        raise ExecutionError('execution_stopped')
+    if (record['admission_binding'] != {'store_generation': registry['generation'],
+                                       'control_revision': control['revision']}
+            or _source(root.resolve(), route) != record['source']):
+        raise ExecutionError('admission_fenced')
+
+
+@state.serialized_task
+def _begin_managed(root, admission, instance, launcher_digest, executable_digest):
+    def begin(registry):
+        record = _managed_record(root, registry, admission)
+        if record.get('launch') is not None:
+            raise ExecutionError('admission_fenced')
+        record['launch'] = {'phase': 'starting', 'owner_instance': instance,
+                            'launcher_digest': launcher_digest, 'executable_digest': executable_digest,
+                            'process_id': None, 'start_identity': None, 'handle_kind': None}
+        record['cleanup_status'] = 'pending'
+        record['revision'] += 1
+    registry, _ = store.mutate_registry(root, begin)
+    return _view(root, registry['records'][admission.execution_id])
+
+
+@state.serialized_task
+def _register_managed(root, admission, instance, process_id, start_identity):
+    def register(registry):
+        record = _managed_record(root, registry, admission, instance)
+        if record['launch']['phase'] != 'starting':
+            raise ExecutionError('admission_fenced')
+        record['launch'].update(phase='registered', process_id=process_id,
+                                 start_identity=start_identity, handle_kind='linux-pidfd-unreaped-group')
+        record['revision'] += 1
+    registry, _ = store.mutate_registry(root, register)
+    return _view(root, registry['records'][admission.execution_id])
+
+
+@state.serialized_task
+def _release_managed(root, admission, instance, recheck, release):
+    # Only the owning adapter passes these callbacks; no model/request callback is admitted.
+    # The one-byte gate write is bounded. No lock spans spawn or process lifetime.
+    def ready(registry):
+        record = _managed_record(root, registry, admission, instance)
+        if record['launch']['phase'] != 'registered':
+            raise ExecutionError('admission_fenced')
+        _managed_admitted(root, registry, record)
+        recheck()
+        record['launch']['phase'] = 'released'
+        record['revision'] += 1
+    registry, _ = store.mutate_registry(root, ready)
+    release()
+    return _view(root, registry['records'][admission.execution_id])
+
+
+@state.serialized_task
+def _managed_watch(root, admission, instance):
+    registry = store.load_registry(root)
+    record = _managed_record(root, registry, admission, instance)
+    route = state.canonical_route(root, record['owner']['route_id'])
+    _, control = _required_registry(root, route, registry)
+    if (control['stopped'] or record['execution_status'] == 'cancel_requested'
+            or record['admission_binding']['control_revision'] != control['revision']):
+        return 'stopped'
+    live = _LIVE.get((str(root.resolve()), record['execution_id']))
+    if not live or live[2] != record['execution_generation'] or live[0].monotonic() >= live[1]:
+        return 'deadline'
+    return 'running'
+
+
+@state.serialized_task
+def _finish_managed(root, admission, instance, event):
+    record = _find(store.load_registry(root), admission.execution_id)
+    return record_event(root, admission.token, admission.execution_id, record['revision'],
+                        admission.execution_generation, 'managed-finished', event, _managed_instance=instance)
 
 
 def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend: ExecutionBackend | None = None,
@@ -402,6 +692,9 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
     request_digest = _request_digest(request, kind)
     with state.task_transition(root):
         route = _caller(root, caller)
+        provisioned, control = _required_registry(root, route)
+        if control['stopped']:
+            raise ExecutionError('execution_stopped')
         owner = {'workspace': caller.workspace, 'project': hashlib.sha256(caller.workspace.encode()).hexdigest(),
                  'session_id': caller.session_id, 'route_id': caller.route_id, 'logical_task_id': caller.logical_task_id,
                  'change_id': route.get('change_id'), 'authority_epoch': caller.authority_epoch,
@@ -427,7 +720,10 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
                 raise store.RegistryError('registry_full')
             execution_id = secrets.token_hex(16)
             record = {
-                'schema_version': 1, 'execution_id': execution_id, 'revision': 1,
+                'schema_version': 2, 'execution_id': execution_id, 'revision': 1,
+                'admission_binding': {'store_generation': provisioned['generation'],
+                                      'control_revision': control['revision']},
+                'launch': None,
                 'execution_generation': secrets.token_hex(16), 'owner': owner,
                 'input': {'intent_digest': intent, 'request_digest': request_digest, 'display': {'label': request.label}},
                 'source': _source(root.resolve(), route),
@@ -445,7 +741,7 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
             registry['records'][execution_id] = record
             registry['intents'][intent] = execution_id
             return execution_id, True
-        registry, (execution_id, dispatch) = store.mutate_registry(root, allocate, create=True)
+        registry, (execution_id, dispatch) = store.mutate_registry(root, allocate)
     record = registry['records'][execution_id]
     if not dispatch:
         return _view(root, record)
@@ -497,7 +793,8 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
 
 
 @state.serialized_task
-def record_event(root, backend_token, execution_id, expected_revision, execution_generation, event_id, event):
+def record_event(root, backend_token, execution_id, expected_revision, execution_generation, event_id, event,
+                 *, _managed_instance=None):
     if (not isinstance(backend_token, str) or not re.fullmatch(r'[0-9a-f]{64}', backend_token)
             or not isinstance(event_id, str) or not _ID.fullmatch(event_id) or not isinstance(event, dict)
             or set(event) - {'execution_status', 'terminal_reason', 'cleanup_status', 'operation_outcome', 'output'}
@@ -525,7 +822,12 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
                 raise ExecutionError('event_conflict')
             return
         live = _LIVE.get((str(root.resolve()), execution_id))
-        if not live or live[2] != execution_generation or live[0].monotonic() >= live[1]:
+        managed = (isinstance(_managed_instance, str) and record['backend']['kind'] == 'managed-local'
+                   and record.get('launch') is not None
+                   and record['launch']['owner_instance'] == _managed_instance
+                   and event['execution_status'] in store.TERMINAL
+                   and event.get('cleanup_status') in {'confirmed', 'unconfirmed', 'failed'})
+        if not live or live[2] != execution_generation or live[0].monotonic() >= live[1] and not managed:
             raise ExecutionError('event_fenced')
         if (type(expected_revision) is not int or record['revision'] != expected_revision
                 or record['execution_status'] in store.TERMINAL or len(record['event_receipts']) >= 64
@@ -534,6 +836,8 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
         if record['execution_status'] == 'cancel_requested' and event['execution_status'] == 'running':
             raise ExecutionError('event_fenced')
         record.update(copy.deepcopy(event))
+        if managed:
+            record['launch']['phase'] = 'finished'
         record['revision'] += 1
         record['event_receipts'][event_id] = digest
         if record['execution_status'] in store.TERMINAL:

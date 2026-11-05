@@ -532,6 +532,9 @@ def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any]
         actual = canonical_route(root, route['route_id']) if exists else None
         if actual != expected:
             raise ValueError('route changed before atomic update')
+        if (actual is not None and 'execution_store_required' in actual
+                and route.get('execution_store_required') != actual['execution_store_required']):
+            raise ValueError('canonical execution store requirement is monotone')
         durable_json(root, path, route)
         _publish_route_projections(root, route)
     return copy.deepcopy(route)
@@ -574,6 +577,9 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
             require_route_owner(root)
         return None
     require_route_owner(root, route)
+    if ('execution_store_required' in updates
+            and updates['execution_store_required'] != route.get('execution_store_required')):
+        raise ValueError('execution store binding requires explicit provisioning')
     if expected_route is not None and route != expected_route:
         raise ValueError('route changed before atomic update')
     if has_task_context(route) and updates.get('status') in {'completed', 'cancelled', 'released', 'archived'}:
@@ -589,6 +595,30 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
     if has_task_context(route):
         changed['state_revision'] += 1
     return _commit_route(root, changed, expected=route)
+
+
+@serialized_task
+def arm_execution_store(root: Path, *, expected_route: dict[str, Any], generation: str) -> dict[str, Any]:
+    """Arm only an existing durable store; this identity carries no stop progress."""
+    from . import execution_store
+    route = require_route_owner(root)
+    if route != expected_route:
+        raise ValueError('route changed before execution provisioning')
+    registry = execution_store.load_registry(root)
+    control = registry.get('controls', {}).get(route['route_id'])
+    if (registry.get('schema_version') != 2 or registry.get('generation') != generation
+            or not control or control['logical_task_id'] != route['logical_task_id']):
+        raise ValueError('durable execution store is unavailable')
+    binding = {'version': 1, 'generation': generation}
+    if route.get('execution_store_required') == binding:
+        return route
+    if 'execution_store_required' in route:
+        raise ValueError('canonical execution store requirement is monotone')
+    updated = copy.deepcopy(route)
+    updated['execution_store_required'] = binding
+    updated['state_revision'] += 1
+    updated['updated_at'] = now_utc()
+    return _commit_route(root, updated, expected=route)
 
 
 def agent_state_path(root: Path) -> Path:

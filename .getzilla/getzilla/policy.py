@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _policy_legacy as _legacy
-from . import fsx
+from . import fsx, state
 from .supply_chain import check_tool_trust
 from ._policy_legacy import *  # noqa: F401,F403
 from ._policy_legacy import (
@@ -125,6 +125,18 @@ def evaluate_pre_tool(
     trusted, reason = check_tool_trust(root, event)
     if not trusted:
         return False, reason
+    try:
+        route = _legacy.get_active_route(root)
+        if route is None and state.route_authority_present(root):
+            if event.get('tool_name') not in {'Read', 'Glob', 'Grep', 'LS', 'ListDirectory'}:
+                return False, 'execution_store_unavailable: canonical task authority cannot be observed.'
+        if route and 'execution_store_required' in route:
+            from .execution import hook_stop_reason
+            stopped = hook_stop_reason(root, event)
+            if stopped is not None:
+                return False, stopped
+    except (ImportError, OSError, ValueError, TypeError, KeyError):
+        return False, 'execution_store_unavailable: required task control cannot be observed.'
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':

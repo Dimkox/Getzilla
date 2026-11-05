@@ -129,9 +129,10 @@ class DurabilityTests(unittest.TestCase):
                     restored = execution.restore(root)
                     self.assertEqual(restored['orphaned'], 1)
                 else:
-                    with self.assertRaises(store.RegistryError) as caught:
-                        store.load_registry(root)
-                    self.assertEqual(caught.exception.code, 'registry_not_found')
+                    prior = store.load_registry(root)
+                    self.assertEqual(prior['records'], {})
+                    self.assertEqual(prior['generation'],
+                                     state.require_route_owner(root)['execution_store_required']['generation'])
                     execution.submit(root, caller, execution.SubmitRequest('crash', {}, 60), backend=backend)
                     self.assertEqual(backend.calls, 1)
 
@@ -141,4 +142,4 @@ class DurabilityTests(unittest.TestCase):
         with self.assertRaises(execution.ExecutionError):
             execution.submit(self.root, self.caller, execution.SubmitRequest('external', {}, 60), backend=backend)
         self.assertEqual(backend.calls, 0)
-        self.assertFalse((self.root / store.REGISTRY_PATH).exists())
+        self.assertEqual(store.load_registry(self.root)['records'], {})

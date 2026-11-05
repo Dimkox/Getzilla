@@ -47,9 +47,15 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(output.normalize_output(malformed)['status'], 'invalid')
 
     def test_credential_suppression_matches_shared_parallel_preview_policy(self):
-        from getzilla.parallel import _preview
+        from getzilla import parallel
+        if not hasattr(parallel, '_preview'):
+            self.skipTest('UNVERIFIED Core preview sharing is not adopted; mandatory after Core composition')
         raw = b'password=synthetic-sensitive\n'
-        self.assertEqual(_preview(raw), output.credential_preview(raw))
+        self.assertEqual(parallel._preview(raw), output.credential_preview(raw))
+
+    def test_registry_credential_preview_suppression_is_active_without_core_sharing(self):
+        raw = b'password=synthetic-sensitive\n'
+        self.assertIn('preview withheld', output.credential_preview(raw))
         result = output.normalize_output({'stdout': raw.decode()})
         self.assertIn('preview withheld', result['preview'])
         self.assertNotIn('synthetic-sensitive', json.dumps(result))

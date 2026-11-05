@@ -1,8 +1,14 @@
 # Execution registry contract
 
+This private composition adopts the scoped #225 source as an UNVERIFIED dependency.
+The main parallel runner has no shared preview helper. Core output sharing and its
+retained assertion remain explicitly unsupported until ordered Core composition;
+registry output redaction is exercised independently. This does not qualify #225.
+
 The optional `getzilla.execution` Python API records one attempt per scoped intent.
-It uses `.getzilla/runtime/executions/registry.json`, version 1. It adds no service,
-database, queue, dependency, native executor or runtime approval. Existing
+It uses `.getzilla/runtime/executions/registry.json`, with version 1 retained for
+historical storage and explicit version 2 provisioning for new execution. It adds
+no service, database, queue, dependency or runtime approval. Existing
 `getzilla par` remains synchronous and keeps its policy checks and exit codes.
 
 `trusted_caller(root)` derives the native-bound session and canonical task context.
@@ -29,6 +35,87 @@ route, including through a freshly derived caller context. The saved canonical
 owner route controls this ACL. Handoff revokes the old epoch. Worker generation
 changes fence the old worker and its callbacks. This is cooperative local scope
 checking, not isolation from the same OS user editing runtime or Python objects.
+
+## Provisioning and the local stop latch
+
+`getzilla trust provision --json` explicitly creates and flushes the sole registry
+before arming `execution_store_required={version:1,generation:...}` on the existing
+canonical task. The binding is monotone and survives task amendments and handoff.
+An interrupted initial arm can resume with that same generation. Once armed,
+missing, corrupt or mismatched state cannot recreate an empty running store.
+Historical version 1 migration requires terminal attempts with confirmed or
+unneeded cleanup. Stop controls and intent tombstones are never silently removed.
+The version 2 machine contract is `schemas/execution-registry.v2.schema.json`.
+
+`getzilla trust stop --reason operator_stop --json` commits the stop before any
+cleanup request. Other fixed reasons are `compromised_tool`, `tool_unavailable`
+and `rollback`. Repeated stop is idempotent. New attempts and their cooperative
+admission consume compare the same registry generation and stop revision. The
+real hook checks the same armed control before later write or unclassified tool
+requests. Known local read requests and exact status/control command forms still
+pass through the existing secret, path and operation policy. This workflow check
+cannot interrupt native host-owned tools or authenticate a customer against a
+same-UID bypass. Unarmed projects keep their existing behavior.
+
+`getzilla trust status --json` returns the stop revision and the number of
+attempts with unconfirmed effects or cleanup. It remains available when source
+observation is unavailable, with a null source fingerprint. `getzilla trust get
+EXECUTION_ID --json` observes the existing attempt. `getzilla trust cancel
+EXECUTION_ID --json` reserves and consumes the existing cancellation request;
+accepted cancellation stays pending until the actual owner confirms cleanup.
+
+`getzilla trust recover --expected-revision N --expected-source DIGEST --json`
+requires the current stopped revision, current source/context observation and no
+unconfirmed attempt. Pending or stale typed scope refuses recovery. This does
+not reset operation grants, credential permissions, deadlines or budget authority.
+Rollback restores reviewed source/declarations through ordinary delivery and
+keeps stop engaged until the restored bytes and cleanup are requalified. No
+unknown attempt is replayed. Canonical-owner handoff fences the old epoch and
+retains the stopped control and required generation.
+
+## Opt-in Linux managed execution
+
+`getzilla trust run --tool TOOL_ID --intent INTENT --timeout SECONDS --json`
+consumes the existing toolchain identity and the same attempt authority. No
+shipped tool is enabled. An existing `.getzilla/config/toolchain.json` entry can
+carry a closed `managed` object with an absolute `executable`, exact `sha256` and
+fixed `argv` array. The executable basename must be in that entry's `commands`.
+No request argument supplies an endpoint, principal, alternate command or grant.
+This is an observed local binary pin, not upstream provenance or transitive
+dependency attestation. Model aliases and declared minimum versions stay distinct.
+
+The adapter admits a bounded, public-mode, single-link regular ELF file through
+anchored no-follow descriptors and strict non-writable ancestry. It checks owner,
+identity, size, mode and content before use. It executes the checked descriptor,
+not a PATH lookup. Public configuration, current typed scope and existing command
+policy are required and rechecked before release. A source/policy change fences
+release. Public-source audit's limited same-group directory observations do not
+widen executable custody. No permissions of shared parents are changed.
+
+After admission consumption, the attempt records `starting`. A fixed launcher
+waits on a parent-owned pipe. The owner spawns outside task locks and records its
+live Linux pidfd/start identity before the release check. The brief release
+transaction persists `released` and writes one byte to the gate. A stop committed
+before this cut prevents the managed command, including late handle registration.
+A stop after the cut requires cleanup and does not undo earlier effects. No task
+lock spans child lifetime. Pipe drains are bounded; independent checks observe
+stop and deadline at intervals of at most 50 ms plus local scheduling/store I/O.
+Authority outage fails closed and triggers owned cleanup.
+
+The child receives only fixed PATH, LANG and LC_ALL values. It inherits no HOME,
+session ID, proxy or credential variable. The bootstrap uses isolated Python and
+its observed pinned ELF descriptor. Its fixed code and bootstrap digest remain
+diagnostic launch binding, not an authenticated customer identity. Output uses
+the existing bounded preview/counters and has no approval or review authority.
+
+Cleanup kills the owned process group while its leader remains unreaped, then
+waits for the child and observes group disappearance. The live pidfd belongs only
+to the owning process; persisted PID/start metadata is observation, never restart
+kill authority. Restore with a lost handle remains orphaned/unconfirmed and never
+spawns or kills by PID. An escaped POSIX session is outside this cleanup scope;
+this adapter is not an OS sandbox. Other hosts and scripts are unsupported and
+refused. Native Windows/macOS qualification remains a full-scope dependency;
+existing Windows Job Object helpers alone do not prove executable ACL custody.
 
 After restart or removal of active task pointers, use
 `trusted_caller(root, execution_id=execution_id)`. This observation-only context
@@ -64,7 +151,8 @@ or uncertain retries never resend it. Only actual accepted consumption can recor
 `cancel_requested`; it never means `cancelled`. Lost responses and receipt failures
 remain unknown. A terminal completion that wins a cancellation race stays
 immutable; work may also finish successfully after cancellation was accepted.
-No live cancellation implementation or qualification is claimed.
+This generic contract alone supplies no physical cancellation. The opt-in Linux
+adapter above owns and confirms only its supported local cleanup scope.
 
 The registry uses existing kernel locks, safe descriptor reads, atomic writes,
 file flushes and directory-entry flushes. It keeps at most 256 attempt/tombstone
@@ -111,6 +199,6 @@ around file flush, rename and directory flush. They do not simulate hardware
 power loss. Windows directory fsync is unsupported in the existing adapter;
 atomic replacement and path checks do not prove power-loss durability. Native
 Windows/macOS and network-filesystem qualification remain separate. External
-mutation adapters stay disabled regardless of local test results. EX-03/EX-04
-must supply real execution/cancellation, and EX-07 must qualify external intent
+mutation adapters stay disabled regardless of local test results. Other adapters
+must supply qualified execution/cancellation, and EX-07 must qualify external intent
 and reconciliation before any external backend can be enabled.

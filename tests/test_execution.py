@@ -64,10 +64,12 @@ class CountingBackend:
         return True
 
 
-def owned_route(root, session='owner', task='Fix a README typo.'):
+def owned_route(root, session='owner', task='Fix a README typo.', *, provision=True):
     state.bind_session(session)
     route = build_route(root, task, session).to_dict()
     state.set_active_route(root, route)
+    if provision:
+        execution.provision(root, execution.trusted_caller(root))
     return state.get_active_route(root)
 
 
@@ -149,7 +151,7 @@ class ExecutionTests(unittest.TestCase):
             self.submit(backend)
         self.assertEqual(caught.exception.code, 'external_backend_unqualified')
         self.assertEqual(backend.calls, 0)
-        self.assertFalse((self.root / store.REGISTRY_PATH).exists())
+        self.assertEqual(store.load_registry(self.root)['records'], {})
         with self.assertRaises(execution.ExecutionError) as caught:
             execution.cancel(self.root, self.caller, 'a' * 32)
         self.assertEqual(caught.exception.code, 'unsupported_backend')
