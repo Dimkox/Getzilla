@@ -72,6 +72,7 @@ MANIFESTS = {
         'node_modules/linked': {'link': True},
     }}),
     'svc/go.mod': 'module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgolang.org/x/net v0.17.0 // indirect\n)\nrequire github.com/a/b v1.2.3\n',
+    'rs/Cargo.toml': '[package]\nname="local"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n',
     'rs/Cargo.lock': '[[package]]\nname = "local"\nversion = "0.1.0"\n\n[[package]]\nname = "smallvec"\nversion = "1.6.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
     'php/composer.lock': json.dumps({'packages': [{'name': 'guzzlehttp/guzzle', 'version': 'v7.4.0'}],
                                      'packages-dev': [{'name': 'x/y', 'version': 'dev-main'}]}),
@@ -350,6 +351,162 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
             KV.download_database(Path(db), ['Hex'], fetch=fetch)  # an ecosystem Getzilla does not download
+
+
+class AliasShapeTests(unittest.TestCase):
+    def test_describe_preserves_only_closed_identifier_lists(self) -> None:
+        dependency = KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')
+        self.assertEqual(KV._describe({'id': 'PUBLIC-1'}, dependency).aliases, [])
+        self.assertEqual(KV._describe({'id': 'PUBLIC-1', 'aliases': []}, dependency).aliases, [])
+        self.assertEqual(KV._describe({'id': 'PUBLIC-1', 'aliases': ['x_CUSTOM:1', 'CVE-2024-22195']}, dependency).aliases,
+                         ['CVE-2024-22195', 'x_CUSTOM:1'])
+        for aliases in (None, 'CVE-2024-22195', {}, [''], ['CVE-2024-22195,'],
+                        [' CVE-2024-22195 '], [3], ('CVE-2024-22195',)):
+            with self.subTest(aliases=aliases), self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
+                KV._describe({'id': 'PUBLIC-1', 'aliases': aliases}, dependency)
+
+    def test_online_detail_aliases_refuse_instead_of_partial_findings(self) -> None:
+        dependency = KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')
+        for aliases in ('CVE-2024-22195', None, ['CVE-2024-22195,']):
+            def fetch(url, body):
+                return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]} if body is not None
+                                  else {**JINJA, 'aliases': aliases}).encode()
+            with self.subTest(aliases=aliases), self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
+                KV.query_online([dependency], fetch=fetch)
+
+    def test_offline_validates_aliases_before_package_or_withdrawn_filter(self) -> None:
+        dependency = KV.Dependency('PyPI', 'Jinja2', '2.11.0', 'requirements.txt')
+        for record in ({**JINJA, 'aliases': 'CVE-2024-22195'},
+                       {'id': 'PUBLIC-unrelated', 'aliases': None, 'affected': []},
+                       {**WITHDRAWN, 'aliases': ['CVE-2024-22195,']}):
+            with tempfile.TemporaryDirectory() as raw:
+                _mirror(Path(raw), 'PyPI', [JINJA, {**record, 'id': 'PUBLIC-malformed'}])
+                with self.subTest(record=record['id']), self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
+                    KV.query_offline([dependency], Path(raw))
+
+    def test_alias_exception_cannot_hide_malformed_data_from_scan_or_cli(self) -> None:
+        config = {'accept': [{'id': JINJA['id'], 'reason': 'public synthetic exception', 'expires': '2027-01-01'}]}
+        tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n', KV.CONFIG_PATH: json.dumps(config)})
+        with tmp:
+            mirror = root / 'public-mirror'
+            _mirror(mirror, 'PyPI', [JINJA])
+            valid = KV.scan(root, environ={'GETZILLA_OSV_DB': str(mirror)}, today=date(2026, 11, 5))
+            self.assertEqual(valid['status'], 'pass')
+            self.assertEqual(valid['accepted'][0]['aliases'], ['CVE-2024-22195'])
+            _mirror(mirror, 'PyPI', [{**JINJA, 'aliases': 'CVE-2024-22195'}])
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
+                KV.scan(root, environ={'GETZILLA_OSV_DB': str(mirror)}, today=date(2026, 11, 5))
+            process = subprocess.run([sys.executable, str(ROOT / 'scripts/getzilla_vulns.py'), '--db', str(mirror), '--json'],
+                                     cwd=root, env={'PATH': '/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1'},
+                                     capture_output=True, text=True, timeout=20)
+            self.assertEqual(process.returncode, 2)
+            self.assertIn('OSV aliases', process.stderr)
+            self.assertNotIn('Traceback', process.stderr)
+            self.assertNotIn('"status": "pass"', process.stdout)
+
+
+class CargoCoverageTests(unittest.TestCase):
+    REGISTRY = 'registry+https://github.com/rust-lang/crates.io-index'
+
+    @staticmethod
+    def lock(name='app', version='0.1.0', source=None):
+        return '[[package]]\nname = ' + json.dumps(name) + '\nversion = ' + json.dumps(version) + '\n' + (
+            '' if source is None else 'source = ' + json.dumps(source) + '\n')
+
+    def test_registry_and_manifest_owned_local_packages_remain_valid(self):
+        files = {'Cargo.toml': '[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n',
+                 'Cargo.lock': self.lock() + self.lock('smallvec', '1.6.0', self.REGISTRY)}
+        tmp, root = _repo(files)
+        with tmp:
+            dependencies, manifests = KV.collect_dependencies(root)
+        self.assertEqual([(d.ecosystem, d.name, d.version) for d in dependencies], [('crates.io', 'smallvec', '1.6.0')])
+        self.assertIn('Cargo.lock', manifests)
+
+    def test_explicit_workspace_members_and_inherited_version_are_local(self):
+        files = {'Cargo.toml': '[workspace]\nmembers=["core", "application"]\n[workspace.package]\nversion="0.1.0"\n[workspace.dependencies]\nsmallvec="1"\ncore={path="core"}\n',
+                 'core/Cargo.toml': '[package]\nname="core"\nversion.workspace=true\n[dependencies]\nsmallvec.workspace=true\n',
+                 'application/Cargo.toml': '[package]\nname="application"\nversion="0.1.0"\n[dependencies]\ncore.workspace=true\n',
+                 'Cargo.lock': self.lock('core') + self.lock('application') + self.lock('smallvec', '1.6.0', self.REGISTRY)}
+        tmp, root = _repo(files)
+        with tmp:
+            try:
+                dependencies, _ = KV.collect_dependencies(root)
+            except KV.VulnerabilityError as error:
+                self.fail(f'qualified workspace inheritance refused: {error}')
+        self.assertEqual([(d.name, d.version) for d in dependencies], [('smallvec', '1.6.0')])
+
+    def test_nonregistry_and_unresolved_declarations_are_explicit_incomplete(self):
+        ordinary = '[package]\nname="app"\nversion="0.1.0"\n'
+        cases = {
+            'git': {'Cargo.toml': ordinary + '[dependencies]\nexternal={git="https://example.invalid/public"}\n',
+                    'Cargo.lock': self.lock() + self.lock('external', '1.0.0', 'git+https://example.invalid/public#'+'a'*40)},
+            'path': {'Cargo.toml': ordinary+'[dependencies]\nexternal={path="vendor/external"}\n',
+                     'vendor/external/Cargo.toml': '[package]\nname="external"\nversion="1.0.0"\n',
+                     'Cargo.lock': self.lock()+self.lock('external', '1.0.0')},
+            'ambiguous': {'Cargo.toml': ordinary, 'Cargo.lock': self.lock()+self.lock('unknown', '1.0.0')},
+            'custom-registry': {'Cargo.lock': self.lock('external', '1.0.0', 'registry+https://example.invalid/index')},
+            'missing-lock': {'Cargo.toml': ordinary+'[dependencies]\nexternal="1"\n'},
+            'missing-pin': {'Cargo.toml': ordinary+'[dependencies]\nexternal="1"\n', 'Cargo.lock': self.lock()},
+            'malformed': {'Cargo.lock': 'package=[7]\n'},
+            'override': {'Cargo.toml': ordinary+'[patch.crates-io]\nexternal={path="vendor/external"}\n', 'Cargo.lock': self.lock()},
+        }
+        cases['mixed'] = {**cases['git'], 'Cargo.lock': cases['git']['Cargo.lock'] + self.lock('smallvec', '1.6.0', self.REGISTRY)}
+        for label, files in cases.items():
+            tmp, root = _repo(files)
+            with tmp, self.subTest(case=label), self.assertRaisesRegex(KV.VulnerabilityError, 'Cargo'):
+                KV.scan(root, environ={})
+
+    def test_unknown_workspace_and_external_source_cannot_claim_member_identity(self):
+        for extra, source in (('members=["core/*"]', None), ('members=["core"]', 'git+https://example.invalid/public#'+'a'*40)):
+            files = {'Cargo.toml': '[workspace]\n'+extra+'\n',
+                     'core/Cargo.toml': '[package]\nname="core"\nversion="0.1.0"\n',
+                     'Cargo.lock': self.lock('core', source=source)}
+            tmp, root = _repo(files)
+            with tmp, self.subTest(source=source), self.assertRaisesRegex(KV.VulnerabilityError, 'Cargo'):
+                KV.collect_dependencies(root)
+
+    def test_actual_cli_refuses_git_without_a_database_and_preserves_registry_positive(self):
+        files = {'Cargo.toml': '[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nexternal={git="https://example.invalid/public"}\n',
+                 'Cargo.lock': self.lock()+self.lock('external', '1.0.0', 'git+https://example.invalid/public#'+'a'*40)}
+        tmp, root = _repo(files)
+        with tmp:
+            command = [sys.executable, str(ROOT/'scripts/getzilla_vulns.py'), '--json']
+            env = {'PATH': '/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1'}
+            refused = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn('Cargo', refused.stderr)
+            self.assertNotIn('Traceback', refused.stderr)
+            (root/'Cargo.toml').write_text('[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n', encoding='utf-8')
+            (root/'Cargo.lock').write_text(self.lock()+self.lock('smallvec', '1.6.0', self.REGISTRY), encoding='utf-8')
+            _mirror(root/'public-db', 'crates.io', [])
+            accepted = subprocess.run([*command, '--db', str(root/'public-db')], cwd=root, env=env,
+                                      capture_output=True, text=True, timeout=20)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(json.loads(accepted.stdout)['status'], 'pass')
+            self.assertEqual(json.loads(accepted.stdout)['dependencies'], 1)
+
+
+class CargoAdmissionTests(unittest.TestCase):
+    def test_inherited_version_requires_boolean_true(self) -> None:
+        files = {'Cargo.toml': '[workspace]\nmembers=["core"]\n[workspace.package]\nversion="0.1.0"\n',
+                 'core/Cargo.toml': '[package]\nname="core"\nversion.workspace=1\n',
+                 'Cargo.lock': CargoCoverageTests.lock('core')}
+        tmp, root = _repo(files)
+        with tmp, self.assertRaisesRegex(KV.VulnerabilityError, 'Cargo'):
+            KV.collect_dependencies(root)
+
+    def test_unreadable_lock_cannot_become_no_dependencies_skip(self) -> None:
+        tmp, root = _repo({'Cargo.toml': '[package]\nname="app"\nversion="0.1.0"\n',
+                           'public-lock': CargoCoverageTests.lock()})
+        with tmp:
+            (root/'Cargo.lock').symlink_to(root/'public-lock')
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'Cargo'):
+                KV.scan(root, environ={})
+
+    def test_standalone_cargo_parser_cannot_silently_discard_nonregistry_entries(self) -> None:
+        for source in (None, 'git+https://example.invalid/public#'+'a'*40, 'registry+https://example.invalid/index'):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                list(KV.MANIFESTS['Cargo.lock'][1](CargoCoverageTests.lock('external', '1.0.0', source)))
 
 
 if __name__ == '__main__':

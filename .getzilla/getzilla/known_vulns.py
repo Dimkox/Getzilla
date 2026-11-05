@@ -107,13 +107,18 @@ def _pairs_from_toml_packages(text: str, *, registry_only: bool) -> Iterable[tup
     data = tomllib.loads(text)
     for item in data.get('package', []):
         if not isinstance(item, dict):
+            if registry_only:
+                raise ValueError('Cargo lock package is malformed')
             continue
         name, version = item.get('name'), item.get('version')
         if not isinstance(name, str) or not isinstance(version, str):
+            if registry_only:
+                raise ValueError('Cargo lock package identity is missing')
             continue
         source = item.get('source')
-        if registry_only and not (isinstance(source, str) and source.startswith('registry+')):
-            continue
+        if registry_only and source not in ('registry+https://github.com/rust-lang/crates.io-index',
+                                            'sparse+https://index.crates.io/'):
+            raise ValueError('Cargo source requires qualified manifest/registry resolution')
         if isinstance(source, dict) and ({'editable', 'directory', 'path', 'virtual', 'git'} & set(source)):
             continue
         yield name, version
@@ -300,26 +305,165 @@ def _tracked_files(root: Path) -> list[str]:
     return sorted(files)
 
 
+def _cargo_packages(root: Path, lock: str, files: set[str]) -> tuple[list[tuple[str, str]], set[str]]:
+    """Resolve only manifest-owned local identities and the default crates.io source."""
+    if tomllib is None:
+        raise ValueError('Cargo manifests need Python 3.11 or newer')
+
+    def document(relative):
+        path = root / relative
+        if (relative not in files or path.is_symlink() or not path.is_file()
+                or path.stat().st_size > MAX_MANIFEST_BYTES):
+            raise ValueError('Cargo manifest is missing or unsupported')
+        value = tomllib.loads(path.read_text(encoding='utf-8'))
+        if 'patch' in value or 'replace' in value:
+            raise ValueError('Cargo source overrides require a qualified resolver')
+        return value
+
+    directory = PurePosixPath(lock).parent
+    manifest = (directory / 'Cargo.toml').as_posix()
+    documents = {manifest: document(manifest)} if manifest in files else {}
+    workspace = documents.get(manifest, {}).get('workspace', {})
+    if not isinstance(workspace, dict):
+        raise ValueError('Cargo workspace is malformed')
+    members = workspace.get('members', [])
+    if (not isinstance(members, list) or workspace.get('exclude')
+            or any(not isinstance(member, str) or not member or '\\' in member
+                   or PurePosixPath(member).is_absolute()
+                   or any(part in {'..', '*', '?', '['} or any(c in part for c in '*?[')
+                          for part in PurePosixPath(member).parts) for member in members)):
+        raise ValueError('Cargo workspace membership requires explicit in-tree paths')
+    for member in members:
+        relative = (directory / member / 'Cargo.toml').as_posix()
+        if relative in documents:
+            raise ValueError('Cargo workspace membership is ambiguous')
+        documents[relative] = document(relative)
+    inherited = workspace.get('package', {})
+    workspace_dependencies = workspace.get('dependencies', {})
+    if not isinstance(inherited, dict) or not isinstance(workspace_dependencies, dict):
+        raise ValueError('Cargo workspace inheritance is malformed')
+    local, identities = set(), {}
+    for relative, data in documents.items():
+        package = data.get('package')
+        if package is None and relative == manifest and workspace:
+            continue
+        if not isinstance(package, dict):
+            raise ValueError('Cargo package identity is missing')
+        name, version = package.get('name'), package.get('version')
+        if type(version) is dict and set(version) == {'workspace'} and version['workspace'] is True:
+            version = inherited.get('version')
+        if (not isinstance(name, str) or not name or not isinstance(version, str)
+                or not version or name in {pair[0] for pair in local}):
+            raise ValueError('Cargo local package identity is ambiguous')
+        local.add((name, version))
+        identities[relative] = name
+    declared = set()
+    for relative, data in documents.items():
+        targets = data.get('target', {})
+        if not isinstance(targets, dict) or any(not isinstance(target, dict) for target in targets.values()):
+            raise ValueError('Cargo target dependency model is malformed')
+        for section in (data, *targets.values()):
+            for group in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+                dependencies = section.get(group, {})
+                if not isinstance(dependencies, dict):
+                    raise ValueError('Cargo dependency table is malformed')
+                for alias, dependency in dependencies.items():
+                    dependency_base = PurePosixPath(relative).parent
+                    if not isinstance(alias, str) or not alias:
+                        raise ValueError('Cargo dependency identity is malformed')
+                    if isinstance(dependency, dict) and 'workspace' in dependency:
+                        if (dependency['workspace'] is not True
+                                or set(dependency) - {'workspace', 'features', 'optional', 'default-features'}
+                                or alias not in workspace_dependencies):
+                            raise ValueError('Cargo workspace dependency is unresolved')
+                        dependency = workspace_dependencies[alias]
+                        dependency_base = directory
+                    if isinstance(dependency, str) and dependency:
+                        declared.add(alias)
+                        continue
+                    if (not isinstance(dependency, dict) or set(dependency)
+                            - {'version', 'features', 'optional', 'default-features', 'package', 'path'}):
+                        raise ValueError('Cargo unsupported dependency source requires a qualified adapter')
+                    name = dependency.get('package', alias)
+                    if not isinstance(name, str) or not name:
+                        raise ValueError('Cargo dependency package identity is malformed')
+                    if 'path' in dependency:
+                        path = dependency['path']
+                        if not isinstance(path, str) or not path or '\\' in path or PurePosixPath(path).is_absolute():
+                            raise ValueError('Cargo path dependency is unresolved')
+                        import posixpath
+                        target = posixpath.normpath((dependency_base / path / 'Cargo.toml').as_posix())
+                        if target not in identities or identities[target] != name:
+                            raise ValueError('Cargo path is not an identified workspace member')
+                    elif isinstance(dependency.get('version'), str) and dependency['version']:
+                        declared.add(name)
+                    else:
+                        raise ValueError('Cargo dependency version is unresolved')
+    data = document(lock)
+    packages = data.get('package')
+    if not isinstance(packages, list):
+        raise ValueError('Cargo lock packages are missing or malformed')
+    pairs = []
+    for package in packages:
+        if not isinstance(package, dict):
+            raise ValueError('Cargo lock package is malformed')
+        name, version = package.get('name'), package.get('version')
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
+            raise ValueError('Cargo lock package identity is missing')
+        if 'source' not in package and (name, version) in local:
+            continue
+        if package.get('source') not in ('registry+https://github.com/rust-lang/crates.io-index',
+                                         'sparse+https://index.crates.io/'):
+            raise ValueError('Cargo source requires a qualified registry/artifact adapter')
+        pairs.append((name, version))
+    if declared - {name for name, _version in pairs}:
+        raise ValueError('Cargo declaration has no exact qualified lock entry')
+    if local - {(package.get('name'), package.get('version')) for package in packages}:
+        raise ValueError('Cargo local package has no matching lock identity')
+    return pairs, set(documents)
+
+
 def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE) -> tuple[list[Dependency], list[str]]:
     """Exact pinned dependencies and the manifests they came from."""
     patterns = tuple(exclude)
     dependencies: set[Dependency] = set()
     manifests: list[str] = []
-    for relative in _tracked_files(root):
+    files = {relative for relative in _tracked_files(root) if not _excluded(relative, patterns)}
+    cargo_manifests = set()
+    for relative in sorted(files):
         parser = _manifest_parser(PurePosixPath(relative).name)
         if parser is None or _excluded(relative, patterns):
             continue
         path = root / relative
         if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
+            if PurePosixPath(relative).name == 'Cargo.lock':
+                raise VulnerabilityError('Cargo lock cannot establish complete inventory')
             continue
         ecosystem, parse = parser
         try:
-            pairs = list(parse(path.read_text(encoding='utf-8')))
+            if PurePosixPath(relative).name == 'Cargo.lock':
+                pairs, identified = _cargo_packages(root, relative, files)
+                cargo_manifests.update(identified)
+            else:
+                pairs = list(parse(path.read_text(encoding='utf-8')))
         except (UnicodeDecodeError, ValueError) as exc:
             raise VulnerabilityError(f'cannot parse {relative}: {exc}') from exc
         manifests.append(relative)
         for name, version in pairs:
             dependencies.add(Dependency(ecosystem, name, version, relative))
+    for relative in files - cargo_manifests:
+        if PurePosixPath(relative).name != 'Cargo.toml':
+            continue
+        path = root / relative
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
+            raise VulnerabilityError('Cargo manifest cannot establish complete inventory')
+        try:
+            document = tomllib.loads(path.read_text(encoding='utf-8')) if tomllib is not None else None
+            if (document is None or any(document.get(key) for key in (
+                    'dependencies', 'dev-dependencies', 'build-dependencies', 'target', 'workspace', 'patch', 'replace'))):
+                raise ValueError('Cargo declarations require a matching qualified lockfile')
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise VulnerabilityError(f'cannot parse {relative}: {exc}') from exc
     return sorted(dependencies), manifests
 
 
@@ -386,7 +530,19 @@ def _in_ranges(version: str, affected: dict[str, Any]) -> bool:
     return False
 
 
+def _osv_aliases(record: dict[str, Any]) -> list[str]:
+    """Validate decision-relevant aliases without coercion or normalization."""
+    if type(record) is not dict:
+        raise VulnerabilityError('OSV aliases require a record object')
+    aliases = record.get('aliases', [])
+    if (type(aliases) is not list or any(type(alias) is not str
+            or re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) is None for alias in aliases)):
+        raise VulnerabilityError('OSV aliases must be a list of valid vulnerability identifiers')
+    return list(aliases)
+
+
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
+    aliases = _osv_aliases(record)
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
@@ -411,7 +567,7 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(str(alias) for alias in record.get('aliases') or []),
+        aliases=sorted(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -477,6 +633,7 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                 if not member.endswith('.json'):
                     continue
                 record = json.loads(bundle.read(member))
+                _osv_aliases(record)
                 if record.get('withdrawn'):
                     continue
                 for affected in record.get('affected') or []:
