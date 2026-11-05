@@ -475,6 +475,73 @@ class EconomicReducerTests(unittest.TestCase):
                 data['observations'].reverse()
                 self.assertEqual(self.compute(data, request), result)
 
+    def reasoning_rate(self, identity, *, rate=5, start='2026-10-01T00:00:00Z',
+                       end='2026-10-02T00:00:00Z', **changes):
+        value = payloads()['tariff']
+        value.update(category='reasoning_output', rate_numerator=rate,
+                     validity={'start': start, 'end_exclusive': end}, **changes)
+        return observation(value, identity, at='2026-10-01T00:00:00Z')
+
+    def reasoning_prices(self, rates):
+        request = query()
+        request.update(views=['task_lifetime'], money_bases=['tariff_estimate'])
+        data = calculation_input([observation(payloads()['model_usage'], 'model'),
+                                  observation(payloads()['task_disposition'], 'accepted'),
+                                  *self.tariffs(), *rates])
+        before = copy.deepcopy(data)
+        result = self.compute(data, request)
+        self.assertEqual(data, before)
+        data['observations'].reverse()
+        self.assertEqual(self.compute(data, request), result)
+        return result
+
+    def test_partial_and_split_reasoning_tariffs_are_not_absent(self):
+        first = self.reasoning_rate('first-half', end='2026-10-01T12:00:00Z')
+        second = self.reasoning_rate('second-half', rate=7, start='2026-10-01T12:00:00Z')
+        same = self.reasoning_rate('same-second-half', start='2026-10-01T12:00:00Z')
+        for label, rates in [('first-only', [first]), ('second-only', [second]),
+                             ('split-different', [first, second]), ('split-same', [first, same])]:
+            with self.subTest(coverage=label):
+                result = self.reasoning_prices(rates)
+                self.assertEqual(result['status'], 'partial')
+                self.assertFalse(result['coverage']['complete'])
+                money = result['totals']['task_lifetime']
+                self.assertTrue(all(item['value'] is None for item in money))
+                self.assertTrue(any('ambiguous' in item['unknown_reasons'] for item in money))
+                refs = {ref for item in money for ref in item['source_refs']}
+                self.assertTrue({item['row']['event_id'] for item in rates} <= refs)
+
+    def test_full_reasoning_tariff_cannot_hide_conflicting_partial_rate(self):
+        full = self.reasoning_rate('full-rate')
+        partial = self.reasoning_rate('conflicting-partial', rate=7, end='2026-10-01T12:00:00Z')
+        result = self.reasoning_prices([full, partial])
+        self.assertEqual(result['status'], 'partial')
+        self.assertFalse(result['coverage']['complete'])
+        money = result['totals']['task_lifetime']
+        self.assertTrue(all(item['value'] is None for item in money))
+        refs = {ref for item in money for ref in item['source_refs']}
+        self.assertTrue({full['row']['event_id'], partial['row']['event_id']} <= refs)
+
+    def test_reasoning_tariff_absence_inapplicability_and_full_equivalence_stay_known(self):
+        before = self.reasoning_rate('before', start='2026-09-30T00:00:00Z', end='2026-10-01T00:00:00Z')
+        after = self.reasoning_rate('after', start='2026-10-02T00:00:00Z', end='2026-10-03T00:00:00Z')
+        wrong_model = self.reasoning_rate('other-model', model_id='different-model')
+        wrong_policy = self.reasoning_rate('other-policy', cache_policy_digest='f'*64)
+        full = self.reasoning_rate('full-rate')
+        equivalent = self.reasoning_rate('equivalent-full', source_proof_ref='e'*64)
+        same_partial = self.reasoning_rate('same-partial', end='2026-10-01T12:00:00Z')
+        for label, rates, expected in [('absent', [], 233), ('outside', [before, after], 233),
+                                       ('inapplicable', [wrong_model, wrong_policy], 233),
+                                       ('single-full', [full], 273), ('equivalent-full', [full, equivalent], 273),
+                                       ('matching-partial', [full, same_partial], 273),
+                                       ('irrelevant-partial', [full, before, after, wrong_model, wrong_policy], 273)]:
+            with self.subTest(rates=label):
+                result = self.reasoning_prices(rates)
+                self.assertEqual(result['status'], 'ok')
+                self.assertTrue(result['coverage']['complete'])
+                self.assertEqual(self.money(result['totals']['task_lifetime'], basis='tariff_estimate'),
+                                 Fraction(expected, 10**6))
+
     def test_two_currencies_never_convert_without_selected_fx(self):
         euro = self.charge(200, line='d'*64)
         euro['amount']['currency'] = 'EUR'

@@ -998,7 +998,8 @@ def _economic_rate(items, payload, category):
     period = payload.get('service_period')
     if period is None:
         return None, [], 'not_observed'
-    matches = []
+    start, end = _economic_utc(period['start']), _economic_utc(period['end_exclusive'])
+    matches, overlapping = [], []
     for item in items:
         rate = item['fact']['row']['payload']
         if (rate['candidate_kind'] != 'tariff' or rate['category'] != category
@@ -1007,17 +1008,23 @@ def _economic_rate(items, payload, category):
         if (rate['cache_policy_digest'] is not None
                 and rate['cache_policy_digest'] != (payload.get('cache_policy') or {}).get('policy_digest')):
             continue
-        if (_economic_utc(rate['validity']['start']) <= _economic_utc(period['start'])
-                and _economic_utc(period['end_exclusive']) <= _economic_utc(rate['validity']['end_exclusive'])
-                and _economic_utc(rate['source_published_at']) <= _economic_utc(item['fact']['row']['captured_at'])):
-            matches.append(item)
+        left, right = _economic_utc(rate['validity']['start']), _economic_utc(rate['validity']['end_exclusive'])
+        if (_economic_utc(rate['source_published_at']) <= _economic_utc(item['fact']['row']['captured_at'])
+                and left < end and start < right):
+            overlapping.append(item)
+            if left <= start and end <= right:
+                matches.append(item)
     signatures = {(item['fact']['row']['payload']['currency'], item['fact']['row']['payload']['decimal_scale'],
                    item['fact']['row']['payload']['rate_numerator'], item['fact']['row']['payload']['rate_denominator'])
-                  for item in matches}
-    if len(signatures) != 1:
-        return None, [], 'ambiguous' if signatures else 'tariff_missing'
+                  for item in overlapping}
+    refs = sorted({ref for item in overlapping for ref in item['refs']})
+    # Partial/split coverage is present pricing, not permission to ignore this
+    # category. Unsegmented usage needs one full-period rate and no conflicting
+    # overlapping quote; do not infer allocation between dated rate segments.
+    if not matches or len(signatures) != 1:
+        return None, refs, 'ambiguous' if overlapping else 'tariff_missing'
     rate = matches[0]['fact']['row']['payload']
-    return rate, sorted({ref for item in matches for ref in item['refs']}), None
+    return rate, refs, None
 
 
 def _economic_prices(item, items):
