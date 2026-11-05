@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from getzilla import execution, execution_store as store, fsx, state
-from tests.test_execution import CountingBackend, owned_route
+from tests.execution_contract_support import CountingBackend, owned_route
 
 
 def interrupted_submit(path, stage):
