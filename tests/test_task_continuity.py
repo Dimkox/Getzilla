@@ -970,10 +970,10 @@ class ContinuityTests(unittest.TestCase):
             self.light_route(root)
             _, path = self.package(root)
             publish = state.durable_json
-            def fault(project, destination, value):
+            def fault(project, destination, value, **kwargs):
                 if destination == path / 'state.json':
                     raise OSError('gate projection fault')
-                return publish(project, destination, value)
+                return publish(project, destination, value, **kwargs)
             text = 'Deploy to production and run paid API calls with explicit bounded authority.'
             with patch.object(state, 'durable_json', side_effect=fault):
                 with self.assertRaises(OSError):

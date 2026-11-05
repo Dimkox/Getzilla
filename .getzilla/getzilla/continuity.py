@@ -112,7 +112,7 @@ def _validate_ack(route: dict[str, Any], ack: Any) -> None:
             raise ValueError('invalid rejected scope resolution action')
 
 
-def validate_route(root: Path, route: dict[str, Any]) -> None:
+def validate_route(root: Path, route: dict[str, Any], *, anchor=None) -> None:
     if not isinstance(route, dict):
         raise ValueError('invalid task envelope')
     if not has_task_context(route):
@@ -127,7 +127,7 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
     if (not _identifier(route.get('logical_task_id')) or not isinstance(origin, str) or
             not 1 <= len(origin) <= 128 or not re.fullmatch(r'[\w.:/-]+', origin) or
             not _identifier(route.get('session_id')) or route['session_id'] == 'manual' or
-            route.get('workspace') != str(root.resolve()) or
+            route.get('workspace') != (anchor.workspace if anchor is not None else str(root.resolve())) or
             not _integer(route.get('authority_epoch')) or not _integer(route.get('state_revision'))):
         raise ValueError('invalid task identity, workspace or authority epoch')
     context = route.get('context')
@@ -471,12 +471,12 @@ def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_
         raise ValueError('invalid selected package checkpoints')
 
 
-def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False) -> dict[str, Any] | None:
+def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False, anchor=None) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
     from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
     from .workflow_storage import valid_package_path
-    active = state.get_active_change(root)
+    active = state.get_active_change(root, anchor=anchor)
     change_id = route.get('change_id')
     if change_id is None:
         if active is not None:
@@ -486,14 +486,16 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
             active['change_id'] != change_id or not valid_package_path(active['path'], change_id)):
         raise ValueError('selected package does not match canonical task')
     path = root / active['path']
-    package_state = state._route_document(root, path / 'state.json')
+    package_state = state._route_document(root, path / 'state.json', anchor=anchor)
     validate_package_state(package_state, route, change_id)
-    raw_spec = read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable)
+    raw_spec = (anchor.read(active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES) if anchor is not None
+                else read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable))
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
-    _validate_document(spec, gate=True, root=root)
+    _validate_document(spec, gate=True, root=root, anchor=anchor)
     if spec.get('change_id') != change_id:
         raise ValueError('typed spec change identity mismatch')
-    requirements = read_package_file(root, active['path'] + '/requirements.md', sync=durable)
+    requirements = (anchor.read(active['path'] + '/requirements.md', 1_048_576) if anchor is not None
+                    else read_package_file(root, active['path'] + '/requirements.md', sync=durable))
     requirements.decode('utf-8', 'strict')
     if not requirements.strip():
         raise ValueError('requirements are unavailable')
@@ -502,35 +504,35 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
             'requirements_digest': hashlib.sha256(requirements).hexdigest()}
 
 
-def context_binding(root: Path, route: dict[str, Any] | None = None, *, discovery: bool = False) -> dict[str, Any]:
+def context_binding(root: Path, route: dict[str, Any] | None = None, *, discovery: bool = False, anchor=None) -> dict[str, Any]:
     """Capture a bounded, revalidated observation; this is not a filesystem snapshot.
 
     No diagnostic read creates a lock or state file. Two equal document reads
     bracketed by canonical-route checks refuse observed concurrent changes.
     Publication still compares the captured binding under task_transition.
     """
-    route = state.get_active_route(root) if route is None else route
+    route = state.get_active_route(root, anchor=anchor) if route is None else route
     if not route:
         raise ValueError('task context unavailable')
     if has_task_context(route):
-        canonical = state.canonical_route(root, route['route_id'])
+        canonical = state.canonical_route(root, route['route_id'], anchor=anchor)
         if canonical != route:
             raise ValueError('task context changed')
-        validate_route(root, route)
+        validate_route(root, route, anchor=anchor)
         if not discovery:
-            state.require_route_owner(root, route)
-    documents = package_documents(root, route)
+            state.require_route_owner(root, route, anchor=anchor)
+    documents = package_documents(root, route, anchor=anchor)
     if documents is None and not (route.get('risk') == 'low' and (
             route.get('delivery_lane') == 'light' or route.get('complexity') == 'micro')):
         raise ValueError('full task requires an attached typed package')
-    if has_task_context(route) and state.canonical_route(root, route['route_id']) != route:
+    if has_task_context(route) and state.canonical_route(root, route['route_id'], anchor=anchor) != route:
         raise ValueError('task context changed during capture')
-    if package_documents(root, route) != documents:
+    if package_documents(root, route, anchor=anchor) != documents:
         raise ValueError('task context documents changed during capture')
     if has_task_context(route):
-        if state.canonical_route(root, route['route_id']) != route:
+        if state.canonical_route(root, route['route_id'], anchor=anchor) != route:
             raise ValueError('task context changed during capture')
-        if not discovery and state.get_active_route(root) != route:
+        if not discovery and state.get_active_route(root, anchor=anchor) != route:
             raise ValueError('selected task context changed during capture')
     value = {'version': 1, 'route_id': route['route_id'], 'logical_task_id': task_identity(route),
              'authority_epoch': route.get('authority_epoch', 0),

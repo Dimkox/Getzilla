@@ -19,9 +19,10 @@ PATH = '.getzilla/runtime/metrics.jsonl'
 
 
 class Observations(list):
-    def __init__(self, values=(), *, gaps=()):
+    def __init__(self, values=(), *, gaps=(), available=True):
         super().__init__(values)
         self.gaps = list(gaps)
+        self.available = available
 
 
 def when(item):
@@ -44,6 +45,11 @@ def clean(value):
 
 @contextlib.contextmanager
 def regular(root, relative, *, create=False):
+    if relative == PATH and not create:
+        from .observation_privacy import owned_journal
+        with owned_journal(root) as (descriptor, _, _):
+            yield descriptor
+        return
     parts = relative.split('/')
     if any(part in ('', '.', '..') for part in parts):
         raise ValueError('unsafe observation path')
@@ -158,9 +164,9 @@ def load(root, since=None):
         with regular(root, PATH) as descriptor:
             raw = os.read(descriptor, MAX_BYTES + 1)
     except FileNotFoundError:
-        return Observations(gaps=['no observations'])
+        return Observations(gaps=['no observations'], available=False)
     except (OSError, ValueError):
-        return Observations(gaps=['unsafe or oversized observation file'])
+        return Observations(gaps=['native observation read unavailable'], available=False)
     rows, gaps = [], []
     for number, row in enumerate(raw.splitlines(keepends=True)):
         if number >= MAX_RECORDS:
@@ -175,7 +181,9 @@ def load(root, since=None):
                 rows.append(item)
         except (UnicodeError, ValueError, TypeError, KeyError):
             gaps.append(f'malformed observation row {number + 1}')
-    return deduplicate(rows, gaps)
+    result = deduplicate(rows, gaps)
+    result.input_digest = hashlib.sha256(raw).hexdigest()
+    return result
 
 
 def import_observations(root, relative):

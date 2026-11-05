@@ -72,9 +72,10 @@ if not actions:
 
 # Explicit caller identity never transfers a grant to another task or authority epoch.
 bind_session(os.environ.get('GETZILLA_SESSION_ID') or os.environ.get('CLAUDE_CODE_SESSION_ID'))
+root = find_root()
 try:
     result = add_approval(
-        find_root(),
+        root,
         args.scope,
         args.reason,
         args.ttl,
@@ -84,6 +85,9 @@ try:
     )
 except ValueError as exc:
     parser.error(str(exc))
+if result.get('route_id'):
+    from getzilla.sprint_lifecycle import flush_after_scope
+    flush_after_scope(root, result['route_id'])
 result['external_trust_ci_authority'] = False
 result['notice'] = (
     'This delegated local grant authorizes only the listed operation on the '

@@ -35,6 +35,7 @@ EXTRA = {
 _HEX = re.compile(r'[0-9a-f]{64}\Z')
 _ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 _UTC = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z')
+_DELIVERY_UTC = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\Z')
 
 
 def utc(value):
@@ -45,6 +46,29 @@ def utc(value):
         return datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
     except ValueError:
         raise ValueError('invalid_timestamp') from None
+
+
+def delivery_utc(value):
+    """Strict local native proof precision; event timestamps remain seconds."""
+    if not isinstance(value, str) or not _DELIVERY_UTC.fullmatch(value):
+        raise ValueError('invalid_delivery_timestamp')
+    try:
+        return datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError('invalid_delivery_timestamp') from None
+
+
+def validate_delivery(proof, row):
+    """Syntax/byte binding only. The caller must prove native storage/owner cut."""
+    from .metrics_journal import digest
+    try:
+        if (type(proof) is not dict or set(proof) != {'proof_version', 'clock_domain', 'row_digest', 'delivered_by'}
+                or type(proof['proof_version']) is not int or proof['proof_version'] != 2
+                or proof['clock_domain'] != 'native_local_utc' or proof['row_digest'] != digest(row)
+                or delivery_utc(proof['delivered_by']) < utc(row['captured_at'])):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise ValueError('invalid_delivery_proof') from None
 
 
 def native_id(value):

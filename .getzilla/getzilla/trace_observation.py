@@ -22,17 +22,19 @@ def _utc_now():
     return datetime.fromisoformat(now_utc()).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def capture_claim(root, route, operation_id, key):
+def capture_claim(root, route, operation_id, key, *, anchor=None):
     """Called by actual153 claim before its canonical CAS, inside its fence."""
     if 'observation_publication' not in route:
         return None
+    if anchor is None:
+        raise ValueError('native_claim_anchor_required')
     from .continuity import context_binding
     from .sprint_lifecycle import _scope
-    state.require_route_owner(root, route)
+    state.require_route_owner(root, route, anchor=anchor)
     operation = route['task_budget']['operations'][operation_id]
     if operation['state'] != 'reserved' or operation['key'] != key or operation['owner_epoch'] != route['authority_epoch']:
         raise ValueError('native_claim_mismatch')
-    binding = context_binding(root, route)
+    binding = context_binding(root, route, anchor=anchor)
     at = _utc_now()
     row = {'schema_version': 3, 'event': 'operation', 'kind': 'budget_claimed',
            'at': at, 'captured_at': at, 'producer_version': 1,
@@ -40,10 +42,9 @@ def capture_claim(root, route, operation_id, key):
            'session_id': route['session_id'], 'authority_epoch': route['authority_epoch'],
            'state_revision': route['state_revision']+1, 'context_revision': route['context']['revision'],
            'scope_digest': _scope(binding, route), 'spec_digest': binding['spec_digest'],
-           'evidence_digest': None, 'head': git_head(root),
-           'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'base': route.get('base_commit'),
+           'evidence_digest': None, **anchor.git_source(), 'base': route.get('base_commit'),
            'operation_id': operation_id, 'attempt_id': None, 'outcome': None, 'elapsed_ns': None,
-           **local_identity(root)}
+           **local_identity(root, anchor=anchor)}
     row['event_id'] = digest(row)
     validate_v3(row)
     return NativeClaim(row, key)
@@ -68,13 +69,15 @@ def claimed_row(route, previous, captured):
     return copy.deepcopy(row)
 
 
-def committed_claim(root, route_id, operation_id, key):
+def committed_claim(root, route_id, operation_id, key, *, anchor=None):
     """Read original A inside the claim/spawn fence, never an ambient pointer."""
     try:
-        route = state.canonical_route(root, route_id)
-        state.require_route_owner(root, route)
+        if anchor is None:
+            return None
+        route = state.canonical_route(root, route_id, anchor=anchor)
+        state.require_route_owner(root, route, anchor=anchor)
         operation = route['task_budget']['operations'][operation_id]
-        binding = local_identity(root)
+        binding = local_identity(root, anchor=anchor)
         for row in reversed(route['observation_publication']['events']):
             if row['kind'] == 'budget_claimed' and row.get('operation_id') == operation_id:
                 validate_v3(row)
@@ -107,21 +110,28 @@ def capture_phase(captured, kind, *, outcome=None, elapsed_ns=None):
     return row
 
 
-def publish_observations(root, captured, rows):
+def publish_observations(root, captured, rows, *, anchor=None):
     """After owned child reap, persist only under still-valid explicit A scope."""
     if type(captured) is not NativeClaim:
         return False
+    if anchor is None:
+        from .trace_storage import native_root
+        try:
+            with native_root(root) as native:
+                return publish_observations(root, captured, rows, anchor=native)
+        except (OSError, ValueError):
+            return False
     try:
-        with state.task_transition(root):
-            route = state.canonical_route(root, captured.row['route_id'])
-            state.require_route_owner(root, route)
+        with state.task_transition(root, anchor=anchor):
+            route = state.canonical_route(root, captured.row['route_id'], anchor=anchor)
+            state.require_route_owner(root, route, anchor=anchor)
             operation = route['task_budget']['operations'][captured.row['operation_id']]
             if (route['logical_task_id'] != captured.row['logical_task_id']
                     or route['authority_epoch'] != captured.row['authority_epoch']
                     or route['session_id'] != captured.row['session_id']
                     or operation['key'] != captured.key or operation['owner_epoch'] != captured.row['authority_epoch']
                     or operation['state'] not in {'running', 'settled'}
-                    or any(captured.row[key] != value for key, value in local_identity(root).items())):
+                    or any(captured.row[key] != value for key, value in local_identity(root, anchor=anchor).items())):
                 return False
             publication = copy.deepcopy(route['observation_publication'])
             present = {row['event_id']: row for row in publication['events']}
@@ -150,9 +160,13 @@ def publish_observations(root, captured, rows):
             changed['observation_publication'] = publication
             changed['state_revision'] += 1
             changed['updated_at'] = now_utc()
-            state._commit_route(root, changed, expected=route, observation_only=True)
-            final = state.canonical_route(root, route['route_id'])['observation_publication']
-            return len(selected) == len(rows) == 2 and bool(starts and finishes) and all(final['delivery'].get(row['event_id'], {}).get('row_digest') == digest(row)
-                                          for row in selected)
+            state._commit_route(root, changed, expected=route, observation_only=True, anchor=anchor)
+        # The entire task/control/settlement scope has ended before journal I/O.
+        from .sprint_lifecycle import deliver
+        if not deliver(root, route['route_id'], anchor=anchor):
+            return False
+        final = state.canonical_route(root, route['route_id'], anchor=anchor)['observation_publication']
+        return len(selected) == len(rows) == 2 and bool(starts and finishes) and all(final['delivery'].get(row['event_id'], {}).get('row_digest') == digest(row)
+                                      for row in selected)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return False

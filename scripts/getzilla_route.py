@@ -78,4 +78,16 @@ except (ValueError, RuntimeError, OSError) as exc:
     raise SystemExit(f'Route operation refused: {exc}') from exc
 if not data:
     raise SystemExit('No owned active route. Inspect the canonical route and use exact --continue ROUTE_ID --session SESSION.')
-print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else route_context(data, root))
+if not args.show and any((args.task is not None, args.new_task is not None, args.continue_route,
+                          args.ack_scope, args.reconcile, args.complete, args.cancel,
+                          args.sprint_select, args.trace_enroll)) and data.get('observation_publication'):
+    from getzilla.sprint_lifecycle import flush_after_scope
+    current = flush_after_scope(root, data['route_id'])
+    if current is not None:
+        data = current
+    else:
+        # Never disclose cached restricted rows after current access was lost.
+        data = {'action_succeeded': True, 'current_state_revision': None,
+                'observation_delivery': 'unavailable'}
+print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else
+      'Route action succeeded; current observation access is unavailable.' if 'action_succeeded' in data else route_context(data, root))

@@ -25,6 +25,10 @@ This uses the native canonical task, current owner and exact state revision. It
 does not create another task ID. The first request initializes private storage
 only for an actually owned, safe local journal. It never upgrades old observations
 into native evidence. Do not change shared or foreign storage to bypass refusal.
+Explicit enrollment may also make the current owner's selected runtime package
+private: its directory becomes `0700`, and state/spec/requirements files become
+`0600` after descriptor and native binding checks. It does not normalize tracked
+legacy packages, shared storage, or permissions during report reads or late ACKs.
 
 For an enrolled task, the existing managed local budget executor records an actual
 `budget_claimed` cut separately from successful process spawn and owned child reap.
@@ -41,12 +45,31 @@ append and fsync. That timestamp is an upper bound, not first visibility. Replay
 keeps event bytes unchanged. Lost acknowledgements, late delivery, missing rows,
 capture failure and exhausted bounds leave the affected history censored. Metrics
 failure does not repeat the original work or block the task's own state transition.
+Proof version 2 uses strict UTC microseconds and the native local clock domain;
+event timestamps remain UTC seconds. Old seconds-only proofs are unqualified.
+Only a real current-owner exact-row reconciliation and fsync can give them a fresh
+upper bound. The first valid proof remains stable. Conflicting duplicate IDs are
+censored even when one row matches a proof.
 
-Restricted reads require the real local OS owner, safe descriptor ancestry, a
-private runtime directory and a single-link `0600` journal. Project binding comes
-from the actual root descriptor. Unqualified legacy storage exposes only admitted
+Journal delivery uses one nonblocking lock attempt and one bounded batch after
+the original work and its guards end. Filesystem fsync latency is not a real-time
+guarantee. Direct library transitions can leave pending rows; public mutating CLI
+consumers flush afterward and reread the explicit original route revision. Reads
+and nonrecording verification do not flush. A pending metadata commit alone does
+not mean the journal has been delivered.
+
+Restricted reads require the real local OS owner and the actual project root as
+the process CWD. The kernel `.` descriptor must match the intended workflow root;
+the root must be owned and not group/other writable. Descendants are opened and
+revalidated relative to that pinned descriptor. A shared writable parent outside
+the root cannot redirect an already pinned operation. Group-writable roots,
+subdirectory CWD, foreign owners and unprovable profiles remain unavailable.
+The runtime is private and the journal is a single-link `0600` regular file.
+Unqualified legacy storage exposes only admitted
 aggregate event kinds and times, with no task IDs or payloads. Unknown ownership
 does not expose even those counts. This local contract is not an enterprise ACL.
+The anchor is storage custody and does not confer tool, customer or credential
+authority. Original task/budget/paid-policy checks remain required.
 
 The empirical forecast targets guarded completion of original selected scope.
 Its pure method uses matching, non-overlapping covered windows, nearest-rank count
@@ -55,6 +78,9 @@ covered windows and excludes censored or future data. Eight training windows plu
 eight backtest origins is a display floor, not proof of an 80% probability. Current
 real history has no qualified cohorts, so the report exposes no numerical forecast.
 Synthetic tests do not supply real calibration evidence.
+The current original finish guard still reaches unanchored receipt/worker/source
+readers. Its factual status change is censored for qualified completion; a path
+bracket cannot manufacture an anchored completion witness.
 
 This initial vertical does not complete issues #152 or #159. Additional native
 retrieval collectors, full source ACL/revocation and sanitizer contracts, retention,

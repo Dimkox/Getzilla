@@ -5,7 +5,7 @@ import hashlib
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from .trace_contracts import validate_v3
+from .trace_contracts import validate_v3, validate_delivery, delivery_utc
 from .metrics_journal import digest
 
 TARGET = 'qualified_original_scope_task_completion_count_v1'
@@ -50,8 +50,11 @@ def summarize_sprint(events, *, start, as_of, source_manifest=None):
             validate_v3(row)
             if 'delivery_proofs' in manifest:
                 proof = manifest['delivery_proofs'].get(row['event_id'])
-                if (not proof or proof.get('row_digest') != digest(row)
-                        or timestamp(proof['delivered_by']) > cutoff):
+                try:
+                    validate_delivery(proof, row)
+                except ValueError:
+                    gaps.add('native_delivery_proof_missing'); continue
+                if delivery_utc(proof['delivered_by']) > cutoff:
                     gaps.add('native_delivery_proof_missing'); continue
             observed = timestamp(row['captured_at'])
             if observed >= cutoff:
@@ -97,6 +100,7 @@ def summarize_sprint(events, *, start, as_of, source_manifest=None):
     ordered = [tasks[key] for key in sorted(tasks)]
     restricted_unavailable = manifest.get('access') == 'metadata_only' or bool(gaps & {
         'native_delivery_proof_missing', 'native_journal_gap', 'native_capture_gap',
+        'conflicting_replay',
         'native_inventory_limit', 'native_inventory_unqualified'})
     legacy_unavailable = manifest.get('input_digest', 'available') is None
     encoded = json.dumps(material, sort_keys=True, allow_nan=False, separators=(',', ':')).encode()

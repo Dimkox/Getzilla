@@ -1,5 +1,6 @@
 """O01: per-route overhead and caught-defect counters answer whether the ritual pays for itself."""
 from __future__ import annotations
+import os
 
 import json
 import subprocess
@@ -70,10 +71,16 @@ class SummaryTests(unittest.TestCase):
 
 class RecordingTests(unittest.TestCase):
     def setUp(self) -> None:
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, saved)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.fchdir, saved)
         self.root = Path(tmp.name)
         (self.root / '.getzilla').mkdir()
+        os.chdir(self.root)
 
     def lines(self) -> list[dict]:
         return [json.loads(line) for line in (self.root / METRICS).read_text(encoding='utf-8').splitlines()]

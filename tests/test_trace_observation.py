@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import signal
+import select
 import sys
 import time
 import unittest
@@ -27,10 +28,16 @@ SESSION = '00000000-0000-4000-8000-000000000001'
 
 
 class TraceObservationTests(unittest.TestCase):
+    def setUp(self):
+        saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, saved)
+        self.addCleanup(os.fchdir, saved)
+
     def setup_native(self, root, *, enroll=True):
         self.assertIsNotNone(trace_observation, 'actual managed operation collector is missing')
         root.chmod(0o755)
         (root/'.getzilla').chmod(0o755)
+        os.chdir(root)
         state.bind_session(SESSION)
         route = build_route(root, 'Fix a README typo.', SESSION).to_dict()
         state.set_active_route(root, route)
@@ -68,6 +75,10 @@ class TraceObservationTests(unittest.TestCase):
                 return real_popen(argv, *args, **kwargs)
             with patch('subprocess.Popen', side_effect=fail_actual), self.assertRaises(OSError):
                 task_budget.execute_local(root, 'native-fail', [sys.executable, '--version'], timeout=1)
+            # A bare library exception leaves the committed claim pending; an
+            # explicit post-cleanup current-owner reconciliation publishes it.
+            self.assertEqual([row for row in load_local(root)['events'] if row.get('event') == 'operation'], [])
+            self.assertTrue(sprint_lifecycle.deliver(root, state.get_active_route(root)['route_id']))
             rows = [row for row in load_local(root)['events'] if row.get('event') == 'operation']
             self.assertEqual([row['kind'] for row in rows], ['budget_claimed'])
             self.assertEqual(task_budget.inspect(root)['unresolved'], 1)
@@ -128,11 +139,12 @@ class TraceObservationTests(unittest.TestCase):
                 if list(argv) == target:
                     processes.append(process)
                 return process
-            def slow_publish(*args):
+            def slow_publish(*args, **kwargs):
                 self.assertIsNotNone(processes[0].returncode)
+                self.assertEqual(state._TRANSITIONS.get(), ())
                 captured.extend(args[2])
                 time.sleep(0.1)
-                return original_publish(*args)
+                return original_publish(*args, **kwargs)
             begin = time.monotonic_ns()
             with patch('subprocess.Popen', side_effect=observe_popen):
                 # The function is imported at the actual executor boundary.
@@ -160,6 +172,39 @@ class TraceObservationTests(unittest.TestCase):
             with patch('getzilla.trace_observation.capture_phase', side_effect=observe_capture), patch('getzilla.task_budget.reconcile', side_effect=observe_settlement):
                 result = task_budget.execute_local(root, 'native-cut', [sys.executable, '--version'], timeout=1)
             self.assertEqual(result['outcome'], 'succeeded')
+
+    def test_slow_actual_journal_fsync_starts_after_timeout_reap_and_settlement(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            self.setup_native(root)
+            journal = (root / '.getzilla/runtime/metrics.jsonl').stat()
+            target = [sys.executable, '-c',
+                      'from pathlib import Path; import time; Path("fsync-effect").write_text("x"); time.sleep(1)']
+            original_popen, original_fsync = subprocess.Popen, os.fsync
+            processes, synced = [], []
+            def observe_popen(argv, *args, **kwargs):
+                process = original_popen(argv, *args, **kwargs)
+                if list(argv) == target:
+                    processes.append(process)
+                return process
+            def slow_journal(descriptor):
+                info = os.fstat(descriptor)
+                if (info.st_dev, info.st_ino) == (journal.st_dev, journal.st_ino):
+                    self.assertIsNotNone(processes[0].returncode)
+                    self.assertEqual(state._TRANSITIONS.get(), ())
+                    self.assertEqual(task_budget.inspect(root)['unresolved'], 0)
+                    synced.append(time.monotonic_ns())
+                    time.sleep(0.15)
+                return original_fsync(descriptor)
+            with patch('subprocess.Popen', side_effect=observe_popen), patch('os.fsync', side_effect=slow_journal):
+                result = task_budget.execute_local(root, 'fsync-after-reap', target, timeout=0.08)
+            self.assertTrue(synced)
+            self.assertEqual(result['outcome'], 'failed')
+            self.assertEqual(result['observation_coverage'], 'partial')
+            self.assertEqual((root / 'fsync-effect').read_text(), 'x')
+            self.assertEqual(task_budget.inspect(root)['calls'], 1)
+            replay = task_budget.execute_local(root, 'fsync-after-reap', target, timeout=0.08)
+            self.assertTrue(replay['replayed'])
+            self.assertEqual((root / 'fsync-effect').read_text(), 'x')
 
     def test_observer_exception_never_abandons_or_repeats_actual_child_effect(self):
         with project_copy(git=True, minimal_runtime=True) as root:
@@ -199,6 +244,54 @@ class TraceObservationTests(unittest.TestCase):
                         if process.poll() is None:
                             os.killpg(process.pid, signal.SIGKILL)
                             process.wait()
+
+    @unittest.skipUnless(hasattr(os, 'fork'), 'native fork unavailable')
+    def test_contended_journal_does_not_delay_owned_timeout_or_repeat_effect(self):
+        from getzilla import fsx
+        with project_copy(git=True, minimal_runtime=True) as root:
+            self.setup_native(root)
+            ready_read, ready_write = os.pipe()
+            release_read, release_write = os.pipe()
+            holder = os.fork()
+            if holder == 0:
+                try:
+                    os.close(ready_read)
+                    os.close(release_write)
+                    descriptor = os.open('.getzilla/runtime/metrics.jsonl', os.O_RDWR)
+                    fsx.lock_file(descriptor)
+                    os.write(ready_write, b'1')
+                    select.select([release_read], [], [], 1.0)
+                    fsx.unlock_file(descriptor)
+                    os.close(descriptor)
+                    os._exit(0)
+                except BaseException:
+                    os._exit(1)
+            os.close(ready_write)
+            os.close(release_read)
+            try:
+                self.assertTrue(select.select([ready_read], [], [], 2)[0])
+                self.assertEqual(os.read(ready_read, 1), b'1')
+                command = [sys.executable, '-c',
+                           'from pathlib import Path; import time; Path("one-effect").write_text("x"); time.sleep(1)']
+                before = time.monotonic()
+                result = task_budget.execute_local(root, 'contended-journal', command, timeout=0.08)
+                elapsed = time.monotonic()-before
+                self.assertLess(elapsed, 0.5)
+                self.assertEqual(result['outcome'], 'failed')
+                self.assertEqual(result['observation_coverage'], 'partial')
+                self.assertEqual((root / 'one-effect').read_text(), 'x')
+                self.assertEqual(task_budget.inspect(root)['calls'], 1)
+                self.assertEqual(task_budget.inspect(root)['unresolved'], 0)
+                self.assertEqual(state.get_active_route(root)['observation_publication']['delivery'], {})
+            finally:
+                try:
+                    os.write(release_write, b'x')
+                except BrokenPipeError:
+                    pass
+                os.close(release_write)
+                os.close(ready_read)
+                _, status = os.waitpid(holder, 0)
+                self.assertEqual(os.waitstatus_to_exitcode(status), 0)
 
 
 if __name__ == '__main__':

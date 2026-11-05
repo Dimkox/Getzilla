@@ -109,7 +109,13 @@ def run(args: argparse.Namespace, root: Path) -> dict | None:
 def main() -> int:
     args = parser().parse_args()
     try:
-        response = run(args, args.root.resolve() if args.root else find_root())
+        root = args.root.resolve() if args.root else find_root()
+        response = run(args, root)
+        if args.action not in {'watchdog', 'watch', 'progress-inspect'}:
+            route_id = getattr(args, 'route_id', None) or (response or {}).get('route_id')
+            if route_id:
+                from getzilla.sprint_lifecycle import flush_after_scope
+                flush_after_scope(root, route_id)
         if response is not None:
             print(json.dumps(response, ensure_ascii=True))
         return 0

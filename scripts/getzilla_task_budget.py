@@ -35,10 +35,13 @@ def main(argv=None):
     run.add_argument('--timeout', required=True, type=float)
     run.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    original_route, root = None, None
     try:
         root = find_root()
+        if args.action != 'show':
+            original_route = require_route_owner(root)
         if args.action == 'init':
-            route = require_route_owner(root)
+            route = original_route
             limits = {name: getattr(args, name) for name in (*task_budget.DIMENSIONS, 'calls', 'failures', 'repeat_failures', 'deadline_epoch')}
             result = task_budget.initialize(root, limits, route['authority_epoch'], route['state_revision'], task_id=route['logical_task_id'])
         elif args.action == 'show':
@@ -53,6 +56,10 @@ def main(argv=None):
         print(json.dumps({'error': 'budget-operation-refused', 'escalation': 'needs-review',
                           'coverage': 'limited-managed-command'}))
         return 2
+    finally:
+        if original_route and original_route.get('observation_publication'):
+            from getzilla.sprint_lifecycle import flush_after_scope
+            flush_after_scope(root, original_route['route_id'])
 
 
 if __name__ == '__main__':

@@ -18,14 +18,18 @@ except ImportError:
 
 class PrivacyTests(unittest.TestCase):
     def setUp(self):
+        saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, saved)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(os.fchdir, saved)
         self.root = Path(self.temp.name)
         (self.root/'.getzilla/runtime').mkdir(parents=True, mode=0o700)
         (self.root/'.getzilla').chmod(0o755)
         self.path = self.root/'.getzilla/runtime/metrics.jsonl'
         self.path.write_text(json.dumps({'event': 'route', 'route_id': 'private-sentinel'})+'\n')
         self.path.chmod(0o600)
+        os.chdir(self.root)
 
     def load(self):
         self.assertIsNotNone(observation_privacy, 'native privacy reader is missing')

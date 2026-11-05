@@ -74,9 +74,10 @@ def _schema_preflight(schema: Any, path: str = "$") -> None:
                 _schema_preflight(value, f"{path}.items")
 
 
-def load_schema(path: Path | None = None) -> dict[str, Any]:
+def load_schema(path: Path | None = None, *, anchor=None) -> dict[str, Any]:
     target = path or SCHEMA_PATH
-    data = json.loads(target.read_text(encoding="utf-8"))
+    data = json.loads(anchor.read('schemas/change-spec.schema.json', MAX_SPEC_BYTES, private=False, source=True)
+                      if anchor is not None and path is None else target.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise SpecError("schema root must be an object")
     _schema_preflight(data)
@@ -612,7 +613,7 @@ def _unsafe_path_character(value: str) -> bool:
     return any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for character in value)
 
 
-def _safe_contract_path(root: Path, raw: str) -> Path | None:
+def _safe_contract_path(root: Path, raw: str, *, anchor=None) -> Path | None:
     rel = Path(raw)
     if (
         not raw
@@ -624,6 +625,16 @@ def _safe_contract_path(root: Path, raw: str) -> Path | None:
     ):
         raise SpecError(f"unsafe contract path: {raw!r}", code="path")
     candidate = root.joinpath(*rel.parts)
+    if anchor is not None:
+        try:
+            with anchor.parent(rel, private=False, source=True) as (parent, name):
+                info = fsx.lstat_at(parent, name)
+                anchor._regular(info, private=False, source=True, limit=8*1024*1024)
+            return candidate
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            raise SpecError(f'unsafe contract path: {raw!r}', code='path') from exc
     try:
         info = candidate.lstat()
     except FileNotFoundError:
@@ -720,7 +731,7 @@ def spec_fingerprint(
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = None) -> list[str]:
+def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = None, anchor=None) -> list[str]:
     errors: list[str] = []
     collections = (("acceptance_criteria", "acceptance criterion"), ("invariants", "invariant"), ("forbidden_outcomes", "forbidden outcome"))
     all_ids: list[str] = []
@@ -746,7 +757,7 @@ def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = No
                 if kind == "test" and root is not None:
                     file_part = str(value).split("::", 1)[0]
                     try:
-                        target = _safe_contract_path(root, file_part)
+                        target = _safe_contract_path(root, file_part, anchor=anchor)
                     except SpecError as exc:
                         errors.append(str(exc))
                     else:
@@ -767,7 +778,7 @@ def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = No
         for raw in group or []:
             try:
                 if root is not None:
-                    target = _safe_contract_path(root, str(raw))
+                    target = _safe_contract_path(root, str(raw), anchor=anchor)
                     if target is None:
                         errors.append(f"contract path does not exist: {raw}")
                 else:
@@ -798,14 +809,14 @@ def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = No
     return errors
 
 
-def _validate_document(spec: dict[str, Any], *, gate: bool, root: Path | None = None) -> dict[str, Any]:
+def _validate_document(spec: dict[str, Any], *, gate: bool, root: Path | None = None, anchor=None) -> dict[str, Any]:
     _bounded_walk(spec)
     version = spec.get("schema_version")
     if version != 2:
         raise SpecError("legacy schema_version 1 is compatibility-only and cannot produce current gate evidence", code="version")
-    schema = load_schema()
+    schema = load_schema(anchor=anchor)
     validate_schema(spec, schema, schema)
-    errors = _semantic_errors(spec, gate=gate, root=root)
+    errors = _semantic_errors(spec, gate=gate, root=root, anchor=anchor)
     if errors:
         raise SpecError("; ".join(errors), code="incomplete")
     return {"ok": True, "digest": canonical_spec_digest(spec), "change_id": spec.get("change_id")}

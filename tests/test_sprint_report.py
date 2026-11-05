@@ -39,6 +39,24 @@ def observation(kind, task='task:'+'a'*32, day=23, **payload):
 
 
 class SprintReportTests(unittest.TestCase):
+    def test_classic_cli_uses_unknown_census_on_unqualified_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / '.getzilla/runtime'
+            runtime.mkdir(parents=True, mode=0o755)
+            (root / '.getzilla').chmod(0o755)
+            journal = runtime / 'metrics.jsonl'
+            journal.write_text(json.dumps({'event': 'route', 'at': START, 'route_id': 'PRIVATE_SENTINEL'})+'\n')
+            journal.chmod(0o600)
+            script = Path(__file__).resolve().parents[1] / 'scripts/getzilla_report.py'
+            result = subprocess.run([sys.executable, str(script), '--since', 'all', '--json'],
+                                    cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertIsNone(report['routes'])
+            self.assertIsNone(report['route_observations']['routes'])
+            self.assertNotIn('PRIVATE_SENTINEL', result.stdout)
+
     def report(self, events):
         self.assertIsNotNone(sprint_report, 'sprint report consumer is missing')
         return sprint_report.summarize_sprint(events, start=START, as_of=CUTOFF)
