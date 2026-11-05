@@ -46,7 +46,7 @@ def owned_fixture():
         raise RuntimeError("public fixture interpreter cannot be expressed as a pinned shebang")
     target = Path(_FIXTURE_DIRECTORY.name) / ("fixture-" + digest(python) + ".py")
     if not target.exists():
-        target.write_bytes(b"#!" + python + b"\n" + FIXTURE.read_bytes().partition(b"\n")[2])
+        target.write_bytes(b"#!" + python + b" -I\n" + FIXTURE.read_bytes().partition(b"\n")[2])
         target.chmod(0o755)
     return target
 
@@ -111,7 +111,7 @@ class LandingProviderTests(unittest.TestCase):
         configured = profile()
         executable = Path(configured.executable)
         header, separator, body = executable.read_bytes().partition(b"\n")
-        self.assertEqual(header, b"#!" + os.fsencode(Path(sys.executable).resolve()))
+        self.assertEqual(header, b"#!" + os.fsencode(Path(sys.executable).resolve()) + b" -I")
         self.assertEqual(separator, b"\n")
         self.assertEqual(body, FIXTURE.read_bytes().partition(b"\n")[2])
         self.assertEqual(configured.executable_sha256, digest(executable.read_bytes()))
