@@ -140,6 +140,11 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 if minimal_runtime and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    # This synthetic project omits the tool/scanner runtime.
+                    # Omit its two tool manifests before the initial commit;
+                    # default/full copies retain and must check all seven pins.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore)
         runtime = root / '.getzilla/runtime'
@@ -282,14 +287,27 @@ def offline_mirror(base: Path) -> Path:
     """
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
+    import io
     from getzilla import baseline, updater
+    from getzilla.security_acquisition import FetchResult, _body
+    from getzilla.security_data import SOURCE_URLS, osv_coverage, publish_snapshot
+    from datetime import datetime, timezone
 
     mirror = base / 'update-mirror'
     for ecosystem in updater.OSV_ECOSYSTEMS:
-        archive = mirror / 'osv' / ecosystem / 'all.zip'
-        archive.parent.mkdir(parents=True)
-        with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as bundle:
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [
+                {'package': {'ecosystem': ecosystem, 'name': 'public-fixture-package'}, 'versions': ['1.0.0']}]}))
+        # Explicit public fake transport/clock through production validation;
+        # this is synthetic unit evidence, never a real acquisition claim.
+        url = SOURCE_URLS[f'osv:{ecosystem}']
+        raw = _body(FetchResult(content.getvalue(), url, url, 200), url)
+        fixture_now = datetime.now(timezone.utc)
+        publish_snapshot(mirror / 'osv', f'osv:{ecosystem}', raw,
+            acquisition={'last_verified_sync_utc': fixture_now.isoformat(), 'retrieval_kind': 'download',
+                         'producer': 'synthetic-public-offline-mirror'},
+            coverage=osv_coverage(raw, ecosystem), now=fixture_now)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

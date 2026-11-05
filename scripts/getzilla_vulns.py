@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, scan  # noqa: E402
+from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, recheck_report, scan  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 from getzilla.known_vulns import _version_key as upgrade_key  # noqa: E402
 
@@ -36,6 +36,7 @@ try:
     if args.db:
         environ['GETZILLA_OSV_DB'] = args.db
     report = scan(find_root(), environ=environ)
+    recheck_report(find_root(), report, environ=environ)
 except VulnerabilityError as exc:
     print(f'getzilla_vulns: {exc}', file=sys.stderr)
     raise SystemExit(2) from exc

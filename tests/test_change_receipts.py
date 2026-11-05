@@ -598,6 +598,7 @@ class ReceiptTests(unittest.TestCase):
             )
 
     def test_unconfigured_consumer_keeps_legacy_receipt_compatibility(self) -> None:
+        from getzilla.receipts import get_receipt
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review current code', 's1')
             route['required_evidence'] = ['verification']
@@ -605,6 +606,15 @@ class ReceiptTests(unittest.TestCase):
             path = write_receipt(root, 'verification', 'pass')
             receipt = json.loads(path.read_text(encoding='utf-8'))
             self.assertNotIn('architecture_digest', receipt)
+            self.assertEqual(get_receipt(root, route['route_id'], 'verification'), receipt)
+            self.assertIn('verification: current security source proof is unavailable', validate_evidence(root, route))
+        # Read compatibility is not fresh source evidence for the full fixture's
+        # seven tooling objects. The actual structural-zero fixture can qualify.
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = _legacy_receipt_route(root, 'Review current code', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            write_receipt(root, 'verification', 'pass')
             self.assertEqual(validate_evidence(root, route), [])
 
     def test_receipt_survives_scratch_churn_but_stales_on_product_edit(self) -> None:
@@ -801,6 +811,97 @@ class ContourTests(unittest.TestCase):
             self.assertEqual(validate_evidence(root, get_active_route(root) or route), [])
             self.assertEqual(json.loads((root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json').read_text())['review_plan_digest'],
                              reconciled['review_plan']['digest'])
+
+
+class SecuritySourceReceiptTests(unittest.TestCase):
+    def test_actual_source_finding_cannot_establish_verification_pass(self):
+        import os
+        from unittest.mock import patch
+        from getzilla import known_vulns
+        from getzilla.review_plan import reconcile_route
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import observed_context, offline_mirror, synchronize_fixture_scope
+        with routed_fixture() as (root, _route):
+            (root / 'requirements.txt').write_text('public-fixture-package==1.0.0\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=root, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-qm', 'public applicable source'], cwd=root, check=True, capture_output=True)
+            start_change(root, 'Public source finding control')
+            synchronize_fixture_scope(root)
+            reconcile_route(root)
+            mirror = offline_mirror(root.parent)
+            with patch.dict(os.environ, {'GETZILLA_OSV_DB': str(mirror / 'osv')}):
+                proof = known_vulns.scan(root)
+                self.assertEqual(proof['status'], 'fail')
+                with self.assertRaisesRegex((RuntimeError, ValueError), 'source|finding|pass'):
+                    write_receipt(root, 'verification', 'pass', expected_context=observed_context(root),
+                                  details={'security_sources': proof})
+
+    def test_input_change_at_actual_receipt_publication_retires_new_pass(self):
+        from getzilla import receipts
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import observed_context
+        original = receipts._publish_receipt
+        with routed_fixture() as (root, route):
+            def publish(*args, **kwargs):
+                original(*args, **kwargs)
+                (root / 'requirements.txt').write_text('public-package==1.0.0\n', encoding='utf-8')
+            with patch.object(receipts, '_publish_receipt', side_effect=publish), \
+                    self.assertRaises((RuntimeError, ValueError)):
+                write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
+            self.assertFalse((root / '.getzilla/runtime/receipts' / route['route_id'] / 'verification.json').exists())
+
+    def test_minimal_fixture_has_actual_zero_inventory_and_full_copy_keeps_seven_tools(self):
+        from getzilla import known_vulns
+        with project_copy(minimal_runtime=False) as root:
+            full = known_vulns.scan(root, environ={})
+            self.assertEqual(full['dependencies'], 7)
+            self.assertEqual({item['manifest'] for item in full['inventory']['objects']}, {
+                '.getzilla/config/python-quality-requirements.txt', '.getzilla/config/python-test-requirements.txt'})
+        with project_copy(minimal_runtime=True) as root:
+            minimal = known_vulns.scan(root, environ={})
+            self.assertEqual(minimal['dependencies'], 0, 'minimal fixture still carries real applicable tooling objects')
+            self.assertEqual(minimal['source_mode'], 'absent')
+            self.assertTrue(minimal['inventory']['complete'])
+
+    def test_modern_omitted_details_derives_actual_empty_proof(self):
+        from getzilla import receipts
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import observed_context
+        with routed_fixture() as (root, route):
+            write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
+            result = receipts.get_receipt(root, route['route_id'], 'verification')
+            self.assertIn('security_sources', result['details'], 'modern PASS omitted its actual source applicability proof')
+            self.assertEqual(result['details']['security_sources']['inventory']['objects'], [])
+            self.assertTrue(result['details']['security_sources']['inventory']['complete'])
+
+    def test_modern_omitted_details_cannot_hide_applicable_dependency(self):
+        from getzilla.review_plan import reconcile_route
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import observed_context
+        with routed_fixture() as (root, _route):
+            (root / 'requirements.txt').write_text('public-package==1.0.0\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=root, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-qm', 'public dependency'], cwd=root, check=True, capture_output=True)
+            from tests._support import synchronize_fixture_scope
+            start_change(root, 'Public source proof control')
+            synchronize_fixture_scope(root)
+            reconcile_route(root)
+            with self.assertRaisesRegex((RuntimeError, ValueError), 'source|inventory|applicable'):
+                write_receipt(root, 'verification', 'pass', expected_context=observed_context(root))
+
+    def test_modern_consumption_requires_stored_proof_even_if_fields_removed(self):
+        from getzilla import receipts, known_vulns
+        from tests.test_verifier_recovery import routed_fixture
+        from tests._support import observed_context
+        with routed_fixture() as (root, route):
+            proof = known_vulns.scan(root, environ={})
+            path = write_receipt(root, 'verification', 'pass', expected_context=observed_context(root),
+                                 details={'security_sources': proof})
+            document = json.loads(path.read_text(encoding='utf-8'))
+            document['details'] = {}
+            path.write_text(json.dumps(document), encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'source|proof'):
+                receipts.get_receipt(root, route['route_id'], 'verification')
 
 
 if __name__ == '__main__':

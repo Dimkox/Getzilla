@@ -55,12 +55,50 @@ def _repo(files: dict[str, str]) -> tuple[tempfile.TemporaryDirectory, Path]:
     return tmp, root
 
 
-def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+def _legacy_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
     target = root / ecosystem / 'all.zip'
     target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, 'w') as bundle:
         for record in records:
             bundle.writestr(f"{record['id']}.json", json.dumps(record))
+
+
+def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """A labelled public synthetic acquired source, through production contracts."""
+    from datetime import datetime, timezone
+    from getzilla.security_acquisition import FetchResult, _body
+    from getzilla.security_data import SOURCE_URLS, osv_coverage, publish_snapshot
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    source_id = f'osv:{ecosystem}'
+    url = SOURCE_URLS[source_id]
+    payload = _body(FetchResult(content.getvalue(), url, url, 200), url)
+    current = datetime.now(timezone.utc)
+    publish_snapshot(root, source_id, payload,
+        acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                     'producer': 'synthetic-public-known-vulns'},
+        coverage=osv_coverage(payload, ecosystem), now=current)
+
+
+def _tampered_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """Intentionally forge public fixture bytes/metadata to test reader refusal."""
+    import hashlib
+    seed = {'id': 'PUBLIC-SEED', 'affected': [{'package': {'ecosystem': ecosystem, 'name': 'public-seed'}, 'versions': ['1.0.0']}]}
+    _mirror(root, ecosystem, [seed])
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    payload = content.getvalue()
+    digest = hashlib.sha256(payload).hexdigest()
+    (root / '.snapshots/sha256' / digest).write_bytes(payload)
+    pointer = root / ecosystem / 'snapshot.json'
+    document = json.loads(pointer.read_text(encoding='utf-8'))
+    document.update(content_sha256=digest, payload_size=len(payload))
+    document['coverage']['record_count'] = len(records)
+    pointer.write_text(json.dumps(document), encoding='utf-8')
 
 
 MANIFESTS = {
@@ -213,9 +251,10 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\nsafe-lib==1.0\n'})
         with tmp:
-            report = KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
-        self.assertEqual(report['status'], 'fail')
-        self.assertEqual(sorted(item['id'] for item in report['findings']), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
+            dependencies, _ = KV.collect_dependencies(root)
+            findings = KV.query_online(dependencies, fetch=fetch)
+        # An observation helper retains pagination; it is not a qualified scan.
+        self.assertEqual(sorted(item.vuln_id for item in findings), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
         first = calls[0][1]['queries']
         self.assertEqual({item['package']['ecosystem'] for item in first}, {'PyPI'})
         self.assertEqual(calls[1][1]['queries'], [{'package': {'name': 'Jinja2', 'ecosystem': 'PyPI'},
@@ -227,7 +266,8 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
         with tmp, self.assertRaisesRegex(KV.VulnerabilityError, 'OSV query failed'):
-            KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
+            dependencies, _ = KV.collect_dependencies(root)
+            KV.query_online(dependencies, fetch=fetch)
 
 
 class PolicyTests(unittest.TestCase):
@@ -340,13 +380,17 @@ class DownloadTests(unittest.TestCase):
             bundle.writestr('A.json', json.dumps(JINJA))
         urls: list[str] = []
 
-        def fetch(url: str, body: bytes | None) -> bytes:
+        def fetch(url: str, body: bytes | None):
+            from getzilla.security_acquisition import FetchResult
             urls.append(url)
-            return buffer.getvalue()
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, 'w') as bundle:
+                bundle.writestr('public.json', json.dumps(JINJA if '/PyPI/' in url else LODASH))
+            return FetchResult(content.getvalue(), url, url, 200)
 
         with tempfile.TemporaryDirectory() as db:
             written = KV.download_database(Path(db), ['PyPI', 'npm'], fetch=fetch)
-            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/all.zip', 'npm/all.zip'])
+            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/snapshot.json', 'npm/snapshot.json'])
             self.assertFalse(list(Path(db).rglob('*.partial')))
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
@@ -380,7 +424,7 @@ class AliasShapeTests(unittest.TestCase):
                        {'id': 'PUBLIC-unrelated', 'aliases': 'CVE-2024-22195', 'affected': []},
                        {**WITHDRAWN, 'aliases': ['CVE-2024-22195,']}):
             with tempfile.TemporaryDirectory() as raw:
-                _mirror(Path(raw), 'PyPI', [JINJA, {**record, 'id': 'PUBLIC-malformed'}])
+                _tampered_mirror(Path(raw), 'PyPI', [JINJA, {**record, 'id': 'PUBLIC-malformed'}])
                 with self.subTest(record=record['id']), self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
                     KV.query_offline([dependency], Path(raw))
 
@@ -393,7 +437,7 @@ class AliasShapeTests(unittest.TestCase):
             valid = KV.scan(root, environ={'GETZILLA_OSV_DB': str(mirror)}, today=date(2026, 11, 5))
             self.assertEqual(valid['status'], 'pass')
             self.assertEqual(valid['accepted'][0]['aliases'], ['CVE-2024-22195'])
-            _mirror(mirror, 'PyPI', [{**JINJA, 'aliases': 'CVE-2024-22195'}])
+            _tampered_mirror(mirror, 'PyPI', [{**JINJA, 'aliases': 'CVE-2024-22195'}])
             with self.assertRaisesRegex(KV.VulnerabilityError, 'OSV aliases'):
                 KV.scan(root, environ={'GETZILLA_OSV_DB': str(mirror)}, today=date(2026, 11, 5))
             process = subprocess.run([sys.executable, str(ROOT / 'scripts/getzilla_vulns.py'), '--db', str(mirror), '--json'],
@@ -478,7 +522,8 @@ class CargoCoverageTests(unittest.TestCase):
             self.assertNotIn('Traceback', refused.stderr)
             (root/'Cargo.toml').write_text('[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n', encoding='utf-8')
             (root/'Cargo.lock').write_text(self.lock()+self.lock('smallvec', '1.6.0', self.REGISTRY), encoding='utf-8')
-            _mirror(root/'public-db', 'crates.io', [])
+            _mirror(root/'public-db', 'crates.io', [{'id': 'PUBLIC-UNRELATED', 'affected': [
+                {'package': {'ecosystem': 'crates.io', 'name': 'public-other-package'}, 'versions': ['1.0.0']}]}])
             accepted = subprocess.run([*command, '--db', str(root/'public-db')], cwd=root, env=env,
                                       capture_output=True, text=True, timeout=20)
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
@@ -542,6 +587,215 @@ class NullAliasCompatibilityTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertEqual([(finding['id'], finding['aliases']) for finding in report['findings']], [(JINJA['id'], [])])
 
+
+
+
+class QualifiedNativeTests(unittest.TestCase):
+    def test_unqualified_online_scan_and_cli_refuse_before_acquisition(self):
+        import contextlib
+        import runpy
+        from unittest.mock import patch
+        from getzilla import util
+        temporary, root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        with temporary:
+            with self.subTest(consumer='scan'), patch.object(KV, 'query_online', return_value=[]) as query:
+                with self.assertRaisesRegex(KV.VulnerabilityError, 'online|qualified'):
+                    KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'})
+                query.assert_not_called()
+            with self.subTest(consumer='CLI'), patch.object(KV, 'query_online', return_value=[]) as query, \
+                    patch.object(util, 'find_root', return_value=root), \
+                    patch.object(sys, 'argv', ['getzilla_vulns.py', '--online', '--json']), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:
+                    runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+                self.assertEqual(stopped.exception.code, 2)
+                query.assert_not_called()
+
+    def test_malformed_policy_errors_are_typed_and_opaque(self):
+        temporary, root = _repo({'README.md': 'public fixture\n'})
+        with temporary:
+            policy = root / KV.CONFIG_PATH
+            policy.parent.mkdir(parents=True)
+            for content in ('{"PUBLIC_POLICY_SENTINEL":1,"PUBLIC_POLICY_SENTINEL":2}',
+                            '{"exclude":' + '[' * 1500 + '0' + ']' * 1500 + '}'):
+                policy.write_text(content, encoding='utf-8')
+                with self.assertRaises(KV.VulnerabilityError) as refused:
+                    KV.load_config(root)
+                self.assertNotIn('PUBLIC_POLICY_SENTINEL', str(refused.exception))
+
+    def test_query_rechecks_source_after_actual_matching(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        from getzilla import security_data
+        temporary, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
+        with temporary:
+            database = root / 'public-database'
+            now = self.qualified(root, database)
+            original, clock = KV._in_ranges, security_data._clock
+            current = [now]
+            def match(*args, **kwargs):
+                current[0] = now + timedelta(seconds=259201)
+                return original(*args, **kwargs)
+            with patch.object(KV, '_in_ranges', match), \
+                    patch.object(security_data, '_clock', side_effect=lambda supplied: clock(current[0] if supplied is None else supplied)):
+                with self.assertRaises(KV.VulnerabilityError):
+                    KV.scan(root, environ={'GETZILLA_OSV_DB': str(database)})
+
+    def test_inventory_mutation_during_query_cannot_publish_old_proof(self):
+        from unittest.mock import patch
+        temporary, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
+        with temporary:
+            database = root / 'public-database'
+            now = self.qualified(root, database)
+            original = KV._in_ranges
+            def match(*args, **kwargs):
+                (root / 'requirements.txt').write_text('Jinja2==3.1.4\n', encoding='utf-8')
+                return original(*args, **kwargs)
+            with patch.object(KV, '_in_ranges', match), self.assertRaises(KV.VulnerabilityError):
+                KV.scan(root, environ={'GETZILLA_OSV_DB': str(database)}, now=now)
+
+    def test_same_policy_bytes_on_a_replacement_inode_do_not_reuse_old_proof(self):
+        import os
+        temporary, root = _repo({'README.md': 'public empty project\n', KV.CONFIG_PATH: '{"accept":[],"exclude":[]}'})
+        with temporary:
+            report = KV.scan(root, environ={})
+            replacement = root / 'public-new-policy'
+            replacement.write_bytes((root / KV.CONFIG_PATH).read_bytes())
+            os.replace(replacement, root / KV.CONFIG_PATH)
+            with self.assertRaises(KV.VulnerabilityError):
+                KV.recheck_report(root, report, environ={})
+
+    def test_hardlinked_policy_cannot_establish_source_applicability(self):
+        import os
+        temporary, root = _repo({'README.md': 'public empty project\n', KV.CONFIG_PATH: '{"accept":[]}'})
+        with temporary:
+            os.link(root / KV.CONFIG_PATH, root / 'public-policy-link')
+            with self.assertRaises(KV.VulnerabilityError):
+                KV.scan(root, environ={})
+
+    def test_public_collector_rejects_hardlinked_manifest_before_content_use(self):
+        import os
+        temporary, root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        with temporary:
+            os.link(root / 'requirements.txt', root / 'public-second-link')
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'inventory'):
+                KV.collect_dependencies(root)
+
+    def qualified(self, root, database):
+        from getzilla import security_data
+        from datetime import datetime, timezone
+        now = datetime(2026, 11, 5, tzinfo=timezone.utc)
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, 'w') as bundle:
+            bundle.writestr('public.json', json.dumps(JINJA))
+        raw = payload.getvalue()
+        security_data.publish_snapshot(database, 'osv:PyPI', raw,
+            acquisition={'last_verified_sync_utc': now.isoformat(), 'retrieval_kind': 'download'},
+            coverage=security_data.osv_coverage(raw, 'PyPI'), now=now)
+        return now
+
+    def test_legacy_empty_zip_cannot_establish_clean_scan(self):
+        temporary, root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        with temporary, tempfile.TemporaryDirectory() as database:
+            _legacy_mirror(Path(database), 'PyPI', [])
+            with self.assertRaises(KV.VulnerabilityError):
+                KV.scan(root, environ={'GETZILLA_OSV_DB': database})
+
+    def test_unresolved_dependency_cannot_be_an_empty_skip(self):
+        temporary, root = _repo({'requirements.txt': 'public-package>=1\n'})
+        with temporary, self.assertRaisesRegex(KV.VulnerabilityError, 'inventory|incomplete|unresolved'):
+            KV.scan(root, environ={})
+
+    def test_structural_empty_scan_retains_inventory_proof(self):
+        temporary, root = _repo({'README.md': 'public no-dependency project\n'})
+        with temporary:
+            report = KV.scan(root, environ={})
+        self.assertEqual(report['status'], 'skip')
+        self.assertTrue(report.get('inventory', {}).get('complete'), 'empty applicability needs source inventory proof')
+        self.assertEqual(report['inventory']['objects'], [])
+
+    def test_bytes_only_fetch_cannot_mint_acquisition_time(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as bundle:
+            bundle.writestr('public.json', json.dumps(JINJA))
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaises(KV.VulnerabilityError):
+            KV.download_database(Path(temporary) / 'database', ['PyPI'], fetch=lambda _url, _body: output.getvalue())
+
+    def test_final_consumer_rechecks_clock_policy_inventory_and_configured_source(self):
+        from datetime import timedelta
+        temporary, root = _repo({'requirements.txt': 'Jinja2==3.1.3\n'})
+        with temporary:
+            database = root / 'public-database'
+            now = self.qualified(root, database)
+            environ = {'GETZILLA_OSV_DB': str(database)}
+            report = KV.scan(root, environ=environ, now=now)
+            check = getattr(KV, 'recheck_report', None)
+            self.assertTrue(callable(check), 'actual final-consumption source recheck is missing')
+            check(root, report, environ=environ, now=now)
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, report, environ=environ, now=now + timedelta(seconds=259201))
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, report, environ={}, now=now)
+            (root / 'requirements.txt').write_text('Jinja2==3.1.4\n', encoding='utf-8')
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, report, environ=environ, now=now)
+            (root / 'requirements.txt').write_text('Jinja2==3.1.3\n', encoding='utf-8')
+            (root / KV.CONFIG_PATH).parent.mkdir(parents=True)
+            (root / KV.CONFIG_PATH).write_text(json.dumps({'exclude': []}), encoding='utf-8')
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, report, environ=environ, now=now)
+
+    def test_final_consumer_rejects_substantive_and_source_proof_substitution(self):
+        import copy
+        temporary, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
+        with temporary:
+            database = root / 'public-database'
+            now = self.qualified(root, database)
+            environ = {'GETZILLA_OSV_DB': str(database)}
+            report = KV.scan(root, environ=environ, now=now)
+            check = getattr(KV, 'recheck_report', None)
+            self.assertTrue(callable(check), 'actual final-consumption source recheck is missing')
+            forged = copy.deepcopy(report)
+            forged['findings'] = []
+            forged['status'] = 'pass'
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, forged, environ=environ, now=now)
+            forged = copy.deepcopy(report)
+            forged['source_evidence'] = []
+            with self.assertRaises(KV.VulnerabilityError):
+                check(root, forged, environ=environ, now=now)
+
+    def test_native_verifier_carries_actual_source_proof_to_final_boundary(self):
+        import inspect
+        from getzilla import verification
+        self.assertIn('evidence', inspect.signature(verification._known_vulnerabilities).parameters,
+                      'native verifier discards the actual security source report')
+        temporary, root = _repo({'README.md': 'public empty applicability\n'})
+        with temporary:
+            evidence = {}
+            result = verification._known_vulnerabilities(root, evidence=evidence)
+            self.assertEqual(result.status, 'skip')
+            self.assertEqual(evidence['dependencies'], 0)
+            self.assertTrue(evidence['inventory']['complete'])
+
+    def test_native_cli_rechecks_before_emitting_report(self):
+        import contextlib
+        import runpy
+        from unittest.mock import patch
+        from getzilla import util
+        temporary, root = _repo({'README.md': 'public empty applicability\n'})
+        called, output = [], io.StringIO()
+        original = KV.recheck_report
+        def check(*args, **kwargs):
+            called.append(True)
+            return original(*args, **kwargs)
+        with temporary, patch.object(util, 'find_root', return_value=root), \
+                patch.object(KV, 'recheck_report', side_effect=check), \
+                patch.object(sys, 'argv', ['getzilla_vulns.py', '--json']), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertTrue(called, 'CLI emitted evidence without final source consumption check')
 
 if __name__ == '__main__':
     unittest.main()

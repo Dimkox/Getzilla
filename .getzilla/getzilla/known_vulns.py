@@ -6,9 +6,11 @@ which aggregates the GitHub Advisory Database, PyPA, RustSec, Go, npm and
 NVD-derived records. Two sources, never both, and never implicit network:
 
 * ``GETZILLA_OSV_DB=<dir>``: an offline mirror made by ``download_database``
-  (``<dir>/<Ecosystem>/all.zip`` from the public OSV bucket). This is what a
+  (``<dir>/<Ecosystem>/snapshot.json`` binds exact public OSV bytes). This is what a
   network-less sandbox such as Trust CI uses.
-* ``GETZILLA_OSV_ONLINE=1``: the OSV API (``api.osv.dev``).
+* ``GETZILLA_OSV_ONLINE=1``: currently refuses before acquisition; a qualified
+  online transcript source remains required. ``query_online`` is an observation
+  helper, not a final scan or receipt proof.
 
 Without either the check is skipped and says so. Findings can be accepted
 for a limited time in ``.getzilla/config/known-vulnerabilities.json``.
@@ -16,6 +18,8 @@ for a limited time in ``.getzilla/config/known-vulnerabilities.json``.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import io
 import json
 import os
 import re
@@ -24,7 +28,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
@@ -41,6 +45,10 @@ DEFAULT_EXCLUDE = ('tests/**', '**/tests/**', '**/fixtures/**', '**/node_modules
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 QUERY_BATCH = 500
 MAX_DETAIL_FETCHES = 300
+MAX_INVENTORY_ENTRIES = 100000
+MAX_INVENTORY_DEPTH = 64
+MAX_INVENTORY_BYTES = 32 * 1024 * 1024
+MAX_INVENTORY_PROOF_BYTES = 1024 * 1024
 
 Fetch = Callable[[str, bytes | None], bytes]
 
@@ -315,7 +323,7 @@ def _cargo_packages(root: Path, lock: str, files: set[str]) -> tuple[list[tuple[
         if (relative not in files or path.is_symlink() or not path.is_file()
                 or path.stat().st_size > MAX_MANIFEST_BYTES):
             raise ValueError('Cargo manifest is missing or unsupported')
-        value = tomllib.loads(path.read_text(encoding='utf-8'))
+        value = tomllib.loads(_read_manifest_text(root, relative))
         if 'patch' in value or 'replace' in value:
             raise ValueError('Cargo source overrides require a qualified resolver')
         return value
@@ -445,7 +453,7 @@ def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE
                 pairs, identified = _cargo_packages(root, relative, files)
                 cargo_manifests.update(identified)
             else:
-                pairs = list(parse(path.read_text(encoding='utf-8')))
+                pairs = list(parse(_read_manifest_text(root, relative)))
         except (UnicodeDecodeError, ValueError) as exc:
             raise VulnerabilityError(f'cannot parse {relative}: {exc}') from exc
         manifests.append(relative)
@@ -458,7 +466,7 @@ def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE
         if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
             raise VulnerabilityError('Cargo manifest cannot establish complete inventory')
         try:
-            document = tomllib.loads(path.read_text(encoding='utf-8')) if tomllib is not None else None
+            document = tomllib.loads(_read_manifest_text(root, relative)) if tomllib is not None else None
             if (document is None or any(document.get(key) for key in (
                     'dependencies', 'dev-dependencies', 'build-dependencies', 'target', 'workspace', 'patch', 'replace'))):
                 raise ValueError('Cargo declarations require a matching qualified lockfile')
@@ -467,12 +475,245 @@ def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE
     return sorted(dependencies), manifests
 
 
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=True, allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def _read_manifest_text(root: Path, relative: str) -> str:
+    from .component_state import BoundRoot, ComponentStateError
+    try:
+        with BoundRoot(root) as bound:
+            snapshot = bound.read(relative, limit=MAX_MANIFEST_BYTES)
+            if snapshot is None:
+                raise ValueError('missing source input')
+            bound.check()
+            return snapshot.content.decode('utf-8')
+    except (OSError, ValueError, UnicodeError, ComponentStateError):
+        label = 'Cargo ' if PurePosixPath(relative).name.startswith('Cargo.') else ''
+        raise VulnerabilityError(f'incomplete {label}inventory: unsafe or unreadable source input') from None
+
+
+def _inventory_files(root: Path, patterns: tuple[str, ...]) -> list[str]:
+    """Count entries before materialization; never follow source directory links."""
+    declarations = {'Cargo.toml', 'package.json', 'composer.json', 'Gemfile', 'Pipfile',
+                    'pom.xml', 'build.gradle', 'build.gradle.kts'}
+    pending, selected, count = [('', 0)], [], 0
+    try:
+        while pending:
+            relative, depth = pending.pop()
+            if depth > MAX_INVENTORY_DEPTH:
+                raise VulnerabilityError('incomplete inventory: directory depth exceeds bound')
+            with os.scandir(root / relative) as entries:
+                for entry in entries:
+                    count += 1
+                    if count > MAX_INVENTORY_ENTRIES:
+                        raise VulnerabilityError('incomplete inventory: file census exceeds bound')
+                    name = f'{relative}/{entry.name}' if relative else entry.name
+                    if entry.name == '.git' or _excluded(name, patterns):
+                        continue
+                    if entry.is_symlink():
+                        label = 'Cargo' if entry.name.startswith('Cargo.') else 'dependency'
+                        raise VulnerabilityError(f'incomplete {label} inventory: linked source input')
+                    if entry.is_dir(follow_symlinks=False):
+                        if not _excluded(name + '/.inventory-child', patterns):
+                            pending.append((name, depth + 1))
+                    elif _manifest_parser(entry.name) is not None or entry.name in declarations:
+                        if not entry.is_file(follow_symlinks=False):
+                            raise VulnerabilityError('incomplete inventory: nonregular dependency input')
+                        selected.append(name)
+    except OSError:
+        raise VulnerabilityError('incomplete inventory: unreadable source census') from None
+    return sorted(selected)
+
+
+def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: dict[str, str], relative: str):
+    """Supported exact-pin forms only; unknown records remain incomplete."""
+    if REQUIREMENTS_RE.fullmatch(name):
+        for raw in text.splitlines():
+            line = raw.split('#', 1)[0].strip().removesuffix('\\').strip()
+            if not line or re.fullmatch(r'--hash=sha256:[a-fA-F0-9]{64}', line):
+                continue
+            if len(list(_pairs_from_requirements(line))) != 1:
+                raise ValueError('unresolved requirement')
+    elif name == 'pyproject.toml':
+        data = tomllib.loads(text) if tomllib else None
+        if not isinstance(data, dict):
+            raise ValueError('unsupported TOML dependency model')
+        project, backend = data.get('project', {}), data.get('build-system', {})
+        if not isinstance(project, dict) or not isinstance(backend, dict) or 'dependencies' in project.get('dynamic', []):
+            raise ValueError('unresolved dynamic dependency model')
+        groups = project.get('optional-dependencies', {})
+        if not isinstance(groups, dict):
+            raise ValueError('malformed dependency groups')
+        for group in [project.get('dependencies', []), backend.get('requires', []), *groups.values()]:
+            if not isinstance(group, list) or any(type(item) is not str or len(list(_pairs_from_requirements(item))) != 1 for item in group):
+                raise ValueError('unresolved project requirement')
+    elif name in {'uv.lock', 'poetry.lock'}:
+        data = tomllib.loads(text) if tomllib else None
+        if not isinstance(data, dict) or not isinstance(data.get('package'), list):
+            raise ValueError('malformed package census')
+        for item in data['package']:
+            if (not isinstance(item, dict) or type(item.get('name')) is not str or not item['name']
+                    or type(item.get('version')) is not str or not item['version']):
+                raise ValueError('unresolved lock identity')
+            source = item.get('source')
+            if isinstance(source, dict) and {'editable', 'directory', 'path', 'virtual', 'git'} & set(source):
+                peer = str(PurePosixPath(relative).with_name('pyproject.toml'))
+                project = tomllib.loads(texts.get(peer, '')).get('project', {})
+                if (set(source) - {'editable', 'virtual'} or not source or set(source.values()) != {'.'}
+                        or not isinstance(project, dict) or project.get('name') != item['name']):
+                    raise ValueError('unqualified local or Git dependency')
+    elif name == 'Pipfile.lock':
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError('malformed package census')
+        for key in ('default', 'develop'):
+            group = data.get(key, {})
+            if not isinstance(group, dict) or any(not isinstance(row, dict) or type(row.get('version')) is not str
+                                               or not row['version'].startswith('==') for row in group.values()):
+                raise ValueError('unresolved lock identity')
+    elif name in {'package-lock.json', 'npm-shrinkwrap.json'}:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not ({'packages', 'dependencies'} & set(data)):
+            raise ValueError('missing package census')
+        if 'packages' in data:
+            if not isinstance(data['packages'], dict):
+                raise ValueError('malformed package census')
+            for path, item in data['packages'].items():
+                if not isinstance(item, dict) or (path and (item.get('link') or type(item.get('version')) is not str
+                                                          or not re.fullmatch(r'[0-9][A-Za-z0-9.+_-]*', item['version']))):
+                    raise ValueError('unresolved package source')
+        else:
+            stack = [data['dependencies']]
+            while stack:
+                group = stack.pop()
+                if not isinstance(group, dict):
+                    raise ValueError('malformed package census')
+                for item in group.values():
+                    if not isinstance(item, dict) or type(item.get('version')) is not str or not re.fullmatch(r'[0-9][A-Za-z0-9.+_-]*', item['version']):
+                        raise ValueError('unresolved package identity')
+                    if 'dependencies' in item:
+                        stack.append(item['dependencies'])
+    elif name == 'composer.lock':
+        data = json.loads(text)
+        if not isinstance(data, dict) or not {'packages', 'packages-dev'} & set(data):
+            raise ValueError('missing package census')
+        for key in ('packages', 'packages-dev'):
+            if not isinstance(data.get(key, []), list):
+                raise ValueError('malformed package census')
+            for item in data.get(key, []):
+                if (not isinstance(item, dict) or type(item.get('name')) is not str or not item['name']
+                        or type(item.get('version')) is not str
+                        or not re.fullmatch(r'v?[0-9][A-Za-z0-9.+_-]*', item['version'])):
+                    raise ValueError('unresolved package identity')
+    elif name == 'go.mod':
+        block = False
+        for raw in text.splitlines():
+            line = raw.split('//', 1)[0].strip()
+            if not line or re.fullmatch(r'(?:module|go|toolchain)\s+\S+', line):
+                continue
+            if line == 'require (':
+                block = True
+            elif line == ')' and block:
+                block = False
+            elif not re.fullmatch(r'(?:require\s+)?\S+\s+v[0-9][A-Za-z0-9.+_-]*', line) or not (block or line.startswith('require ')):
+                raise ValueError('unresolved Go source')
+        if block:
+            raise ValueError('incomplete Go requirement block')
+    elif name == 'gradle.lockfile':
+        if any(line.strip() and not line.strip().startswith(('#', 'empty='))
+               and not re.fullmatch(r'[^:=\s]+:[^:=\s]+:[^:=\s]+=.*', line.strip()) for line in text.splitlines()):
+            raise ValueError('unresolved Maven lock identity')
+    else:
+        # Native extraction supports these formats, but regex extraction alone
+        # cannot establish their complete source/record census.
+        raise ValueError('dependency format requires a qualified complete resolver')
+    return list(parse(text))
+
+
+def dependency_inventory(root: Path, config: dict[str, Any]) -> tuple[list[Dependency], list[str], dict[str, Any]]:
+    from .component_state import BoundRoot, ComponentStateError
+    patterns = tuple(config['exclude'])
+    policy = _policy_snapshot(root)
+    if load_config(root) != config:
+        raise VulnerabilityError('security policy changed before inventory')
+    files = _inventory_files(root, patterns)
+    if len(files) > 4096:
+        raise VulnerabilityError('incomplete inventory: manifest census exceeds bound')
+    snapshots, texts, total = {}, {}, 0
+    try:
+        with BoundRoot(root) as bound:
+            for relative in files:
+                snapshot = bound.read(relative, limit=min(MAX_MANIFEST_BYTES, MAX_INVENTORY_BYTES - total))
+                if snapshot is None:
+                    raise VulnerabilityError('incomplete inventory: source disappeared')
+                total += len(snapshot.content)
+                snapshots[relative] = snapshot
+                texts[relative] = snapshot.content.decode('utf-8')
+            dependencies, manifests, cargo = set(), [], set()
+            for relative in files:
+                name = PurePosixPath(relative).name
+                parser = _manifest_parser(name)
+                if parser is None:
+                    continue
+                ecosystem, parse = parser
+                if name == 'Cargo.lock':
+                    pairs, identified = _cargo_packages(root, relative, set(files))
+                    cargo.update(identified)
+                else:
+                    pairs = _strict_manifest_pairs(name, texts[relative], ecosystem, parse, texts, relative)
+                manifests.append(relative)
+                dependencies.update(Dependency(ecosystem, package, version, relative) for package, version in pairs)
+            for relative in files:
+                name = PurePosixPath(relative).name
+                if name == 'Cargo.toml':
+                    if relative not in cargo and any(tomllib.loads(texts[relative]).get(key) for key in (
+                            'dependencies', 'dev-dependencies', 'build-dependencies', 'target', 'workspace', 'patch', 'replace')):
+                        raise ValueError('Cargo unresolved declaration requires a qualified lock')
+                elif _manifest_parser(name) is None:
+                    # The current closed collector has no complete resolver
+                    # for these declarations; never infer structural absence.
+                    raise ValueError('unresolved dependency declaration')
+            for relative, previous in snapshots.items():
+                if bound.read(relative, limit=MAX_MANIFEST_BYTES) != previous:
+                    raise ValueError('dependency input changed during inventory')
+            bound.check()
+        if _policy_snapshot(root) != policy:
+            raise ValueError('security policy changed during inventory')
+        objects = [{'ecosystem': d.ecosystem, 'name': d.name, 'version': d.version, 'manifest': d.manifest} for d in sorted(dependencies)]
+        proof = {'schema_version': 1, 'complete': True, 'selection': 'bounded-physical-source-with-explicit-exclusions',
+                 'policy_sha256': _digest(config), 'objects': objects,
+                 'policy_input': None if policy is None else {
+                     'sha256': policy.sha256, 'mode': policy.mode, 'identity_sha256': _digest(list(policy.identity))},
+                 'inputs': [{'path': p, 'sha256': s.sha256, 'mode': s.mode,
+                             'identity_sha256': _digest(list(s.identity))} for p, s in sorted(snapshots.items())]}
+        if len(json.dumps(proof).encode('utf-8')) > MAX_INVENTORY_PROOF_BYTES:
+            raise ValueError('inventory proof exceeds bound')
+        return sorted(dependencies), manifests, proof
+    except (OSError, ValueError, UnicodeError, RecursionError, ComponentStateError) as error:
+        label = 'Cargo ' if 'Cargo' in str(error) else ''
+        raise VulnerabilityError(f'incomplete {label}dependency inventory') from None
+
+
+def _policy_snapshot(root: Path):
+    from .component_state import BoundRoot, ComponentStateError
+    try:
+        with BoundRoot(root) as bound:
+            snapshot = bound.read(CONFIG_PATH, limit=65536)
+            bound.check()
+            return snapshot
+    except (OSError, ValueError, ComponentStateError):
+        raise VulnerabilityError('security policy is unsafe, unreadable or exceeds its bound') from None
+
+
 def load_config(root: Path) -> dict[str, Any]:
-    path = root / CONFIG_PATH
-    if not path.is_file():
+    snapshot = _policy_snapshot(root)
+    if snapshot is None:
         return {'exclude': list(DEFAULT_EXCLUDE), 'accept': []}
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
+        from .security_data import _json
+        data = _json(snapshot.content)
     except (OSError, ValueError) as exc:
         raise VulnerabilityError(f'invalid {CONFIG_PATH}: {exc}') from exc
     exclude = data.get('exclude', list(DEFAULT_EXCLUDE))
@@ -621,16 +862,23 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
     return findings
 
 
-def query_offline(dependencies: list[Dependency], database: Path) -> list[Finding]:
+def query_offline(dependencies: list[Dependency], database: Path, *, now: datetime | None = None,
+                  source_evidence: list[dict[str, Any]] | None = None) -> list[Finding]:
+    from .security_data import SecurityDataError, confirm_snapshots, qualified_packagist, read_snapshot
     wanted: dict[str, dict[str, list[Dependency]]] = {}
     for item in dependencies:
         wanted.setdefault(item.ecosystem, {}).setdefault(normalize_name(item.ecosystem, item.name), []).append(item)
     findings: list[Finding] = []
+    proofs = []
     for ecosystem, by_name in sorted(wanted.items()):
-        archive = database / ecosystem / 'all.zip'
-        if not archive.is_file():
-            raise VulnerabilityError(f'offline OSV database has no {ecosystem}/all.zip under {database}')
-        with zipfile.ZipFile(archive) as bundle:
+        try:
+            payload, proof = read_snapshot(database, f'osv:{ecosystem}', now=now, required_scope={ecosystem})
+        except SecurityDataError as error:
+            raise VulnerabilityError(str(error)) from error
+        if source_evidence is not None:
+            source_evidence.append(proof)
+        proofs.append(proof)
+        with zipfile.ZipFile(io.BytesIO(payload)) as bundle:
             for member in bundle.namelist():
                 if not member.endswith('.json'):
                     continue
@@ -640,52 +888,59 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                     continue
                 for affected in record.get('affected') or []:
                     package = affected.get('package') or {}
+                    if (ecosystem == 'Packagist' and qualified_packagist(package.get('ecosystem'))
+                            and normalize_name(ecosystem, package.get('name', '')) in by_name):
+                        raise VulnerabilityError('Packagist dependency registry identity requires a qualified adapter')
                     if package.get('ecosystem') != ecosystem:
                         continue
                     for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
                         if _in_ranges(dependency.version, affected):
                             findings.append(_describe(record, dependency))
+    if proofs:
+        try:
+            confirm_snapshots(database, proofs, now=now)
+        except SecurityDataError as error:
+            raise VulnerabilityError(str(error)) from error
     unique = {(item.dependency, item.vuln_id): item for item in findings}
     return [unique[key] for key in sorted(unique)]
 
 
-def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS, *, fetch: Fetch = _default_fetch) -> list[str]:
-    """Refresh ``<destination>/<Ecosystem>/all.zip``; run on a host with network, never in the sandbox."""
+def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS, *, fetch=None,
+                      now: datetime | None = None) -> list[str]:
+    """Publish qualified fixed-origin snapshots; raw bytes cannot mint acquisition."""
+    from .security_acquisition import fetch_public, refresh_osv
     written = []
     for ecosystem in ecosystems:
         if ecosystem not in ECOSYSTEMS:
             raise VulnerabilityError(f'unsupported ecosystem: {ecosystem}')
-        data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip', None)
-        target = destination / ecosystem / 'all.zip'
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix('.zip.partial')
-        temporary.write_bytes(data)
-        with zipfile.ZipFile(temporary) as bundle:
-            if bundle.testzip() is not None:
-                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
-        os.replace(temporary, target)
-        written.append(str(target))
+        qualified = fetch_public if fetch is None else lambda url: fetch(url, None)
+        result = refresh_osv(destination, [ecosystem], fetch=qualified, now=now)[0]
+        if result['status'] != 'pass':
+            raise VulnerabilityError(f'OSV refresh failed for {ecosystem}: {result["reason"]}')
+        written.append(str(destination / ecosystem / 'snapshot.json'))
     return written
 
 
 def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _default_fetch,
-         today: date | None = None) -> dict[str, Any]:
+         today: date | None = None, now: datetime | None = None) -> dict[str, Any]:
     env = os.environ if environ is None else environ
     config = load_config(root)
-    dependencies, manifests = collect_dependencies(root, exclude=config['exclude'])
+    dependencies, manifests, inventory = dependency_inventory(root, config)
     database = env.get('GETZILLA_OSV_DB', '').strip()
     online = env.get('GETZILLA_OSV_ONLINE', '').strip() == '1'
-    report: dict[str, Any] = {'manifests': manifests, 'dependencies': len(dependencies), 'findings': [], 'accepted': []}
+    report: dict[str, Any] = {'manifests': manifests, 'dependencies': len(dependencies), 'findings': [], 'accepted': [],
+                              'inventory': inventory, 'source_evidence': [], 'source_mode': 'absent'}
     if not dependencies:
         report.update(status='skip', source=None, summary='no pinned dependencies in lockfiles or requirements')
         return report
     if database:
         source = f'offline OSV mirror {database}'
-        findings = query_offline(dependencies, Path(database))
+        report['source_mode'] = 'offline'
+        findings = query_offline(dependencies, Path(database), now=now, source_evidence=report['source_evidence'])
     elif online:
-        source = 'OSV API'
-        findings = query_online(dependencies, fetch=fetch)
+        raise VulnerabilityError('qualified online source coverage is unavailable; use a qualified offline snapshot')
     else:
+        report['source_mode'] = 'unconfigured'
         report.update(status='skip', source=None,
                       summary=f'{len(dependencies)} pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1')
         return report
@@ -713,4 +968,58 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
         accepted = f', {len(report["accepted"])} accepted until expiry' if report['accepted'] else ''
         report.update(status='pass',
                       summary=f'no known vulnerabilities in {len(dependencies)} pinned dependencies ({source}){accepted}')
+    # A query may take time: the initial inventory is not a final witness.
+    if dependency_inventory(root, load_config(root))[2] != inventory:
+        raise VulnerabilityError('security policy or inventory changed during the query')
+    if report['source_mode'] == 'offline':
+        from .security_data import SecurityDataError, confirm_snapshots
+        try:
+            confirm_snapshots(Path(database), report['source_evidence'], now=now)
+        except SecurityDataError as error:
+            raise VulnerabilityError(str(error)) from error
     return report
+
+
+def recheck_report(root: Path, report: dict[str, Any], *, environ: dict[str, str] | None = None,
+                   now: datetime | None = None) -> None:
+    """Re-derive native offline evidence from current configured inputs, never report paths."""
+    if not isinstance(report, dict) or report.get('source_mode') not in {'offline', 'absent'}:
+        raise VulnerabilityError('current source revalidation is unavailable for this report mode')
+    current_environment = os.environ if environ is None else environ
+    if report['source_mode'] == 'offline' and not current_environment.get('GETZILLA_OSV_DB', '').strip():
+        raise VulnerabilityError('current configured offline source is unavailable')
+    # A final consumer never falls back to online acquisition.
+    current_environment = {**current_environment, 'GETZILLA_OSV_ONLINE': '0'}
+    current = scan(root, environ=current_environment, now=now)
+    stable = ('status', 'source_mode', 'inventory', 'dependencies', 'manifests', 'findings', 'accepted')
+    if any(key not in report or report[key] != current[key] for key in stable):
+        raise VulnerabilityError('security policy, inventory or substantive result changed before consumption')
+    sources = report.get('source_evidence')
+    actual = current['source_evidence']
+    fields = ('source_id', 'source_url', 'content_sha256', 'payload_size', 'acquisition', 'coverage',
+              'manifest_sha256', 'custody_sha256')
+    if not isinstance(sources, list) or len(sources) != len(actual):
+        raise VulnerabilityError('source evidence is missing or changed before consumption')
+    for before, after in zip(sources, actual):
+        if not isinstance(before, dict) or any(field not in before or before[field] != after[field] for field in fields):
+            raise VulnerabilityError('source evidence is missing or changed before consumption')
+
+
+def verification_sources(root: Path, details: dict[str, Any], *, require_stored: bool = False) -> dict[str, Any]:
+    """Every modern PASS needs a current proof, including omitted-details callers."""
+    if not isinstance(details, dict):
+        raise VulnerabilityError('verification source proof is unavailable')
+    if 'security_sources' in details:
+        proof = details['security_sources']
+    else:
+        if require_stored:
+            raise VulnerabilityError('verification source proof is missing')
+        # Derive real structural non-applicability through production logic.
+        # Never read a configured feed or invoke a network for this fallback.
+        proof = scan(root, environ={})
+        if proof['dependencies'] != 0 or proof['source_mode'] != 'absent':
+            raise VulnerabilityError('verification requires the actual applicable source proof')
+    recheck_report(root, proof, environ={} if isinstance(proof, dict) and proof.get('source_mode') == 'absent' else None)
+    if proof.get('status') != 'pass' and not (proof.get('status') == 'skip' and proof.get('source_mode') == 'absent'):
+        raise VulnerabilityError('current security source findings cannot establish verification pass')
+    return proof

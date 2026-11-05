@@ -937,8 +937,15 @@ def write_receipt(
     spill = kind == 'verification'
     publication = None
     receipt_publication_started = False
+    source_guarded = kind == 'verification' and status == 'pass' and (
+        modern or isinstance(data['details'], dict) and 'security_sources' in data['details'])
     try:
         assert_context()
+        if source_guarded:
+            from .known_vulns import verification_sources
+            proof = verification_sources(root, data['details'])
+            if modern:
+                data['details'] = {**data['details'], 'security_sources': proof}
         # Classification can fail to serialize; that must retire an older pass too.
         spill = spill and len((json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + '\n').encode('utf-8')) > MAX_RECEIPT_BYTES
         if spill:
@@ -952,9 +959,13 @@ def write_receipt(
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
         assert_context()
+        if source_guarded:
+            verification_sources(root, data['details'] if not spill else details or {}, require_stored=modern and not spill)
         receipt_publication_started = True
         _publish_receipt(path, data, interrupt_check)
         assert_context()
+        if source_guarded:
+            verification_sources(root, ({**(details or {}), 'security_sources': proof}), require_stored=modern)
     except BaseException:
         if spill or receipt_publication_started:
             directory_fd = None
@@ -988,6 +999,16 @@ def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
         data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
         if kind == 'verification':
             _hydrate_verification_report(directory_fd, route_id, data)
+            if data.get('status') == 'pass':
+                from .known_vulns import VulnerabilityError, verification_sources
+                from .continuity import legacy_evidence_allowed
+                route = get_active_route(root)
+                modern = bool(route and route.get('route_id') == route_id and not legacy_evidence_allowed(route))
+                if modern or isinstance(data.get('details'), dict) and 'security_sources' in data['details']:
+                    try:
+                        verification_sources(root, data.get('details', {}), require_stored=modern)
+                    except VulnerabilityError as error:
+                        raise RuntimeError('verification source proof is missing, stale or unavailable') from error
         return data
     except FileNotFoundError:
         return None
@@ -1065,6 +1086,14 @@ def validate_evidence(
             missing.append(f'{kind}: malformed receipt envelope')
         if receipt.get('status') != 'pass':
             missing.append(f'{kind}: status={receipt.get("status")}')
+        if kind == 'verification' and receipt.get('status') == 'pass':
+            from .known_vulns import VulnerabilityError, verification_sources
+            try:
+                # Legacy envelopes may be read, but never establish fresh
+                # required evidence without a current applicable-source proof.
+                verification_sources(root, receipt.get('details', {}))
+            except VulnerabilityError:
+                missing.append('verification: current security source proof is unavailable')
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
         plan_digest = (route.get('review_plan') or {}).get('digest')

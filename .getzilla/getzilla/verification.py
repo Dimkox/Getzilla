@@ -1808,11 +1808,13 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
-def _known_vulnerabilities(root: Path) -> CheckResult:
+def _known_vulnerabilities(root: Path, *, evidence: dict[str, Any] | None = None) -> CheckResult:
     try:
         report = scan_known_vulnerabilities(root)
     except VulnerabilityError as exc:
         return CheckResult('known-vulnerabilities', 'fail', str(exc))
+    if evidence is not None:
+        evidence.update(report)
     details = [_vulnerability_detail(item) for item in report['findings'][:200]]
     return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
 
@@ -2969,7 +2971,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         dispatch.run('trivy-config', lambda: _trivy_config(root))
     state.stage = 'known-vulnerabilities'
     cancellation.check()
-    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
+    security_sources: dict[str, Any] = {}
+    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root, evidence=security_sources))
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
@@ -3004,6 +3007,12 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
     )
     results.append(_task_context_check(root, state))
+    if security_sources:
+        from .known_vulns import recheck_report
+        try:
+            recheck_report(root, security_sources)
+        except VulnerabilityError:
+            results.append(CheckResult('security-source-stability', 'fail', 'security source, policy or inventory is stale or unavailable'))
     quality_gate = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope)
     results.append(
         CheckResult(
@@ -3036,6 +3045,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         'checks': [item.to_dict() for item in results],
         'terminal_state': 'completed',
         'evidence_status': 'not_recorded',
+        'security_sources': security_sources,
     })
     cancellation.check()
     if record and state.receipt_eligible and route and governance_check.status != 'fail' and source_stable:
