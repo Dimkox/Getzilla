@@ -8,6 +8,52 @@ from .util import dump_json, git_head, git_output, now_utc
 _LOGS = ('core-tests.log', 'trust-ci-tests.log', 'smoke.log', 'install.log')
 
 
+def export_live_evidence(source: Path, output: Path) -> None:
+    """Copy hash-bound observations only; this does not admit or attest a cell."""
+    import re
+    from .architecture import _read_regular_bytes
+    from .live_acceptance import CELLS, OUTPUT_LIMIT, evidence_name
+
+    def read(name):
+        content = _read_regular_bytes(source, name, label='public live observation')
+        if len(content) > OUTPUT_LIMIT:
+            raise ValueError('live observation exceeds byte bound')
+        return content
+
+    raw = read('manifest.json')
+    manifest = json.loads(raw)
+    if (manifest.get('schema') != 'getzilla-live-acceptance-v1'
+            or manifest.get('cell') not in CELLS
+            or not isinstance(manifest.get('source'), dict)
+            or any(not re.fullmatch(r'[0-9a-f]{40}', manifest['source'].get(key, ''))
+                   for key in ('head', 'tree'))):
+        raise ValueError('unknown or unbound live observation schema')
+    files = manifest.get('files')
+    if not isinstance(files, list) or len(files) > 128:
+        raise ValueError('live observation inventory exceeds bound')
+    selected = {'manifest.json': raw}
+    total = len(raw)
+    for entry in files:
+        if (not isinstance(entry, dict) or set(entry) != {'path', 'sha256'}
+                or not isinstance(entry['path'], str) or not evidence_name(entry['path'])
+                or entry['path'] in selected
+                or not isinstance(entry['sha256'], str)
+                or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
+            raise ValueError('unselected or duplicate live observation')
+        content = read(entry['path'])
+        if hashlib.sha256(content).hexdigest() != entry['sha256']:
+            raise ValueError('live observation digest mismatch')
+        total += len(content)
+        if total > 64 * 1024 * 1024:
+            raise ValueError('live observation total exceeds bound')
+        selected[entry['path']] = content
+    output.mkdir(parents=True, exist_ok=False)
+    if output.is_symlink():
+        raise ValueError('live artifact directory must not be a symlink')
+    for name, content in selected.items():
+        (output / name).write_bytes(content)
+
+
 def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: str, run_id: str) -> None:
     output.mkdir(parents=True, exist_ok=False)
     if output.is_symlink():
