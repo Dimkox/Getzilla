@@ -173,6 +173,32 @@ class SQLiteLandingJobStore:
             raise LandingServiceError("not_found", 404, "landing job not found")
         return record
 
+    def observe_job(self, tenant_id: str, repository_id: str, job_id: str) -> LandingJobRecord:
+        """Bounded read of the existing source/job, without a write reservation."""
+        if not self._lock.acquire(timeout=.05):
+            raise LandingServiceError('store_observation_unavailable', 503, 'landing observation unavailable')
+        previous = None
+        try:
+            self._ensure_open()
+            previous = self._connection.execute('PRAGMA busy_timeout').fetchone()[0]
+            self._connection.execute('PRAGMA busy_timeout=50')
+            self._connection.execute('BEGIN')
+            result = self._select_record((tenant_id, repository_id, job_id))
+            self._connection.execute('COMMIT')
+            if result is None:
+                raise LandingServiceError('not_found', 404, 'landing job not found')
+            return result
+        except Exception:
+            if previous is not None and self._connection.in_transaction:
+                self._connection.execute('ROLLBACK')
+            raise LandingServiceError('store_observation_unavailable', 503, 'landing observation unavailable') from None
+        finally:
+            try:
+                if previous is not None:
+                    self._connection.execute(f'PRAGMA busy_timeout={int(previous)}')
+            finally:
+                self._lock.release()
+
     def find(
         self, tenant_id: str, repository_id: str, job_id: str
     ) -> LandingJobRecord | None:

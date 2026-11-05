@@ -87,6 +87,10 @@ class FactoryStopMigrationTests(unittest.TestCase):
                 ('global',)).fetchone(), (True, history[1][1]))
             self.assertEqual(connection.execute(
                 'SELECT active_kills FROM factory.metric_counters WHERE singleton').fetchone()[0], 1)
+            from getzilla_factory.store import PostgresFactoryStore
+            with connection.cursor() as cursor:
+                self.assertTrue(PostgresFactoryStore(DATABASE_URL)._is_killed(cursor, ('fixture',)),
+                                'the actual claim consumer ignored the monotone stop revision')
 
     def test_conflicting_replay_does_not_change_head_or_enable_runtime_authority(self):
         self.upgrade()

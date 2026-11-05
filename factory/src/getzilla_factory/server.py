@@ -180,25 +180,27 @@ def build_app(
         ):
             raise ServerError("database capabilities are not ready")
 
+    factory_service = FactoryService(
+        store,
+        execution_registry=execution_registry if settings.execution_enabled else None,
+        artifact_broker=artifact_broker if settings.execution_enabled else None,
+        artifact_attestation_store=attestation_store,
+        snapshot_broker=snapshot_broker if settings.execution_enabled else None,
+        semantic_store=semantic_store,
+        semantic_validator_store=semantic_validator_store,
+        semantic_adjudicator_store=semantic_adjudicator_store,
+    )
     owned_landing = None
     try:
         if landing_service is None:
             owned_landing = compose_server_landing(
-                settings, repository_root=Path(__file__).resolve().parents[3]
+                settings, repository_root=Path(__file__).resolve().parents[3],
+                factory_service=factory_service,
             )
             if owned_landing is not None:
                 landing_service = owned_landing.service
         app = create_app(
-            FactoryService(
-                store,
-                execution_registry=execution_registry if settings.execution_enabled else None,
-                artifact_broker=artifact_broker if settings.execution_enabled else None,
-                artifact_attestation_store=attestation_store,
-                snapshot_broker=snapshot_broker if settings.execution_enabled else None,
-                semantic_store=semantic_store,
-                semantic_validator_store=semantic_validator_store,
-                semantic_adjudicator_store=semantic_adjudicator_store,
-            ),
+            factory_service,
             Authenticator(load_actors(settings.actors_file)),
             execution_enabled=settings.execution_enabled,
             landing_service=landing_service,

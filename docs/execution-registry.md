@@ -108,6 +108,52 @@ its observed pinned ELF descriptor. Its fixed code and bootstrap digest remain
 diagnostic launch binding, not an authenticated customer identity. Output uses
 the existing bounded preview/counters and has no approval or review authority.
 
+## Factory provider stop boundary
+
+Factory uses its existing PostgreSQL `kill_switches` history and
+`kill_switch_heads` projection. Migration 026 assigns a serialized monotone
+revision before each new same-scope event. Operator authorization and exact
+idempotent replay remain unchanged. Neither local execution state nor landing's
+SQLite projection replaces this authority.
+
+A client chooses a validated landing job ID and knows the content SHA256 before
+upload. It first submits a genuine Factory TaskIntake with its required authority
+documents. Use `source_type=api` and source ID `landing:v1:` followed by the
+SHA256 of that exact job ID's UTF-8 bytes. This 75-byte selector has no legacy
+alias and grants no identity or permission. Then upload with the same job ID as
+the landing Idempotency-Key. Factory allocates the actual task UUID.
+
+The real server binds its existing Factory service to landing. An opaque local
+capability requires exactly one active, unexpired task with the same repository,
+base, content hash, original intake actor and immutable stored landing creator.
+The full job ID and stored input remain separately bound. Request labels,
+provider profiles and serialized capability text cannot supply this authority.
+Separate access and permission freshness still require their actual authority;
+this stop capability does not authenticate a customer against a same-UID bypass.
+
+The provider checks the capability before credential lookup and just before its
+local POST admission. During connect, headers and body waits, an independent
+observer checks both global and exact-repository revisions every 50 ms. One
+750 ms deadline covers each PostgreSQL connect, existing capability-role checks,
+setup and snapshot query. Source observation has two separate 50 ms SQLite
+owner-lock bounds. An outage closes the owned DB connection before cancelling
+and joining its query task. No DB transaction or task lock spans provider IO.
+These are local measured controls; OS scheduling and remote cancellation are
+not guaranteed.
+
+A stop, changed revision, stale source or authority outage cancels owned HTTP
+work and produces a non-fallback policy outcome. After local admission, remote
+usage remains unknown unless a valid result established it. Local cancellation
+does not reverse a provider effect. A cancelled job cannot accept a late result
+or replay its provider call. An operator's disable event changes the revision;
+it cannot revive an earlier capability.
+
+Standalone live landing lacks this Factory boundary and refuses before keys or
+POST. Its offline path remains available. The programmatic synthetic Qwen probe
+also requires a real capability for its exact synthetic source. The public probe
+CLI has no authenticated capability issuer and therefore refuses live execution.
+No deployment or real-provider qualification is implied by source tests.
+
 Cleanup kills the owned process group while its leader remains unreaped, then
 waits for the child and observes group disappearance. The live pidfd belongs only
 to the owning process; persisted PID/start metadata is observation, never restart
