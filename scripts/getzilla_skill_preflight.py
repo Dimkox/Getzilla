@@ -38,14 +38,28 @@ def _unknown_publication(error: BaseException) -> bool:
         if len(seen) >= 8:
             return True
         seen.add(id(current))
-        values = BaseException.__getattribute__(current, '__dict__')
-        state = values.get('publication_state')
-        if type(state) is str and state == 'unknown':
+        try:
+            # Calling __getattribute__ still dispatches subclass descriptors.
+            # Use only the trusted base-owned storage descriptors and dict APIs.
+            values = BaseException.__dict__['__dict__'].__get__(current, BaseException)
+            if not isinstance(values, dict) or dict.__len__(values) > 64:
+                return True
+            # Unknown keys could run equality hooks inside even builtin dict.get.
+            if any(type(key) is not str for key in dict.keys(values)):
+                return True
+            missing = object()
+            state = dict.get(values, 'publication_state', missing)
+            if state is not missing and (type(state) is not str or state == 'unknown'):
+                return True
+            for name in ('__cause__', '__context__'):
+                linked = BaseException.__dict__[name].__get__(current, BaseException)
+                if linked is not None:
+                    if not issubclass(type(linked), BaseException):
+                        return True
+                    pending.append(linked)
+        except BaseException:
+            # Unreadable metadata is uncertainty, never a secondary traceback.
             return True
-        for name in ('__cause__', '__context__'):
-            linked = BaseException.__getattribute__(current, name)
-            if linked is not None:
-                pending.append(linked)
     return False
 
 
@@ -92,10 +106,10 @@ def main(argv=None):
                               'reason': 'PUBLICATION_CUSTODY_UNKNOWN', 'reasons': [],
                               'publication_state': 'unknown', 'inspection_required': True, 'retryable': False,
                               'permissions_granted': False, 'activated': False, 'evidence_valid': False}, sort_keys=True))
-            if not isinstance(exc, (ValueError, OSError)):
+            if not issubclass(type(exc), (ValueError, OSError)):
                 raise
             return 2
-        if not isinstance(exc, (ValueError, OSError)):
+        if not issubclass(type(exc), (ValueError, OSError)):
             raise
         # No raw source, command, exception text or credentials enter diagnostics.
         prefix, _separator, detail = str(exc).partition(':')
@@ -109,10 +123,13 @@ def main(argv=None):
 
 def _terminal_unknown_exit(error: BaseException) -> int:
     """Bounded public exit codes; never print a private SystemExit payload."""
-    if isinstance(error, KeyboardInterrupt):
+    if issubclass(type(error), KeyboardInterrupt):
         return 130
-    if isinstance(error, SystemExit):
-        code = error.code
+    if issubclass(type(error), SystemExit):
+        try:
+            code = SystemExit.__dict__['code'].__get__(error, SystemExit)
+        except BaseException:
+            return 1
         if type(code) is int and -(2 ** 31) <= code < 2 ** 31:
             effective = code & (0xFFFFFFFF if os.name == 'nt' else 0xFF)
             if effective:

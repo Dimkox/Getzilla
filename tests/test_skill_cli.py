@@ -188,7 +188,18 @@ class SkillCliTests(unittest.TestCase):
         class DirectInterruption(BaseException):
             pass
 
-        for error in (KeyboardInterrupt('PRIVATE_INTERRUPT'), SystemExit(37), DirectInterruption('PRIVATE_BASE_EXIT')):
+        class MetadataInterruption(BaseException):
+            @property
+            def __dict__(self):
+                raise AssertionError('PRIVATE_DICT_DESCRIPTOR')
+
+        class MetadataExit(SystemExit):
+            @property
+            def code(self):
+                raise AssertionError('PRIVATE_EXIT_DESCRIPTOR')
+
+        for error in (KeyboardInterrupt('PRIVATE_INTERRUPT'), SystemExit(37), DirectInterruption('PRIVATE_BASE_EXIT'),
+                      MetadataInterruption('PRIVATE_META_INTERRUPT'), MetadataExit(37)):
             with self.subTest(kind=type(error).__name__):
                 fixture = self.fixture()
                 write, read = ComponentTransaction.write, ComponentTransaction.read
@@ -233,12 +244,26 @@ from pathlib import Path
 from getzilla.component_state import ComponentTransaction
 class DirectInterruption(BaseException):
     pass
+class MetadataError(ValueError):
+    @property
+    def __dict__(self):
+        raise RuntimeError('PRIVATE_DICT_DESCRIPTOR')
+class MetadataExit(SystemExit):
+    @property
+    def code(self):
+        raise RuntimeError('PRIVATE_CODE_DESCRIPTOR')
+class MetadataMap(dict):
+    def get(self,*args,**kwargs):
+        raise RuntimeError('PRIVATE_MAPPING_METHOD')
 script,root,kind,mode=sys.argv[1:]
 private='PRIVATE_CHILD_DETAIL /private/child-location payload=never-print'
 errors={'keyboard':KeyboardInterrupt(private),'system':SystemExit(37),'zero':SystemExit(0),
         'none':SystemExit(None),'wide':SystemExit(256),'too-wide':SystemExit(2**64),
         'system-text':SystemExit(private),'custom':DirectInterruption(private),
-        'value':ValueError(private),'io':OSError(private)}
+        'value':ValueError(private),'io':OSError(private),
+        'dict-descriptor':MetadataError(private),'code-descriptor':MetadataExit(37),
+        'mapping-method':ValueError(private)}
+if kind=='mapping-method':errors[kind].__dict__=MetadataMap()
 error=errors[kind]
 write,read=ComponentTransaction.write,ComponentTransaction.read
 complete=[]
@@ -301,3 +326,116 @@ runpy.run_path(script,run_name='__main__')
                                        capture_output=True, check=False, timeout=15)
         self.assertEqual(parser_result.returncode, 2)
         self.assertIn(b'usage:', parser_result.stderr)
+
+    def test_actual_terminal_base_storage_bypasses_hostile_metadata_hooks(self):
+        for kind, expected in (('dict-descriptor', 2), ('code-descriptor', 37), ('mapping-method', 2)):
+            with self.subTest(kind=kind):
+                process, fixture = self.subprocess_fault(kind)
+                self.assertEqual(process.returncode, expected)
+                result = json.loads(process.stdout)
+                self.assertEqual(result['status'], 'unknown')
+                self.assertTrue(result['inspection_required'])
+                self.assertFalse(result['retryable'])
+                self.assertEqual(process.stderr, b'')
+                self.assertNotIn(b'PRIVATE', process.stdout)
+                marker = fixture.root / '.getzilla/runtime/skill-publications/example.json'
+                self.assertEqual(json.loads(marker.read_bytes())['status'], 'complete')
+
+    def test_metadata_graph_reads_base_descriptors_and_rejects_unsafe_scalars(self):
+        hooks = []
+
+        class HostileLinks(ValueError):
+            @property
+            def __dict__(self):
+                hooks.append('dictionary')
+                raise AssertionError('PRIVATE_DICT_DESCRIPTOR')
+
+            @property
+            def __cause__(self):
+                hooks.append('cause')
+                raise AssertionError('PRIVATE_CAUSE_DESCRIPTOR')
+
+            @property
+            def __context__(self):
+                hooks.append('context')
+                raise AssertionError('PRIVATE_CONTEXT_DESCRIPTOR')
+
+            @property
+            def __class__(self):
+                hooks.append('class')
+                raise AssertionError('PRIVATE_CLASS_DESCRIPTOR')
+
+        class UnsafeScalar:
+            def __eq__(self, other):
+                raise AssertionError('PRIVATE_EQUALITY')
+
+            def __hash__(self):
+                raise AssertionError('PRIVATE_HASH')
+
+            def __bool__(self):
+                raise AssertionError('PRIVATE_TRUTH')
+
+        leaf = ValueError('PRIVATE_LEAF')
+        leaf.publication_state = 'unknown'
+        for link in ('__cause__', '__context__'):
+            error = HostileLinks('PRIVATE_WRAPPER')
+            BaseException.__dict__[link].__set__(error, leaf)
+            self.assertTrue(CLI._unknown_publication(error))
+        ordinary = HostileLinks('PRIVATE_ORDINARY')
+        self.assertFalse(CLI._unknown_publication(ordinary))
+        for scalar in (UnsafeScalar(), None, True, 1, [], {}):
+            error = ValueError('PRIVATE_SCALAR')
+            error.publication_state = scalar
+            self.assertTrue(CLI._unknown_publication(error))
+        self.assertEqual(hooks, [])
+        error = ValueError('PRIVATE_LARGE_METADATA')
+        error.__dict__.update({str(i): None for i in range(65)})
+        self.assertTrue(CLI._unknown_publication(error))
+
+    def test_unknown_metadata_never_hashes_or_compares_foreign_keys(self):
+        hooks = []
+
+        class ForeignKey(str):
+            armed = False
+
+            def __hash__(self):
+                if self.armed:
+                    hooks.append('hash')
+                    raise AssertionError('PRIVATE_KEY_HASH')
+                return str.__hash__(self)
+
+            def __eq__(self, other):
+                hooks.append('equality')
+                raise AssertionError('PRIVATE_KEY_EQUALITY')
+
+        key = ForeignKey('publication_state')
+        error = ValueError('PRIVATE_KEY_ERROR')
+        error.__dict__ = {key: 'unknown'}
+        key.armed = True
+        self.assertTrue(CLI._unknown_publication(error))
+        self.assertEqual(hooks, [])
+
+    def test_base_storage_dictionary_method_and_exit_scalar_controls(self):
+        hooks = []
+
+        class MetadataMap(dict):
+            def get(self, *args):
+                hooks.append('mapping-get')
+                raise AssertionError('PRIVATE_MAPPING_METHOD')
+
+            def __iter__(self):
+                hooks.append('mapping-iteration')
+                raise AssertionError('PRIVATE_MAPPING_ITERATOR')
+
+        class MetadataExit(SystemExit):
+            @property
+            def code(self):
+                hooks.append('exit-code')
+                raise AssertionError('PRIVATE_EXIT_DESCRIPTOR')
+
+        error = ValueError('PRIVATE_MAPPING_ERROR')
+        error.__dict__ = MetadataMap(publication_state='unknown')
+        self.assertTrue(CLI._unknown_publication(error))
+        for code, expected in ((37, 37), (0, 1), (None, 1), (True, 1), ('PRIVATE_CODE', 1)):
+            self.assertEqual(CLI._terminal_unknown_exit(MetadataExit(code)), expected)
+        self.assertEqual(hooks, [])

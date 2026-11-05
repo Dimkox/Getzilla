@@ -89,3 +89,8 @@ unknown exceptions to private-text-free failure: KeyboardInterrupt130, valid non
 SystemExit codes with nonzero actual platform exit preserved, and other cases1. Zero/None, private
 string codes, out-of-policy integers and codes that normalize to success become1. There is no global
 exception hook. Ordinary interrupts, help and parser exits without unknown metadata keep their behavior.
+
+Exception metadata uses trusted built-in storage descriptors for the dictionary, cause/context and
+SystemExit code. Subclass properties and dictionary methods cannot supply these values. Metadata
+has at most64 entries with exact string keys; unreadable, oversized or malformed metadata requires
+inspection. Unknown scalar objects are never formatted, hashed, compared or converted to truth.
