@@ -30,6 +30,69 @@ class CiEvidenceTests(unittest.TestCase):
             elif path.is_file():
                 path.chmod(0o600)
 
+    def _failed_native_export(self, cut):
+        from getzilla.ci_evidence import export_local_evidence
+        from getzilla import fsx
+        from unittest.mock import patch
+        base = Path(__file__).resolve().parents[1]/'.getzilla/runtime'
+        with tempfile.TemporaryDirectory(prefix='inert-native-export-',dir=base) as temporary:
+            root = Path(temporary)
+            git(root,'init','-q')
+            git(root,'-c','maintenance.auto=false','-c','gc.auto=0','commit','--allow-empty','-qm','public fixture')
+            runtime = root/'.getzilla/runtime'
+            runtime.mkdir(parents=True)
+            (runtime/'active-route.json').write_text('{"route_id":"public"}\n')
+            self.admit_private_fixture(root)
+            output = runtime/'exports/failed.zip'
+            original_unlink,cuts = fsx.unlink_at,[]
+            foreign = b'foreign inert fixture\n'
+            def replace_output():
+                replacement = output.with_name('foreign.zip')
+                replacement.write_bytes(foreign)
+                replacement.chmod(0o600)
+                os.replace(replacement,output)
+                cuts.append(output.stat().st_ino)
+            def failed(*_args,**_kwargs):
+                if cut == 'before-selection':
+                    replace_output()
+                raise OSError('inert archive write failure')
+            def final_unlink(parent,name):
+                self.assertEqual(name,output.name)
+                if cut == 'final-cut':
+                    replace_output()
+                return original_unlink(parent,name)
+            with patch('zipfile.ZipFile.writestr',side_effect=failed):
+                with patch.object(fsx,'unlink_at',side_effect=final_unlink) as cleanup:
+                    with self.assertRaisesRegex(OSError,'inert archive write failure'):
+                        export_local_evidence(root,output)
+                if cut == 'final-cut' and cuts:
+                    self.assertTrue(output.exists(),'cleanup deleted the final-cut foreign replacement')
+                    self.assertEqual(output.read_bytes(),foreign)
+                    self.assertEqual(output.stat().st_ino,cuts[0])
+                self.assertEqual(cleanup.call_count,0,'failed native export attempted pathname deletion')
+            self.assertTrue(output.exists(),'failed native output must be retained as unavailable')
+            before,identity = output.read_bytes(),output.stat().st_ino
+            if cut == 'before-selection':
+                self.assertEqual(before,foreign)
+                self.assertEqual(identity,cuts[0])
+            names = set(output.parent.iterdir())
+            with patch('zipfile.ZipFile.writestr',side_effect=AssertionError('same-path retry wrote an archive')):
+                for _ in range(3):
+                    with self.assertRaises(FileExistsError):
+                        export_local_evidence(root,output)
+            self.assertEqual(output.read_bytes(),before)
+            self.assertEqual(output.stat().st_ino,identity)
+            self.assertEqual(set(output.parent.iterdir()),names)
+
+    def test_native_failed_export_retains_owned_partial_and_bounds_same_path_retry(self):
+        self._failed_native_export('owned')
+
+    def test_native_failed_export_preserves_foreign_replacement_before_selection(self):
+        self._failed_native_export('before-selection')
+
+    def test_native_failed_export_has_no_final_pathname_cleanup_cut(self):
+        self._failed_native_export('final-cut')
+
     def test_archive_exports_exact_referenced_immutable_verification_blob(self):
         from getzilla.ci_evidence import export_local_evidence
         from getzilla.receipts import MAX_RECEIPT_BYTES, write_receipt

@@ -212,7 +212,6 @@ def _export_local_evidence(root: Path, output: Path, anchor) -> None:
         return
     with anchor.parent(relative_output, private=False, create=True) as (parent, leaf):
         descriptor = fsx.open_at(parent, leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
-        created_identity = os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino
         try:
             with os.fdopen(descriptor, 'wb') as destination:
                 descriptor = None
@@ -221,13 +220,9 @@ def _export_local_evidence(root: Path, output: Path, anchor) -> None:
                 os.fsync(destination.fileno())
             anchor.check_parent(parent)
             fsx.fsync_dir(parent)
-        except BaseException:
-            # Only the exact output created by this invocation, never shared
-            # source state or another task's archive.
-            current = fsx.lstat_at(parent, leaf)
-            if (current.st_dev, current.st_ino) == created_identity:
-                fsx.unlink_at(parent, leaf)
-            raise
         finally:
+            # Failed output remains unavailable at the caller-selected name.
+            # O_EXCL bounds same-path retries; pathname deletion cannot CAS
+            # an expected inode and could remove a foreign replacement.
             if descriptor is not None:
                 os.close(descriptor)
