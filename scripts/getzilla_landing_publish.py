@@ -17,7 +17,7 @@ from getzilla_factory.settings import read_private_file
 
 def _authority(config, control_root, request):
     from getzilla_delivery.landing_publication_contracts import PublicationError
-    from getzilla.state import get_active_change, get_active_route
+    from getzilla.state import approval_record_kind, get_active_change, get_active_route, validate_approval_history
     from getzilla.util import git_head, git_output, tree_fingerprint
 
     route, change = get_active_route(control_root), get_active_change(control_root)
@@ -43,10 +43,18 @@ def _authority(config, control_root, request):
     )["grants"]
     if not isinstance(grants, list) or len(grants) > 200:
         raise PublicationError("publication_grants")
+    try:
+        validate_approval_history(grants)
+    except ValueError:
+        raise PublicationError("publication_grants") from None
     now = datetime.now(timezone.utc)
     matches = []
     for grant in grants:
-        if not isinstance(grant, dict):
+        try:
+            kind = approval_record_kind(grant)
+        except ValueError:
+            raise PublicationError("publication_grants") from None
+        if kind != 'active':
             continue
         grant_binding_digest = grant.get("grant_binding_digest")
         legacy_tree_fingerprint = grant.get("tree_fingerprint")

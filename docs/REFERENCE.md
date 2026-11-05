@@ -424,7 +424,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [governance CLI](../scripts/getzilla_governance.py)
 - [`scripts/getzilla_verify.py`](../scripts/getzilla_verify.py)
 - [`scripts/getzilla_review.py`](../scripts/getzilla_review.py)
-- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only
+- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only. Before editing a new protected file, explicitly extend one current grant with `protected-path --extend <grant-id> --request-id <32-lowercase-hex> --action protected-path-write --resource <old-file> --resource <new-file> --reason <delegation>`. Repeat `--resource` for the complete literal strict superset. This requires existing delegation for every new path. It retains the original branch/task/owner/epoch/anchor and caps expiry at the earlier parent deadline or requested TTL. It replaces the parent with supported non-authority history in the same store. An exact current replay returns the same grant; stale, revoked or pruned requests never remint or follow a larger successor. Uncertain publication returns no grant and requires inspection. Other grants do not contribute resources or TTL. Production, external-write, release and human-signed approval boundaries retain their existing rules.
 - [`scripts/getzilla_deploy.py`](../scripts/getzilla_deploy.py) — [local deployment preflight](deploy-preflight.md) and release preparation
 - [`scripts/getzilla_doctor.py`](../scripts/getzilla_doctor.py)
 - [`scripts/getzilla_demo.py`](../scripts/getzilla_demo.py)

@@ -396,7 +396,14 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
     return sorted(paths)
 
 
-def file_sha256(path: Path) -> str:
+def file_sha256(path: Path, *, strict_root: Path | None = None) -> str:
+    if strict_root is not None:
+        from .component_state import BoundRoot
+        with BoundRoot(strict_root) as binding:
+            snapshot = binding.read(path.relative_to(strict_root).as_posix())
+            if snapshot is None:
+                raise ValueError('grant source disappeared')
+            return snapshot.sha256
     digest = hashlib.sha256()
     with path.open('rb') as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b''):
@@ -426,9 +433,12 @@ def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
     return b'\0'.join(entries)
 
 
-def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None) -> str:
+def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None,
+                     strict: bool = False) -> str:
     """Legacy HEAD/worktree binding, or independent committed/index/worktree edit binding."""
     skipped = {str(item).replace('\\', '/') for item in exclude}
+    if strict and not anchor:
+        raise ValueError('strict grant observation requires an anchor')
     digest = hashlib.sha256()
     head = anchor or git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
@@ -451,15 +461,27 @@ def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | N
         digest.update(os.fsencode(rel))
         path = root / rel
         try:
+            before = path.lstat() if strict and (path.exists() or path.is_symlink()) else None
             if anchor and path.exists():
                 digest.update(str(path.lstat().st_mode).encode())
             if path.is_symlink():
                 digest.update(os.fsencode(os.readlink(path)))
             elif path.is_file():
-                digest.update(file_sha256(path).encode())
+                digest.update((file_sha256(path, strict_root=root) if strict else file_sha256(path)).encode())
             else:
+                if strict and before is not None:
+                    raise ValueError('grant source is not a regular file or link')
                 digest.update(b'MISSING')
+            if strict:
+                after = path.lstat() if path.exists() or path.is_symlink() else None
+                fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+                def identity(info):
+                    return None if info is None else tuple(getattr(info, key) for key in fields)
+                if identity(before) != identity(after):
+                    raise ValueError('grant source changed during observation')
         except OSError:
+            if strict:
+                raise ValueError('grant source observation unavailable') from None
             digest.update(b'ERROR')
     return digest.hexdigest()
 
