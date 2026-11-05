@@ -222,13 +222,15 @@ def _trust_ci(root, output, namespace):
                 f"postgresql://trust_ci_{role}:{passwords[role]}@postgres-test:5432/trust_ci_test")
         phase = "tester-create"
         tester = owner.container("tests", pins["python"]["reference"], configuration_digest=pins["python"]["image_id"], volume=deps, volume_target="/deps",
-            network=network, bind={root / "trust-ci": "/src"}, working_directory="/src", environment=environment,
+            network=network, bind={root / "trust-ci": "/src",
+                root / "scripts/getzilla_trust_ci_postgres_suite.py": "/runner/run_postgres_suite.py"},
+            working_directory="/src", environment=environment,
             command=("sleep", "1200"))
         for item, key in ((provision, "python"), (postgres, "postgres"), (tester, "python")):
             if item["image_id"] != verified_image_id(pins[key]["reference"], pins[key]["image_id"]):
                 raise ValueError("Trust CI image configuration digest mismatch")
         phase = "database-suite"
-        output_json = _run(["docker", "exec", tester["id"], "python3", "tests/run_postgres_suite.py"], timeout=300)
+        output_json = _run(["docker", "exec", tester["id"], "python3", "/runner/run_postgres_suite.py", "--tests", "/src/tests"], timeout=300)
         report = json.loads(output_json)
         if report.get("status") != "pass" or not report.get("tests_run") or report.get("skipped"):
             raise RuntimeError("Trust CI required PostgreSQL tests did not execute")

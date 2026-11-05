@@ -190,6 +190,14 @@ class ObserverControls(unittest.TestCase):
 
 
 class PublicWorkflowControls(unittest.TestCase):
+    def test_counted_trust_ci_driver_is_a_separate_public_acceptance_harness(self):
+        driver = ROOT / 'scripts/getzilla_trust_ci_postgres_suite.py'
+        self.assertTrue(driver.is_file(), 'public acceptance orchestration belongs outside trust-ci product source')
+        result = subprocess.run([sys.executable, '-B', str(driver), '--help'],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--tests', result.stdout)
+
     def test_two_pg_cells_join_required_linux_without_replacing_native_jobs(self):
         import yaml
 
