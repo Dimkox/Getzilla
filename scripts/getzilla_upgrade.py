@@ -43,7 +43,7 @@ from getzilla.component_state import (
     owned_proof, read_state, record_owned, read_keep_contract, match_kept_local, kept_file_state,
     validate_manifest_publication,
 )
-from getzilla.harnesses import is_generated_policy, render_codex_hooks
+from getzilla.harnesses import policy_reconciliation_required, render_codex_hooks
 from getzilla.spec import MAX_SPEC_BYTES, SpecError, _parse_canonical_json
 
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
@@ -390,8 +390,7 @@ def planned_changes(installer, home: Path, project: Path,
             if kept_configs is not None and (current is None or current.content != content):
                 kept_configs.append(entry.path)
             continue
-        if (current is not None and is_generated_policy(entry.path)
-                and (current.content != content or not mode_matches(current.mode, entry.mode))):
+        if policy_reconciliation_required(entry.path, current, content, entry.mode):
             raise UpdateError(f'custom generated policy requires reconciliation before updating: {entry.path}')
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
                 and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):

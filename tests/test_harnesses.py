@@ -92,6 +92,52 @@ class SelectedHarnessTests(unittest.TestCase):
             write(root)
         self.assertEqual(output.read_text(), 'my custom version\n')
 
+    def test_generated_role_policy_is_independent_of_matching_local_ownership(self) -> None:
+        from getzilla.component_state import MANIFEST, ComponentTransaction, encode_manifest, read_state, record_owned
+        vendor = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        self.assertIn(b'sandbox_mode = "workspace-write"', vendor)
+        publish_original = ComponentTransaction.write
+        for scenario in ('stock', 'read-only', 'mode'):
+            with self.subTest(scenario=scenario):
+                root = self.fixture(('codex',))
+                canonical = root / '.getzilla/agents/general_implementer.toml'
+                canonical.parent.mkdir(parents=True)
+                canonical.write_bytes(vendor)
+                canonical.chmod(0o644)
+                hooks = root / '.getzilla/config/hooks.json'
+                hooks.parent.mkdir()
+                hooks.write_bytes(b'{"hooks": {}}')
+                write(root)
+                target = root / '.codex/agents/general_implementer.toml'
+                if scenario == 'stock':
+                    original = (root / MANIFEST).read_bytes()
+                    with mock.patch.object(ComponentTransaction, 'write', autospec=True, side_effect=publish_original) as publish:
+                        self.assertEqual(write(root), [])
+                    publish.assert_not_called()
+                    self.assertEqual((root / MANIFEST).read_bytes(), original)
+                    self.assertEqual(target.read_bytes(), vendor)
+                    continue
+                content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"') if scenario == 'read-only' else vendor
+                mode = 0o755 if scenario == 'mode' else 0o644
+                target.write_bytes(content)
+                target.chmod(mode)
+                manifest = read_state(root).manifest
+                record_owned(manifest, '.codex/agents/general_implementer.toml', content, mode)
+                (root / MANIFEST).write_bytes(encode_manifest(manifest))
+                before = (root / MANIFEST).read_bytes()
+                # Another pending output must not be published before refusal.
+                pending = root / '.codex/hooks.json'
+                pending.unlink()
+                with mock.patch.object(ComponentTransaction, 'write', autospec=True, side_effect=publish_original) as publish:
+                    with self.assertRaisesRegex(ValueError, 'conflict.*generated policy'):
+                        write(root)
+                publish.assert_not_called()
+                self.assertEqual(target.read_bytes(), content)
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), mode)
+                self.assertEqual((root / MANIFEST).read_bytes(), before)
+                self.assertEqual(canonical.read_bytes(), vendor)
+                self.assertFalse(pending.exists())
+
     def test_kept_manifest_refuses_before_any_generated_effect(self) -> None:
         from getzilla.component_state import MANIFEST
         for legacy in (False, True):
@@ -762,13 +808,21 @@ class CursorRuleTests(unittest.TestCase):
 
     def test_failed_replace_leaves_no_temp_file(self) -> None:
         root = self.fixture()
+        canonical = root / '.agents/skills/example/SKILL.md'
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text('first canonical version\n')
         write(root)
-        (root / '.getzilla/cursor-rules/00-rule.toml').write_text(_toml({**CORE, 'instructions': '- Changed.'}))
+        canonical.write_text('second canonical version\n')
+        output = root / '.claude/skills/example/SKILL.md'
+        manifest = root / '.getzilla/managed-components.json'
+        original_manifest = manifest.read_bytes()
         with mock.patch.object(harnesses.fsx, 'replace_at', side_effect=OSError('disk full')), \
                 self.assertRaisesRegex(ValueError, 'incomplete'):
             write(root)
         leftovers = [path for path in root.rglob('*.tmp')]
         self.assertEqual(leftovers, [])
+        self.assertEqual(output.read_text(), 'first canonical version\n')
+        self.assertEqual(manifest.read_bytes(), original_manifest)
 
     def test_user_cursor_files_are_preserved(self) -> None:
         root = self.fixture()

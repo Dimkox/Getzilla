@@ -323,6 +323,12 @@ def is_generated_policy(path: str) -> bool:
         r'\.github/agents/[^/]+\.agent\.md|\.cursor/rules/getzilla/[^/]+\.mdc|\.grok/config\.toml)', path))
 
 
+def policy_reconciliation_required(path: str, current: FileSnapshot | None, desired: bytes, mode: int) -> bool:
+    """A local ownership proof never authorizes replacing a differing policy."""
+    return (current is not None and is_generated_policy(path)
+            and (current.content != desired or not mode_matches(current.mode, mode)))
+
+
 def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestState,
                      selected: tuple[str, ...]) -> tuple[list[str], list[tuple], list[tuple], dict]:
     expected = _render(binding, selected)
@@ -372,6 +378,9 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
         elif current.content != content or not mode_matches(current.mode, 0o644):
             if relative == '.codex/config.toml' or not matches_owned(current, owned_proof(manifest, relative)):
                 problems.append(f'conflict {relative}')
+                continue
+            if policy_reconciliation_required(relative, current, content, 0o644):
+                problems.append(f'conflict generated policy requires reconciliation: {relative}')
                 continue
             problems.append(f'stale {relative}')
             changes.append((relative, content, current))
