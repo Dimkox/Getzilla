@@ -1,12 +1,14 @@
 """Closed economics controls use synthetic facts, never authority or actual spend."""
 import copy
+import hashlib
 import json
 from pathlib import Path
+from fractions import Fraction
 import unittest
 from unittest.mock import patch
 
 from getzilla import route_metrics as metrics
-from tests.economics_fixtures import payloads, quantity, query, TASK
+from tests.economics_fixtures import payloads, quantity, query, TASK, OP, observation, binding, calculation_input
 
 
 class EconomicPayloadTests(unittest.TestCase):
@@ -105,6 +107,13 @@ class EconomicPayloadTests(unittest.TestCase):
         value = payloads()['model_usage']
         value['input_semantics'] = 'unknown'
         self.assertEqual(self.validate(value), value)
+
+    def test_known_cache_buckets_cannot_exceed_total_with_unknown_uncached(self):
+        value = payloads()['model_usage']
+        value['uncached_input'] = quantity(None, reason='not_observed')
+        value['input_total']['value'] = 1
+        with self.assertRaises(ValueError):
+            self.validate(value)
 
     def test_allocation_unique_task_and_conservation_pair_disjoint_attempts(self):
         value = payloads()['allocation']
@@ -217,3 +226,374 @@ class EconomicQueryTests(unittest.TestCase):
         schema = json.loads(path.read_text())
         self.assertEqual(set(schema['properties']), metrics._QUERY_FIELDS)
         self.assertIs(schema['additionalProperties'], False)
+
+
+class EconomicReducerTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(callable(getattr(metrics, 'compute_economics', None)), 'pure economics reducer is absent')
+
+    def compute(self, data, request=None):
+        return metrics.compute_economics(data, metrics.parse_report_query(request or query())).as_dict()
+
+    def money(self, values, currency='USD', basis='confirmed_billed', field='value'):
+        item = next(item for item in values if item['currency'] == currency and item['basis'] == basis)
+        value = item[field]
+        return None if value is None else Fraction(int(value['numerator']), int(value['denominator']))
+
+    def charge(self, value, operation=None, line='a'*64, period=None):
+        result = payloads()['charge']
+        result['amount']['value'] = value
+        result['operation'] = copy.deepcopy(operation or OP)
+        result['external_line_digest'] = line
+        result['source_fact_digest'] = hashlib.sha256(json.dumps([value, operation, line], sort_keys=True).encode()).hexdigest()
+        if period is not None:
+            result['service_period'] = period
+        return result
+
+    def test_oldhead_preselection_attempts_count_in_lifetime_but_not_current_period(self):
+        old = dict(OP, operation_id='older-operation', attempt_id='older-attempt',
+                   physical_operation_digest='2'*64, claim_event_digest='3'*64)
+        new_period = {'start': '2026-10-20T00:00:00Z', 'end_exclusive': '2026-10-21T00:00:00Z'}
+        rows = [observation(self.charge(100, old), 'old'),
+                observation(self.charge(200, line='b'*64, period=new_period), 'new'),
+                observation(payloads()['task_disposition'], 'accept')]
+        result = self.compute(calculation_input(rows, bindings=[binding(old, head='a'*40, outcome='failed'), binding()]))
+        self.assertEqual(self.money(result['totals']['task_lifetime']), 3)
+        self.assertEqual(self.money(result['totals']['cohort_period_spend']), 2)
+        self.assertEqual(result['ratios']['accepted_tasks'], 1)
+        self.assertEqual(self.money(result['ratios']['accepted_task_mean']), 3)
+        task = result['tasks'][0]
+        self.assertEqual({attempt['head'] for attempt in task['attempts']}, {'a'*40, 'd'*40})
+        self.assertEqual(len(task['attempts']), 2)
+
+    def test_exact_replay_and_input_permutation_have_identical_result_and_snapshot(self):
+        row = observation(self.charge(100), 'charge')
+        data = calculation_input([row, observation(payloads()['task_disposition'], 'accept')])
+        expected = self.compute(data)
+        data['observations'] = list(reversed(data['observations'])) + [copy.deepcopy(row)]
+        self.assertEqual(self.compute(data), expected)
+        request = query()
+        request['snapshot_ref'] = expected['snapshot_ref']
+        self.assertEqual(self.compute(data, request), expected)
+
+    def test_bill_conflict_is_quarantined_before_task_and_accounting_filter(self):
+        other = dict(OP, operation_id='outside-operation', physical_operation_digest='4'*64, claim_event_digest='5'*64)
+        first = observation(self.charge(100), 'one')
+        changed = self.charge(999, other)
+        changed['amount']['currency'] = 'EUR'
+        second = observation(changed, 'two', at='2026-10-01T00:00:00Z')
+        foreign = dict(TASK, task_id='task:'+'2'*32)
+        result = self.compute(calculation_input([first, second], bindings=[binding(), binding(other, foreign)]))
+        self.assertEqual(result['reconciliation']['conflict_count'], 2)
+        self.assertIsNone(self.money(result['totals']['task_lifetime'], currency=None))
+        self.assertFalse(result['coverage']['complete'])
+
+    def test_local_provider_usage_is_once_only_and_billed_and_estimated_never_add(self):
+        local = payloads()['model_usage']
+        provider = copy.deepcopy(local)
+        provider.update(source_fact_digest='d'*64, source_proof_ref='e'*64, observation_origin='provider_export')
+        result = self.compute(calculation_input([observation(local, 'local'), observation(provider, 'provider'),
+                                                 observation(self.charge(300), 'charge')]))
+        measured = {item['category']: item for item in result['tasks'][0]['usage']}
+        self.assertEqual(measured['input_total']['value'], 100)
+        self.assertEqual(self.money(result['totals']['task_lifetime']), 3)
+        self.assertEqual(result['reconciliation']['coalesced_observations'], 1)
+        self.assertNotIn('combined_money', result['totals'])
+
+    def test_shared_allocation_conserves_exact_amount_and_exposes_remainder(self):
+        allocation = payloads()['allocation']
+        allocation['shares'][0]['weight_ppm'] = 333333
+        result = self.compute(calculation_input([observation(self.charge(1), 'charge'),
+                                                 observation(allocation, 'allocation')]))
+        self.assertEqual(self.money(result['totals']['task_lifetime'], field='known_subtotal'), Fraction(333333, 100000000))
+        self.assertEqual(self.money(result['reconciliation']['unallocated']), Fraction(666667, 100000000))
+        self.assertEqual(self.money(result['totals']['scope_period_spend'], field='known_subtotal'), 0)
+
+    def test_unknown_census_zero_accepted_and_missing_human_are_distinct(self):
+        data = calculation_input([observation(self.charge(0), 'known-zero')])
+        data['census'] = None
+        unknown = self.compute(data)
+        self.assertIsNone(unknown['ratios']['accepted_tasks'])
+        self.assertIsNone(unknown['friction138']['human_minutes'])
+        data['census'] = [TASK]
+        rejected = payloads()['task_disposition']
+        rejected['decision'] = 'rejected'
+        data['observations'].append(observation(rejected, 'explicit-rejection'))
+        known = self.compute(data)
+        self.assertEqual(known['ratios']['accepted_tasks'], 0)
+        self.assertIsNone(self.money(known['ratios']['cohort_spend_per_accepted']))
+        self.assertIn('zero_denominator', known['ratios']['reasons'])
+
+    def test_completion_merge_acceptance_and_late_revocation_remain_independent(self):
+        accepted = payloads()['task_disposition']
+        revoked = copy.deepcopy(accepted)
+        revoked.update(decision='revoked', decision_id='b'*64, supersedes=accepted['decision_id'])
+        rows = [observation(payloads()['workflow_end'], 'ended'),
+                observation(payloads()['completion'], 'completed'), observation(accepted, 'accepted'),
+                observation(revoked, 'revoked', at='2026-11-02T00:00:00Z')]
+        old = self.compute(calculation_input(rows))
+        self.assertEqual(old['ratios']['accepted_tasks'], 1)
+        self.assertEqual(old['tasks'][0]['workflow_end'], 'failed')
+        self.assertEqual(old['tasks'][0]['completion'], 'completed')
+        self.assertIsNone(old['tasks'][0]['merged'])
+        request = query()
+        request['as_of'] = '2026-11-03T00:00:00Z'
+        new = self.compute(calculation_input(rows), request)
+        self.assertEqual(new['ratios']['accepted_tasks'], 0)
+        self.assertEqual(new['tasks'][0]['disposition'], 'revoked')
+        self.assertNotEqual(old['snapshot_ref'], new['snapshot_ref'])
+
+    def test_declared_human_decision_count_and_duration_are_separate(self):
+        duration = payloads()['human_usage']
+        duration['human_time']['value'] = 1200 * 10**9
+        rows = [observation(duration, 'duration'), observation(payloads()['human_decision'], 'decision')]
+        result = self.compute(calculation_input(rows))
+        self.assertEqual(result['friction138']['human_decision_count'], 1)
+        self.assertEqual(result['friction138']['human_minutes'], {'numerator': '20', 'denominator': '1'})
+        self.assertIsNone(result['friction138']['approval_count_per_commit'])
+
+    def test_invalid_proof_or_row_bounds_never_return_complete_partial_census(self):
+        data = calculation_input([observation(self.charge(100), 'charge')])
+        data['observations'][0]['delivery']['row_digest'] = '0'*64
+        result = self.compute(data)
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertEqual(set(result), {'definition_version', 'status', 'reason'})
+
+    def test_json_text_render_same_nullable_result_without_implicit_currency(self):
+        amount = self.charge(1)
+        amount['amount'].update(value=None, currency=None, unknown_reason='currency_missing')
+        result = metrics.compute_economics(calculation_input([observation(amount, 'unknown')]), query())
+        self.assertEqual(json.loads(metrics.render_report_json(result)), result.as_dict())
+        text = metrics.render_report_text(result)
+        self.assertIn('unknown', text)
+        self.assertNotIn('0 USD', text)
+
+    def tariffs(self, *, reasoning=False):
+        rows = []
+        rates = [('uncached_input', 1, 1), ('cache_write', 2, 1), ('cache_read', 1, 10), ('output', 3, 1)]
+        if reasoning:
+            rates.append(('reasoning_output', 5, 1))
+        for category, numerator, denominator in rates:
+            value = payloads()['tariff']
+            value.update(category=category, rate_numerator=numerator, rate_denominator=denominator)
+            rows.append(observation(value, 'rate-' + category, at='2026-10-01T00:00:00Z'))
+        return rows
+
+    def test_valid_time_rational_rates_do_not_double_charge_inclusive_reasoning(self):
+        data = calculation_input([observation(payloads()['model_usage'], 'model'), *self.tariffs()])
+        result = self.compute(data)
+        self.assertEqual(self.money(result['totals']['task_lifetime'], basis='tariff_estimate'), Fraction(233, 10**6))
+        data['observations'] = [observation(payloads()['model_usage'], 'model'), *self.tariffs(reasoning=True)]
+        separate = self.compute(data)
+        self.assertEqual(self.money(separate['totals']['task_lifetime'], basis='tariff_estimate'), Fraction(273, 10**6))
+
+    def test_rate_boundary_spanning_unsegmented_usage_remains_unknown(self):
+        rates = self.tariffs()
+        for item in rates:
+            payload = item['row']['payload']
+            payload['validity']['end_exclusive'] = '2026-10-01T12:00:00Z'
+            replacement = observation(payload, 'short-rate-' + payload['category'], at='2026-10-01T00:00:00Z')
+            item.update(replacement)
+        result = self.compute(calculation_input([observation(payloads()['model_usage'], 'model'), *rates]))
+        self.assertIsNone(self.money(result['totals']['task_lifetime'], currency=None, basis='tariff_estimate'))
+
+    def test_credit_and_selected_dated_fx_are_distinct_from_token_usage(self):
+        debit = observation(self.charge(300), 'debit')
+        credit_payload = self.charge(100, line='c'*64)
+        credit_payload.update(direction='credit', adjusts_charge_event=debit['row']['event_id'])
+        fx = observation(payloads()['fx'], 'fx', at='2026-10-01T00:00:00Z')
+        data = calculation_input([debit, observation(credit_payload, 'credit'), fx])
+        request = query()
+        request['fx_refs'] = [fx['row']['event_id']]
+        result = self.compute(data, request)
+        self.assertEqual(self.money(result['totals']['task_lifetime']), 2)
+        candidates = [row for row in result['fx_totals'] if row['view'] == 'task_lifetime'
+                      and row['from_currency'] == 'USD' and row['to_currency'] == 'EUR']
+        self.assertTrue(candidates, 'selected dated FX calculation is absent')
+        converted = candidates[0]
+        self.assertEqual(self.money(converted['amounts'], currency='EUR'), Fraction(9, 5))
+
+    def test_two_currencies_never_convert_without_selected_fx(self):
+        euro = self.charge(200, line='d'*64)
+        euro['amount']['currency'] = 'EUR'
+        result = self.compute(calculation_input([observation(self.charge(100), 'usd'), observation(euro, 'eur')]))
+        self.assertEqual(self.money(result['totals']['task_lifetime']), 1)
+        self.assertEqual(self.money(result['totals']['task_lifetime'], currency='EUR'), 2)
+        self.assertEqual(result['fx_totals'], [])
+
+    def test_actual_cache_pair_requires_both_disjoint_observed_operation_sets(self):
+        long_operation = dict(OP, operation_id='operation-two', physical_operation_digest='e'*64, claim_event_digest='e'*64)
+        normal = payloads()['model_usage']
+        long = copy.deepcopy(normal)
+        long.update(operation=long_operation, source_fact_digest='d'*64)
+        long['cache_policy'].update(mode='long', policy_digest='b'*64)
+        pair = payloads()['cache_pair']
+        pair['basis'] = 'actual_pair'
+        pair_row = observation(pair, 'pair')
+        request = query()
+        request['cache_pair_refs'] = [pair_row['row']['event_id']]
+        data = calculation_input([observation(normal, 'normal'), observation(long, 'long'), pair_row],
+                                 bindings=[binding(), binding(long_operation)])
+        result = self.compute(data, request)
+        self.assertTrue(result['cache_comparison'], 'requested cache comparison is absent')
+        self.assertEqual(result['cache_comparison'][0]['basis'], 'actual_pair')
+        self.assertNotIn('not_observed', result['cache_comparison'][0]['unknown_reasons'])
+        data['observations'].pop(1)
+        missing = self.compute(data, request)
+        self.assertIn('not_observed', missing['cache_comparison'][0]['unknown_reasons'])
+        self.assertEqual(missing['cache_comparison'][0]['status'], 'partial')
+
+    def test_requested_allowlisted_grouping_is_derived_from_same_contributions(self):
+        request = query()
+        request['group_by'] = ['task', 'disposition']
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge'),
+                                                 observation(payloads()['task_disposition'], 'accept')]), request)
+        self.assertEqual(len(result['groups']), 1)
+        self.assertEqual(result['groups'][0]['dimensions']['disposition'], 'accepted')
+        self.assertEqual(self.money(result['groups'][0]['amounts']), 1)
+
+    def test_changed_first_delivery_proof_does_not_silently_choose_one_version(self):
+        first = observation(self.charge(100), 'charge')
+        second = copy.deepcopy(first)
+        second['delivery']['delivered_by'] = '2026-10-21T00:00:01.000001Z'
+        result = self.compute(calculation_input([first, second]))
+        self.assertEqual(result['status'], 'unavailable')
+
+    def test_closed_result_refuses_partial_cost_relabelled_complete(self):
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge')]))
+        self.assertEqual(result['status'], 'partial')
+        result['status'] = 'ok'
+        with self.assertRaises(ValueError):
+            metrics.ReportResult(json.dumps(result))
+
+    def test_missing_related_attempt_bill_and_unallocated_share_are_not_full_costs(self):
+        missing = dict(OP, physical_operation_digest='d'*64, operation_id='missing-operation', attempt_id='missing-attempt',
+                       claim_event_digest='d'*64)
+        data = calculation_input([observation(self.charge(100), 'charge')], bindings=[binding(), binding(missing)])
+        result = self.compute(data)
+        self.assertIsNone(self.money(result['totals']['task_lifetime']))
+        self.assertEqual(self.money(result['totals']['task_lifetime'], field='known_subtotal'), 1)
+        allocation = payloads()['allocation']
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge'), observation(allocation, 'share')]))
+        self.assertIsNone(self.money(result['totals']['task_lifetime']))
+        self.assertEqual(self.money(result['totals']['task_lifetime'], field='known_subtotal'), Fraction(3, 5))
+
+    def test_unknown_disposition_cannot_be_reported_as_zero_rejected_share(self):
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge')]))
+        self.assertIsNone(self.money(result['ratios']['rejected_abandoned_share']))
+        self.assertIn('outcome_unknown', result['ratios']['rejected_abandoned_share'][0]['unknown_reasons'])
+
+    def test_unsuccessful_attempt_spend_inside_accepted_task_has_separate_share(self):
+        old = dict(OP, operation_id='old-operation', attempt_id='old-attempt', physical_operation_digest='d'*64,
+                   claim_event_digest='d'*64)
+        result = self.compute(calculation_input([observation(self.charge(100, old), 'old'),
+            observation(self.charge(200, line='e'*64), 'new'), observation(payloads()['task_disposition'], 'accept')],
+            bindings=[binding(old, outcome='failed'), binding()]))
+        self.assertIn('unsuccessful_attempt_share', result['ratios'], 'attempt waste view is absent')
+        self.assertEqual(self.money(result['ratios']['unsuccessful_attempt_share']), Fraction(1, 3))
+
+    def test_attempt_cycle_or_unseen_parent_does_not_qualify_a_complete_history(self):
+        rows = [observation(self.charge(100), 'charge'), observation(payloads()['task_disposition'], 'accept')]
+        left = payloads()['attempt_relation']
+        right = copy.deepcopy(left)
+        right.update(from_attempt=left['to_attempt'], to_attempt=left['from_attempt'])
+        result = self.compute(calculation_input(rows + [observation(left, 'retry-left'), observation(right, 'retry-right')]))
+        self.assertFalse(result['coverage']['complete'])
+        self.assertIsNone(self.money(result['totals']['task_lifetime']))
+
+    def test_native_selection_window_keeps_old_attempts_and_missing_selection_is_unknown(self):
+        request = query()
+        request['cohort'] = {'kind': 'selection_window', 'selection_interval': request['accounting_interval']}
+        data = calculation_input([observation(self.charge(100), 'before-selected'),
+                                  observation(payloads()['task_disposition'], 'accept')])
+        self.assertEqual(self.money(self.compute(data, request)['totals']['task_lifetime']), 1)
+        data['census'] = None
+        result = self.compute(data, request)
+        self.assertIsNone(result['ratios']['accepted_tasks'])
+
+    def test_group_and_row_limits_fail_without_truncating_or_touching_input(self):
+        data = calculation_input([observation(self.charge(100), 'charge')])
+        data['observations'] *= 4097
+        before = copy.deepcopy(data)
+        result = self.compute(data)
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertEqual(data, before)
+
+    def test_group_and_fx_totals_keep_missing_related_costs_unknown(self):
+        missing = dict(OP, physical_operation_digest='d'*64, operation_id='missing-operation', attempt_id='missing-attempt',
+                       claim_event_digest='d'*64)
+        fx = observation(payloads()['fx'], 'fx', at='2026-10-01T00:00:00Z')
+        request = query()
+        request['fx_refs'] = [fx['row']['event_id']]
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge'), fx],
+                                                 bindings=[binding(), binding(missing)]), request)
+        self.assertIsNone(self.money(result['groups'][0]['amounts']))
+        converted = next(row for row in result['fx_totals'] if row['view'] == 'task_lifetime')
+        self.assertIsNone(self.money(converted['amounts'], currency='EUR'))
+
+    def test_owned_result_rejects_contradictory_full_value_and_nonboolean_merge(self):
+        result = self.compute(calculation_input([observation(self.charge(100), 'charge')]))
+        altered = copy.deepcopy(result)
+        money = next(row for row in altered['totals']['task_lifetime'] if row['currency'] == 'USD')
+        money['value'] = {'numerator': '999', 'denominator': '1'}
+        with self.assertRaises(ValueError):
+            metrics.ReportResult(json.dumps(altered))
+        altered = copy.deepcopy(result)
+        altered['tasks'][0]['merged'] = 1
+        with self.assertRaises(ValueError):
+            metrics.ReportResult(json.dumps(altered))
+
+    def test_wall_budget_exhaustion_returns_no_partial_totals_and_preserves_input(self):
+        self.assertTrue(hasattr(metrics, 'ECONOMICS_MAX_WALL_SECONDS'), 'bounded calculation clock is absent')
+        data = calculation_input([observation(self.charge(100), 'charge')])
+        before = copy.deepcopy(data)
+        readings = iter([0.0, 5.0])
+        with patch('getzilla.route_metrics.time.monotonic', side_effect=lambda: next(readings, 5.0)):
+            result = self.compute(data)
+        self.assertEqual(result, {'definition_version': metrics.ECONOMICS_DEFINITION,
+                                  'status': 'unavailable', 'reason': 'input_limit'})
+        self.assertEqual(data, before)
+
+    def test_original_claim_cannot_change_subject_by_changing_physical_operation(self):
+        other = dict(OP, operation_id='other-operation', physical_operation_digest='d'*64)
+        foreign = dict(TASK, task_id='task:'+'2'*32)
+        result = self.compute(calculation_input([observation(self.charge(100), 'original'),
+            observation(self.charge(200, other, line='e'*64), 'changed-subject')],
+            bindings=[binding(), binding(other, foreign)]))
+        self.assertEqual(result['reconciliation']['conflict_count'], 2)
+
+    def test_native_claim_cannot_be_reused_for_two_effects_in_one_subject(self):
+        other = dict(OP, operation_id='other-effect', physical_operation_digest='e'*64)
+        result = self.compute(calculation_input([observation(self.charge(100), 'first'),
+            observation(self.charge(200, other, line='e'*64), 'second')], bindings=[binding(), binding(other)]))
+        self.assertEqual(result['reconciliation']['conflict_count'], 2)
+
+    def test_accepted_task_mean_and_cohort_spend_per_accepted_have_distinct_numerators(self):
+        other_task = dict(TASK, task_id='task:'+'2'*32)
+        other = dict(OP, operation_id='other-operation', physical_operation_digest='d'*64, claim_event_digest='e'*64)
+        rejected = payloads()['task_disposition']
+        rejected.update(task=other_task, decision='rejected', decision_id='b'*64)
+        data = calculation_input([observation(self.charge(100), 'accepted-cost'),
+            observation(self.charge(200, other, line='e'*64), 'rejected-cost'),
+            observation(payloads()['task_disposition'], 'accept'), observation(rejected, 'reject')],
+            bindings=[binding(), binding(other, other_task)], census=[TASK, other_task])
+        request = query()
+        request['cohort']['tasks'].append(other_task)
+        result = self.compute(data, request)
+        self.assertEqual(self.money(result['ratios']['accepted_task_mean']), 1)
+        self.assertEqual(self.money(result['ratios']['cohort_spend_per_accepted']), 3)
+        self.assertEqual(self.money(result['ratios']['rejected_abandoned_share']), Fraction(2, 3))
+
+    def test_as_known_uses_strict_capture_but_inclusive_six_fraction_delivery_cut(self):
+        request = query()
+        before = observation(self.charge(100), 'included', at='2026-10-31T23:59:59Z',
+                             delivered_by='2026-11-01T00:00:00.000000Z')
+        self.assertEqual(self.money(self.compute(calculation_input([before]), request)['totals']['task_lifetime']), 1)
+        late = observation(self.charge(100), 'late', at='2026-10-31T23:59:59Z',
+                           captured_at='2026-11-01T00:00:00Z', delivered_by='2026-11-01T00:00:00.000000Z')
+        result = self.compute(calculation_input([late]), request)
+        self.assertNotIn(late['row']['event_id'], result['source_refs'])
+        delivered_late = observation(self.charge(100), 'delivery-late', at='2026-10-31T23:59:59Z',
+                                     delivered_by='2026-11-01T00:00:00.000001Z')
+        result = self.compute(calculation_input([delivered_late]), request)
+        self.assertNotIn(delivered_late['row']['event_id'], result['source_refs'])

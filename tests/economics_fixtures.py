@@ -1,5 +1,7 @@
 """Synthetic public facts, never measurements, invoices or authority."""
 from copy import deepcopy
+import hashlib
+import json
 
 H = 'a' * 64
 TASK = {'domain': 'core_native', 'project_digest': H, 'task_id': 'task:' + '1' * 32}
@@ -19,6 +21,38 @@ def query():
             'views': ['task_lifetime', 'period_spend'], 'group_by': ['task'],
             'money_bases': ['confirmed_billed', 'tariff_estimate'],
             'fx_refs': [], 'cache_pair_refs': [], 'snapshot_ref': None}
+
+
+def observation(payload, identity, *, at='2026-10-21T00:00:00Z', captured_at=None, delivered_by=None):
+    """Synthetic v4 observer differs deliberately from the subject/effect owner."""
+    captured_at = captured_at or at
+    row = {'schema_version': 4, 'event': 'observation', 'event_id': hashlib.sha256(identity.encode()).hexdigest(),
+           'kind': 'economics_observation', 'at': at, 'captured_at': captured_at, 'producer_version': 1,
+           'repository_digest': H, 'workspace_digest': 'b'*64,
+           'observer': {'profile': 'core_native', 'operation_id': 'import-operation',
+                        'context': {'route_id': '9'*12, 'logical_task_id': 'task:'+'9'*32,
+                                    'session_id': '99999999-9999-9999-9999-999999999999',
+                                    'authority_epoch': 0, 'state_revision': 1, 'context_revision': 0,
+                                    'scope_digest': H, 'spec_digest': None, 'evidence_digest': None,
+                                    'head': 'f'*40, 'tree': 'f'*40, 'base': 'e'*40}},
+           'payload': deepcopy(payload)}
+    row_digest = hashlib.sha256(json.dumps(row, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    proof = {'proof_version': 2, 'clock_domain': 'native_local_utc', 'row_digest': row_digest,
+             'delivered_by': delivered_by or captured_at.replace('Z', '.000001Z')}
+    return {'row': row, 'delivery': proof}
+
+
+def binding(operation=None, task=None, *, head='d'*40, outcome='succeeded'):
+    return dict(deepcopy(operation or OP), task=deepcopy(task or TASK), head=head, outcome=outcome)
+
+
+def calculation_input(observations=(), *, bindings=None, census=None, gaps=()):
+    # This is a pure arithmetic seam, not a genuine source/read capability.
+    return {'observations': list(observations), 'bindings': deepcopy(bindings if bindings is not None else [binding()]),
+            'selections': [{'task': deepcopy(TASK), 'selected_at': '2026-10-20T00:00:00Z',
+                            'selection_event_digest': H}],
+            'census': deepcopy(census if census is not None else [TASK]),
+            'gaps': list(gaps), 'source_cut_digest': H}
 
 
 def payloads():
@@ -63,7 +97,8 @@ def payloads():
         dict(candidate_kind='task_pr_link', task=TASK, repository_digest=H, pr_number=1,
              mapping_evidence_digest=H, validity=PERIOD, supersedes=None, source_proof_ref=H),
         dict(candidate_kind='cache_pair', normal_operations=[OP],
-             long_operations=[dict(OP, operation_id='operation-two', physical_operation_digest='e' * 64)],
+             long_operations=[dict(OP, operation_id='operation-two', physical_operation_digest='e' * 64,
+                                   claim_event_digest='e' * 64)],
              workload_source_digest=H, model_revision_digest=H, quality_criteria_digest=H,
              normal_config_digest=H, long_config_digest='b' * 64, basis='explicit_scenario', source_proof_ref=H),
         dict(candidate_kind='human_decision', task=TASK, decision_id=H, activity='approval',
