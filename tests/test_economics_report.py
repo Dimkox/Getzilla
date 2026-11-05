@@ -424,6 +424,57 @@ class EconomicReducerTests(unittest.TestCase):
         converted = candidates[0]
         self.assertEqual(self.money(converted['amounts'], currency='EUR'), Fraction(9, 5))
 
+    def test_ambiguous_reasoning_tariffs_cannot_use_absent_rate_fallback(self):
+        request = query()
+        request.update(views=['task_lifetime'], money_bases=['tariff_estimate'])
+        rows = [observation(payloads()['model_usage'], 'model'),
+                observation(payloads()['task_disposition'], 'accepted')]
+        missing = self.compute(calculation_input(rows + self.tariffs()), request)
+        single = self.compute(calculation_input(rows + self.tariffs(reasoning=True)), request)
+        self.assertEqual(self.money(missing['totals']['task_lifetime'], basis='tariff_estimate'), Fraction(233, 10**6))
+        self.assertEqual(self.money(single['totals']['task_lifetime'], basis='tariff_estimate'), Fraction(273, 10**6))
+        self.assertEqual((missing['status'], single['status']), ('ok', 'ok'))
+        second = payloads()['tariff']
+        second.update(category='reasoning_output', rate_numerator=7)
+        contradictory = observation(second, 'second-reasoning-rate', at='2026-10-01T00:00:00Z')
+        data = calculation_input(rows + self.tariffs(reasoning=True) + [contradictory])
+        before = copy.deepcopy(data)
+        result = self.compute(data, request)
+        self.assertEqual(result['status'], 'partial')
+        self.assertFalse(result['coverage']['complete'])
+        self.assertTrue(all(item['value'] is None for item in result['totals']['task_lifetime']))
+        self.assertTrue(any('ambiguous' in item['unknown_reasons'] for item in result['totals']['task_lifetime']))
+        self.assertEqual(data, before)
+        data['observations'].reverse()
+        self.assertEqual(self.compute(data, request), result)
+
+    def test_credit_parent_requires_same_account_currency_and_operation(self):
+        debit = observation(self.charge(300), 'account-debit')
+        credit = self.charge(100, line='d'*64)
+        credit.update(direction='credit', adjusts_charge_event=debit['row']['event_id'])
+        request = query()
+        request.update(views=['task_lifetime'], money_bases=['confirmed_billed'])
+        accepted = observation(payloads()['task_disposition'], 'accepted')
+        matching = self.compute(calculation_input([debit, observation(credit, 'credit'), accepted]), request)
+        self.assertEqual(matching['status'], 'ok')
+        self.assertEqual(self.money(matching['totals']['task_lifetime']), 2)
+        self.assertEqual(matching['reconciliation']['conflict_count'], 0)
+        variants = [('provider_account_digest', 'e'*64), ('amount', dict(credit['amount'], currency='EUR')),
+                    ('operation', dict(OP, operation_id='other-operation'))]
+        for field, value in variants:
+            changed = copy.deepcopy(credit)
+            changed[field] = value
+            data = calculation_input([debit, observation(changed, 'credit'), accepted])
+            before = copy.deepcopy(data)
+            with self.subTest(field=field):
+                result = self.compute(data, request)
+                self.assertEqual(result['reconciliation']['conflict_count'], 2)
+                self.assertFalse(result['coverage']['complete'])
+                self.assertTrue(all(item['value'] is None for item in result['totals']['task_lifetime']))
+                self.assertEqual(data, before)
+                data['observations'].reverse()
+                self.assertEqual(self.compute(data, request), result)
+
     def test_two_currencies_never_convert_without_selected_fx(self):
         euro = self.charge(200, line='d'*64)
         euro['amount']['currency'] = 'EUR'

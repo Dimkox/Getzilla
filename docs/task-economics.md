@@ -100,7 +100,9 @@ Rates are supplied dated rational facts with units, currency, source and cache
 policy. No current tariff or historical cache multiplier is built in. Inclusive
 input/output buckets are not billed twice. With one inclusive output rate,
 reasoning is already in output; with a distinct reasoning rate, subtract that
-component before pricing the remaining output. Different cache modes/configs
+component before pricing the remaining output. Only a genuinely absent reasoning
+tariff permits the inclusive-output fallback. Conflicting applicable reasoning
+tariffs retain an unknown full estimate. Different cache modes/configs
 require distinct operations/writes. Unknown semantics leaves derived costs
 unknown. The current currency profile admits USD/EUR/GBP/JPY/CAD/AUD/CHF/CNY;
 each observation supplies its scale explicitly. Unknown or unsupported currency
@@ -108,7 +110,9 @@ never becomes USD. Other currencies need an explicit reviewed profile extension.
 
 FX applies only through selected explicit dated facts and retains original
 currency totals. Missing/overlapping rates remain unknown. Credits are positive
-source amounts adjusting a referenced matching charge; they are not negative
+source amounts adjusting a referenced charge from the same provider account,
+currency and operation. A mismatch is quarantined and cannot produce a known
+full net amount. Credits are not negative
 token usage. Human time, CPU, GPU, elapsed, energy and CI runner time retain
 their different units. Neither missing billing nor runner minutes means free
 local work or a known monetary rate.

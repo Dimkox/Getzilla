@@ -856,7 +856,7 @@ def _reconcile_economics(facts, bindings):
         operation = fact['row']['payload'].get('operation')
         if operation and operation['physical_operation_digest'] in bad_operations:
             conflict_ids.add(fact['row']['event_id'])
-    # An unresolved credit cannot silently reduce another currency/operation.
+    # An unresolved credit cannot silently reduce another account/currency/operation.
     charges = {fact['row']['event_id']: fact for fact in facts
                if fact['row']['payload']['candidate_kind'] == 'charge'}
     for fact in charges.values():
@@ -865,7 +865,8 @@ def _reconcile_economics(facts, bindings):
             parent = charges.get(payload['adjusts_charge_event'])
             if parent is None or parent['row']['payload']['direction'] != 'debit':
                 conflict_ids.add(fact['row']['event_id'])
-            elif (parent['row']['payload']['amount']['currency'] != payload['amount']['currency']
+            elif (parent['row']['payload']['provider_account_digest'] != payload['provider_account_digest']
+                  or parent['row']['payload']['amount']['currency'] != payload['amount']['currency']
                   or parent['row']['payload']['operation'] != payload['operation']):
                 conflict_ids.update((fact['row']['event_id'], parent['row']['event_id']))
     kept, merged = {}, 0
@@ -1041,10 +1042,11 @@ def _economic_prices(item, items):
                         reason = None
             quantities.append((category, value, reason))
         output, reasoning = payload['output']['value'], payload['reasoning_output']['value']
-        reasoning_rate, _, _ = _economic_rate(items, payload, 'reasoning_output')
+        reasoning_rate, _, reasoning_missing = _economic_rate(items, payload, 'reasoning_output')
         if payload['output_semantics'] == 'unknown':
             quantities.extend((('output', None, 'ambiguous'), ('reasoning_output', None, 'ambiguous')))
-        elif payload['output_semantics'] == 'includes_reasoning' and reasoning_rate is None:
+        elif (payload['output_semantics'] == 'includes_reasoning' and reasoning_rate is None
+              and reasoning_missing == 'tariff_missing'):
             # A single output rate prices the inclusive total once. Reasoning is
             # still reported as usage, but never added to that total again.
             quantities.append(('output', output, payload['output']['unknown_reason']))
