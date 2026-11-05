@@ -89,12 +89,13 @@ class HistoricalUpgradeTests(unittest.TestCase):
         result = subprocess.run(args, cwd=cwd, env=cls.environment, check=False,
                                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90)
         if result.returncode:
-            diagnostic = (result.stderr or result.stdout)[-2048:]
+            diagnostic = result.stderr or result.stdout
             diagnostic = diagnostic.replace(str(cls.base), '<historical-fixture>').replace(str(ROOT), '<candidate>')
             diagnostic = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', diagnostic)
             diagnostic = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', diagnostic)
-            diagnostic = re.sub(r'(?i)\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*\S+',
+            diagnostic = re.sub(r'(?i)\b([\w-]*(?:token|password|secret|api[_-]?key|authorization)[\w-]*)\s*[:=][^\r\n]*',
                                 r'\1=[redacted]', diagnostic)
+            diagnostic = diagnostic[-2048:]
             raise AssertionError(f'historical fixture command failed (exit {result.returncode}): {diagnostic}')
         return result.stdout.strip()
 
@@ -164,14 +165,21 @@ class HistoricalUpgradeTests(unittest.TestCase):
 
     def test_fixture_failure_diagnostics_are_bounded_and_redact_credentials(self):
         script = self.project/'.getzilla/runtime/failing-fixture.py'
-        script.write_text('import sys\nsys.stderr.write("x"*5000 + " token=synthetic-private-value\\n")\n'
-                          'sys.exit(7)\n', encoding='utf-8', newline='\n')
-        with self.assertRaises(AssertionError) as caught:
-            self.run_process([sys.executable, str(script)])
-        self.assertIn('exit 7', str(caught.exception))
-        self.assertIn('token=[redacted]', str(caught.exception))
-        self.assertNotIn('synthetic-private-value', str(caught.exception))
-        self.assertLess(len(str(caught.exception)), 2200)
+        samples = (
+            ('x'*5000+' token='+'synthetic-private-value'*200+'\n', 'synthetic-private-value', 'token=[redacted]'),
+            ('Authorization: Bearer synthetic-bearer-value\n', 'synthetic-bearer-value', 'Authorization=[redacted]'),
+            ('https://user:synthetic-url-secret@example.invalid/path\n', 'synthetic-url-secret', 'https://[redacted]@'),
+        )
+        for payload, secret, replacement in samples:
+            with self.subTest(secret=secret):
+                script.write_text('import sys\nsys.stderr.write('+repr(payload)+')\nsys.exit(7)\n',
+                                  encoding='utf-8', newline='\n')
+                with self.assertRaises(AssertionError) as caught:
+                    self.run_process([sys.executable, str(script)])
+                self.assertIn('exit 7', str(caught.exception))
+                self.assertIn(replacement, str(caught.exception))
+                self.assertNotIn(secret, str(caught.exception))
+                self.assertLess(len(str(caught.exception)), 2200)
 
     def stock_ignored_runtime(self):
         # The stock install.sh --create route invokes this exact historical
