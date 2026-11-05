@@ -836,6 +836,15 @@ def validate_spec(
         _validate_document(spec, gate=gate, root=root)
     except SpecError as exc:
         return [f"{path_or_schema}: {exc}"]
+    if route and (route.get('context') or {}).get('version') == 2:
+        from .state import get_active_change
+        active = get_active_change(root) or {}
+        if path_or_schema == root / str(active.get('path','')) / 'change-spec.yaml':
+            try:
+                from .intake_publication import require_intake_ready
+                require_intake_ready(root,route,operation_class='spec-validation')
+            except Exception:
+                return ['semantic intake is not current and ready']
     return []
 
 

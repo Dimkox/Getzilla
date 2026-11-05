@@ -8,7 +8,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
-from pathlib import Path
 
 from . import state
 from .requirements_intake import (IntakeError, digest, normalized, project_requirements, validate_intake,
@@ -173,10 +172,30 @@ def _budget(root, package, data, intent_raw, prior):
                 raw = _raw(root,package,path.relative_to(package).as_posix())
                 total += len(raw)
                 versions += path.parent.name == 'versions'
+                if total > MAX_RETAINED_BYTES:
+                    raise IntakeError('budget_exhausted')
+    recovery = root/'.getzilla/runtime/workflow-cas'/package.name
+    if recovery.is_symlink():
+        raise IntakeError('unsafe_intake_storage')
+    if recovery.exists():
+        for path in recovery.iterdir():
+            entries += 1
+            if entries > 20000 or path.is_symlink() or not path.is_file():
+                raise IntakeError('unsafe_intake_storage')
+            total += len(_read_regular(root,path.relative_to(root).as_posix(),limit=MAX_RETAINED_BYTES))
+            if total > MAX_RETAINED_BYTES:
+                raise IntakeError('budget_exhausted')
     active = _raw(root,package,ACTIVE,missing=True)
     total += len(active or b'')
     # Reserve complete target+active copies and ACK/context overhead before pending.
-    reserve = len(canonical_json(data)) * 3 + len(intent_raw) + len(canonical_json(prior or {})) * 2 + 32768
+    # Count CAS recovery copies too. Reserve an upper bound for both live and
+    # retained input/intent/target/document copies before any pending latch.
+    previous_bytes = len(canonical_json(prior or {}))
+    input_bytes = len(canonical_json(data))
+    saved = _strict_json(intent_raw,limit=MAX_RETAINED_BYTES)
+    target_bound = input_bytes*2 + previous_bytes*2 + 16384
+    reserve = (input_bytes*2 + len(intent_raw)*2 + target_bound*3 + previous_bytes +
+               len(saved['spec'].encode())*2 + len(saved['requirements'].encode())*2)
     version_path = BASE+'versions/'+project_requirements(data)['draft_digest']+'.json'
     if total + reserve > MAX_RETAINED_BYTES or versions >= MAX_VERSIONS and _raw(root,package,version_path,missing=True) is None:
         raise IntakeError('budget_exhausted')
@@ -346,7 +365,7 @@ def recover_intake(root, publication_id):
         from .continuity import _active_workers, ack_scope, context_binding, package_documents, scope_gaps
         from .policy import write_roles
         roles = write_roles(root) | {route.get('write_agent')}
-        if any(row['agent_type'] in roles for row in _active_workers(root).values()):
+        if saved['ack_request'] is not None and any(row['agent_type'] in roles for row in _active_workers(root).values()):
             raise IntakeError('writer_quiescence_required')
         revision = route['context']['revision']
         old_revision = saved['core']['scope_revision']
@@ -354,7 +373,10 @@ def recover_intake(root, publication_id):
         if revision != old_revision and not (saved['ack_request'] and revision == old_revision+1 and ack and ack['operation_id'] == saved['ack_request']['operation_id']):
             raise IntakeError('stale_scope_revision')
         for target,raw,boundary in [('change-spec.yaml',saved['spec'].encode(),'spec'), ('requirements.md',saved['requirements'].encode(),'requirements')]:
-            _put(root,route,package,target,raw,saved['old_files'][target])
+            if saved['ack_request'] is not None:
+                _put(root,route,package,target,raw,saved['old_files'][target])
+            elif _hash(_raw(root,package,target)) != saved['old_files'][target]:
+                raise IntakeError('recovery_conflict')
             _boundary(boundary)
         protocol['pending']['phase']='documents'
         route = _cursor(root,route,protocol)
@@ -462,3 +484,44 @@ def require_intake_ready(root, route=None, operation_class='product-write'):
     if result['status'] != 'not_run' and result['assessment']['status'] != 'ready':
         raise IntakeError('intake_not_ready')
     return result
+
+
+def trace_requirement(root, criterion_id, delivery=None):
+    """Owned local trace; imported PR observations never establish acceptance."""
+    observation = read_intake_cut(root)
+    if observation['status'] == 'not_run':
+        raise IntakeError('intake_trace_unavailable')
+    route = state.require_route_owner(root)
+    package = _package(root,route)
+    stored = _json(root,package,ACTIVE)
+    data = stored['projection']['input']
+    requirements = [row for row in data['requirements'] if criterion_id in row['criterion_ids']]
+    if not requirements:
+        raise IntakeError('criterion_unmapped')
+    refs = {row['source_id'] for row in requirements}
+    tasks, graph_status = [],'not_run'
+    graph = _json(root,package,'workflow/task-graph.json',missing=True)
+    if graph is not None:
+        from .workflow_artifacts import validate_task_graph,load_source_manifest,compile_task_graph
+        validate_task_graph(graph)
+        bundle = load_source_manifest(root,package/'workflow/manifest.json')
+        if graph != compile_task_graph(root,route['change_id'],bundle,route):
+            raise IntakeError('stale_task_graph')
+        tasks = [row['task_id'] for row in graph['tasks'] if criterion_id in row['covers']]
+        graph_status = 'observed'
+    delivery_status = 'not_run'
+    if delivery is not None:
+        if (not isinstance(delivery,dict) or set(delivery) != {'number','state','head_sha','observed_head_sha'} or
+                type(delivery['number']) is not int or delivery['number']<1 or
+                delivery['state'] not in {'open','closed','merged'} or
+                any(not isinstance(delivery[key],str) or re.fullmatch('[0-9a-f]{40}',delivery[key]) is None for key in ('head_sha','observed_head_sha'))):
+            raise IntakeError('invalid_delivery_observation')
+        delivery_status = 'observed_unqualified' if delivery['head_sha']==delivery['observed_head_sha'] else 'stale'
+    # Current ACL/provider/receipt qualification is deliberately not inferred here.
+    if read_intake_cut(root) != observation:
+        raise IntakeError('intake_changed_during_trace')
+    return {'criterion_id':criterion_id,'draft_digest':observation['cut']['D'],'spec_digest':observation['cut']['S'],
+            'requirement_ids':sorted(row['id'] for row in requirements),
+            'source_refs':[copy.deepcopy(row) for row in data['sources'] if row['id'] in refs],
+            'task_ids':sorted(tasks),'task_graph_status':graph_status,'delivery_status':delivery_status,
+            'receipt_status':'not_run','accepted':False,'authority':False,'receipt_eligible':False}

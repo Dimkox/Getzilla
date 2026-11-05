@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 import time
 from pathlib import Path
@@ -27,10 +29,82 @@ _DEGRADED_CONTROL_PLANE = re.compile(r'(?:^|[\s/"\'=>:])(?:\.getzilla/|\.grok/|\
 _DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|truncate|touch|rsync)\b|\bsed\s+-i|\bperl\s+-\S*i')
 
 
-def _degraded_denial(tool: str, inputs: Any) -> str | None:
+def _degraded_intake_required(root: Path | None = None) -> bool:
+    """Read only the bounded canonical native marker when package imports fail.
+
+    Unknown existing task state cannot downgrade an enabled task. No approval or
+    source data is accepted through this fallback.
+    """
+    root = root or next((path for path in (Path.cwd(),*Path.cwd().parents) if (path/'.getzilla').is_dir()),None)
+    if root is None:
+        return False
+    def read(parts):
+        handles=[]
+        try:
+            if os.name == 'nt':
+                raise ValueError('descriptor fallback unavailable')
+            directory=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            handles.append(directory)
+            for part in parts[:-1]:
+                directory=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+                handles.append(directory)
+            descriptor=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+            handles.append(descriptor)
+            before=os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_size>1_048_576:
+                raise ValueError('unavailable marker')
+            raw=b''
+            while len(raw)<=1_048_576:
+                chunk=os.read(descriptor,min(65536,1_048_577-len(raw)))
+                if not chunk:
+                    break
+                raw+=chunk
+            after=os.fstat(descriptor)
+            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                raise ValueError('changed marker')
+            return json.loads(raw)
+        finally:
+            for descriptor in reversed(handles):
+                os.close(descriptor)
+    try:
+        pointer=read(('.getzilla','runtime','active-route.json'))
+    except FileNotFoundError:
+        return (root/'.getzilla/runtime/sessions').exists()
+    except Exception:
+        return True
+    try:
+        route_id=pointer['route_id']
+        if not isinstance(route_id,str) or re.fullmatch('[A-Za-z0-9_-]{1,128}',route_id) is None:
+            return True
+        try:
+            route=read(('.getzilla','runtime','routes',route_id+'.json'))
+        except FileNotFoundError:
+            if 'task_context_version' in pointer or set(pointer)<= {'route_id','session_id'}:
+                return True
+            route=pointer
+        context=route.get('context') or {}
+        return context.get('version')==2 or 'intake' in context or ('task_context_version' in route and context.get('version')!=1)
+    except Exception:
+        return True
+
+
+def _degraded_denial(tool: str, inputs: Any, *, root: Path | None = None) -> str | None:
     """Why a protected action is refused while the policy is not loaded, or None for anything else."""
     if not isinstance(inputs, dict):
         return None
+    if _degraded_intake_required(root):
+        affected=tool in _DEGRADED_WRITE_TOOLS or tool in _DEGRADED_SHELL_TOOLS or tool.startswith('mcp__')
+        if tool in _DEGRADED_SHELL_TOOLS:
+            import shlex
+            command=inputs.get('command',inputs.get('cmd',''))
+            try:
+                argv=shlex.split(command) if isinstance(command,str) else []
+            except ValueError:
+                argv=[]
+            if argv and argv[0] in {'pwd','cat','head','tail','wc'} and not any(char in str(command) for char in '><;&|`$()'):
+                affected=False
+        if affected:
+            return 'Semantic intake cannot be loaded; this product mutation is refused.'
     reason = ('Getzilla policy did not load, so this protected action is refused until the hook is repaired '
               '(see .getzilla/runtime/hook-events.jsonl). Reads and ordinary edits stay allowed.')
     if tool in _DEGRADED_SHELL_TOOLS:
@@ -554,7 +628,7 @@ def main() -> None:
         except Exception as error:
             # Policy stack not importable: record it, refuse protected actions, allow the rest (#78).
             record_degraded('pre_tool_use', error, payload)
-            denial = _degraded_denial(current_tool, current_input)
+            denial = _degraded_denial(current_tool, current_input, root=context.effective_root or context.session_root)
             emit(permission_output(denial is None, denial))
             return
 
@@ -601,9 +675,10 @@ def main() -> None:
         _deny(payload, current_tool, current_input, reason or 'Blocked by Getzilla policy',
               context=context, action=action or 'policy-denial')
     except Exception as error:
-        # Fail-open: never lock the agent on hook bugs, but record that policy did not run
+        # Keep required/unknown intake effects closed even if the outer stack failed.
         record_degraded('pre_tool_use', error)
-        emit(permission_output(True))
+        reason = _degraded_denial(locals().get('current_tool',''),locals().get('current_input',{}),root=locals().get('root'))
+        emit(permission_output(reason is None,reason))
 
 
 if __name__ == '__main__':

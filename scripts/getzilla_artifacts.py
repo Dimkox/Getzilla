@@ -44,11 +44,12 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument("--write", action="store_true")
     export.add_argument("--expected-digest")
     intake = sub.add_parser('intake')
-    intake.add_argument('action', choices=('inspect','assess','apply','recover'))
+    intake.add_argument('action', choices=('inspect','assess','apply','recover','trace'))
     intake.add_argument('--request', help='Bounded repository-relative native request JSON')
     intake.add_argument('--expected-cut', help='Exact cut digest; none only for initial publication')
     intake.add_argument('--expected-state', help='Exact raw state digest; zero SHA for initial publication')
     intake.add_argument('--publication-id')
+    intake.add_argument('--criterion-id')
     return parser
 
 
@@ -67,19 +68,22 @@ def main() -> int:
     try:
         root = find_root(ROOT)
         if args.command == 'intake':
-            from getzilla.intake_publication import prepare_intake, recover_intake, read_intake_cut
+            from getzilla.intake_publication import prepare_intake, recover_intake, read_intake_cut, trace_requirement, _request
             from getzilla.requirements_intake import IntakeError, project_requirements
             from getzilla.intake_readiness import assess_readiness
             from getzilla.package_status import read_package_file
             from getzilla.workflow_artifacts import _strict_json
             if args.action == 'inspect':
                 result = read_intake_cut(root)
+            elif args.action == 'trace':
+                result = trace_requirement(root,args.criterion_id)
             elif args.action == 'recover':
                 result = recover_intake(root,args.publication_id)
             else:
                 if args.request is None:
                     raise IntakeError('request_required')
                 request = _strict_json(read_package_file(root,args.request,1_000_000),limit=1_000_000)
+                request = _request(request)
                 if args.action == 'assess':
                     from getzilla.state import require_route_owner
                     require_route_owner(root)

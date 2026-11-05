@@ -112,6 +112,8 @@ MANAGED_FILES = (
     "schemas/workflow-source-v1.schema.json",
     "schemas/workflow-task-graph-v1.schema.json",
     "schemas/workflow-convergence-report-v1.schema.json",
+    "schemas/requirement-intake-v1.schema.json",
+    "schemas/intake-readiness-v1.schema.json",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {

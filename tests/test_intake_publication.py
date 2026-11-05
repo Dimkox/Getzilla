@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import shutil
 import sys
 import unittest
 from unittest.mock import patch
@@ -14,12 +15,18 @@ from getzilla.change import start_change
 from getzilla.intake_publication import (prepare_intake, recover_intake, read_intake_cut,
                                        native_policy, native_identity, cut_digest, require_intake_ready)
 from getzilla.requirements_intake import IntakeError
-from getzilla.spec import load_spec, dump_canonical_spec
+from getzilla.spec import dump_canonical_spec
 from tests.test_requirements_intake import snapshot
 
 
 class PublicationTests(unittest.TestCase):
     def fixture(self, root):
+        # Actual hook subprocesses load the installed root's schema files, not
+        # the test runner's imported package schema directory.
+        source=Path(__file__).resolve().parents[1]/'schemas'
+        (root/'schemas').mkdir(exist_ok=True)
+        for name in ('change-spec.schema.json','requirement-intake-v1.schema.json','intake-readiness-v1.schema.json'):
+            shutil.copyfile(source/name,root/'schemas'/name)
         continuity.submit(root, 'Implement a bounded record-retention feature and preserve source requirements.', 'fixture-owner', event_id='initial')
         start_change(root)
         route = state.require_route_owner(root)
@@ -64,7 +71,6 @@ class PublicationTests(unittest.TestCase):
                         raise RuntimeError('inert interruption')
                 with patch.object(publisher, '_boundary', interrupt), self.assertRaises(RuntimeError):
                     self.publish(root, intent)
-                route = state.require_route_owner(root)
                 if point not in {'staged','commit'}:
                     with self.assertRaises(IntakeError):
                         require_intake_ready(root)
@@ -105,6 +111,19 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(state.require_route_owner(root)['context']['revision'],route['context']['revision'])
             self.assertEqual(identities,{name:(package/name).stat().st_ino for name in identities})
 
+    def test_bookkeeping_preserves_equivalent_human_spec_formatting(self):
+        with project_copy() as root:
+            package,intent=self.fixture(root)
+            first=self.publish(root,intent)
+            path=package/'change-spec.yaml'
+            path.write_bytes(path.read_bytes()+b'\n')
+            before=path.read_bytes()
+            inode=path.stat().st_ino
+            intent['event']={'id':'bookkeeping-two','kind':'record'}
+            prepare_intake(root,intent,cut_digest(first['cut']),first['cut']['M'])
+            self.assertEqual(path.read_bytes(),before)
+            self.assertEqual(path.stat().st_ino,inode)
+
     def test_event_collision_old_epoch_and_forged_approval_are_refused(self):
         with project_copy() as root:
             _,intent=self.fixture(root)
@@ -112,7 +131,8 @@ class PublicationTests(unittest.TestCase):
             for mutate in (lambda d:d['event'].update(kind='question_round'),
                            lambda d:d['snapshot']['identity'].update(authority_epoch=9),
                            lambda d:d['event'].update(approved=True,principal='owner')):
-                changed=copy.deepcopy(intent); mutate(changed)
+                changed=copy.deepcopy(intent)
+                mutate(changed)
                 with self.assertRaises(IntakeError):
                     prepare_intake(root,changed,cut_digest(first['cut']),first['cut']['M'])
 
@@ -121,7 +141,10 @@ class PublicationTests(unittest.TestCase):
             package,intent=self.fixture(root)
             first=self.publish(root,intent)
             route=state.require_route_owner(root)
-            changed=copy.deepcopy(route); changed['context'].pop('intake'); changed['context']['version']=1; changed['state_revision']+=1
+            changed=copy.deepcopy(route)
+            changed['context'].pop('intake')
+            changed['context']['version']=1
+            changed['state_revision']+=1
             with self.assertRaises(ValueError):
                 state._commit_route(root,changed,expected=route)
             path=package/f"workflow/projections/intake/versions/{first['cut']['D']}.json"
@@ -134,6 +157,34 @@ class PublicationTests(unittest.TestCase):
             package,intent=self.fixture(root)
             self.publish(root,intent)
             (package/'requirements.md').write_text('Human changed requirements.\n')
+            with self.assertRaises(IntakeError):
+                require_intake_ready(root)
+
+    def test_pending_bookkeeping_never_reuses_previous_ready(self):
+        with project_copy() as root:
+            _,intent=self.fixture(root)
+            first=self.publish(root,intent)
+            intent['event']={'id':'bookkeeping-two','kind':'record'}
+            from getzilla import intake_publication as publisher
+            with patch.object(publisher,'_boundary',side_effect=lambda p: (_ for _ in ()).throw(RuntimeError()) if p=='pending' else None):
+                with self.assertRaises(RuntimeError):
+                    prepare_intake(root,intent,cut_digest(first['cut']),first['cut']['M'])
+            with self.assertRaises(IntakeError):
+                require_intake_ready(root)
+
+    def test_projection_bytes_and_original_epoch_are_rederived(self):
+        with project_copy() as root:
+            package,intent=self.fixture(root)
+            invalid=copy.deepcopy(intent)
+            invalid['snapshot']['identity']['authority_epoch']=1
+            with self.assertRaises(IntakeError):
+                self.publish(root,invalid)
+            self.publish(root,intent)
+            path=package/'workflow/projections/intake.json'
+            forged=json.loads(path.read_text())
+            forged['assessment']['status']='ready'
+            forged['assessment']['authority']=True
+            path.write_text(json.dumps(forged))
             with self.assertRaises(IntakeError):
                 require_intake_ready(root)
 
@@ -180,6 +231,36 @@ class PublicationTests(unittest.TestCase):
             from getzilla import intake_publication as publisher
             before=state.require_route_owner(root)
             with patch.object(publisher,'MAX_RETAINED_BYTES',30000), self.assertRaisesRegex(IntakeError,'budget_exhausted'):
+                self.publish(root,intent)
+            self.assertEqual(state.require_route_owner(root),before)
+
+    def test_existing_native_cas_recovery_bytes_count_toward_retained_bound(self):
+        with project_copy() as root:
+            _,intent=self.fixture(root)
+            route=state.require_route_owner(root)
+            recovery=root/'.getzilla/runtime/workflow-cas'/route['change_id']
+            recovery.mkdir(parents=True,exist_ok=True)
+            (recovery/'retained-recovery').write_bytes(b'x'*1_000_000)
+            with self.assertRaisesRegex(IntakeError,'budget_exhausted'):
+                self.publish(root,intent)
+            self.assertEqual(state.require_route_owner(root),route)
+
+    def test_revision_and_event_ceiling_never_evict_unresolved_identity(self):
+        from getzilla.requirements_intake import reduce_intake,NativeIntakeContext
+        trusted=NativeIntakeContext({'logical_task_id':'fixture','authority_epoch':0},'a'*64,'b'*64,'2026-11-05T00:00:00Z')
+        previous={'identity':trusted.identity,'events':[{'id':f'old-{i}','request_digest':'a'*64,'event_digest':'c'*64} for i in range(4096)],'rounds':3,'withdrawn':False}
+        before=copy.deepcopy(previous)
+        with self.assertRaisesRegex(IntakeError,'budget_exhausted'):
+            reduce_intake(previous,{'id':'new','kind':'record'},trusted)
+        self.assertEqual(previous,before)
+        with project_copy() as root:
+            package,intent=self.fixture(root)
+            versions=package/'workflow/projections/intake/versions'
+            versions.mkdir(parents=True)
+            for number in range(64):
+                (versions/f'{number:064x}.json').write_text('{}\n')
+            before=state.require_route_owner(root)
+            with self.assertRaisesRegex(IntakeError,'budget_exhausted'):
                 self.publish(root,intent)
             self.assertEqual(state.require_route_owner(root),before)
 
