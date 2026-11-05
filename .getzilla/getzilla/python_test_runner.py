@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import configparser
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import metadata
 import importlib.util
 import json
@@ -18,8 +18,9 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
-from . import fsx
+from . import STACK_DIR, fsx
 from ._cpu_capacity import linux_quota_capacity
 from .verification_scope import FORCE_FULL_VARIABLE
 
@@ -363,6 +364,41 @@ def _environment(root: Path, data_file: Path, *, temporary_root: Path | None = N
     return environment
 
 
+def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
+    # STACK_DIR remains a real directory when the engine lives in getzilla.zip.
+    return [sys.executable, str(STACK_DIR.parent / 'scripts/getzilla_unittest.py'),
+            '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
+
+
+def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
+    if result.returncode:
+        return result
+    try:
+        nonce = result.command[result.command.index('--nonce') + 1]
+        if not re.fullmatch('[0-9a-f]{32}', nonce) or fsx.is_link(result_file.lstat()):
+            raise ValueError('invalid collection result identity')
+        descriptor = os.open(result_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(descriptor, 'rb') as source:
+            identity = os.fstat(source.fileno())
+            if (not stat.S_ISREG(identity.st_mode)
+                    or (hasattr(os, 'getuid') and identity.st_uid != os.getuid())):
+                raise ValueError('invalid collection result owner or type')
+            content = source.read(513)
+        if len(content) > 512:
+            raise ValueError('oversized collection result')
+        report = json.loads(content)
+        if (not isinstance(report, dict) or set(report) != {'schema_version', 'nonce', 'tests_run', 'successful'}
+                or type(report['schema_version']) is not int or report['schema_version'] != 1
+                or report['nonce'] != nonce
+                or type(report['tests_run']) is not int or report['tests_run'] < 1
+                or report['successful'] is not True):
+            raise ValueError('no successful nonempty collection')
+    except (OSError, ValueError, TypeError, IndexError):
+        return replace(result, returncode=5,
+                       stderr=result.stderr + '\nunittest collection result missing or invalid\n')
+    return result
+
+
 def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> ProcessResult:
     """Run explicit Core unittest names as a bounded observation, without coverage."""
     if type(budget) is not int or not 1 <= budget <= 180:
@@ -376,8 +412,10 @@ def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> Pro
         raise RunnerError('named tests require nonempty existing tests.test_module[.Class[.test_method]] targets')
     retained: dict[str, ProcessResult] = {}
     with _run_directory('grok-named-smoke-', retained) as directory:
-        retained['tests'] = execute([sys.executable, '-m', 'unittest', *targets], root,
-                                    _environment(root, Path(directory) / '.coverage'), timeout=budget)
+        result_file = Path(directory) / 'unittest-result.json'
+        retained['tests'] = _unittest_result(
+            execute(_unittest_command(result_file, *targets), root,
+                    _environment(root, Path(directory) / '.coverage'), timeout=budget), result_file)
     return retained['tests']
 
 
@@ -457,14 +495,12 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                                 test_files: list[str] | None = None) -> ProcessResult:
     if test_files is None:
         test_files = _unittest_files(root)
-    command = [
-        sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
-        '-m', 'unittest', 'discover', '-s', 'tests', '-p', '<test-file>',
-    ]
+    command = [sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
+               *_unittest_command(Path('<result>'), 'discover', '-s', 'tests', '-p', '<test-file>')[1:]]
     if not test_files:
         return ProcessResult(command, 5, stderr='no unittest modules discovered')
     started = time.monotonic()
-    active: list[tuple[str, subprocess.Popen, Path, Path]] = []
+    active: list[tuple[str, subprocess.Popen, Path, Path, Path]] = []
     completed: list[ProcessResult] = []
     cleanup_errors: list[str] = []
     next_file = 0
@@ -479,14 +515,15 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     next_file += 1
                     stdout = output_root / f'{test_file}.stdout'
                     stderr = output_root / f'{test_file}.stderr'
+                    result_file = output_root / f'{test_file}.result.json'
                     out_handle = stdout.open('wb')
                     err_handle = stderr.open('wb')
                     try:
                         process = fsx.owned_popen(
                             [
                                 sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                                f'--rcfile={config}', '-m', 'unittest', 'discover',
-                                '-s', 'tests', '-p', test_file,
+                                f'--rcfile={config}',
+                                *_unittest_command(result_file, 'discover', '-s', 'tests', '-p', test_file)[1:],
                             ],
                             cwd=root,
                             env={**environment, '_GETZILLA_TEST_CHILD': '1'},
@@ -500,34 +537,30 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                         continue
                     out_handle.close()
                     err_handle.close()
-                    active.append((test_file, process, stdout, stderr))
+                    active.append((test_file, process, stdout, stderr, result_file))
                 for item in list(active):
-                    test_file, process, stdout, stderr = item
+                    test_file, process, stdout, stderr, result_file = item
                     if process.poll() is None:
                         continue
                     active.remove(item)
                     job = fsx.owned_job(process)
                     if job is not None:
                         job.close()  # a finished shard's leftover descendants end with its job
-                    completed.append(ProcessResult(
-                        [
-                            sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                            f'--rcfile={config}', '-m', 'unittest', 'discover',
-                            '-s', 'tests', '-p', test_file,
-                        ],
+                    completed.append(_unittest_result(ProcessResult(
+                        list(process.args),
                         process.returncode if process.returncode is not None else 1,
                         stdout=_read_limited(stdout),
                         stderr=_read_limited(stderr),
-                    ))
+                    ), result_file))
                 if time.monotonic() - started > TIMEOUT:
-                    for _test_file, process, _stdout, _stderr in active:
+                    for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
                                          seconds=time.monotonic() - started, terminal_state='timeout')
                 if active:
                     time.sleep(0.05)
         except BaseException:
-            for test_file, process, _stdout, _stderr in active:
+            for test_file, process, _stdout, _stderr, _result_file in active:
                 try:
                     _stop(process)
                 except Exception as exc:
@@ -598,6 +631,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         coverage_root.mkdir(mode=0o700)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
+        result_file = coverage_root / 'unittest-result.json'
         environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
         if workers and engine == 'pytest-xdist':
             command = _pytest_command(workers, 'worksteal')
@@ -610,7 +644,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                 '-m', 'unittest', '<module>',
             ]
         else:
-            command = [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests']
+            command = _unittest_command(result_file, 'discover', '-s', 'tests')
             if measured:
                 command = [sys.executable, '-m', 'coverage', 'run', f'--rcfile={config}', *command[1:]]
         if workers and engine == 'coverage-unittest-parallel':
@@ -619,6 +653,8 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
         else:
             tests = execute(command, root, environment)
+            if engine != 'pytest-xdist':
+                tests = _unittest_result(tests, result_file)
         retained['tests'] = tests
         coverage = None
         facts: dict[str, object] = {}
@@ -662,15 +698,17 @@ def run_trust_tests(root: Path, workers: int) -> ProcessResult:
         raise RunnerError('trust-ci/tests is missing')
     workers, _engine = select_engine(workers, measured=False)
     _tool_versions(['pytest', 'pytest-xdist'] if workers else [])
-    command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else [
-        sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
-    ]
     retained: dict[str, ProcessResult] = {}
     # Child temp files now live in this folder, so its cleanup must not replace the verdict (#134).
     with _run_directory('grok-trust-tests-', retained) as directory:
+        result_file = Path(directory) / 'unittest-result.json'
+        command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else _unittest_command(
+            result_file, 'discover', '-s', 'tests')
         environment = _environment(suite, Path(directory) / '.coverage')
         environment['PYTHONPATH'] = os.pathsep.join(str(path) for path in (suite / 'src', suite / 'tests', suite))
         retained['tests'] = execute(command, suite, environment)
+        if not workers:
+            retained['tests'] = _unittest_result(retained['tests'], result_file)
     return retained['tests']
 
 

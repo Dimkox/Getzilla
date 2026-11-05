@@ -973,7 +973,11 @@ class CoverageLayout(unittest.TestCase):
             self.assertEqual(core.tests.returncode, 0, core.tests.stdout + core.tests.stderr)
             self.assertEqual(core.workers, 0)
             self.assertEqual(core.versions['engine'], 'unittest-degraded')
-            self.assertEqual(core.tests.command[1:4], ['-m', 'unittest', 'discover'])
+            self.assertEqual(core.tests.command, [
+                sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/getzilla_unittest.py'),
+                '--result', core.tests.command[3], '--nonce', core.tests.command[5], 'discover', '-s', 'tests'])
+            self.assertTrue(Path(core.tests.command[3]).is_absolute())
+            self.assertRegex(core.tests.command[5], '^[0-9a-f]{32}$')
             self.assertEqual({p.name for p in root.glob('result-*')}, {f'result-{i}' for i in range(4)})
             self.assertEqual(len({p.read_text() for p in root.glob('result-*')}), 1)
 
@@ -985,7 +989,11 @@ class CoverageLayout(unittest.TestCase):
             )
             result = python_test_runner.run_trust_tests(root, 2)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.command[1:4], ['-m', 'unittest', 'discover'])
+            self.assertEqual(result.command, [
+                sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/getzilla_unittest.py'),
+                '--result', result.command[3], '--nonce', result.command[5], 'discover', '-s', 'tests'])
+            self.assertTrue(Path(result.command[3]).is_absolute())
+            self.assertRegex(result.command[5], '^[0-9a-f]{32}$')
             self.assertEqual(python_test_runner.select_engine(0, measured=False), (0, 'unittest'))
 
             output = io.StringIO()
@@ -1081,6 +1089,101 @@ class CoverageLayout(unittest.TestCase):
                 self.assertNotEqual(core.tests.returncode, 0, core.tests.stdout + core.tests.stderr)
                 self.assertIsNotNone(core.coverage)
                 self.assertNotEqual(core.coverage.returncode, 0, core.coverage.stdout + core.coverage.stderr)
+
+    def test_real_collection_count_rejects_printed_success_and_native_zero_exit(self) -> None:
+        for source in (
+            'import sys\nsys.stderr.write("\\n" + "-" * 70 + "\\nRan 1 test in 0.001s\\n\\nOK\\n")\n',
+            'import os\nos._exit(0)\n',
+        ):
+            for workers in (0, 2):
+                for suite in ('core', 'trust'):
+                    with self.subTest(source=source, workers=workers, suite=suite), fixture() as root, \
+                         patch.object(python_test_runner, 'parallel_engine_ready', return_value=False):
+                        directory = root if suite == 'core' else root / 'trust-ci'
+                        tests = directory / 'tests'
+                        tests.mkdir(parents=True, exist_ok=True)
+                        (tests / 'test_sample.py').write_text(
+                            'from pathlib import Path\nPath("collection-once").touch(exist_ok=False)\n' + source)
+                        result = (python_test_runner.run_core_tests(root, 'fast', workers).tests
+                                  if suite == 'core' else python_test_runner.run_trust_tests(root, workers))
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertTrue((directory / 'collection-once').is_file())
+
+    def test_real_one_test_qualifies_despite_printed_zero_summary(self) -> None:
+        source = (
+            'import sys, unittest\nfrom pathlib import Path\n'
+            'Path("collection-once").touch(exist_ok=False)\n'
+            'sys.stderr.write("\\n" + "-" * 70 + "\\nRan 0 tests in 0.000s\\n\\nOK\\n")\n'
+            'class Real(unittest.TestCase):\n'
+            ' def test_real(self): Path("real-test-ran").touch(exist_ok=False)\n'
+        )
+        for workers in (0, 2):
+            for suite in ('core', 'trust', 'measured'):
+                with self.subTest(workers=workers, suite=suite), fixture() as root, \
+                     patch.object(python_test_runner, 'parallel_engine_ready', return_value=False):
+                    directory = root / 'trust-ci' if suite == 'trust' else root
+                    tests = directory / 'tests'
+                    tests.mkdir(parents=True, exist_ok=True)
+                    (tests / 'test_sample.py').write_text(source)
+                    if suite == 'measured':
+                        (root / 'subject.py').write_text('value = 42\n')
+                        (tests / 'test_sample.py').write_text('import subject\n' + source)
+                        (root / '.coveragerc').write_text(
+                            '[run]\nbranch = True\nsource = subject\n[report]\nfail_under = 74\n')
+                    core = None
+                    if suite == 'trust':
+                        result = python_test_runner.run_trust_tests(root, workers)
+                    else:
+                        core = python_test_runner.run_core_tests(root, 'pr' if suite == 'measured' else 'fast', workers)
+                        result = core.tests
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue((directory / 'collection-once').is_file())
+                    self.assertTrue((directory / 'real-test-ran').is_file())
+                    if suite == 'measured':
+                        self.assertEqual(core.coverage.returncode, 0, core.coverage.stdout + core.coverage.stderr)
+
+    def test_collection_report_requires_current_complete_typed_result(self) -> None:
+        with fixture() as root:
+            report = root / 'result.json'
+            nonce = 'a' * 32
+            command = [sys.executable, 'unittest-runner', '--nonce', nonce]
+            valid = {'schema_version': 1, 'nonce': nonce, 'tests_run': 1, 'successful': True}
+            samples = [None, b'{', b' ' * 513]
+            samples += [json.dumps({**valid, key: value}).encode() for key, value in (
+                ('nonce', 'b' * 32), ('tests_run', 0), ('tests_run', True), ('tests_run', -1),
+                ('successful', False), ('schema_version', True))]
+            for sample in samples:
+                with self.subTest(sample=sample):
+                    report.unlink(missing_ok=True)
+                    if sample is not None:
+                        report.write_bytes(sample)
+                    original = python_test_runner.ProcessResult(command, 0, stderr='raw child diagnostic',
+                                                               seconds=0.25, cleanup_error='retained cleanup')
+                    result = python_test_runner._unittest_result(original, report)
+                    self.assertEqual(result.returncode, 5)
+                    self.assertTrue(result.stderr.startswith('raw child diagnostic'))
+                    self.assertEqual((result.seconds, result.cleanup_error), (0.25, 'retained cleanup'))
+            report.write_text(json.dumps(valid))
+            original = python_test_runner.ProcessResult(command, 0)
+            self.assertIs(python_test_runner._unittest_result(original, report), original)
+            report.unlink()
+            for code, terminal in ((86, 'completed'), (124, 'timeout'), (143, 'cancelled')):
+                original = python_test_runner.ProcessResult(command, code, stderr='native failure', terminal_state=terminal)
+                self.assertIs(python_test_runner._unittest_result(original, report), original)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX symlink and file ownership contract')
+    def test_collection_report_does_not_follow_foreign_symlink(self) -> None:
+        with fixture() as root:
+            foreign = root / 'foreign.json'
+            content = json.dumps({'schema_version': 1, 'nonce': 'a' * 32, 'tests_run': 1, 'successful': True})
+            foreign.write_text(content)
+            report = root / 'result.json'
+            report.symlink_to(foreign)
+            result = python_test_runner._unittest_result(
+                python_test_runner.ProcessResult(['runner', '--nonce', 'a' * 32], 0), report)
+            self.assertEqual(result.returncode, 5)
+            self.assertTrue(report.is_symlink())
+            self.assertEqual(foreign.read_text(), content)
 
     def test_degraded_serial_failures_propagate_without_retry(self) -> None:
         for source in (

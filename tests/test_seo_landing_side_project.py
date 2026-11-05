@@ -279,6 +279,58 @@ class SeoLandingShowcaseContractTests(unittest.TestCase):
             server.terminate()
             server.wait(timeout=5)
 
+    def test_local_chrome_contract_handles_long_inherited_temporary_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            inherited = Path(directory) / ('long-native-socket-context-' * 5)
+            inherited.mkdir()
+            foreign = inherited / 'foreign.txt'
+            foreign.write_text('preserve foreign bytes')
+            with mock.patch.dict(os.environ, {'TMPDIR': str(inherited), 'TEMP': str(inherited), 'TMP': str(inherited)}):
+                self.test_local_chrome_runner_exits_cleanly_after_contract_passes()
+            self.assertEqual(list(inherited.iterdir()), [foreign])
+            self.assertEqual(foreign.read_text(), 'preserve foreign bytes')
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX signal and short AF_UNIX runtime contract')
+    def test_chrome_early_signal_reports_diagnostic_and_cleans_only_owned_runtime(self) -> None:
+        node = available_executable(('node', 'nodejs'), ('/usr/bin/node',))
+        if node is None:
+            self.skipTest('unavailable optional lab dependency: Node.js')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inherited = root / ('long-native-socket-context-' * 5)
+            inherited.mkdir()
+            foreign = inherited / 'foreign.txt'
+            foreign.write_text('preserve foreign bytes')
+            observed = root / 'observed.json'
+            chrome = root / 'chrome-signal'
+            chrome.write_text(
+                f'#!{sys.executable}\nimport json, os, signal, stat, sys\nfrom pathlib import Path\n'
+                'temporary = Path(os.environ["TMPDIR"])\n'
+                'profile = next(value.split("=", 1)[1] for value in sys.argv if value.startswith("--user-data-dir="))\n'
+                f'Path({str(observed)!r}).write_text(json.dumps({{"temporary": str(temporary), "profile": profile, '
+                '"mode": stat.S_IMODE(temporary.stat().st_mode), "pid": os.getpid()}))\n'
+                'sys.stderr.write("synthetic startup diagnostic\\n"); sys.stderr.flush()\n'
+                'os.kill(os.getpid(), signal.SIGTERM)\n')
+            chrome.chmod(0o700)
+            started = time.monotonic()
+            result = subprocess.run(
+                [node, str(BROWSER_RUNNER), '--url', 'http://127.0.0.1:1/', '--output', str(root / 'output'), '--chrome', str(chrome)],
+                env={**os.environ, 'TMPDIR': str(inherited), 'TEMP': str(inherited), 'TMP': str(inherited)},
+                capture_output=True, text=True, timeout=8)
+            self.assertLess(time.monotonic() - started, 8)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('SIGTERM', result.stderr)
+            self.assertIn('synthetic startup diagnostic', result.stderr)
+            report = json.loads(observed.read_text())
+            self.assertEqual(report['mode'], 0o700)
+            self.assertLess(len(os.fsencode(report['temporary'] + '/com.google.Chrome.123456/SingletonSocket')), 108)
+            self.assertFalse(Path(report['temporary']).exists())
+            self.assertFalse(Path(report['profile']).exists())
+            self.assertEqual(list(inherited.iterdir()), [foreign])
+            self.assertEqual(foreign.read_text(), 'preserve foreign bytes')
+            with self.assertRaises(ProcessLookupError):
+                os.kill(report['pid'], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

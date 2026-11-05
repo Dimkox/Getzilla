@@ -29,6 +29,19 @@ const outputDir = path.resolve(outputOption);
 fs.mkdirSync(outputDir, { recursive: true });
 let chromeProcess;
 let chromeProfile;
+let chromeRuntime;
+let chromeDiagnostic = "";
+let chromeStartupError;
+let chromeStopping;
+const ownedDirectories = [];
+
+function privateDirectory(parent, prefix) {
+  const directory = fs.mkdtempSync(path.join(parent, prefix));
+  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  const identity = fs.lstatSync(directory, { bigint: true });
+  ownedDirectories.push({ directory, identity });
+  return directory;
+}
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -54,7 +67,9 @@ function findChrome() {
 async function launchChrome() {
   if (suppliedCdp) return suppliedCdp.replace(/\/$/, "");
   const port = await freePort();
-  chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), "seo-landing-browser-contract-"));
+  chromeProfile = privateDirectory(os.tmpdir(), "seo-landing-browser-contract-");
+  // Chrome adds a singleton socket suffix. Inherited test paths can exceed AF_UNIX limits.
+  chromeRuntime = privateDirectory(process.platform === "win32" ? os.tmpdir() : "/tmp", "gzc-");
   chromeProcess = spawn(findChrome(), [
     "--headless=new",
     "--no-sandbox",
@@ -63,17 +78,27 @@ async function launchChrome() {
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${chromeProfile}`,
     "about:blank",
-  ], { stdio: "ignore" });
+  ], {
+    stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, TMPDIR: chromeRuntime, TEMP: chromeRuntime, TMP: chromeRuntime },
+  });
+  chromeProcess.stderr.on("data", (chunk) => {
+    chromeDiagnostic = (chromeDiagnostic + chunk.toString("utf8")).slice(-4096);
+  });
+  chromeProcess.once("error", (error) => { chromeStartupError = error; });
   const cdpUrl = `http://127.0.0.1:${port}`;
   for (let attempt = 0; attempt < 450; attempt += 1) {
+    if (chromeStartupError || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) {
+      const reason = chromeStartupError?.message ?? chromeProcess.signalCode ?? chromeProcess.exitCode;
+      throw new Error(`Chrome exited before startup: ${reason}\n${chromeDiagnostic}`);
+    }
     try {
       const response = await fetch(`${cdpUrl}/json/version`);
       if (response.ok) return cdpUrl;
     } catch {}
-    if (chromeProcess.exitCode !== null) throw new Error(`Chrome exited with ${chromeProcess.exitCode}`);
     await delay(100);
   }
-  throw new Error("Timed out waiting for Chrome DevTools Protocol");
+  throw new Error(`Timed out waiting for Chrome DevTools Protocol\n${chromeDiagnostic}`);
 }
 
 function waitForExit(child, timeoutMs) {
@@ -94,21 +119,49 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-async function stopChrome() {
-  if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
-    chromeProcess.kill("SIGTERM");
-    if (!await waitForExit(chromeProcess, 3000)) {
-      chromeProcess.kill("SIGKILL");
-      if (!await waitForExit(chromeProcess, 3000)) throw new Error("Chrome did not exit after SIGKILL");
+function stopChrome() {
+  chromeStopping ??= (async () => {
+    try {
+      if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
+        chromeProcess.kill("SIGTERM");
+        if (!await waitForExit(chromeProcess, 3000)) {
+          chromeProcess.kill("SIGKILL");
+          if (!await waitForExit(chromeProcess, 3000)) throw new Error("Chrome did not exit after SIGKILL");
+        }
+      }
+    } finally {
+      const cleanupErrors = [];
+      for (const { directory, identity } of ownedDirectories.reverse()) {
+        try {
+          let current;
+          try { current = fs.lstatSync(directory, { bigint: true }); }
+          catch (error) { if (error.code === "ENOENT") continue; throw error; }
+          if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev
+              || current.ino !== identity.ino || current.uid !== identity.uid) {
+            throw new Error("Owned Chrome directory identity changed; refusing cleanup");
+          }
+          await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Owned Chrome directory cleanup failed");
     }
-  }
-  if (chromeProfile && chromeProfile.startsWith(path.join(os.tmpdir(), "seo-landing-browser-contract-"))) {
-    await fs.promises.rm(chromeProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  }
+  })();
+  return chromeStopping;
 }
 
-const cdpUrl = await launchChrome();
+const signalHandlers = new Map([["SIGINT", 130], ["SIGTERM", 143]].map(([signal, code]) => {
+  const handler = () => {
+    stopChrome().catch((error) => console.error(`Chrome cleanup failed: ${error.message}`))
+      .finally(() => process.exit(code));
+  };
+  process.once(signal, handler);
+  return [signal, handler];
+}));
+let primaryError;
 try {
+  const cdpUrl = await launchChrome();
   const pageResponse = await fetch(`${cdpUrl}/json/new?${encodeURIComponent(targetUrl)}`, { method: "PUT" });
   if (!pageResponse.ok) throw new Error(`Cannot create CDP page: HTTP ${pageResponse.status}`);
   const target = await pageResponse.json();
@@ -206,6 +259,15 @@ try {
   console.log(JSON.stringify(report, null, 2));
   socket.close();
   if (!passed) process.exitCode = 1;
+} catch (error) {
+  primaryError = error;
+  throw error;
 } finally {
-  await stopChrome();
+  try { await stopChrome(); }
+  catch (error) {
+    if (!primaryError) throw error;
+    console.error(`Chrome cleanup failed: ${error.message}`);
+  } finally {
+    for (const [signal, handler] of signalHandlers) process.off(signal, handler);
+  }
 }
