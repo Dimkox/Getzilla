@@ -55,6 +55,8 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
 
     Repository callers must first rule out a local queue module. Escapes,
     rebinding, reflection and unknown mock replacement keep ordinary policy.
+    Visible selectors/addresses need canonical-use proof; this does not prove
+    hidden effects of ordinary helpers.
     This projection never executes imports or modifies the caller's AST.
     """
     nodes = list(ast.walk(tree))
@@ -100,6 +102,15 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
     patch_calls = patch_names | {p + '.multiple' for p in patch_names}
     object_patches = {p + '.object' for p in patch_names}
     mock_namespaces = {p.rsplit('.', 1)[0] for p in patch_names if '.' in p}
+    exception_names = {alias.asname or alias.name for node in imports for alias in node.names
+                       if alias.name in {'Empty', 'Full'}}
+    canonical_calls = set()
+    approved_literals = set()
+
+    def literal_arguments(call):
+        approved_literals.update(id(value) for value in
+            (*call.args, *(keyword.value for keyword in call.keywords)) if isinstance(value, ast.Constant))
+
     replaced = set()
     for node in nodes:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in instrumentation_roots:
@@ -131,6 +142,8 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             if not isinstance(member, ast.Constant) or type(member.value) is not str:
                 return tree
             replaced.add(member.value)
+            canonical_calls.add(id(node))
+            literal_arguments(node)
             continue
         if function not in patch_calls:
             continue
@@ -141,6 +154,7 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         if not isinstance(target, ast.Constant) or type(target.value) is not str:
             return tree
         replaced.add(target.value.rsplit('.', 1)[-1])
+        approved_literals.add(id(target))
         for keyword in node.keywords:
             if keyword.arg is not None:
                 replaced.add(keyword.arg)
@@ -152,6 +166,39 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
                 if not isinstance(key, ast.Constant) or type(key.value) is not str:
                     return tree
                 replaced.add(key.value)
+                approved_literals.add(id(key))
+        canonical_calls.add(id(node))
+        literal_arguments(node)
+
+    exception_calls = set()
+    for node in nodes:
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in exception_names
+                and isinstance(parents.get(node), ast.Raise) and parents[node].exc is node):
+            exception_calls.add(id(node))
+            literal_arguments(node)
+    canonical_roots = {name.split('.')[0] for name in patch_names}
+    for node in nodes:
+        bare_literal = isinstance(parents.get(node), ast.Expr) and parents[node].value is node
+        unproved_selector = (
+            isinstance(node, ast.Attribute) and node.attr == 'patch' and dotted(node) not in patch_names
+            or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == 'patch'
+            and node.id not in canonical_roots | exception_names
+            or isinstance(node, ast.ImportFrom) and any(alias.name == 'patch' for alias in node.names)
+            and (node.level or node.module != 'unittest.mock')
+            or isinstance(node, ast.Constant) and node.value == 'patch'
+            and id(node) not in approved_literals and not bare_literal
+        )
+        if unproved_selector:
+            return tree
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            parts = node.value.lstrip('.').split('.')
+            binding_address = parts[-1] in exception_names and all(part.isidentifier() for part in parts)
+            if binding_address and id(node) not in approved_literals and not bare_literal:
+                return tree
+        if (isinstance(node, ast.keyword) and node.arg in exception_names
+                and id(parents.get(node)) not in canonical_calls | exception_calls):
+            return tree
 
     selected = set()
     for node in imports:

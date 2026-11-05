@@ -2205,6 +2205,79 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
                 self.assertIn('new_queue', report.triggers)
 
+    def test_visible_capability_uses_require_canonical_proof_before_exception_projection(self):
+        prefix = 'from queue import Empty\ndef f():\n    raise Empty()\n'
+        governed = (
+            'from .unittest import mock as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from pkg.unittest import mock as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from tools import instrumentation as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from pkg.tools import instrumentation as tools\ntools.patch("sample.Empty",unknown)\n',
+            'from tools import instrumentation as change\nmodify=change.patch\nmodify("sample.Empty",unknown)\n',
+            'import pkg.tools as tools\nmodify=getattr(tools,"patch")\nmodify("sample.Empty",unknown)\n',
+            'from tools import instrumentation as change\nmodify=getattr(change,"patch")\nmodify("sample.Empty",unknown)\n',
+            'from pkg.tools import patch as modify\nmodify("sample.Empty",unknown)\n',
+            'from tools import mutate as renamed\nmodify=renamed\nmodify("sample.Empty",unknown)\n',
+            'from tools import mutate as renamed\naddress="sample.Empty"\nrenamed(address,unknown)\n',
+            'from tools import mutate\naddress=__name__+".Empty"\nmutate(address,unknown)\n',
+            'from tools import mutate\nmutate(Empty=unknown)\n',
+            'from tools import mutate\nmutate(**{"Empty":unknown})\n',
+            'from tools import instrumentation as change\nchange.patch("sample.unrelated",None)\n',
+            'from tools import instrumentation as change\nmember="patch"\nmodify=getattr(change,member)\n',
+            'from tools import patch as modify\nmodify("sample.unrelated",None)\n',
+            'from .unittest.mock import patch\npatch("sample.Empty",unknown)\n',
+            'from unittest.mock import *\nunknown()\n',
+            'globals()["Empty"]=unknown\n',
+            *(f'from unittest.mock import {capability} as modify\nmodify("sample",Empty=unknown)\n'
+              for capability in ('_patch_multiple', '_patch_object', 'future_capability', 'Mock')),
+            *(f'from unittest.mock import {capability}\n'
+              for capability in ('_patch_multiple', 'future_capability')),
+            'from unittest.mock import patch\npatch("sample.Empty",unknown)\n',
+            'from unittest import mock\nmock.patch("sample.Empty",unknown)\n',
+        )
+        clear = (
+            '',
+            'from unittest import mock as change\nchange.patch("sample.unrelated",None)\n',
+            'import unittest.mock as change\nchange.patch("sample.unrelated",None)\n',
+            'import unittest as unit\nunit.mock.patch("sample.unrelated",None)\n',
+            'from unittest.mock import patch as change\nchange.object(own,"unrelated",None)\n',
+            'from unittest.mock import patch\npatch("sample.unrelated",None)\n',
+            # This shortcut does not prove hidden effects of ordinary helpers.
+            'from helpers import ordinary\nordinary()\n',
+            'raise Empty("Empty")\n',
+            'raise Empty("patch")\n',
+            '"Empty"\n',
+        )
+        for expected, cases in ((True, governed), (False, clear)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+
+    def test_visible_facade_and_canonical_matching_mutations_fail_public_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        repo.write_text('src/pkg/__init__.py', '')
+        repo.write_text('src/pkg/unittest.py', 'from unittest import mock\n')
+        base = repo.commit('ordinary package facade baseline')
+        for origin in ('unittest', '.unittest'):
+            with self.subTest(origin=origin):
+                repo.write_text('src/pkg/sample.py', 'from queue import Empty\n'
+                    f'from {origin} import mock as modify\n'
+                    'def f():\n    raise Empty()\ndef apply(replacement):\n'
+                    '    with modify.patch("pkg.sample.Empty",replacement):\n        f()\n')
+                report = self._evaluate(repo, base, repo.commit('visible member replacement'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
