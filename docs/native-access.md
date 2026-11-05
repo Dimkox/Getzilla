@@ -81,7 +81,16 @@ the old cut; no second permission or attempt store is created.
 
 This initial Factory profile has one source-result stage per existing checked
 task/run/attempt/fence/packet. Rebinding keeps that stage's operation identifier,
-payload/target and original deadline. A changed preparation conflicts. Existing
+payload/target and original deadline. A changed preparation conflicts. Admission
+intersects that original deadline with the current request deadline; source
+refresh, SQL bounds, queue admission and dispatch use the same smaller value.
+A dispatch whose commit returns after that deadline refuses before transport;
+this is not a hard real-time bound on database IO or already admitted effects.
+Expired and consumed native preparations remain in the same bounded cache for
+the service lifetime. Its64 total/16 per-principal limit includes those entries;
+capacity saturation refuses new preparation rather than renewing old intent.
+These entries retain their bounded owned buffers; they are not a durable permit
+or a replacement for result/outbox replay checks after restart. Existing
 result-admission idempotency and the unique outbox envelope remain the durable
 replay fences, including after restart; an unknown outcome is not a new intent.
 General Core225 operations and multiple162/200 computation stages still need

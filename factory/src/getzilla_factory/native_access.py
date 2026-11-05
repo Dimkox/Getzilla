@@ -146,5 +146,5 @@ class FactoryNativeAccessHost(NativeAccessHost):
         _remaining_bounds(deadline)
         # release() owns final task/stop/SOURCE/pending-commit/outbox admission;
         # its dispatcher repeats current admission before the actual registered UDS.
-        result = self._service.release(binding.session, reference.identifier)
+        result = self._service.release(binding.session, reference.identifier, absolute_deadline=deadline)
         return ExistingOperationDisposition(result['status'], result['operation_id'])

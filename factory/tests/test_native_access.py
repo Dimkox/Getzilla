@@ -44,7 +44,7 @@ class FactoryNativeAccessTests(unittest.TestCase):
         self.snapshot = SimpleNamespace(revision=1, permission_digest='a' * 64)
         self.actor = Actor('worker', 'worker', frozenset({'task:execute', 'source:read', 'source:release'}),
                            frozenset({'repo'}))
-        self.session = object.__new__(AccessSession)
+        self.session = AccessSession(object(), object(), 'worker', 'fixture-principal', 'public', b'', 1)
         self.enterContext(patch.object(self.authority, 'actor', return_value=self.actor))
         self.enterContext(patch.object(self.authority, '_live', return_value=None))
         self.enterContext(patch.object(self.authority, '_credential_live', return_value=None))
@@ -204,7 +204,7 @@ class FactoryNativeAccessTests(unittest.TestCase):
         reference = self.broker.prepare_owned_response(self.handle, 'factory.source-text/v1', cut,
                                                       'registered-response', absolute_deadline=self.deadline())
         calls = []
-        def release(session, identifier):
+        def release(session, identifier, *, absolute_deadline):
             calls.append(identifier)
             self.assertIs(session, self.session)
             self.assertIn(identifier, self.service._prepared)
@@ -247,6 +247,148 @@ class FactoryNativeAccessTests(unittest.TestCase):
                                           absolute_deadline=self.deadline())
         self.assertEqual(len(self.service._prepared), 1)
         self.assertIs(next(iter(self.service._prepared.values())), original)
+
+    def _prepare_with(self, broker, handle, deadline, destination='registered-response'):
+        cut = broker.load_authorized_cut(handle, self.query, absolute_deadline=deadline)
+        return broker.prepare_owned_response(handle, 'factory.source-text/v1', cut,
+                                             destination, absolute_deadline=deadline)
+
+    def test_tighter_rebound_deadline_reaches_actual_release_refresh(self):
+        from getzilla_factory.access_release import _remaining_bounds
+        now, observed = [100.0], []
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.host)
+            self._prepare_with(broker, broker.bind_native_request(self.session, self.workflow), 102.0)
+            original = next(iter(self.service._prepared.values()))
+            now[0] = 100.1
+            handle = broker.bind_native_request(self.session, self.workflow)
+            reference = self._prepare_with(broker, handle, 100.3)
+            def stop_at_refresh(prepared):
+                now[0] = 100.4
+                expired = False
+                try:
+                    _remaining_bounds(prepared.deadline)
+                except AccessError:
+                    expired = True
+                observed.append((prepared.deadline, expired))
+                raise AccessError('access_expired')  # End before any SQL admission.
+            with patch.object(self.service, '_refresh_native_prepared', side_effect=stop_at_refresh):
+                with self.assertRaises(NativeAccessError):
+                    broker.admit_response(handle, reference)
+            self.assertEqual(observed, [(100.3, True)],
+                             'actual release must intersect original102 with caller100.3')
+            self.assertEqual(original.deadline, 102.0)
+
+    def test_expired_stable_stage_cannot_renew_deadline_or_target(self):
+        self.service._destinations['other-response'] = self.service._destinations['registered-response']
+        now = [100.0]
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.n.FactoryNativeAccessHost(self.service))
+            self._prepare_with(broker, broker.bind_native_request(self.session, self.workflow), 102.0)
+            original = next(iter(self.service._prepared.values()))
+            now[0] = 102.1
+            for target in ('registered-response', 'other-response'):
+                handle = broker.bind_native_request(self.session, self.workflow)
+                with self.assertRaises(NativeAccessError):
+                    self._prepare_with(broker, handle, 104.1, target)
+                self.assertIs(self.service._prepared[original.identifier], original)
+                self.assertEqual(original.deadline, 102.0)
+                self.assertEqual(original.destination, 'registered-response')
+
+    def test_consumed_stable_stage_cannot_prepare_again_after_unknown_release(self):
+        now = [100.0]
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.host)
+            handle = broker.bind_native_request(self.session, self.workflow)
+            reference = self._prepare_with(broker, handle, 102.0)
+            with patch.object(self.service, '_refresh_native_prepared', side_effect=AccessError('source_unavailable')):
+                with self.assertRaises(NativeAccessError):
+                    broker.admit_response(handle, reference)
+            repeated = broker.bind_native_request(self.session, self.workflow)
+            with self.assertRaises(NativeAccessError):
+                self._prepare_with(broker, repeated, 102.0)
+
+
+    @contextmanager
+    def _release_transaction(self, **bounds):
+        self.assertLessEqual(bounds['connect_timeout'], 2)
+        class Cursor:
+            def execute(inner, query, arguments):
+                inner.query = query
+            def fetchone(inner):
+                return (ATTEMPT if 'access_task_fence_v1' in inner.query else 'd' * 64,)
+        yield Cursor()
+
+    def test_tighter_deadline_is_retained_by_existing_pending_queue(self):
+        now = [100.0]
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.host)
+            self._prepare_with(broker, broker.bind_native_request(self.session, self.workflow), 102.0)
+            handle = broker.bind_native_request(self.session, self.workflow)
+            reference = self._prepare_with(broker, handle, 100.3)
+            with patch.object(self.store, '_transaction', side_effect=self._release_transaction), \
+                    patch.object(self.authority, '_queue_cut', side_effect=lambda prepared, queue, entry=None:
+                                 queue._cut(prepared, entry)):
+                result = broker.admit_response(handle, reference)
+            self.assertEqual(result.status, 'queued')
+            entry = next(iter(self.service._queue._entries.values()))
+            self.assertEqual(entry.prepared.deadline, 100.3)
+            self.assertEqual(entry.state, 'ready')
+            self.assertTrue(next(iter(self.service._prepared.values())).consumed)
+            with self.assertRaises(AccessError):
+                self.service.release(self.session, entry.prepared.identifier)
+
+    def test_dispatch_commit_past_tighter_deadline_refuses_before_transport(self):
+        now, transports = [100.0], []
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.host)
+            self._prepare_with(broker, broker.bind_native_request(self.session, self.workflow), 100.3)
+            prepared = next(iter(self.service._prepared.values()))
+            entry = self.service._queue._cut(prepared, None)
+            self.service._queue._finish_commit(entry, 'd' * 64)
+            @contextmanager
+            def transaction(**bounds):
+                with self._release_transaction(**bounds) as cursor:
+                    yield cursor
+                if entry.state == 'dispatch_admitted':
+                    now[0] = 100.4  # Simulate delayed COMMIT, without SQL or actual transport.
+            client = self.service._destinations['registered-response']
+            with patch.object(self.store, '_transaction', side_effect=transaction), \
+                    patch.object(self.authority, '_queue_cut', side_effect=lambda prepared, queue, entry=None:
+                                 queue._cut(prepared, entry)), \
+                    patch.object(client, 'dispatch', side_effect=lambda claim: transports.append(claim)):
+                self.assertEqual(self.service.run_once(), 0)
+            self.assertEqual(transports, [])
+            self.assertEqual(self.service.last_error, 'AccessError')
+            self.assertEqual(self.service._queue._entries, {})
+
+    def test_expired_stage_capacity_refuses_instead_of_evicting_original_intents(self):
+        now = [100.0]
+        with patch('time.monotonic', side_effect=lambda: now[0]):
+            broker = NativeAccessBroker._compose(self.host)
+            self._prepare_with(broker, broker.bind_native_request(self.session, self.workflow), 102.0)
+            original = next(iter(self.service._prepared.values()))
+            # Fill the same existing cache with distinct ordinary workflow stages.
+            # This is retention/capacity metadata, not new durable tasks or authority.
+            for value in range(4, 19):
+                grant = replace(self.grant, task_id=f'00000000-0000-0000-0000-{value:012d}')
+                workflow = self.n.FactoryTaskBinding(grant, 'b' * 64)
+                handle = broker.bind_native_request(self.session, workflow)
+                self._prepare_with(broker, handle, 102.0)
+                # Each independent workflow uses another bounded broker; the
+                # existing service cache retains all previous stage intents.
+                broker = NativeAccessBroker._compose(self.host)
+            self.assertEqual(len(self.service._prepared), 16)
+            now[0] = 102.1
+            before = dict(self.service._prepared)
+            grant = replace(self.grant, task_id='00000000-0000-0000-0000-000000000099')
+            workflow = self.n.FactoryTaskBinding(grant, 'b' * 64)
+            handle = broker.bind_native_request(self.session, workflow)
+            with self.assertRaises(NativeAccessError):
+                self._prepare_with(broker, handle, 104.1)
+            self.assertEqual(self.service._prepared, before)
+            self.assertIs(self.service._prepared[original.identifier], original)
+
 
 
 if __name__ == '__main__':

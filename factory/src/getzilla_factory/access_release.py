@@ -4,7 +4,7 @@ This local Factory profile does not qualify hooks, model-generated lineage or Co
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import math
 from pathlib import Path
@@ -100,6 +100,7 @@ class _Prepared:
     binding_digest: str
     deadline: float
     native_capture: _CapturedSources | None = None
+    consumed: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -284,9 +285,16 @@ class AccessReleaseService:
             canonical_digest(binding), deadline, captured if native_revalidate else None)
         with self._lock:
             now = time.monotonic()
-            self._prepared = {key: item for key, item in self._prepared.items() if item.deadline > now}
+            # Native entries retain this service's original bounded stage intent,
+            # including expiry/consumption. Capacity pressure refuses rather than
+            # renewing its target/deadline. Durable replay remains the existing
+            # result-command/outbox constraint, including across process restart.
+            self._prepared = {key: item for key, item in self._prepared.items()
+                              if item.native_capture is not None or item.deadline > now}
             existing = self._prepared.get(identifier)
             if existing is not None:
+                if existing.consumed or now >= existing.deadline:
+                    raise AccessError('access_already_used')
                 if (existing.binding_digest != prepared.binding_digest
                         or existing.envelope.record_digest != prepared.envelope.record_digest
                         or not (existing.session is session or existing.session == session)):
@@ -308,15 +316,22 @@ class AccessReleaseService:
         # at its actual native queue cut; this is not an atomic filesystem fence.
         self._revalidate_native_sources(prepared.native_capture, context, attempt, prepared.deadline)
 
-    def release(self, session, identifier):
+    def release(self, session, identifier, *, absolute_deadline=None):
         if type(identifier) is not str or len(identifier) != 64:
             raise AccessError('invalid_access_request')
         with self._lock:
             prepared = self._prepared.get(identifier)
-            if prepared is None or prepared.session != session:
+            if prepared is None or prepared.consumed or prepared.session != session:
                 raise AccessError('access_already_used')
             # Claim once before any durable write. Unknown outcomes never auto-replay.
-            del self._prepared[identifier]
+            if prepared.native_capture is not None:
+                self._prepared[identifier] = replace(prepared, consumed=True)
+                if absolute_deadline is not None:
+                    if type(absolute_deadline) not in (int, float) or not math.isfinite(absolute_deadline):
+                        raise AccessError('invalid_access_request')
+                    prepared = replace(prepared, deadline=min(prepared.deadline, absolute_deadline))
+            else:
+                del self._prepared[identifier]
         entry = None
         try:
             self._refresh_native_prepared(prepared)
@@ -325,6 +340,8 @@ class AccessReleaseService:
                 context, attempt = self._context(cursor, prepared.grant, prepared.execution_packet)
                 if context.workspace_handle != prepared.workspace or attempt != prepared.attempt:
                     raise AccessError('access_denied')
+                if prepared.native_capture is not None:
+                    _remaining_bounds(prepared.deadline)
                 record = prepared.envelope
                 command = {'contract': 'adaptive-factory.result-admission-command/v1', 'action': 'result_admission',
                     'actor_id': prepared.grant.owner, 'idempotency_key': identifier,
@@ -332,6 +349,8 @@ class AccessReleaseService:
                 cursor.execute('SELECT factory.admit_result_v1(%s,%s,%s,%s,%s,%s,%s)',
                     (canonical_json(record.to_dict()).decode(), record.record_digest, prepared.grant.owner,
                      identifier, canonical_digest(command), canonical_json(command).decode(), 'access:' + identifier))
+                if prepared.native_capture is not None:
+                    _remaining_bounds(prepared.deadline)
                 cursor.execute('SELECT factory.stage_access_release_v1(%s,%s,%s,%s)',
                     (record.record_digest, prepared.grant.owner, prepared.binding_wire, prepared.binding_digest))
                 request = cursor.fetchone()[0].strip()
@@ -367,6 +386,8 @@ class AccessReleaseService:
                 claim = DispatchClaim(entry.request, 'factory-result:' + entry.request, record.record_digest,
                     record.repository_id, record.task_id, record.run_id, record.fence, record.packet_digest,
                     record.attempt_id, token, 'factory-protected-dispatcher', 'claimed', record.to_dict())
+                if prepared.native_capture is not None:
+                    _remaining_bounds(prepared.deadline)
                 outcome = self._destinations[prepared.destination].dispatch(claim)
                 with self._store._transaction(**_BOUNDS) as cursor:
                     cursor.execute('SELECT factory.observe_access_release_v1(%s,%s,%s,%s)',
