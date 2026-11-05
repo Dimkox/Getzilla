@@ -28,6 +28,87 @@ env:
 
 jobs:
   linux:
+    if: always()
+    needs: [linux-core, postgres-acceptance]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require complete Core and isolated PostgreSQL jobs
+        env:
+          CORE_RESULT: ${{ needs.linux-core.result }}
+          POSTGRES_RESULT: ${{ needs.postgres-acceptance.result }}
+        run: |
+          test "$CORE_RESULT" = success
+          test "$POSTGRES_RESULT" = success
+
+  postgres-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.job_timeout }}
+    env:
+      GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      DOCKER_CONFIG: ${{ runner.temp }}/getzilla-disposable-docker
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: factory
+            job_timeout: 40
+            main_timeout: 1500
+          - cell: trust-ci
+            job_timeout: 30
+            main_timeout: 1200
+    steps:
+      - name: Reserve cleanup and evidence time before any allocation
+        shell: python
+        env:
+          JOB_MINUTES: ${{ matrix.job_timeout }}
+        run: |
+          import os, time
+          deadline = int(time.time()) + int(os.environ['JOB_MINUTES']) * 60 - 300
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('GETZILLA_LIVE_DEADLINE=' + str(deadline) + '\n')
+      - name: Check out the exact candidate head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - name: Record capacity and load immutable component images
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 022
+          mkdir -m 0700 -p "$DOCKER_CONFIG"
+          python scripts/getzilla_startup_cpu.py --no-probe
+      - name: Run bounded isolated acceptance with cleanup observer
+        shell: bash
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: python scripts/getzilla_live.py --cell "${{ matrix.cell }}" --output "$RUNNER_TEMP/live-observations" --timeout-seconds "${{ matrix.main_timeout }}"
+      - name: Export allowlisted live observations
+        if: always()
+        run: python scripts/getzilla_ci_evidence.py --live-source "${{ runner.temp }}/live-observations" --output "${{ runner.temp }}/live-evidence"
+      - name: Retain live evidence for 30 days
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-live-${{ matrix.cell }}-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+
+  linux-core:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
