@@ -22,7 +22,8 @@ runtime_environment = dict(os.environ)
 if (
     raw_request != canonical_request
     or set(runtime_environment) - {"LC_CTYPE"}
-    or runtime_environment.get("LC_CTYPE") not in {None, "C.UTF-8"}
+    # CPython's closed coercion targets; UTF-8 applies when C.UTF-8 is absent.
+    or runtime_environment.get("LC_CTYPE") not in {None, "C.UTF-8", "C.utf8", "UTF-8"}
 ):
     raise SystemExit(32)
 profile = request["profile"]

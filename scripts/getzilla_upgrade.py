@@ -43,9 +43,10 @@ from getzilla.component_state import (
     validate_manifest_publication,
 )
 from getzilla.harnesses import render_codex_hooks
+from getzilla.install_baseline import POLICY_PATHS, load_baseline
 
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
-OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--help')
+OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--baseline-release', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
 # Lint and coverage settings name the project's own paths and rules; Getzilla's copy is only a first default.
 PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc', '.getzilla/config/optional-modules.json'})
@@ -239,7 +240,8 @@ def planned_changes(installer, home: Path, project: Path,
                     kept_configs: list[str] | None = None, *, expected_head: str | None = None,
                     binding: BoundRoot | ComponentTransaction | None = None,
                     tree: dict[str, tuple[str, str]] | None = None,
-                    observations: dict | None = None) -> list[tuple[str, bytes, str]]:
+                    observations: dict | None = None,
+                    baseline: dict | None = None) -> list[tuple[str, bytes, str]]:
     """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD.
 
     A lint or coverage configuration the project already commits is its own and stays; its path
@@ -248,7 +250,8 @@ def planned_changes(installer, home: Path, project: Path,
     if binding is None:
         with BoundRoot(project) as bound:
             return planned_changes(installer, home, project, digests, kept_configs,
-                                   expected_head=expected_head, binding=bound, tree=tree, observations=observations)
+                                   expected_head=expected_head, binding=bound, tree=tree, observations=observations,
+                                   baseline=baseline)
     state = read_state(project, binding=binding)
     selected = state.require_selection()
     manifest = copy.deepcopy(state.manifest)
@@ -350,8 +353,13 @@ def planned_changes(installer, home: Path, project: Path,
             if kept_configs is not None and (current is None or current.content != content):
                 kept_configs.append(entry.path)
             continue
+        historical_match = matches_owned(current, baseline.get(entry.path)) if baseline is not None else False
+        if (baseline is not None and current is not None and entry.path in POLICY_PATHS
+                and not historical_match and current.content != content):
+            raise UpdateError(f'custom policy is not a trusted baseline: {entry.path}')
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
-                and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):
+                and not matches_owned(current, owned_proof(manifest, entry.path))
+                and not historical_match and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
         record_owned(manifest, entry.path, content, entry.mode)
         if tree.get(entry.path) != (mode, blob_id(content, object_format)):
@@ -418,21 +426,26 @@ def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction
     return state, snapshot
 
 
-def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False) -> str:
+def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False,
+                 baseline_release: str | None = None) -> str:
     """Publish target selection and managed bytes in the same private-index commit."""
     project = Path(fsx.system_canonical(project))
     try:
+        if baseline_release is not None and (accept or retire):
+            raise UpdateError('baseline migration cannot be combined with accept-local or retire-legacy')
+        baseline = load_baseline(home, baseline_release, include_runtime_anchors=True) if baseline_release is not None else None
         with BoundRoot(project) as binding:
             _require_clean_project(project)
             head = _git_out(project, 'rev-parse', 'HEAD')
             _committed_manifest(project, binding, head, head_tree(project, head))
         with component_transaction(project) as transaction:
-            return _sync_project_locked(home, project, transaction, accept=accept, retire=retire)
+            return _sync_project_locked(home, project, transaction, accept=accept, retire=retire, baseline=baseline)
     except (ComponentStateError, OSError, ValueError) as exc:
         raise UpdateError(str(exc)) from exc
 
 
-def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransaction, *, accept: bool, retire: bool) -> str:
+def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransaction, *, accept: bool, retire: bool,
+                         baseline: dict | None = None) -> str:
     _require_clean_project(project)
     expected_head = _git_out(project, 'rev-parse', 'HEAD')
     expected_branch = git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
@@ -451,12 +464,20 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 raise UpdateError(f'project file changed during the update: {path}')
 
     check_current()
+    if baseline is not None:
+        # Legacy sandbox policy remains provenance-sensitive even if a later
+        # payload migrates it to a different path. Ledger ownership is insufficient.
+        legacy_policy = transaction.read('.grok/config.toml')
+        observations['.grok/config.toml'] = legacy_policy
+        if legacy_policy is not None and not matches_owned(legacy_policy, baseline.get('.grok/config.toml')):
+            raise UpdateError('custom legacy policy is not a trusted baseline: .grok/config.toml')
     installer = load_installer(home)
     kept_configs: list[str] = []
     try:
         digests, record, accepted = accept_local(installer, project, expected_head) if accept else ({}, None, [])
         changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs,
-                                  expected_head=expected_head, binding=transaction, tree=tree, observations=observations)
+                                  expected_head=expected_head, binding=transaction, tree=tree, observations=observations,
+                                  baseline=baseline)
         fresh_record = sync_record(installer, project, tree, expected_head) if record is None else None
         # A fresh empty record alone is not an update: it rides along with the next real change (#215).
         if fresh_record is not None and (changes or fresh_record != installer.FRESH_SYNC_RECORD):
@@ -538,6 +559,27 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
     if encoded is not None:
         changes.append((MANIFEST, encoded, '100644'))
+    # Keep ignored, positively owned files outside Git when the incoming bytes
+    # and mode already match. Tracking them would remove them on rollback.
+    # The original observations remain in check_current and the checkout CAS.
+    ignored = set(_git_out(project, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+                           *(path for path, _, _ in changes)).split('\0')) - {''} if changes else set()
+    retained_ignored = set()
+    for path, content, mode in changes:
+        if path not in ignored:
+            continue
+        current = observations[path]
+        proved = (matches_owned(current, owned_proof(state.manifest, path))
+                  or baseline is not None and matches_owned(current, baseline.get(path)))
+        if (proved and content is not None and current.content == content
+                and mode_matches(current.mode, 0o755 if mode == '100755' else 0o644)):
+            retained_ignored.add(path)
+    if ignored - retained_ignored:
+        raise UpdateError('ignored local files sit on managed paths; move them first: '
+                          + ', '.join(sorted(ignored - retained_ignored)))
+    changes = [(path, content, mode) for path, content, mode in changes if path not in retained_ignored]
+    if retained_ignored:
+        notes.append(f'kept {len(retained_ignored)} unchanged owned ignored file(s) outside Git')
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:
@@ -551,11 +593,6 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
         raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
-    # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
-    ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
-                       *(path for path, _, _ in changes))
-    if ignored:
-        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
     check_current()
     commit = commit_changes(project, changes, f'chore: update Getzilla to {version}', expected_head=expected_head)
     check_current()
@@ -583,6 +620,8 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                                for path, content, mode in changes})
         for path, (content, mode) in expected_files.items():
             snapshot = transaction.read(path)
+            if path in retained_ignored and snapshot != observations[path]:
+                raise UpdateError(f'retained ignored file changed after checkout: {path}')
             if ((content is None and snapshot is not None)
                     or (content is not None and (snapshot is None or snapshot.content != content
                                                 or not mode_matches(snapshot.mode, mode)))):
@@ -614,6 +653,9 @@ def is_tool_option(arg: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     step, rest = (argv[0], argv[1:]) if argv and argv[0] in STEPS else (None, argv)
+    if any(arg.split('=')[0] == '--baseline-release' for arg in rest) and (
+            step == 'tools' or any(is_tool_option(arg) for arg in rest)):
+        argparse.ArgumentParser(prog='getzilla update').error('--baseline-release cannot dispatch tool updates')
     if step == 'tools':
         return run_tools(HOME, rest)
     if step is None and any(is_tool_option(arg) for arg in rest):
@@ -622,6 +664,8 @@ def main(argv: list[str] | None = None) -> int:
         prog=f"getzilla update{' ' + step if step else ''}", description=__doc__.splitlines()[0],
         epilog='steps: ' + '; '.join(f'`getzilla update {name}` {summary}' for name, summary in STEPS.items()))
     if step != 'core':
+        parser.add_argument('--baseline-release', choices=('v2.3.0',),
+                            help='recognize exact selected vendor files from the pinned v2.3.0 installation')
         parser.add_argument('project', nargs='?', help='project to update (default: the one around this folder)')
     if step is None or step == 'core':
         parser.add_argument('--ref', help='branch or tag for a detached Getzilla checkout (default: main)')
@@ -634,6 +678,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument('--retire-legacy', action='store_true',
                             help='also remove the committed pre-rename files (.grok-stack, scripts/grok_*) in the same commit')
     args = parser.parse_args(rest)
+    if getattr(args, 'baseline_release', None) and (args.accept_local or args.retire_legacy):
+        parser.error('--baseline-release cannot be combined with --accept-local or --retire-legacy')
+    if getattr(args, 'baseline_release', None) and step is None and (not args.no_self or not args.no_tools):
+        parser.error('--baseline-release requires project mode or both --no-self and --no-tools')
     try:
         if step == 'core':
             print(update_self(HOME, args.ref))
@@ -644,6 +692,7 @@ def main(argv: list[str] | None = None) -> int:
             project = args.project or find_project(Path.cwd(), HOME)
             again = [*([str(project)] if project else []), '--no-self', *(['--no-tools'] if args.no_tools else []),
                      *(['--accept-local'] if args.accept_local else []),
+                     *(['--baseline-release', args.baseline_release] if args.baseline_release else []),
                      *(['--retire-legacy'] if args.retire_legacy else [])]
             return subprocess.run([sys.executable, str(HOME / 'scripts/getzilla_upgrade.py'), *again],
                                   check=False).returncode
@@ -651,7 +700,8 @@ def main(argv: list[str] | None = None) -> int:
         if project is None:
             print('no project here: run `getzilla update` inside a project to update it too')
         else:
-            print(sync_project(HOME, project, accept=args.accept_local, retire=args.retire_legacy), flush=True)
+            print(sync_project(HOME, project, accept=args.accept_local, retire=args.retire_legacy,
+                               baseline_release=args.baseline_release), flush=True)
     except UpdateError as exc:
         print(f'getzilla update: {exc}', file=sys.stderr)
         return 1

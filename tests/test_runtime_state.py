@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.state import runtime_lock
-from getzilla import fsx
+from getzilla import fsx, read_ledger
 from getzilla.util import runtime_dir
 from tests._support import project_copy
 
@@ -27,6 +27,105 @@ def _hold_runtime_lock(root, ready):
         # The parent kills this holder. Do not wait on a shared semaphore:
         # notifying a killed waiter can itself hang the parent's cleanup.
         time.sleep(10)
+
+
+class RuntimeGuardCreateTests(unittest.TestCase):
+    def test_darwin_transient_missing_guard_retries_without_losing_entry(self) -> None:
+        for failures in (1, 2):
+            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                original = fsx.open_at
+                calls = []
+
+                def transient(parent, name, flags, mode=0o777):
+                    calls.append((parent, name, flags, mode))
+                    if len(calls) <= failures:
+                        raise FileNotFoundError(errno.ENOENT, 'inert guard-create race', name)
+                    return original(parent, name, flags, mode)
+
+                with mock.patch.object(sys, 'platform', 'darwin'), mock.patch.object(fsx, 'open_at', transient):
+                    read_ledger.record(root, 'guard-create', {'saved.py'})
+                self.assertEqual(read_ledger.seen(root, 'guard-create'), {'saved.py'})
+                self.assertEqual(len(calls), failures + 1)
+                self.assertEqual(len(set(calls)), 1, 'retry changed the parent FD or open arguments')
+                self.assertEqual(calls[0][1], '.reads.guard.lock')
+                self.assertEqual(calls[0][3], 0o600)
+                self.assertTrue(calls[0][2] & os.O_CREAT)
+                self.assertEqual(calls[0][2] & fsx.O_NOFOLLOW, fsx.O_NOFOLLOW)
+                with self.assertRaises(OSError):
+                    os.fstat(calls[0][0])
+
+    def test_guard_create_error_bounds_preserve_existing_entries(self) -> None:
+        cases = (('darwin', errno.ENOENT, 3), ('linux', errno.ENOENT, 1),
+                 ('win32', errno.ENOENT, 1), ('darwin', errno.EACCES, 1),
+                 ('darwin', errno.ELOOP, 1), ('darwin', errno.EIO, 1))
+        for platform, number, attempts in cases:
+            with self.subTest(platform=platform, errno=number), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                read_ledger.record(root, 'guard-create', {'before.py'})
+                calls = []
+
+                def refuse(parent, name, flags, mode=0o777):
+                    calls.append((parent, name, flags, mode))
+                    raise OSError(number, 'inert guard-create refusal', name)
+
+                with mock.patch.object(sys, 'platform', platform), mock.patch.object(fsx, 'open_at', refuse):
+                    read_ledger.record(root, 'guard-create', {'dropped.py'})
+                self.assertEqual(read_ledger.seen(root, 'guard-create'), {'before.py'})
+                self.assertEqual(len(calls), attempts)
+                self.assertEqual(len(set(calls)), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(calls[0][0])
+                read_ledger.record(root, 'guard-create', {'after.py'})
+                self.assertEqual(read_ledger.seen(root, 'guard-create'), {'before.py', 'after.py'})
+
+    def test_retry_keeps_foreign_guard_refusal_and_closes_descriptors(self) -> None:
+        from types import SimpleNamespace
+
+        for kind in ('symlink', 'hardlink', 'directory', 'identity'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'project'
+                guard = runtime_dir(root) / '.state.guard.lock'
+                target = Path(directory) / 'owned-foreign'
+                target.write_bytes(b'untouched')
+                if kind == 'symlink':
+                    try:
+                        guard.symlink_to(target)
+                    except OSError as error:
+                        self.skipTest(f'symlinks unavailable: {error}')
+                elif kind == 'hardlink':
+                    os.link(target, guard)
+                elif kind == 'directory':
+                    guard.mkdir()
+                original_open, original_stat = fsx.open_at, fsx.lstat_at
+                calls, descriptors = [], []
+
+                def transient(parent, name, flags, mode=0o777):
+                    calls.append((parent, name, flags, mode))
+                    if len(calls) == 1:
+                        raise FileNotFoundError(errno.ENOENT, 'inert guard-create race', name)
+                    fd = original_open(parent, name, flags, mode)
+                    descriptors.append(fd)
+                    return fd
+
+                def mismatched(parent, name):
+                    info = original_stat(parent, name)
+                    if kind == 'identity':
+                        return SimpleNamespace(st_mode=info.st_mode, st_dev=info.st_dev, st_ino=info.st_ino + 1)
+                    return info
+
+                with mock.patch.object(sys, 'platform', 'darwin'), \
+                        mock.patch.object(fsx, 'open_at', transient), mock.patch.object(fsx, 'lstat_at', mismatched):
+                    with self.assertRaises(OSError):
+                        with runtime_lock(root, timeout=0.1):
+                            self.fail('foreign or changed guard admitted a writer')
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(set(calls)), 1)
+                self.assertEqual(target.read_bytes(), b'untouched')
+                self.assertTrue(guard.exists() or guard.is_symlink())
+                for fd in [calls[0][0], *descriptors]:
+                    with self.assertRaises(OSError):
+                        os.fstat(fd)
 
 
 class RuntimeStateTests(unittest.TestCase):
