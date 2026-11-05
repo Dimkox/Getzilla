@@ -256,6 +256,49 @@ def _timestamp(value: Any) -> bool:
         return False
 
 
+def accounting_rows(accounting: Any) -> list[dict[str, Any]]:
+    """The existing bounded accounting format, shared by inspection and synchronization."""
+    if (not isinstance(accounting, dict) or accounting.get('schema_version') != 1
+            or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_FILES):
+        raise InspectionError('obligation_invalid', 'evidence accounting must be a bounded version 1 obligation list')
+    return accounting['obligations']
+
+
+def obligation_reference(row: Any, ids: set[str], receipt_kinds: set[str], *, observe=None) -> str | None:
+    """Validate one existing row; observation preserves diagnostic display ordering."""
+    if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not _ID.fullmatch(row['id']):
+        raise InspectionError('obligation_invalid', 'obligation identity is invalid')
+    if row['id'] in ids or not isinstance(row.get('kind'), str) or row['kind'] not in {'receipt', 'run'}:
+        raise InspectionError('obligation_invalid', 'obligation kind or uniqueness is invalid')
+    ids.add(row['id'])
+    if row['kind'] == 'receipt':
+        kind = row.get('receipt_kind')
+        if not isinstance(kind, str) or kind not in RECEIPT_KINDS or kind in receipt_kinds:
+            raise InspectionError('obligation_invalid', 'receipt obligation kind is invalid or duplicated')
+        receipt_kinds.add(kind)
+    if observe is not None:
+        observe(row)
+    if row.get('status') == 'not_run':
+        if not isinstance(row.get('reason'), str) or not row['reason'].strip() or len(row['reason']) > 4096:
+            raise InspectionError('obligation_invalid', 'not_run requires a nonempty bounded reason')
+        return None
+    if row.get('status') != 'recorded':
+        raise InspectionError('obligation_invalid', 'obligation status must be not_run or recorded')
+    if not isinstance(row.get('outcome'), str) or row['outcome'] not in {'pass', 'fail'} or not _timestamp(row.get('recorded_at')):
+        raise InspectionError('obligation_invalid', 'recorded evidence requires an outcome and observation time')
+    command = row.get('command')
+    if row['kind'] == 'run' and (not isinstance(command, list) or not 1 <= len(command) <= 32
+            or any(not isinstance(arg, str) or not arg or len(arg) > 512 for arg in command)):
+        raise InspectionError('obligation_invalid', 'a recorded run requires bounded command arguments')
+    reference = row.get('reference')
+    ref_parts = _relative(reference)
+    if (not 2 <= len(ref_parts) <= 5 or ref_parts[0] != 'evidence'
+            or Path(reference).suffix not in {'.md', '.json'}
+            or any(part.startswith('.') or re.search(r'(^|[-_.])(secrets?|credentials?|private[-_]?keys?|dumps?)([-_.]|$)', part, re.I) for part in ref_parts)):
+        raise InspectionError('file_unsafe', 'evidence reference must name an allowed current package report')
+    return reference
+
+
 def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, Any] | None) -> dict[str, Any]:
     """Inspect only the selected package and explicitly referenced current records."""
     result: dict[str, Any] = {
@@ -402,57 +445,28 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
     accounting = state.get('evidence_accounting')
     if accounting is None:
         add('legacy_evidence_accounting', f'{relative}/state.json', 'this package has no typed evidence accounting; no migration was performed', 'warning')
-    elif (
-        not isinstance(accounting, dict) or accounting.get('schema_version') != 1
-        or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_FILES
-    ):
-        add('obligation_invalid', f'{relative}/state.json', 'evidence accounting must be a bounded version 1 obligation list')
     else:
+        try:
+            rows = accounting_rows(accounting)
+        except InspectionError as exc:
+            add(exc.code, f'{relative}/state.json', str(exc))
+            rows = None
         ids: set[str] = set()
         receipt_kinds: set[str] = set()
-        for row in accounting['obligations']:
+        def observe(row):
+            result['obligations'].append({
+                key: row.get(key)
+                for key in ('id', 'kind', 'receipt_kind', 'status', 'reason', 'outcome', 'recorded_at', 'reference')
+            })
+        for row in rows or []:
             try:
-                if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not _ID.fullmatch(row['id']):
-                    raise InspectionError('obligation_invalid', 'obligation identity is invalid')
-                if row['id'] in ids or not isinstance(row.get('kind'), str) or row['kind'] not in {'receipt', 'run'}:
-                    raise InspectionError('obligation_invalid', 'obligation kind or uniqueness is invalid')
-                ids.add(row['id'])
-                if row['kind'] == 'receipt':
-                    kind = row.get('receipt_kind')
-                    if not isinstance(kind, str) or kind not in RECEIPT_KINDS or kind in receipt_kinds:
-                        raise InspectionError('obligation_invalid', 'receipt obligation kind is invalid or duplicated')
-                    receipt_kinds.add(kind)
-                result['obligations'].append({
-                    key: row.get(key)
-                    for key in ('id', 'kind', 'receipt_kind', 'status', 'reason', 'outcome', 'recorded_at', 'reference')
-                })
-                if row.get('status') == 'not_run':
-                    if not isinstance(row.get('reason'), str) or not row['reason'].strip() or len(row['reason']) > 4096:
-                        raise InspectionError('obligation_invalid', 'not_run requires a nonempty bounded reason')
-                elif row.get('status') == 'recorded':
-                    if not isinstance(row.get('outcome'), str) or row['outcome'] not in {'pass', 'fail'} or not _timestamp(row.get('recorded_at')):
-                        raise InspectionError('obligation_invalid', 'recorded evidence requires an outcome and observation time')
-                    command = row.get('command')
-                    if row['kind'] == 'run' and (
-                        not isinstance(command, list) or not 1 <= len(command) <= 32
-                        or any(not isinstance(arg, str) or not arg or len(arg) > 512 for arg in command)
-                    ):
-                        raise InspectionError('obligation_invalid', 'a recorded run requires bounded command arguments')
-                    reference = row.get('reference')
-                    ref_parts = _relative(reference)
-                    if (
-                        not 2 <= len(ref_parts) <= 5 or ref_parts[0] != 'evidence'
-                        or Path(reference).suffix not in {'.md', '.json'}
-                        or any(part.startswith('.') or re.search(r'(^|[-_.])(secrets?|credentials?|private[-_]?keys?|dumps?)([-_.]|$)', part, re.I) for part in ref_parts)
-                    ):
-                        raise InspectionError('file_unsafe', 'evidence reference must name an allowed current package report')
+                reference = obligation_reference(row, ids, receipt_kinds, observe=observe)
+                if reference is not None:
                     report = read(reference)
                     if report is not None and not report.strip():
                         add('evidence_reference_empty', f'{relative}/{reference}', 'recorded evidence reference is empty')
                     if reference not in text_files:
                         text_files.append(reference)
-                else:
-                    raise InspectionError('obligation_invalid', 'obligation status must be not_run or recorded')
             except InspectionError as exc:
                 add(exc.code, f'{relative}/state.json', str(exc), field='evidence_accounting.obligations')
         required = (route or {}).get('required_evidence', [])
@@ -463,7 +477,7 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
         ):
             add('obligation_invalid', f'{relative}/state.json', 'route receipt obligation list is invalid')
         else:
-            for kind in sorted(set(required) - receipt_kinds):
+            for kind in sorted(set(required) - receipt_kinds) if rows is not None else []:
                 add('obligation_missing', f'{relative}/state.json', f'required receipt kind has no accounting: {kind}', severity)
 
     for name in text_files:
