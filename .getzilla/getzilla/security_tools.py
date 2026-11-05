@@ -402,16 +402,37 @@ def _secret_text(relative: str, raw: bytes) -> str:
     return text
 
 
-def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_ROOT) -> dict:
+def _secret_input_core(root: Path, files: list[str], trusted_root: Path, *, file_limit: int, native: bool) -> dict:
+    """One byte/encoding engine; projections never originate disposition authority."""
     findings, gaps, binary = [], [], []
     total = 0
+    policy = None
+    stage = 'policy'
+    relative = '.'
+
+    def gap(code, path=None):
+        detail = {'code': code, 'message': 'secret input coverage is unavailable'}
+        if path is not None:
+            detail['path'] = path
+        gaps.append(detail)
+        if native:
+            findings.append({'severity': 'error', 'effective_severity': 'error', 'code': code,
+                             'path': path or '.', 'message': 'Secret input coverage is unavailable.'})
+
     try:
-        policy = dispositions.Dispositions(trusted_root)
+        try:
+            policy = dispositions.Dispositions(trusted_root)
+        except (dispositions.DispositionError, OSError):
+            if not native:
+                raise
+            # Native findings remain visible when review policy cannot qualify.
+            # An invalid policy never authorizes any disposition.
+            findings.append(dispositions.invalid_finding())
+            gaps.append({'code': 'disposition-config-invalid', 'message': 'reviewed disposition binding unavailable'})
+        stage = 'input'
         for relative in files:
-            raw = _regular(root / relative, limit=MAX_SOURCE_FILE)
+            raw = _regular(root / relative, limit=min(file_limit, MAX_SOURCE_TOTAL - total))
             total += len(raw)
-            if total > MAX_SOURCE_TOTAL:
-                raise SecurityDataError('secret input inventory exceeds the bounded total')
             digest = hashlib.sha256(raw).hexdigest()
             try:
                 views = [(_secret_text(relative, raw), False)]
@@ -420,9 +441,13 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
                 if _opaque_asset(Path(relative), raw):
                     binary.append({'path': relative, 'sha256': digest,
                                    'reason': 'recognized asset; visible bytes checked, opaque contents not decoded'})
+                    if native:
+                        findings.append({'severity': 'info', 'effective_severity': 'info',
+                                         'code': 'secret-binary-input', 'path': relative,
+                                         'file_sha256': digest,
+                                         'message': 'Recognized asset; visible bytes checked, opaque contents not decoded.'})
                 else:
-                    gaps.append({'code': 'secret-text-coverage', 'path': relative,
-                                 'message': 'cannot establish supported text encoding or opaque asset type'})
+                    gap('secret-text-coverage', relative)
             # The supported narrow codecs preserve ASCII. A wide decoder can hide
             # a separate contiguous ASCII string, so inspect visible bytes there
             # too. Latin-1 here is a 1:1 byte view, not an encoding assertion.
@@ -434,19 +459,49 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
                     for match in pattern.finditer(text):
                         line, column = dispositions.location(text, match.start())
                         entry = (policy.secret(relative, digest, text, match)
-                                 if label == 'generic-secret' and not byte_view else None)
-                        finding = {'rule': label, 'path': relative, 'line': line, 'column': column,
-                                   'file_sha256': digest, 'disposition': entry.get('id') if entry else None}
+                                 if policy and label == 'generic-secret' and not byte_view else None)
+                        if native:
+                            finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
+                                       'code': label, 'path': relative, 'line': line, 'column': column,
+                                       'file_sha256': digest, 'message': 'Potential committed secret.'}
+                            if policy:
+                                policy.apply(finding, entry)
+                        else:
+                            finding = {'rule': label, 'path': relative, 'line': line, 'column': column,
+                                       'file_sha256': digest, 'disposition': entry.get('id') if entry else None}
                         if byte_view:
                             finding['byte_offset'] = match.start()
                         findings.append(finding)
-        policy.assert_current()
-    except (OSError, ValueError, RuntimeError) as exc:
-        gaps.append({'code': 'secret-input-unavailable', 'message': str(exc)})
+        stage = 'policy'
+        if policy:
+            policy.assert_current()
+    except (OSError, ValueError, RuntimeError):
+        if native and stage == 'policy':
+            findings.append(dispositions.invalid_finding())
+            gaps.append({'code': 'disposition-config-invalid', 'message': 'reviewed disposition binding unavailable'})
+        else:
+            gap('secret-input-unavailable', relative if native else None)
+    if native:
+        summary = dispositions.summary(policy, findings)
+        findings.append(summary)
+        text = (f'{summary["observed"]} potential secrets; {summary["disposed"]} disposed; '
+                f'{summary["unresolved"]} unresolved')
+        if gaps:
+            text = 'secret input coverage incomplete; ' + text
+        return {'outcome': 'blocked' if gaps else ('finding' if summary['unresolved'] else 'pass'),
+                'summary': text, 'details': findings}
     unresolved = [item for item in findings if item['disposition'] is None]
     return {'outcome': 'blocked' if gaps else ('finding' if unresolved else 'pass'),
             'summary': f'{len(unresolved)} unresolved text-pattern secret findings; {len(gaps)} coverage gaps',
             'findings': findings, 'gaps': gaps, 'binary_inputs': binary}
+
+
+def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_ROOT) -> dict:
+    return _secret_input_core(root, files, trusted_root, file_limit=MAX_SOURCE_FILE, native=False)
+
+
+def native_secret_observations(root: Path, files: list[str]) -> dict:
+    return _secret_input_core(root, files, root, file_limit=dispositions.MAX_FILE_BYTES, native=True)
 
 
 def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path = TRUSTED_ROOT) -> list[dict]:

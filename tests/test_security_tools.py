@@ -292,6 +292,58 @@ class SecurityToolTests(unittest.TestCase):
                 self.assertNotIn(sentinel, json.dumps(result))
                 self.assertEqual(result['binary_inputs'], [])
 
+    def test_normal_gate_secret_consumer_detects_supported_non_utf8_without_disclosing_value(self):
+        from getzilla.verification import _secret_scan
+        sentinel = 'public-source-fixture-value'
+        assignment = 'api_key = ' + repr(sentinel) + '\n'
+        for name, raw in (
+            ('app.py', ('# coding: latin-1\n# café\n' + assignment).encode('latin-1')),
+            ('config.ps1', codecs.BOM_UTF16_LE + assignment.encode('utf-16-le')),
+            ('config.ps1', codecs.BOM_UTF16_BE + assignment.encode('utf-16-be')),
+            ('config.txt', codecs.BOM_UTF32_LE + assignment.encode('utf-32-le')),
+        ):
+            with self.subTest(name=name, digest=hashlib.sha256(raw).hexdigest()):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                findings = [item for item in result.details if item.get('code') == 'generic-secret']
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0]['file_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertNotIn(sentinel, json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_distinguishes_valid_text_assets_and_unknown_binary(self):
+        from getzilla.verification import _secret_scan
+        valid = b'# coding: latin-1\n# caf\xe9\nprint(1)\n'
+        pixel = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+mGz8AAAAASUVORK5CYII=')
+        for name, raw, outcome in (('app.py', valid, 'pass'), ('pixel.png', pixel, 'pass'),
+                                   ('impostor.py', pixel, 'fail'), ('unknown.bin', b'\0\xffdata', 'fail')):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, outcome)
+                if name == 'pixel.png':
+                    self.assertTrue(any(item.get('code') == 'secret-binary-input' for item in result.details))
+
+    def test_normal_gate_secret_consumer_retains_visible_ascii_in_wide_and_binary_inputs(self):
+        from getzilla.verification import _secret_scan
+        assignment = b'api_key = "public-binary-fixture-value"\n'
+        for name, raw in (('wide.ps1', codecs.BOM_UTF16_LE + '# text\n'.encode('utf-16-le') + assignment),
+                          ('pixel.gif', b'GIF89a\0\xff' + assignment)):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                self.assertTrue(any(item.get('code') == 'generic-secret' and 'byte_offset' in item
+                                    for item in result.details))
+                self.assertNotIn('public-binary-fixture-value', json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_refuses_over_cap_instead_of_silent_skip(self):
+        from getzilla.verification import _secret_scan
+        (self.root / 'large.txt').write_bytes(b'x' * 2_000_001)
+        result = _secret_scan(self.root, ['large.txt'])
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any(item.get('code') == 'secret-input-unavailable' for item in result.details))
+
     def test_unknown_or_corrupt_source_blocks_without_requesting_a_custom_codec(self):
         requested = []
 

@@ -1408,41 +1408,11 @@ def _git_diff_check(
 
 
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
-    findings: list[dict[str, object]] = []
-    try:
-        policy = reviewed_dispositions.Dispositions(root)
-    except (reviewed_dispositions.DispositionError, OSError):
-        policy = None
-        findings.append(reviewed_dispositions.invalid_finding())
-    for rel in files:
-        path = root / rel
-        if not path.is_file() or path.stat().st_size > 2_000_000:
-            continue
-        text = read_text_limited(path)
-        with path.open('rb') as stream:
-            raw = stream.read(reviewed_dispositions.MAX_FILE_BYTES + 1)
-        file_hash = hashlib.sha256(raw).hexdigest()
-        for label, pattern in reviewed_dispositions.SECRET_PATTERNS.items():
-            for match in pattern.finditer(text):
-                line, column = reviewed_dispositions.location(text, match.start())
-                finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
-                           'code': label, 'path': rel, 'line': line, 'column': column,
-                           'file_sha256': file_hash, 'message': 'Potential committed secret.'}
-                if policy:
-                    entry = policy.secret(rel, file_hash, text, match) if label == 'generic-secret' else None
-                    policy.apply(finding, entry)
-                findings.append(finding)
-    if policy:
-        try:
-            policy.assert_current()
-        except (reviewed_dispositions.DispositionError, OSError):
-            findings.append(reviewed_dispositions.invalid_finding())
-    disposition_summary = reviewed_dispositions.summary(policy, findings)
-    findings.append(disposition_summary)
-    return CheckResult('secret-scan', 'fail' if disposition_summary['unresolved'] else 'pass',
-                       f'{disposition_summary["observed"]} potential secrets; '
-                       f'{disposition_summary["disposed"]} disposed; {disposition_summary["unresolved"]} unresolved',
-                       details=findings)
+    from .security_tools import native_secret_observations
+
+    observed = native_secret_observations(root, files)
+    return CheckResult('secret-scan', 'pass' if observed['outcome'] == 'pass' else 'fail',
+                       observed['summary'], details=observed['details'])
 
 
 def _php_lint(root: Path, files: list[str]) -> CheckResult:
