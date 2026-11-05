@@ -318,6 +318,118 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
+    def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
+        output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'
+                  '---- Captured stdout call ----\nSYNTHETIC_CAPTURE\n'
+                  '==== short test summary info ====\n'
+                  'SUBFAILED(layer=hook, command=SYNTHETIC_PARAMETER) '
+                  'tests/test_peer.py::PeerTests::test_close - SYNTHETIC_ASSERTION\n'
+                  '1 failed, 6 passed, 2 errors, 3 skipped, 4 warnings, 2 subtests passed in 0.12s\n')
+        result = verification_module._core_output_excerpt(
+            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
+        self.assertIn('pytest_failure_ids=', result)
+        self.assertIn('SUBFAILED tests/test_peer.py::PeerTests::test_close', result)
+        fields = dict(line.split('=', 1) for line in result.splitlines() if line.startswith('pytest_'))
+        self.assertEqual(json.loads(fields['pytest_failure_ids']),
+                         ['tests/test_peer.py::PeerTests::test_close'])
+        self.assertEqual(json.loads(fields['pytest_reported_terminal_counts']),
+                         {'failed': 1, 'passed': 6, 'errors': 2, 'skipped': 3})
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertNotIn('layer=', result)
+
+    def test_pytest_reported_counts_keep_absent_or_ambiguous_values_unknown(self) -> None:
+        examples = [
+            ('==== FAILURES ====\n1 failed, 7 passed in 1.20s\n',
+             {'failed': 1, 'passed': 7, 'errors': None, 'skipped': None}),
+            ('==== ERRORS ====\n\x1b[31m=== 2 errors, 3 skipped in 0.01s ===\x1b[0m\r\n',
+             {'failed': None, 'passed': None, 'errors': 2, 'skipped': 3}),
+        ]
+        for output, expected in examples:
+            with self.subTest(expected=expected):
+                result = verification_module._core_output_excerpt(output, failed=True)
+                self.assertIn('pytest_reported_terminal_counts=', result)
+                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+                self.assertEqual(json.loads(line.split('=', 1)[1]), expected)
+        unknown = {'failed': None, 'passed': None, 'errors': None, 'skipped': None}
+        for suffix in ('1 failed in 0.1s\n2 failed in 0.2s\n',
+                       '1 failed, 2 failed in 0.1s\n',
+                       '999999999999999999 failed in 0.1s\n',
+                       '-1 failed in 0.1s\n',
+                       '1 failed in 0.1s\nSYNTHETIC_TRAILING\n',
+                       '---- Captured stdout call ----\n1 failed in 0.1s\n'):
+            with self.subTest(suffix_length=len(suffix)):
+                result = verification_module._core_output_excerpt('==== FAILURES ====\n' + suffix, failed=True)
+                self.assertIn('pytest_reported_terminal_counts=', result)
+                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+                self.assertEqual(json.loads(line.split('=', 1)[1]), unknown)
+                self.assertNotIn('SYNTHETIC', result)
+
+    def test_known_pytest_failure_without_markers_does_not_return_raw_tail(self) -> None:
+        result = verification_module._core_output_excerpt(
+            'malformed SYNTHETIC_CAPTURE_AND_COMMAND\n', failed=True, pytest_output=True)
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertIn('pytest_failure_ids=null', result)
+
+    def test_pytest_identity_is_unavailable_for_ambiguous_or_untrusted_subtest(self) -> None:
+        trusted = {'tests/test_peer.py': (100, {'PeerTests::test_close', 'PeerTests::test_other'})}
+        for summary in (
+            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_other ) '
+            'tests/test_peer.py::PeerTests::test_close - SYNTHETIC\n',
+            'SUBFAILED(SYNTHETIC) tests/test_peer.py::PeerTests::test_unknown\n',
+            'SUBFAILED(SYNTHETIC) /tests/test_peer.py::PeerTests::test_close\n',
+            'SUBFAILED(SYNTHETIC) tests/../test_peer.py::PeerTests::test_close\n',
+            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_close ) invalid-node\n',
+        ):
+            with self.subTest(summary_length=len(summary)):
+                result = verification_module._core_output_excerpt(
+                    '==== FAILURES ====\ntests/test_peer.py:67: AssertionError\n'
+                    '==== short test summary info ====\n' + summary, failed=True, trusted=trusted)
+                self.assertIn('tests/test_peer.py:67', result)
+                self.assertIn('pytest_failure_ids=null', result)
+                self.assertNotIn('::test_', result)
+                self.assertNotIn('SYNTHETIC', result)
+
+    def test_pytest_parameter_ids_and_controls_never_enter_structured_identity(self) -> None:
+        output = ('==== FAILURES ====\n==== short test summary info ====\n'
+                  'FAILED tests/test_peer.py::PeerTests::test_close[SYNTHETIC_VALUE] - SYNTHETIC_ASSERTION\n')
+        result = verification_module._core_output_excerpt(
+            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
+        self.assertIn('pytest_failure_ids=', result)
+        self.assertNotIn('SYNTHETIC', result)
+        for identity in ('tests/test_peer.py::PeerTests::test_close\x1b]8;;SYNTHETIC',
+                         'tests/test_peer.py::PeerTests::test_close.SYNTHETIC',
+                         'tests/test_peer.py::PeerTests::' + 'test_' + 'x' * 200):
+            result = verification_module._core_output_excerpt(
+                '==== FAILURES ====\nFAILED ' + identity + '\n', failed=True,
+                trusted={'tests/test_peer.py': (100, {'PeerTests::test_close', identity.split('::', 1)[1]})})
+            self.assertIn('pytest_failure_ids=null', result)
+            self.assertNotIn('SYNTHETIC', result)
+
+    def test_pytest_diagnostic_scan_and_records_stay_bounded(self) -> None:
+        output = '==== FAILURES ====\n' + ('SYNTHETIC_VALUE\n' * 160000) + '1 failed in 0.1s\n'
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertLessEqual(len(result), 12000)
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertIn('pytest_reported_terminal_counts=', result)
+        line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+        self.assertTrue(all(value is None for value in json.loads(line.split('=', 1)[1]).values()))
+
+    def test_known_pytest_caller_sanitizes_both_streams_without_changing_result(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        core = CoreTestRun(ProcessResult(['pytest'], 1, stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR'),
+                           ProcessResult(['coverage'], 1), 2, {'engine': 'pytest-xdist'}, {})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tests').mkdir()
+            with patch.object(verification_module, '_trusted_pytest_metadata', return_value={}), \
+                    patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(2, 'configuration')), \
+                    patch.object(verification_module, 'run_core_tests', return_value=core):
+                checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
+        self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+        self.assertNotIn('SYNTHETIC', checks[0].stdout + checks[0].stderr)
+        self.assertIn('workers=2 exit=1', checks[0].summary)
+        self.assertIn('test_timeout=900s', checks[0].summary)
+
     def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
         failure = ('================ FAILURES ================\n'
                    'tests/test_peer.py:174: AssertionError: secret-token-123\n'
