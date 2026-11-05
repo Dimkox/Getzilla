@@ -416,6 +416,26 @@ class ComponentTransactionTests(unittest.TestCase):
 
 
 class FreshSelectionTests(unittest.TestCase):
+    def test_grok_removal_includes_stock_native_briefs_and_config_only(self) -> None:
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import getzilla_upgrade
+        environment = {'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                       'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, environment):
+            target = Path(tmp) / 'project'
+            INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                     selection=INSTALL.PayloadSelection(('grok',)))
+            custom = target / '.grok/agents/consumer_custom.md'
+            custom.write_bytes(b'# public user agent\n')
+            for args in (('init', '--quiet', '--initial-branch=main'), ('add', '-A'),
+                         ('commit', '--quiet', '-m', 'Grok installed public fixture')):
+                subprocess.run(['git', '-C', str(target), *args], check=True, capture_output=True)
+            self.assertTrue((target / '.grok/agents/general_implementer.md').is_file())
+            getzilla_upgrade.remove_adapters(ROOT, target)
+            self.assertFalse((target / '.grok/agents/general_implementer.md').exists())
+            self.assertFalse((target / '.grok/config.toml').exists())
+            self.assertEqual(custom.read_bytes(), b'# public user agent\n')
+
     def test_git_backed_adapter_removal_readd_and_empty_selection_in_both_layouts(self) -> None:
         from getzilla.component_state import agent_of, read_state
         sys.path.insert(0, str(ROOT / 'scripts'))

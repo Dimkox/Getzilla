@@ -142,6 +142,23 @@ class ProjectSyncTests(unittest.TestCase):
             upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
 
+    def test_owned_read_only_grok_config_is_not_replaced_by_stock_policy(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('grok',))
+        path = '.grok/config.toml'
+        vendor = (ROOT / path).read_bytes()
+        content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"')
+        self.assertNotEqual(content, vendor)
+        target = self.project / path
+        target.parent.mkdir()
+        target.write_bytes(content)
+        target.chmod(0o644)
+        record_owned(manifest, path, content, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
+            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+        self.assertEqual(target.read_bytes(), content)
+
     def test_codex_update_preserves_canonical_overlay_and_custom_enabled_configuration(self) -> None:
         self.select(('codex',))
         overlay = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo user-stop'}]}]}}

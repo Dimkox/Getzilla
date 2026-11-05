@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +43,15 @@ def _native(content: bytes) -> dict:
         value = _parse_canonical_json(content, Path('adapter-native-configuration.json'))
     except SpecError as exc:
         raise ComponentStateError('invalid native configuration for removal') from exc
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if type(item) is float and not math.isfinite(item):
+            raise ComponentStateError('nonfinite native configuration value')
+        if type(item) is dict:
+            pending.extend(item.values())
+        elif type(item) is list:
+            pending.extend(item)
     if type(value) is not dict or type(value.get('hooks', {})) is not dict or len(value.get('hooks', {})) > 64:
         raise ComponentStateError('invalid native hook configuration for removal')
     for event, groups in value.get('hooks', {}).items():
@@ -85,11 +95,14 @@ def _subtract(content: bytes, expected: bytes, guards: dict) -> bytes | None:
             del hooks[event]
     if not hooks:
         data.pop('hooks', None)
-    if 'context' in stock and data.get('context') == stock['context']:
+    if not hooks and 'context' in stock and data.get('context') == stock['context']:
         data.pop('context')
     if data == {'version': 1} and stock.get('version') == 1:
         data = {}
-    return harnesses._json(data) if data else None
+    encoded = harnesses._json(data) if data else None
+    if encoded is not None and len(encoded) > MAX_NATIVE_BYTES:
+        raise ComponentStateError('native configuration output exceeds removal bound')
+    return encoded
 
 
 def codex_retained_configuration(canonical: bytes, overlay: bytes) -> bytes | None:
@@ -114,19 +127,31 @@ def plan_removal(home: Path, binding: BoundRoot | ComponentTransaction,
         return RemovalPlan([], observations, manifest, (), [])
     with BoundRoot(home) as source:
         outputs = harnesses._render(source, removing)
+        # Grok uses native Markdown briefs and a stock config copied by the
+        # installer, alongside the renderer's hooks and skill outputs.
+        if 'grok' in removing:
+            for path in [*source.files('.grok/agents'), '.grok/config.toml']:
+                if path.endswith('.md') or path == '.grok/config.toml':
+                    snapshot = source.read(path)
+                    if snapshot is None:
+                        raise ComponentStateError(f'missing canonical Grok source: {path}')
+                    outputs[path] = snapshot.content
         guards = {agent: _stock_guards(source, agent) for agent in removing}
     kept, digests = read_keep_contract(binding)
     kept, digests = match_kept_local(kept, digests, {*outputs, MANIFEST})
     changes = []
     retained = []
     # Config first: Codex activation must remain when Entire/custom hooks remain.
-    retained_codex_hooks = False
+    retained_activation = set()
     paths = sorted(outputs, key=lambda path: (path not in NATIVE_CONFIGS, path))
     for path in paths:
         current = binding.read(path, limit=MAX_NATIVE_BYTES) if path in NATIVE_CONFIGS else binding.read(path)
         observations[path] = current
         if current is None:
             continue
+        if path in retained_activation:
+            retained.append(path)
+            continue  # no write; unknown/kept activation is not removal authority
         if path in kept:
             raise ComponentStateError(f'kept adapter output requires reconciliation before removal: {path}')
         if not matches_owned(current, owned_proof(state.manifest, path)):
@@ -136,10 +161,8 @@ def plan_removal(home: Path, binding: BoundRoot | ComponentTransaction,
         content = None
         if path in NATIVE_CONFIGS:
             content = _subtract(current.content, outputs[path], guards[agent_of(path)])
-            retained_codex_hooks = path == '.codex/hooks.json' and content is not None or retained_codex_hooks
-        elif path == '.codex/config.toml' and retained_codex_hooks:
-            retained.append(path)
-            continue
+            if content is not None and path in {'.codex/hooks.json', '.grok/hooks.json'}:
+                retained_activation.add(path.removesuffix('hooks.json') + 'config.toml')
         elif current.content != outputs[path] or not mode_matches(current.mode, 0o644):
             raise ComponentStateError(f'custom generated adapter file requires reconciliation before removal: {path}')
         if content is not None:

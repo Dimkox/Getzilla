@@ -58,6 +58,7 @@ class RemovalPlanTests(unittest.TestCase):
             path = f'.{agent}/' + ('hooks.json' if agent == 'grok' else 'settings.json')
             self.assertIsNone(changes[path], path)
         self.assertIsNone(changes['.github/hooks/getzilla.json'])
+        self.assertIsNotNone(changes['.codex/hooks.json'])
         codex = json.loads(changes['.codex/hooks.json'])
         commands = str(codex)
         self.assertIn('entire hooks codex', commands)
@@ -78,7 +79,9 @@ class RemovalPlanTests(unittest.TestCase):
         self.put(path, json.dumps(data).encode())
         self.save()
         plan = self.plan(('claude',))
-        result = json.loads(dict((p, c) for p, c, _ in plan.changes)[path])
+        contents = dict((p, c) for p, c, _ in plan.changes)[path]
+        self.assertIsNotNone(contents)
+        result = json.loads(contents)
         self.assertEqual(result, {'hooks': {'Stop': [foreign]}, 'user': {'retain': True}})
         self.assertNotIn(path, plan.manifest['components']['agent:claude'].get('owned', {}))
         self.assertEqual(plan.manifest['agents'], [x for x in self.selected if x != 'claude'])
@@ -127,12 +130,47 @@ class RemovalPlanTests(unittest.TestCase):
         self.assertFalse(any(p.startswith('.codex/') for p in paths))
         self.assertNotIn('.codex/private-unknown.toml', paths)
 
+    def test_unowned_custom_codex_activation_stays_when_entire_remains(self) -> None:
+        path = '.codex/config.toml'
+        self.put(path, b'[features]\ncodex_hooks = true\n[user]\nretain = true\n', owned=False)
+        self.manifest['components']['agent:codex']['owned'].pop(path)
+        self.save()
+        plan = self.plan(('codex',))
+        self.assertNotIn(path, {p for p, _, _ in plan.changes})
+        self.assertIn(path, plan.retained)
+
+    def test_remaining_grok_hooks_keep_unowned_custom_activation(self) -> None:
+        path = '.grok/hooks.json'
+        data = json.loads(self.outputs[path])
+        foreign = {'hooks': [{'command': 'echo public foreign'}]}
+        data['hooks']['Stop'].append(foreign)
+        self.put(path, json.dumps(data).encode())
+        config = b'[features]\nhooks = true\n[user]\nretain = true\n'
+        self.put('.grok/config.toml', config, owned=False)
+        self.save()
+        plan = self.plan(('grok',))
+        self.assertNotIn('.grok/config.toml', {p for p, _, _ in plan.changes})
+        self.assertIn('.grok/config.toml', plan.retained)
+        self.assertEqual((self.project / '.grok/config.toml').read_bytes(), config)
+        self.assertEqual(json.loads(dict((p, c) for p, c, _ in plan.changes)[path]), {'hooks': {'Stop': [foreign]}})
+
+    def test_remaining_qwen_hooks_keep_their_context(self) -> None:
+        path = '.qwen/settings.json'
+        data = json.loads(self.outputs[path])
+        foreign = {'hooks': [{'command': 'echo public foreign'}]}
+        data['hooks']['Stop'].append(foreign)
+        self.put(path, json.dumps(data).encode())
+        self.save()
+        plan = self.plan(('qwen',))
+        result = json.loads(dict((p, c) for p, c, _ in plan.changes)[path])
+        self.assertEqual(result, {'context': data['context'], 'hooks': {'Stop': [foreign]}})
+
     def test_manifest_keep_and_native_resource_limits_refuse_without_effect(self) -> None:
         from getzilla.adapter_removal import MAX_NATIVE_BYTES
         path = '.qwen/settings.json'
         for content in (b'{"hooks":{},"padding":"' + b'x' * MAX_NATIVE_BYTES + b'"}',
                         b'{"hooks":{"Stop":' + b'[' * 1100 + b']' * 1100 + b'}}',
-                        b'{"hooks":{"Stop":[NaN]}}', b'\xef\xbb\xbf{"hooks":{}}',
+                        b'{"hooks":{"Stop":[NaN]}}', b'{"hooks":{},"extra":1e309}', b'\xef\xbb\xbf{"hooks":{}}',
                         b'{"hooks":{},"extra":' + b'[' * 66 + b'0' + b']' * 66 + b'}',
                         b'{"hooks":{},"extra":"\\ud800"}'):
             with self.subTest(content=content[:25]):
@@ -144,6 +182,19 @@ class RemovalPlanTests(unittest.TestCase):
         self.put('.getzilla/AGBP_SYNC.json', json.dumps({'schema_version': 1, 'kept_local': [MANIFEST]}).encode(), owned=False)
         self.save()
         with self.assertRaisesRegex(ValueError, 'kept component manifest'):
+            self.plan(('qwen',))
+
+    def test_native_output_remains_within_the_same_byte_bound(self) -> None:
+        extra = ['x' * 100] * 1600
+        for _ in range(58):
+            extra = [extra]
+        data = json.loads(self.outputs['.qwen/settings.json'])
+        data['extra'] = extra
+        compact = json.dumps(data, separators=(',', ':')).encode()
+        self.assertLess(len(compact), 262144)
+        self.put('.qwen/settings.json', compact)
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'native configuration.*bound'):
             self.plan(('qwen',))
 
 
