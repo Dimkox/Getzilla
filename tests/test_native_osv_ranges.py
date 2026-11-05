@@ -1,0 +1,144 @@
+"""Public synthetic OSV data exercises the native offline consumer, never online services."""
+import copy
+import sys
+import tempfile
+import unittest
+import subprocess
+import os
+from datetime import date
+from unittest.mock import patch
+from pathlib import Path
+
+from tests import test_known_vulns as fixtures
+sys.path.insert(0,str(fixtures.ROOT/'.getzilla'))
+from getzilla import known_vulns as KV
+
+
+def affected(events,*,kind='SEMVER',ecosystem='npm',versions=None):
+    result = {'package':{'ecosystem':ecosystem,'name':'synthetic-package'},
+              'ranges':[{'type':kind,'events':events}]}
+    if versions is not None:
+        result['versions'] = versions
+    return result
+
+
+class NativeOsvRangeTests(unittest.TestCase):
+    def test_actual_native_cli_still_loads_after_comparator_repair(self):
+        env = dict(os.environ)
+        result = subprocess.run([sys.executable,str(fixtures.ROOT/'scripts/getzilla_vulns.py'),'--help'],
+                                env=env,cwd=fixtures.ROOT,capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('Check pinned dependencies',result.stdout)
+
+    def test_actual_native_cli_keeps_maintenance_line_fixes_instead_of_a_global_maximum(self):
+        root_context,root = fixtures._repo({'requirements.txt':'synthetic-package==1.0rc1\n'})
+        with root_context,tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            database = Path(directory)
+            records = [{'id':identifier,'affected':[affected([{'introduced':'0'},{'fixed':fixed}],
+                        kind='ECOSYSTEM',ecosystem='PyPI')]} for identifier,fixed in
+                       [('OSV-SYNTHETIC-LINE1','1.0'),('OSV-SYNTHETIC-LINE2','2.0')]]
+            fixtures._mirror(database,'PyPI',records)
+            env = {**os.environ,'GETZILLA_OSV_ONLINE':'0','GITHUB_ACTIONS':'true'}
+            result = subprocess.run([sys.executable,str(fixtures.ROOT/'scripts/getzilla_vulns.py'),
+                                     '--db',str(database)],cwd=root,env=env,capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,1,result.stderr)
+        self.assertIn('OSV-SYNTHETIC-LINE1: fixed in 1.0',result.stdout)
+        self.assertIn('OSV-SYNTHETIC-LINE2: fixed in 2.0',result.stdout)
+        self.assertNotIn('upgrade to >=',result.stdout)
+
+    def test_actual_native_offline_consumer_finds_prerelease_before_fixed_final(self):
+        record = {'id':'OSV-SYNTHETIC-313','aliases':[],
+                  'affected':[affected([{'introduced':'0'},{'fixed':'1.0.0'}])]}
+        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            database = Path(directory)
+            fixtures._mirror(database,'npm',[record])
+            findings = KV.query_offline([KV.Dependency('npm','synthetic-package','1.0.0-rc.1','package-lock.json')],database)
+        self.assertEqual([finding.vuln_id for finding in findings],['OSV-SYNTHETIC-313'])
+
+    def test_semver_prerelease_numeric_alphanumeric_and_build_precedence(self):
+        ordered = ['1.0.0-alpha','1.0.0-alpha.1','1.0.0-alpha.beta','1.0.0-beta',
+                   '1.0.0-beta.2','1.0.0-beta.11','1.0.0-rc.1','1.0.0']
+        for lower,upper in zip(ordered,ordered[1:]):
+            with self.subTest(lower=lower,upper=upper):
+                scope = affected([{'introduced':'0'},{'fixed':upper}])
+                self.assertTrue(KV._in_ranges(lower,scope))
+                self.assertFalse(KV._in_ranges(upper,scope))
+        scope = affected([{'introduced':'1.0.0+build.9'},{'fixed':'2.0.0'}])
+        self.assertTrue(KV._in_ranges('1.0.0+other.2',scope))
+
+    def test_introduced_fixed_last_affected_disjoint_and_limit_boundaries(self):
+        disjoint = affected([{'introduced':'1.0.0'},{'fixed':'1.2.0'},
+                             {'introduced':'2.0.0'},{'fixed':'2.2.0'}])
+        for version,expected in [('0.9.9',False),('1.0.0',True),('1.2.0',False),
+                                 ('1.9.0',False),('2.0.0',True),('2.2.0',False)]:
+            self.assertEqual(KV._in_ranges(version,disjoint),expected,version)
+        inclusive = affected([{'introduced':'0'},{'last_affected':'1.0.0'}])
+        self.assertTrue(KV._in_ranges('1.0.0',inclusive))
+        self.assertFalse(KV._in_ranges('1.0.1',inclusive))
+        limited = affected([{'introduced':'0'},{'limit':'2.0.0'}])
+        self.assertTrue(KV._in_ranges('1.9.9',limited))
+        self.assertFalse(KV._in_ranges('2.0.0',limited))
+        self.assertTrue(KV._in_ranges('9.0.0',affected([{'introduced':'0'},{'limit':'*'}])))
+        multiple = affected([{'introduced':'0'},{'limit':'2.0.0'},{'limit':'3.0.0'}])
+        self.assertTrue(KV._in_ranges('2.5.0',multiple))
+        self.assertFalse(KV._in_ranges('3.0.0',multiple))
+
+    def test_unsupported_or_ambiguous_ranges_never_return_clean(self):
+        cases = [
+            affected([{'introduced':'0'}],kind='GIT'),
+            affected([{'introduced':'0'},{'fixed':'2.0'}],ecosystem='Maven',kind='ECOSYSTEM'),
+            affected([{'fixed':'1.0.0'},{'introduced':'0'}]),
+            affected([{'introduced':'2.0.0'},{'fixed':'1.0.0'}]),
+            affected([{'introduced':'1.0.0'},{'fixed':'1.0.0'}]),
+            affected([{'introduced':'0'},{'fixed':'1.0.0','last_affected':'1.0.0'}]),
+            affected([{'introduced':'0'},{'fixed':'1.0.0'},{'last_affected':'2.0.0'}]),
+            affected([{'introduced':'0'},{'unsupported':'1.0.0'}]),
+            affected([{'introduced':'0'},{'fixed':'1.0.0-01'}]),
+        ]
+        for scope in cases:
+            with self.subTest(scope=scope),self.assertRaises(KV.VulnerabilityError):
+                KV._in_ranges('3.0.0',scope)
+
+    def test_qualified_pypi_ordering_and_exact_string_versions_are_preserved(self):
+        for version,fixed in [('1.0rc1','1.0'),('1.0.dev2','1.0a1'),
+                              ('1.0','1.0.post1'),('1.9','1!1.0')]:
+            with self.subTest(version=version,fixed=fixed):
+                scope = affected([{'introduced':'0'},{'fixed':fixed}],kind='ECOSYSTEM',ecosystem='PyPI')
+                self.assertTrue(KV._in_ranges(version,scope))
+                self.assertFalse(KV._in_ranges(fixed,scope))
+        scope = affected([{'introduced':'0'},{'fixed':'1.0'}],kind='ECOSYSTEM',ecosystem='PyPI')
+        self.assertFalse(KV._in_ranges('1.0.0',scope))
+        self.assertTrue(KV._in_ranges('vendor-release',{'package':{'ecosystem':'Maven'},'versions':['vendor-release']}))
+
+    def test_missing_range_coverage_cannot_hide_behind_an_exact_match(self):
+        scope = affected([{'introduced':'0'}],kind='GIT',versions=['3.0.0'])
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('3.0.0',scope)
+        malformed = copy.deepcopy(scope)
+        malformed['ranges'] = 'unsupported'
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('3.0.0',malformed)
+
+    def test_native_gate_does_not_hide_unsupported_data_behind_dated_exceptions(self):
+        from getzilla import verification
+        root_context,root = fixtures._repo({'requirements.txt':'synthetic-package==3.0.0\n'})
+        with root_context,tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            database = Path(directory)
+            records = [{'id':identifier,'affected':[scope]} for identifier,scope in [
+                ('OSV-SYNTHETIC-KNOWN',affected([{'introduced':'0'},{'fixed':'4.0.0'}],
+                                             kind='ECOSYSTEM',ecosystem='PyPI')),
+                ('OSV-SYNTHETIC-UNKNOWN',affected([{'introduced':'0'}],kind='GIT',ecosystem='PyPI'))]]
+            fixtures._mirror(database,'PyPI',records)
+            path = root/KV.CONFIG_PATH
+            path.parent.mkdir(parents=True,exist_ok=True)
+            import json
+            path.write_text(json.dumps({'accept':[{'id':record['id'],'reason':'Synthetic dated fixture',
+                                                   'expires':'2026-12-31'} for record in records]}))
+            def actual_scan(target):
+                return KV.scan(target,environ={'GETZILLA_OSV_DB':str(database)},today=date(2026,11,5))
+            with self.assertRaises(KV.VulnerabilityError):
+                actual_scan(root)
+            with patch.object(verification,'scan_known_vulnerabilities',side_effect=actual_scan):
+                result = verification._known_vulnerabilities(root)
+            self.assertEqual(result.status,'fail')
+            self.assertEqual(result.details,[])

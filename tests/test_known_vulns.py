@@ -178,8 +178,9 @@ class OfflineTests(unittest.TestCase):
             KV.scan(root, environ={'GETZILLA_OSV_DB': db})
 
     def test_range_edges(self) -> None:
-        affected = {'ranges': [{'type': 'ECOSYSTEM', 'events': [
-            {'introduced': '1.0'}, {'fixed': '1.5'}, {'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
+        affected = {'package': {'ecosystem': 'PyPI'}, 'ranges': [
+            {'type': 'ECOSYSTEM', 'events': [{'introduced': '1.0'}, {'fixed': '1.5'}]},
+            {'type': 'ECOSYSTEM', 'events': [{'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
@@ -187,7 +188,8 @@ class OfflineTests(unittest.TestCase):
         open_ended = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '3.0.0'}]}]}
         self.assertTrue(KV._in_ranges('9.9.9', open_ended))
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
-        self.assertFalse(KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}))
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]})
 
 
 class OnlineTests(unittest.TestCase):

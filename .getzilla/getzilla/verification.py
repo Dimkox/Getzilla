@@ -28,7 +28,8 @@ from .receipts import (
     validate_evidence,
     write_receipt,
 )
-from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
+from .spec import (_pairs_object, _parse_canonical_json, _reject_constant, canonical_spec_digest,
+                   criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec)
 from .package_status import read_package_file
 from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
@@ -1856,22 +1857,44 @@ def _opengrep(root: Path) -> CheckResult:
     refusal = _unpinned_opengrep(Path(executable))
     if refusal:
         return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
+    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
                '--disable-version-check', '--timeout', '30']
     for pattern in OPENGREP_EXCLUDES:
         command.extend(('--exclude', pattern))
     command.append('.')
     result = run(command, cwd=root, timeout=900, encoding='utf-8', errors='replace')
     try:
-        report = json.loads(result.stdout or '{}')
-    except ValueError:
+        report = json.loads(result.stdout or '{}', object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
+    except (ValueError, TypeError, RecursionError):
         return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without a JSON report',
                            command=command, stderr=result.stderr[-4000:])
     if result.returncode not in {0, 1}:
         return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
                            stderr=result.stderr[-4000:])
-    findings = report.get('results') or []
-    errors = [item for item in report.get('errors') or [] if str(item.get('level', 'error')).lower() == 'error']
+    if (not isinstance(report, dict) or not isinstance(report.get('results'), list)
+            or not isinstance(report.get('errors'), list)
+            or not all(isinstance(item, dict) for item in report['results'])
+            or not all(isinstance(item, dict) for item in report['errors'])):
+        return CheckResult('opengrep', 'fail', 'opengrep returned an incomplete report', command=command)
+    if 'paths' in report:
+        paths = report['paths']
+        if (not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list)
+                or not all(isinstance(path, str) and path for path in paths['scanned'])):
+            return CheckResult('opengrep', 'fail', 'opengrep returned malformed declared coverage', command=command)
+        # This is reported shape, not an independent expected-target census.
+    findings, errors = report['results'], report['errors']
+    if errors:
+        # A finding disposition must not erase incomplete analysis. Preserve
+        # no finding details on this path, regardless of diagnostic level/exit.
+        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} analysis diagnostics',
+                           command=command, stderr=json.dumps(errors[:20])[-4000:])
+    for item in findings:
+        if (not isinstance(item.get('check_id'), str) or not item['check_id']
+                or not isinstance(item.get('path'), str) or not item['path']
+                or not isinstance(item.get('start'), dict)
+                or type(item['start'].get('line')) is not int or item['start']['line'] < 1
+                or not isinstance(item.get('extra', {}), dict)):
+            return CheckResult('opengrep', 'fail', 'opengrep returned a malformed finding', command=command)
     details = [
         {
             'rule': str(item.get('check_id', '')),
@@ -1885,9 +1908,8 @@ def _opengrep(root: Path) -> CheckResult:
     if findings:
         return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
                            command=command, details=details)
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} errors', command=command,
-                           stderr=json.dumps(errors[:20])[-4000:])
+    if result.returncode:
+        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without findings', command=command)
     return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
 
 

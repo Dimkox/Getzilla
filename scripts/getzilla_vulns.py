@@ -11,7 +11,6 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, scan  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
-from getzilla.known_vulns import _version_key as upgrade_key  # noqa: E402
 
 parser = argparse.ArgumentParser(
     description='Check pinned dependencies against known vulnerabilities (OSV: GitHub Advisory, PyPA, RustSec, Go, npm, NVD).',
@@ -54,10 +53,12 @@ else:
         for item in report['findings']:
             grouped.setdefault((item['manifest'], item['ecosystem'], item['package'], item['version']), []).append(item)
         for (manifest, ecosystem, package, version), items in sorted(grouped.items()):
-            fixes = sorted({fix for item in items for fix in item['fixed']}, key=upgrade_key)
-            target = f'upgrade to >= {fixes[-1]}' if fixes else 'no fixed version published'
-            ids = ', '.join(item['id'] for item in items)
-            print(f"::error file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{target}. {ids}")
+            # Different maintenance lines cannot supply one safe global-max
+            # upgrade recommendation. Preserve each advisory's published fixes.
+            fixes = '; '.join(
+                f"{item['id']}: fixed in {', '.join(item['fixed'])}" if item['fixed']
+                else f"{item['id']}: no fixed version published" for item in items)
+            print(f"::error file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{fixes}. Review the advisory release ranges before selecting an upgrade.")
     for item in report['accepted']:
         print(f"  accepted until {item['accepted_until']}: {item['package']} {item['version']} {item['id']}")
 status = report['status']

@@ -27,12 +27,13 @@ RULES = ROOT / '.getzilla/sast/rules'
 FAKE_NAME = 'opengrep.cmd' if os.name == 'nt' else 'opengrep'
 
 
-def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0) -> str:
+def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0, *, delay: float = 0) -> str:
     """Write a fake ``opengrep`` that records each run in ``ran`` and return its sha256."""
     body = payload if isinstance(payload, str) else json.dumps(payload)
     program = textwrap.dedent(f'''\
-        import pathlib, sys
+        import pathlib, sys, time
         pathlib.Path({str(directory / 'ran')!r}).touch()
+        time.sleep({delay!r})
         sys.stdout.write({body!r})
         sys.exit({exit_code})
     ''')
@@ -74,8 +75,8 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertTrue((self.bin / 'ran').exists())
         self.assertFalse((competing / 'ran').exists())
 
-    def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True) -> V.CheckResult:
-        digest = _fake_opengrep(self.bin, payload, exit_code) if payload is not None else '0' * 64
+    def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True, delay: float = 0) -> V.CheckResult:
+        digest = _fake_opengrep(self.bin, payload, exit_code, delay=delay) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
         # Hide both resolver additions, so only this fixture PATH can supply opengrep.
         with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64), \
@@ -98,6 +99,7 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertEqual(result.status, 'pass')
         self.assertTrue((self.bin / 'ran').exists())
         self.assertEqual(Path(result.command[0]), self.bin / FAKE_NAME)
+        self.assertIn('--strict', result.command)
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
@@ -121,7 +123,57 @@ class OpengrepCheckTests(unittest.TestCase):
         errored = self._run({'results': [], 'errors': [{'level': 'error', 'message': 'rule parse error'}]})
         self.assertEqual(errored.status, 'fail')
         warned = self._run({'results': [], 'errors': [{'level': 'warn', 'message': 'partial parse'}]})
-        self.assertEqual(warned.status, 'pass')
+        self.assertEqual(warned.status, 'fail')
+
+    def test_incomplete_shape_duplicate_keys_and_nonfinite_json_are_not_clean(self) -> None:
+        for payload in ({}, {'results': []}, {'errors': []}, {'results': None, 'errors': []},
+                        {'results': [], 'errors': None}, {'results': [], 'errors': [], 'paths': {}},
+                        '{"results":[],"errors":[{"level":"warn"}],"errors":[]}',
+                        '{"results":[],"errors":[],"unsupported":NaN}'):
+            with self.subTest(payload=payload):
+                self.assertEqual(self._run(payload).status, 'fail')
+
+    def test_diagnostics_precede_findings_so_dispositions_cannot_hide_partial_analysis(self) -> None:
+        finding = {'check_id': 'getzilla.python.sql-injection', 'path': 'app.py', 'start': {'line': 12},
+                   'extra': {'severity': 'ERROR', 'message': 'Synthetic finding.'}}
+        for exit_code in (0, 1):
+            for kind in ('partial parse', 'timeout', 'unsupported analysis'):
+                with self.subTest(exit_code=exit_code, kind=kind):
+                    payload = {'results': [finding], 'errors': [{'level': 'warning', 'message': kind}],
+                               'paths': {'scanned': ['app.py']}}
+                    result = self._run(payload, exit_code=exit_code)
+                    self.assertEqual(result.status, 'fail')
+                    self.assertEqual(result.details, [])
+                    self.assertIn('diagnostic', result.summary)
+
+    def test_nonempty_information_diagnostic_is_not_silently_filtered(self) -> None:
+        result = self._run({'results': [], 'errors': [{'level': 'info', 'message': 'incomplete analysis'}]})
+        self.assertEqual(result.status, 'fail')
+
+    def test_nonzero_without_findings_is_not_clean(self) -> None:
+        self.assertEqual(self._run({'results': [], 'errors': []}, exit_code=1).status, 'fail')
+
+    def test_actual_process_timeout_is_refused_without_waiting_the_full_scan_budget(self) -> None:
+        actual_run = V.run
+        def bounded(command, **kwargs):
+            kwargs['timeout'] = 0.1
+            return actual_run(command, **kwargs)
+        with mock.patch.object(V, 'run', side_effect=bounded):
+            result = self._run({'results': [], 'errors': []}, delay=10)
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('124', result.summary)
+
+    def test_malformed_nested_findings_and_declared_paths_fail_without_crashing(self) -> None:
+        payloads = [[], None, {'results': [7], 'errors': []},
+                    {'results': [], 'errors': ['partial']},
+                    {'results': [], 'errors': [], 'paths': []},
+                    {'results': [], 'errors': [], 'paths': {'scanned': [7]}},
+                    {'results': [{'check_id': 'rule', 'path': 'app.py', 'start': 'bad'}], 'errors': []},
+                    {'results': [{'check_id': 'rule', 'path': 'app.py', 'start': {'line': True}}], 'errors': []}]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                raw = json.dumps(payload)
+                self.assertEqual(self._run(raw).status, 'fail')
 
     def test_missing_binary_is_refused_and_opengrep_is_mandatory_in_pr_and_release(self) -> None:
         # A machine without OpenGrep must not pass a PR/release gate with SAST silently skipped (#40).
