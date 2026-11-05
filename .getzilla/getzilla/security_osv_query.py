@@ -283,7 +283,7 @@ def acquire_transcript(inventory: dict[str, Any], *, transport: Callable,
         replay = validate_transcript(payload, expected_inventory=inventory)
         check_deadline(deadline)
         acquisition = {'last_verified_sync_utc': started.isoformat(), 'retrieval_kind': 'download',
-                       'producer': 'getzilla-native-osv-query-v1'}
+                       'producer': 'synthetic-public-injected-osv-query-v1'}
         return payload, acquisition, replay['coverage']
     except (ValueError, KeyError, TypeError, RecursionError):
         raise SecurityDataError('query acquisition is incomplete or malformed') from None

@@ -147,6 +147,7 @@ class QueryAcquisitionTests(unittest.TestCase):
         self.assertTrue(callable(refresh), 'explicit qualified query acquisition is missing')
         result = refresh(self.root, self.database, transport=self.transport, now=NOW)
         self.assertEqual(result['status'], 'pass', result)
+        self.assertEqual(result['snapshot']['acquisition']['producer'], 'synthetic-public-injected-osv-query-v1')
         pointer = self.database / 'queries/native/snapshot.json'
         before = pointer.read_bytes()
         original = security_data._SnapshotStore.write

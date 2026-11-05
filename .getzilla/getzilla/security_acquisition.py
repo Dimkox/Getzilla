@@ -290,6 +290,10 @@ def refresh_query(root: Path, database: Path, *, transport=None,
             return {'source_id': SOURCE_ID, 'status': 'skip', 'reason': 'actual structural absence; no acquisition'}
         payload, acquisition, coverage = acquire_transcript(inventory, transport=fetch_osv_request if transport is None else transport,
                                                            now=now, deadline=deadline)
+        if transport is None:
+            # This names the selected default code path, not independent
+            # publisher/runner authority. Explicit test ports stay synthetic.
+            acquisition['producer'] = 'getzilla-native-osv-query-v1'
         def current_inputs():
             check_deadline(deadline)
             if dependency_inventory(root, load_config(root))[2] != inventory:

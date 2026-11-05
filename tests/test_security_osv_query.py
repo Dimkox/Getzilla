@@ -68,6 +68,7 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(replay['hits'], [])
         self.assertEqual(len(replay['plan']), 2)
         self.assertEqual(acquisition['last_verified_sync_utc'], NOW.isoformat())
+        self.assertEqual(acquisition['producer'], 'synthetic-public-injected-osv-query-v1')
         self.assertEqual(len(self.calls), 1)
         temporary, root = _repo({'requirements.txt': 'public-package==1.0.0\npublic-safe==2.0\n'})
         with temporary:
