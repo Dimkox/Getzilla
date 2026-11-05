@@ -125,6 +125,55 @@ class ReconciliationStateTests(unittest.TestCase):
         self.assertEqual(set(reduced['required_evidence']), {'verification', 'code_review'})
         self.assertEqual(self.path.read_bytes(), stable)
 
+    def test_exact_utf8_output_boundary_preserves_state_and_route_on_refusal(self):
+        from getzilla.package_status import MAX_FILE_BYTES, read_package_file
+        self.assertEqual(MAX_FILE_BYTES, 262144)
+        self.route()
+        original = self.read()
+        self.risk_diff()
+        reconcile_route(self.root)
+        # Calibrate only the real serialized row-growth overhead on this fixture.
+        # The independent oracle is the ordinary reader's fixed byte limit.
+        expanded = self.read()
+        expanded['retained-public-padding'] = ''
+        def encoded(document):
+            return (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2,
+                               allow_nan=False) + '\n').encode('utf-8')
+        overhead = len(encoded(expanded))
+        for character in ('p', '界'):
+            for target in (262143, 262144, 262145):
+                with self.subTest(character=character, output_bytes=target):
+                    remaining = target - overhead
+                    width = len(character.encode('utf-8'))
+                    padding = character * (remaining // width) + 'p' * (remaining % width)
+                    projected = {**expanded, 'retained-public-padding': padding}
+                    self.assertEqual(len(encoded(projected)), target)
+                    document = {**original, 'retained-public-padding': padding}
+                    state.durable_json(self.root, self.path, document)
+                    relative = self.path.relative_to(self.root).as_posix()
+                    before = read_package_file(self.root, relative)
+                    self.assertLess(len(before), MAX_FILE_BYTES)
+                    authority = state.get_active_route(self.root)
+                    with mock.patch.object(change, 'durable_json', wraps=change.durable_json) as publication:
+                        if target > MAX_FILE_BYTES:
+                            with self.assertRaises(ValueError):
+                                reconcile_route(self.root)
+                            self.assertEqual(publication.call_count, 0)
+                            self.assertEqual(self.path.read_bytes(), before)
+                            self.assertEqual(state.get_active_route(self.root), authority)
+                        else:
+                            try:
+                                current = reconcile_route(self.root)
+                            except ValueError as error:
+                                self.fail(f'ordinary-reader-admitted output refused: {error}')
+                            self.assertEqual(publication.call_count, 1)
+                            self.assertEqual(len(read_package_file(self.root, relative)), target)
+                            self.assertEqual(self.kinds(), REQUIRED)
+                            self.assertEqual(self.read()['retained-public-padding'], padding)
+                            self.assertEqual(self.read()['evidence_accounting']['obligations'][:2],
+                                             original['evidence_accounting']['obligations'])
+                            observed = inspect_package(self.root, current, state.get_active_change(self.root))
+                            self.assertFalse(any(row['code'] == 'file_too_large' for row in observed['findings']))
     def test_no_package_and_legacy_warning_do_not_create_typed_acceptance(self):
         self.route(package=False)
         self.risk_diff()

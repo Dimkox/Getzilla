@@ -143,7 +143,7 @@ def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: 
 def _sync_receipt_obligations(root: Path, route: dict[str, Any], required: list[str]) -> Callable[[], None]:
     """Append unperformed selected work; retained records never supply fresh authority."""
     from .continuity import validate_package_state
-    from .package_status import MAX_FILES, inspect_package
+    from .package_status import MAX_FILE_BYTES, MAX_FILES, inspect_package
     from .receipts import RECEIPT_KINDS
     from .state import CLOSED_CHANGE_STATUSES, get_active_change, _route_document
 
@@ -204,6 +204,10 @@ def _sync_receipt_obligations(root: Path, route: dict[str, Any], required: list[
         identities.add(identity)
         rows.append({'id': identity, 'kind': 'receipt', 'receipt_kind': kind,
                      'status': 'not_run', 'reason': 'selected by source-bound reconciliation; not run'})
+    # Match durable_json's exact encoding and the ordinary package reader's cap.
+    raw = (json.dumps(expected, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
+    if len(raw) > MAX_FILE_BYTES:
+        raise ValueError('selected receipt accounting exceeds its byte bound')
     if get_active_change(root) != active or _route_document(root, path) != original:
         raise ValueError('selected package changed before accounting publication')
     durable_json(root, path, expected)
