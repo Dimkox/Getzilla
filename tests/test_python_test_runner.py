@@ -1142,6 +1142,56 @@ class CoverageLayout(unittest.TestCase):
                     if suite == 'measured':
                         self.assertEqual(core.coverage.returncode, 0, core.coverage.stdout + core.coverage.stderr)
 
+    def test_managed_harness_omission_preserves_real_consumer_coverage_and_options(self) -> None:
+        for workers in (0, 2):
+            for uncovered in (False, True):
+                with self.subTest(workers=workers, uncovered=uncovered), fixture() as root, \
+                     patch.object(python_test_runner, 'parallel_engine_ready', return_value=False), \
+                     patch.dict(os.environ, {'CONSUMER_OMIT': 'omitted.py', 'CONSUMER_BRANCH': 'True'}):
+                    (root / 'subject.py').write_text('value = 42\n' + ('def unused(): return 0\n' if uncovered else ''))
+                    (root / 'omitted.py').write_text('def unused(): return 0\n')
+                    (root / 'report_omitted.py').write_text('def unused(): return 0\n')
+                    (root / 'tests/test_sample.py').write_text(
+                        'import unittest, subject, omitted, report_omitted\n'
+                        'class Real(unittest.TestCase):\n'
+                        ' def test_value(self): self.assertEqual(subject.value, 42)\n')
+                    config = ('[run]\nbranch = ${CONSUMER_BRANCH}\ncontext = consumer%profile\nomit = ${CONSUMER_OMIT}\n'
+                              '[report]\nfail_under = 100\nomit = report_omitted.py\nprecision = 3\nshow_missing = True\n')
+                    (root / '.coveragerc').write_text(config)
+                    run = python_test_runner.run_core_tests(root, 'pr', workers)
+                    self.assertEqual(0, run.tests.returncode, run.tests.stdout + run.tests.stderr)
+                    self.assertEqual(int(uncovered), run.coverage.returncode, run.coverage.stdout + run.coverage.stderr)
+                    self.assertEqual(config, (root / '.coveragerc').read_text())
+                    files = run.coverage_metadata['files']
+                    self.assertTrue(any(name.endswith('subject.py') for name in files), files)
+                    self.assertFalse(any(name.endswith('getzilla_unittest.py') for name in files), files)
+                    self.assertFalse(any(name.endswith('omitted.py') for name in files), files)
+                    if not uncovered:
+                        self.assertEqual(100, run.coverage_metadata['totals']['percent_covered'])
+
+    def test_private_coverage_config_keeps_all_consumer_options_and_exact_path(self) -> None:
+        from coverage import Coverage
+        with fixture() as root:
+            config = root / '.coveragerc'
+            config.write_text('[run]\nbranch = True\nsource = subject\ninclude = */subject.py\n'
+                              'omit = a.py, b.py\ncontext = consumer%context\nrelative_files = True\n'
+                              '[report]\nfail_under = 100\nomit = separate.py\nprecision = 3\n'
+                              '[html]\ndirectory = custom-html\n[paths]\nsource =\n    subject\n    other/subject\n')
+            original = config.read_bytes()
+            overlay = python_test_runner._application_coverage_config(config, root)
+            before = Coverage(config_file=str(config))
+            after = Coverage(config_file=str(overlay))
+            for option in ('run:branch', 'run:source', 'run:include', 'run:context', 'run:relative_files',
+                           'report:fail_under', 'report:omit', 'report:precision', 'html:directory', 'paths'):
+                with self.subTest(option=option):
+                    self.assertEqual(before.get_option(option), after.get_option(option))
+            harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+            self.assertEqual(['a.py', 'b.py', harness], after.get_option('run:omit'))
+            self.assertEqual(original, config.read_bytes())
+            with patch.object(python_test_runner, 'STACK_DIR', root / '[ambiguous]'):
+                with self.assertRaises(RunnerError):
+                    python_test_runner._application_coverage_config(config, root)
+
     def test_collection_report_requires_current_complete_typed_result(self) -> None:
         with fixture() as root:
             report = root / 'result.json'

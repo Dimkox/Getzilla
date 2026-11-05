@@ -296,6 +296,7 @@ def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
     """One deterministic zip: every engine file plus unchecked-hash bytecode for this Python."""
     import importlib.util
     import io
+    import marshal
     import zipfile
     from importlib import _bootstrap_external  # type: ignore[attr-defined]
 
@@ -307,6 +308,11 @@ def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
             if name.endswith(".py"):
                 code = compile(entry.content, name, "exec", dont_inherit=True)
                 pyc = _bootstrap_external._code_to_hash_pyc(code, importlib.util.source_hash(entry.content), False)
+                # Marshal >=3 records interpreter-local references and string
+                # interning state. Version2 has no such identity encoding. Keep
+                # the current interpreter's hash-pyc header and code semantics;
+                # these bytecode members are still specific to that Python ABI.
+                pyc = bytes(pyc[:16]) + marshal.dumps(code, 2)
                 members.append((name[:-3] + ".pyc", bytes(pyc)))
             for member, data in members:
                 info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))

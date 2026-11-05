@@ -54,7 +54,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         lock = self.repo / "factory/uv.lock"
         lock.write_text(
             'version = 1\nrevision = 3\nrequires-python = ">=3.12,<3.13"\n\n'
-            '[[package]]\nname = "getzilla-factory"\nversion = "1.2.3"\n\n'
+            '[[package]]\nname = "getzilla-factory"\nversion = "1.2.3"\ndependencies = [{name = "demo"}]\n\n'
             '[[package]]\nname = "demo"\nversion = "1.0.0"\n'
             f'wheels = [{{ url = "https://invalid.example/{wheel.name}", '
             f'hash = "sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}", size = {wheel.stat().st_size} }}]\n'
@@ -191,6 +191,67 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[2]
         inventory = repository / "factory/runtime/runtime-wheels-linux-x86_64-cpython312.json"
         self.builder.validate_committed_inventory(repository / "factory/uv.lock", inventory)
+
+    def test_runtime_graph_excludes_dev_and_follows_activated_extras_and_markers(self):
+        original = self.repo / 'factory/uv.lock'
+        text = original.read_text().replace('dependencies = [{name = "demo"}]',
+                                           'dependencies = [{name = "demo", extra = ["binary"]}]')
+        text = text.replace('name = "demo"\nversion = "1.0.0"',
+                            'name = "demo"\nversion = "1.0.0"\n'
+                            'dependencies = [{name = "absent-on-windows", marker = "sys_platform == \'win32\'"}]')
+        text += ('\n[package.optional-dependencies]\nbinary = [{name = "binary", marker = "implementation_name != \'pypy\'"}]\n'
+                 '\n[[package]]\nname = "binary"\nversion = "1.0.0"\n'
+                 'wheels = [{url = "https://invalid.example/binary-1.0.0-py3-none-any.whl", hash = "sha256:' + 'a' * 64 + '"}]\n'
+                 '\n[[package]]\nname = "dev-only"\nversion = "9.0.0"\n')
+        original.write_text(text)
+        derived = self.builder.derive_inventory(original)
+        self.assertEqual(['binary', 'demo'], [item['name'] for item in derived['wheels']])
+        self.assertEqual(hashlib.sha256(original.read_bytes()).hexdigest(), derived['lock_sha256'])
+
+    def test_runtime_graph_refuses_missing_ambiguous_unsupported_and_unresolved_wheels(self):
+        lock = self.repo / 'factory/uv.lock'
+        original = lock.read_text()
+        cases = [
+            original.replace('name = "demo"}]', 'name = "missing"}]'),
+            original + '\n[[package]]\nname = "demo"\nversion = "2.0.0"\n',
+            original.replace('name = "demo"}]', 'name = "demo", extra = ["missing"]}]'),
+            original.replace('name = "demo"}]', 'name = "demo", marker = "platform_release == \'unknown\'"}]'),
+            original.replace('name = "demo"}]', 'name = "demo", marker = "sys_platform == \'linux\' or unknown"}]'),
+            original.replace('name = "demo"}]', 'name = "demo", version = "2.0.0"}]'),
+            original.replace('dependencies = [{name = "demo"}]', ''),
+            original.replace('-py3-none-any.whl', '-cp312-cp312-win_amd64.whl'),
+            original.replace('requires-python = ">=3.12,<3.13"', 'requires-python = ">=3.13"'),
+            original.replace('requires-python = ">=3.12,<3.13"', 'requires-python = 312'),
+            original.replace('name = "demo"}]', 'name = "demo", marker = "sys_platform == \'win32\'"}]'),
+            original.replace('url = "https://invalid.example/demo-1.0.0-py3-none-any.whl"', 'url = 1'),
+            original.replace('name = "demo"}]', 'name = "demo", marker = "python_full_version < \'3.12\'"}]'),
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                lock.write_text(text)
+                with self.assertRaises(setup.InstallerError):
+                    self.builder.derive_inventory(lock)
+
+    def test_runtime_graph_bounds_and_lock_binding_remain_strict(self):
+        lock = self.repo / 'factory/uv.lock'
+        original = lock.read_text()
+        for text in (original + '\n[[package]]\nname = "p"\nversion = "1"\n' * 513,
+                     original.replace('dependencies = [{name = "demo"}]',
+                                      'dependencies = [' + ','.join('{name = "demo"}' for _ in range(4097)) + ']')):
+            with self.subTest(bytes=len(text)):
+                lock.write_text(text)
+                with self.assertRaises(setup.InstallerError):
+                    self.builder.derive_inventory(lock)
+        lock.write_text(original + '\n')
+        with self.assertRaises(setup.InstallerError) as error:
+            self.builder.validate_committed_inventory(lock, self.inventory)
+        self.assertEqual('WHEEL_INVENTORY_DRIFT', error.exception.code)
+
+    def test_current_runtime_wheels_match_twenty_committed_records(self):
+        repository = Path(__file__).resolve().parents[2]
+        previous = json.loads((repository / 'factory/runtime/runtime-wheels-linux-x86_64-cpython312.json').read_text())
+        self.assertEqual(20, len(previous['wheels']))
+        self.assertEqual(previous['wheels'], self.builder.derive_inventory(repository / 'factory/uv.lock')['wheels'])
 
 
 if __name__ == "__main__":

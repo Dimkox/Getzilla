@@ -370,6 +370,28 @@ def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
             '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
 
 
+def _application_coverage_config(config: Path, directory: Path) -> Path:
+    """Keep consumer settings; exclude only our absolute external entrypoint."""
+    harness = str((STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+    # Coverage's omit values are comma/newline-separated glob patterns with
+    # environment expansion. Never broaden an exact infrastructure exclusion.
+    if any(character in harness for character in '[]*?,\n\r$'):
+        raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
+    settings = configparser.RawConfigParser()
+    try:
+        settings.read_string(config.read_text(encoding='utf-8'))
+        if not settings.has_section('run'):
+            settings.add_section('run')
+        original = settings.get('run', 'omit', fallback='')
+        settings.set('run', 'omit', original + '\n' + harness)
+        overlay = directory / 'application.coveragerc'
+        with overlay.open('x', encoding='utf-8') as output:
+            settings.write(output)
+        return overlay
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise RunnerError('cannot preserve consumer coverage configuration') from exc
+
+
 def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
     if result.returncode:
         return result
@@ -632,6 +654,8 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         # storage, outside the fixture guards' nonrecursive ancestor watches.
         coverage_root = Path(directory) / 'coverage'
         coverage_root.mkdir(mode=0o700)
+        if measured:
+            config = _application_coverage_config(config, coverage_root)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
         result_file = coverage_root / 'unittest-result.json'
@@ -673,10 +697,10 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                     exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts)
                     raise
                 try:
+                    from coverage import Coverage
+                    from coverage.exceptions import CoverageException
                     document = json.loads(report_file.read_text(encoding='utf-8'))
-                    settings = configparser.ConfigParser()
-                    settings.read(config)
-                    expected_branch = settings.getboolean('run', 'branch', fallback=False)
+                    expected_branch = Coverage(config_file=str(config)).get_option('run:branch')
                     if (not isinstance(document, dict)
                             or not isinstance(document.get('files'), dict) or not document['files']
                             or not isinstance(document.get('meta'), dict)
@@ -685,7 +709,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                             or not isinstance(document.get('totals'), dict)):
                         raise ValueError('coverage source or branch data missing')
                     facts = {'totals': document['totals'], 'branch_coverage': expected_branch, 'files': sorted(document['files'])}
-                except (OSError, ValueError, TypeError, KeyError, configparser.Error) as exc:
+                except (OSError, ValueError, TypeError, KeyError, CoverageException) as exc:
                     coverage.returncode = 1
                     coverage.stderr += f'\ninvalid current-run coverage: {exc}'
                 if exported.returncode or tests.returncode or 'failed to return coverage data' in tests.stdout + tests.stderr:

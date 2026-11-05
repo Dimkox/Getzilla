@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -30,6 +31,7 @@ from getzilla_factory.models import Actor
 from factory.tests.test_api import FakeService
 from factory.tests.test_landing_provider import clock as provider_clock
 from factory.tests.test_landing_provider import profile as fixture_profile
+from factory.tests._showcase_custody import validate_showcase
 
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
@@ -455,9 +457,6 @@ class LandingApiTests(unittest.TestCase):
             # Only the explicitly versioned successor is outside predecessor bytes.
             and path != Path("factory/contracts/jsonschema/earned-autonomy.v2.schema.json")
         )
-        showcase = (
-            path for path in Path("side-projects/seo-landing-showcase").rglob("*") if path.is_file()
-        )
         self.assertEqual(
             # Re-anchored after the Getzilla rename (decisions.md 2026-10-08): the 18 files are
             # byte-identical; only their package path changed (the old digest reproduces
@@ -470,11 +469,13 @@ class LandingApiTests(unittest.TestCase):
             (23, "d0c2604ae4e052724e8ba99ba203183926591d2fb719439e795a85d98b0e914a"),
             aggregate(predecessor_contracts),
         )
-        self.assertEqual(
-            # Rename 73d97c5 (footer text) and e07cfbe (cold Chrome start retries).
-            (6, "b59b074fa907aeb63991a23ff072a04d4fbe3fd4bab14263447898e02994162c"),
-            aggregate(showcase),
-        )
+        # Historical six-file metadata stays pinned separately from reviewed
+        # current lab tools. Only Git-tracked source participates; interpreter
+        # caches and browser output can never become frozen source authority.
+        manifest = json.loads(Path('side-projects/seo-landing-showcase.source.json').read_text(encoding='utf-8'))
+        tracked = subprocess.check_output(['git', 'ls-files', '--', 'side-projects/seo-landing-showcase/'],
+                                          text=True).splitlines()
+        validate_showcase(Path.cwd(), manifest, tracked)
         # Historic binary custody is external to the source tree. Bind its
         # retained immutable record without claiming fresh verification of ZIP bytes.
         state = json.loads(Path('PROJECT_STATE.json').read_text(encoding='utf-8'))

@@ -178,7 +178,7 @@ root = Path.cwd()
 (root / 'tests').mkdir()
 (root / 'tests/__init__.py').write_text('')
 (root / 'subject.py').write_text('value = 42\\n')
-(root / '.coveragerc').write_text('[run]\\nbranch = True\\nsource = subject\\n[report]\\nfail_under = 74\\n')
+(root / '.coveragerc').write_text('[run]\\nbranch = True\\n[report]\\nfail_under = 100\\n')
 rows = []
 with patch.object(runner, 'parallel_engine_ready', return_value=False):
     for count, source in ((1, 'import unittest, subject\\nclass Real(unittest.TestCase):\\n def test_real(self): self.assertEqual(subject.value, 42)\\n'),
@@ -187,7 +187,8 @@ with patch.object(runner, 'parallel_engine_ready', return_value=False):
         for workers in (0, 2):
             result = runner.run_core_tests(root, 'pr', workers)
             rows.append({'count': count, 'workers': workers, 'tests': result.tests.returncode,
-                         'coverage': result.coverage.returncode, 'command': result.tests.command})
+                         'coverage': result.coverage.returncode, 'command': result.tests.command,
+                         'facts': result.coverage_metadata})
 print(json.dumps({'module': runner.__file__, 'rows': rows}))
 ''')
             result = subprocess.run([sys.executable, '-B', str(probe)], cwd=project,
@@ -199,6 +200,9 @@ print(json.dumps({'module': runner.__file__, 'rows': rows}))
                               for row in report['rows']], [(1, 0, 0, 0), (1, 2, 0, 0), (0, 0, 5, 1), (0, 2, 5, 1)])
             for row in report['rows']:
                 self.assertIn(str(project / 'scripts/getzilla_unittest.py'), row['command'])
+                if row['count']:
+                    self.assertEqual(100, row['facts']['totals']['percent_covered'])
+                    self.assertFalse(any(path.endswith('getzilla_unittest.py') for path in row['facts']['files']))
             self.assertEqual(foreign.read_text(), 'preserve foreign bytes')
 
     def test_an_upgrade_with_engine_files_keeps_them_and_a_checkout_uses_files(self) -> None:

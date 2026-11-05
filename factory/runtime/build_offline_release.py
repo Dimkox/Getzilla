@@ -42,11 +42,14 @@ def _host_supported() -> bool:
         return False
 
 
-def _selected_wheel(package: dict) -> dict | None:
-    if package["name"] == "tzdata":  # locked only for psycopg's Windows marker
-        return None
+def _selected_wheel(package: dict) -> dict:
     matches = []
-    for wheel in package.get("wheels", []):
+    wheels = package.get("wheels", [])
+    if not isinstance(wheels, list) or len(wheels) > 512:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    for wheel in wheels:
+        if not isinstance(wheel, dict) or not isinstance(wheel.get("url"), str) or not isinstance(wheel.get("hash"), str):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
         filename = wheel["url"].rsplit("/", 1)[-1]
         universal = filename.endswith(("-py3-none-any.whl", "-py2.py3-none-any.whl"))
         native = "-cp312-cp312-" in filename and "manylinux" in filename and "x86_64" in filename
@@ -61,17 +64,108 @@ def _selected_wheel(package: dict) -> dict | None:
     return {"name": package["name"], "version": package["version"], "filename": filename, "sha256": digest}
 
 
+def _comparison(left: str, operator: str, right: str, *, version: bool = False) -> bool:
+    if version:
+        if not re.fullmatch(r"\d+(?:\.\d+){0,2}", right):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        left = tuple(map(int, left.split("."))) + (0,) * (3 - len(left.split(".")))
+        right = tuple(map(int, right.split("."))) + (0,) * (3 - len(right.split(".")))
+    elif operator not in {"==", "!="}:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    return {"==": left == right, "!=": left != right, "<": left < right,
+            "<=": left <= right, ">": left > right, ">=": left >= right}[operator]
+
+
+def _marker_matches(marker: str, extras: set[str]) -> bool:
+    """Closed marker subset for the single supported Linux/CPython3.12 profile.
+
+    New compound expressions or variables need reviewed support, never an
+    assumed-true fallback. Optional dependency tables propagate active extras.
+    """
+    values = {"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
+              "platform_machine": "x86_64", "implementation_name": "cpython",
+              "platform_python_implementation": "CPython", "python_version": "3.12",
+              "python_full_version": "3.12.0"}
+    match = re.fullmatch(r"([a-z_]+)\s*(==|!=|<=|>=|<|>)\s*(['\"])([^'\"]{1,128})\3", marker)
+    if not match or match[1] not in {*values, "extra"}:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    name, operator, _, value = match.groups()
+    if name == "extra":
+        return any(_comparison(extra, operator, value) for extra in extras | {""})
+    return _comparison(values[name], operator, value, version=name.startswith("python_"))
+
+
+def _runtime_packages(data: dict) -> list[dict]:
+    packages = data["package"]
+    if (data.get("version") != 1 or data.get("revision") not in {3, 5}
+            or not isinstance(packages, list) or not 1 <= len(packages) <= 512):
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    indexed = {}
+    for package in packages:
+        name = package["name"]
+        if (not isinstance(name, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name)
+                or not isinstance(package.get("version"), str) or not package["version"]
+                or name in indexed or "resolution-markers" in package):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        indexed[name] = package
+    roots = indexed["getzilla-factory"].get("dependencies")
+    if not isinstance(roots, list) or not 1 <= len(roots) <= 512:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    queue = [(edge, set()) for edge in roots]
+    active: dict[str, set[str]] = {}
+    steps = 0
+    while queue:
+        edge, parent_extras = queue.pop()
+        steps += 1
+        if (steps > 4096 or not isinstance(edge, dict) or not {"name"} <= set(edge) <= {"name", "extra", "marker"}
+                or not isinstance(edge["name"], str)):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        extras = edge.get("extra", [])
+        if (not isinstance(extras, list) or len(extras) > 32
+                or any(not isinstance(extra, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", extra) for extra in extras)):
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        marker = edge.get("marker")
+        if marker is not None and (not isinstance(marker, str) or not _marker_matches(marker, parent_extras)):
+            if not isinstance(marker, str):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+            continue
+        name = edge["name"]
+        if name == "getzilla-factory" or name not in indexed:
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        if name in active and set(extras) <= active[name]:
+            continue
+        active.setdefault(name, set()).update(extras)
+        package = indexed[name]
+        dependencies = package.get("dependencies", [])
+        optional = package.get("optional-dependencies", {})
+        if not isinstance(dependencies, list) or not isinstance(optional, dict) or len(optional) > 32:
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        outgoing = list(dependencies)
+        for extra in active[name]:
+            if extra not in optional or not isinstance(optional[extra], list):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+            outgoing.extend(optional[extra])
+        if len(outgoing) > 512:
+            raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        queue.extend((child, active[name].copy()) for child in outgoing)
+    if not active:
+        raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+    return [indexed[name] for name in sorted(active)]
+
+
 def derive_inventory(lock: Path) -> dict:
     content = Path(lock).read_bytes()
     try:
+        if len(content) > 8 * 1024 * 1024:
+            raise InstallerError("INVALID_LOCK")
         data = tomllib.loads(content.decode())
-        packages = []
-        for package in data["package"]:
-            if package["name"] == "getzilla-factory":
-                continue
-            selected = _selected_wheel(package)
-            if selected is not None:
-                packages.append(selected)
+        if not isinstance(data.get("requires-python"), str):
+            raise InstallerError("INVALID_LOCK")
+        for bound in data["requires-python"].split(","):
+            match = re.fullmatch(r"\s*(==|!=|<=|>=|<|>)\s*(\d+(?:\.\d+){0,2})\s*", bound)
+            if not match or not _comparison("3.12.0", match[1], match[2], version=True):
+                raise InstallerError("LOCK_PROFILE_UNRESOLVED")
+        packages = [_selected_wheel(package) for package in _runtime_packages(data)]
     except (KeyError, TypeError, ValueError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise InstallerError("INVALID_LOCK") from exc
     return {"schema_version": "factory-runtime-wheels/v1", "profile": PROFILE,
