@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:requirement-intake:v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["version", "identity", "policy", "spec", "scope", "dependencies", "permissions", "sources", "requirements"],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:/-]+$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "texts": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/text"}},
+    "fact": {"type": "object", "additionalProperties": false, "required": ["subject", "scope", "facet", "operator", "value", "unit"], "properties": {
+      "subject": {"$ref": "#/$defs/id"}, "scope": {"$ref": "#/$defs/id"}, "facet": {"$ref": "#/$defs/id"},
+      "operator": {"enum": ["equals", "at_least", "at_most", "requires", "forbids"]},
+      "value": {"type": ["string", "integer"], "maxLength": 512, "minimum": -9007199254740991, "maximum": 9007199254740991},
+      "unit": {"type": ["string", "null"], "maxLength": 64}
+    }}
+  },
+  "properties": {
+    "version": {"const": 1},
+    "identity": {"type": "object", "additionalProperties": false, "required": ["repository", "logical_task_id", "authority_epoch"], "properties": {"repository": {"$ref": "#/$defs/id"}, "logical_task_id": {"$ref": "#/$defs/id"}, "authority_epoch": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}}},
+    "policy": {"type": "object", "additionalProperties": false, "required": ["version", "digest", "decision_required"], "properties": {"version": {"$ref": "#/$defs/id"}, "digest": {"$ref": "#/$defs/hash"}, "decision_required": {"type": "boolean"}}},
+    "spec": {"type": "object"},
+    "scope": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+    "dependencies": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["id", "status"], "properties": {"id": {"$ref": "#/$defs/id"}, "status": {"enum": ["satisfied", "unknown", "blocked"]}}}},
+    "permissions": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["operation", "resource", "status"], "properties": {"operation": {"$ref": "#/$defs/id"}, "resource": {"$ref": "#/$defs/id"}, "status": {"enum": ["required", "unknown", "denied"]}}}},
+    "sources": {"type": "array", "maxItems": 256, "items": {"type": "object", "additionalProperties": false, "required": ["id", "uri", "version", "sha256", "locator"], "properties": {
+      "id": {"$ref": "#/$defs/id"}, "uri": {"type": "string", "minLength": 1, "maxLength": 512}, "version": {"$ref": "#/$defs/id"}, "sha256": {"$ref": "#/$defs/hash"}, "imported_status": {"type": "string", "maxLength": 128},
+      "locator": {"type": "object", "additionalProperties": false, "required": ["kind", "path", "start", "end"], "properties": {"kind": {"const": "lines"}, "path": {"type": "string", "minLength": 1, "maxLength": 512}, "start": {"type": "integer", "minimum": 1, "maximum": 20000}, "end": {"type": "integer", "minimum": 1, "maximum": 20000}}}
+    }}},
+    "requirements": {"type": "array", "maxItems": 500, "items": {"type": "object", "additionalProperties": false, "required": ["id", "source_id", "criterion_ids", "action_key", "facts", "interpretations", "proposals", "assumptions", "owner_ref"], "properties": {
+      "id": {"$ref": "#/$defs/id"}, "source_id": {"$ref": "#/$defs/id"}, "criterion_ids": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "pattern": "^AC-[0-9]{3,6}$"}},
+      "action_key": {"type": ["string", "null"], "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:/-]+$"},
+      "facts": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/fact"}},
+      "interpretations": {"$ref": "#/$defs/texts"}, "proposals": {"$ref": "#/$defs/texts"}, "assumptions": {"$ref": "#/$defs/texts"}, "owner_ref": {"type": ["string", "null"], "maxLength": 128}
+    }}}
+  }
+}
