@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:module-runtime:v1",
+  "title": "Optional module runtime descriptor (not activation authority)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "module", "version", "required_features", "native_profiles"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "version": {"type": "string", "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$"},
+    "required_features": {"type": "array", "minItems": 2, "maxItems": 8, "uniqueItems": true,
+      "items": {"enum": ["owned-runtime-v1", "trusted-transport-v1", "owned-native-fragment-v1"]},
+      "allOf": [{"contains": {"const": "owned-runtime-v1"}}, {"contains": {"const": "trusted-transport-v1"}}]},
+    "native_profiles": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"}}
+  }
+}

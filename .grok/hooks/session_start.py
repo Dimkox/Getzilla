@@ -56,7 +56,8 @@ def main() -> None:
     else:
         context = unavailable_authority_notice(root) or 'No active route. Submit a development task to classify work.'
     context += package_note
-    context = f'{context} {startup_note(root, harness())}'
+    model_note = startup_note(root, harness())
+    context = f'{context} {model_note}'
     note = _tool_update_note()
     if note:
         context = f'{context} {note}'
@@ -64,7 +65,8 @@ def main() -> None:
     if capacity:
         context = f'{context} {capacity}'
     if len(context.encode('utf-8')) > 16384 and route:
-        context = route_context(route, root)
+        remaining = 16384 - len(model_note.encode('utf-8')) - 1
+        context = f'{route_context(route, root, max_bytes=remaining)} {model_note}'
     # Copilot consumes top-level additionalContext. Other harnesses use the
     # existing SessionStart envelope. See docs/model-continuation.md.
     if harness() == 'copilot':

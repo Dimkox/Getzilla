@@ -5,9 +5,9 @@
   getzilla par [-j N] --each "tests/php/test_*.php" -- php {}
 
 Each command is checked by the repository policy first; when any is refused nothing runs.
-Output is a short summary (failures with their last lines); full logs stay in
-.getzilla/runtime/par/<run>/. Exit 0 when every command passed, 1 when any failed, 2 when
-refused or empty.
+Output is a bounded summary with byte counts and loss flags. Logs retain at most 32 MiB
+per batch in .getzilla/runtime/par/<run>/. Truncated output is not full-report evidence.
+Exit 0 when every command passed, 1 when any failed, 2 when refused or empty.
 """
 from __future__ import annotations
 
@@ -40,7 +40,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     workers = args.jobs or capacity(root)
     started = time.monotonic()
-    jobs, folder = run_batch(root, commands, workers=workers, cwd=cwd, timeout=args.timeout)
+    try:
+        jobs, folder = run_batch(root, commands, workers=workers, cwd=cwd, timeout=args.timeout)
+    except (OSError, NotImplementedError, AttributeError):
+        print('getzilla par: execution or log-ownership backend unavailable; complete_output=false')
+        return 1
     print(report(root, jobs, folder, workers=workers, wall=time.monotonic() - started, show_all=args.show_all))
     if any(job.refused for job in jobs):
         return 2

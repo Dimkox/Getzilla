@@ -141,7 +141,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla setup-agent --agent <name>` | Sets the coding agent (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`) and where its models come from |
 | | `getzilla install-into --plan <repo>` | Shows, read-only, what Getzilla would add to a project; `--materialize-new <path>` creates a new project |
 | | `getzilla adopt plan\|apply\|status\|resume\|abort` | Adopts a folder without Git into a new local workspace |
-| | `getzilla components status`, `components add <name>`, `components adopt --agents <complete-list>` | Shows selection and adds optional parts; `adopt` declares a legacy project's complete adapter list (`--agents ''` selects none) |
+| | `getzilla components status`, `components add <name>`, `components module <operation>`, `components adopt --agents <complete-list>` | Shows selection and manages [optional modules](docs/optional-modules.md); `adopt` declares a legacy project's complete adapter list (`--agents ''` selects none) |
 | | `getzilla baseline status --project <repo>` | Shows the installed baseline and project wiring |
 | | `getzilla baseline apply --project <repo>` | Connects the installed workflow baseline to a project |
 | | `getzilla harness [--write]` | Checks or regenerates the installed project's selected adapters; source generation uses `--repository-all --write` |
@@ -155,6 +155,7 @@ All commands go through one launcher, `getzilla <command>`. The Linux and macOS 
 | | `getzilla par -j <n> -- "cmd1" "cmd2"` | Runs independent commands in parallel on the measured CPUs |
 | Check | `getzilla test` | Runs the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | | `getzilla verify --mode fast\|pr\|release` | Runs the checks the route selects and records a receipt |
+| | `getzilla evals run\|accept` | [Offline agent replay](docs/agent-evals.md) with pinned cases and explicit baseline acceptance |
 | | `getzilla test-tools catalog\|plan\|run` | Optional [executed test and mutation evidence](docs/verification-tools.md) for seven open-source tools |
 | | `getzilla review <kind> --status pass\|fail --report <file> --reviewed-commit <sha>` | Records an independent review |
 | | `getzilla gate status`, `gate decide <gate> approved\|rejected` | Shows or records a human-gate decision |

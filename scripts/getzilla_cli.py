@@ -31,6 +31,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'cleanup': ('getzilla_cleanup.py', 'disk inventory and guarded removal of worktrees without unique work'),
     'change': ('getzilla_change.py', 'manage engineering change packages'),
     'spec': ('getzilla_spec.py', 'validate typed change specifications'),
+    'evals': ('getzilla_evals.py', 'offline agent replay and explicit baseline acceptance'),
     'verify': ('getzilla_verify.py', 'run route-selected verification and record a receipt'),
     'test-tools': ('getzilla_verification_tools.py', 'catalog, plan and run optional executable verification tools'),
     'review': ('getzilla_review.py', 'record an independent review receipt'),
