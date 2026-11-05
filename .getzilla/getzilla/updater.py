@@ -273,17 +273,11 @@ def _check_zip(data: bytes) -> None:
 
 
 def update_osv(fetch: Fetch, root: Path) -> list[Result]:
-    database = root / 'osv'
-    results = []
-    for ecosystem in OSV_ECOSYSTEMS:
-        try:
-            data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip')
-            _check_zip(data)
-            _replace_bytes(database / ecosystem / 'all.zip', data)
-            results.append(Result(f'osv:{ecosystem}', 'ok', f'{len(data) // 1024} KiB'))
-        except Exception as exc:  # noqa: BLE001 - one ecosystem failing must not stop the others
-            results.append(Result(f'osv:{ecosystem}', 'fail', str(exc)[:200]))
-    return results
+    from .security_acquisition import fetch_public, refresh_osv
+    qualified = fetch_public if fetch is _default_fetch else fetch
+    return [Result(item['source_id'], 'ok' if item['status'] == 'pass' else 'fail',
+                   'qualified snapshot committed' if item['status'] == 'pass' else item['reason'])
+            for item in refresh_osv(root / 'osv', list(OSV_ECOSYSTEMS), fetch=qualified)]
 
 
 def _platform_key() -> tuple[str, str]:
@@ -418,8 +412,13 @@ def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable
         results += [Result(item.component, item.status, item.detail + mirror.note(False))
                     for item in update_sources(run, root, {name: mirror.url(url) for name, url in SOURCES.items()})]
     if 'osv' in wanted:
-        results += [Result(item.component, item.status, item.detail + mirror.note(False))
-                    for item in update_osv(mirror.fetch, root)]
+        from .security_data import SecurityDataError, copy_snapshot
+        for ecosystem in OSV_ECOSYSTEMS:
+            try:
+                copy_snapshot(mirror.root / 'osv', root / 'osv', f'osv:{ecosystem}', required_scope={ecosystem})
+                results.append(Result(f'osv:{ecosystem}', 'ok', 'qualified snapshot copied with original acquisition time' + mirror.note(False)))
+            except (OSError, ValueError, SecurityDataError):
+                results.append(Result(f'osv:{ecosystem}', 'fail', 'qualified offline snapshot is unavailable; raw ZIP cannot refresh time'))
     if 'opengrep' in wanted:
         assets = {key: (asset, mirror.opengrep.get(asset, digest)) for key, (asset, digest) in OPENGREP_ASSETS.items()}
         pinned = assets.get(_platform_key(), ('',))[0] in mirror.opengrep

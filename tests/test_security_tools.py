@@ -188,7 +188,7 @@ class SecurityToolTests(unittest.TestCase):
             trivy_database_source(self.root, now=NOW)
 
     def test_sast_requires_actual_nonzero_coverage_without_parse_errors(self):
-        good = {'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
         self.assertEqual(validate_tool_report('opengrep', good, ['src/app.py'])['outcome'], 'pass')
         for report in ({}, {**good, 'paths': {'scanned': []}},
                        {**good, 'errors': [{'level': 'error', 'type': 'ParseError'}]},
@@ -204,6 +204,52 @@ class SecurityToolTests(unittest.TestCase):
         uncovered['metrics'].pop('src/app.py')
         with self.assertRaises(SecurityDataError):
             validate_tool_report('bandit', uncovered, ['src/app.py'])
+
+    def test_public_opengrep_report_helper_reuses_closed_version_and_roster_contract(self):
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        for change, expected in (({'version': 'unknown'}, ['src/app.py']),
+                                 ({}, ['src/app.py', 'src/app.py']),
+                                 ({'paths': {'scanned': ['src/app.py', 'extra.py']}}, ['src/app.py'])):
+            with self.subTest(change=change, expected=expected), self.assertRaises(SecurityDataError):
+                validate_tool_report('opengrep', {**good, **change}, expected)
+
+    def test_real_expanded_consumer_delegates_original_source_and_rejects_inventory_gaps(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+
+        def legacy_report(command, _source, _scratch, **_options):
+            Path(command[command.index('--output') + 1]).write_text(json.dumps({
+                'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}))
+            return ProcessResult(command, 0)
+
+        observed = {'outcome': 'pass', 'summary': 'one complete source target', 'findings': [],
+                    'finding_count': 0, 'coverage': {'expected': ['app.js'], 'observed': ['app.js']}}
+        for inventory_files in ([], ['app.js', 'app.js']):
+            with self.subTest(inventory=inventory_files), \
+                 mock.patch.object(security_opengrep, 'scan_source', return_value=observed) as adapter, \
+                 mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+                 mock.patch.object(security_tools, '_process', side_effect=legacy_report):
+                reports = security_tools.scan_source(self.root, {'files': inventory_files})
+            result = next(row for row in reports if row['name'] == 'opengrep')
+            self.assertEqual(result['outcome'], 'blocked')
+            if inventory_files == []:
+                self.assertEqual(adapter.call_args.args[0], self.root)
+                self.assertEqual(adapter.call_args.kwargs['profile'], 'expanded')
+
+    def test_expanded_consumer_keeps_adapter_partial_even_when_legacy_report_is_clean(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+        partial = {'outcome': 'blocked', 'summary': 'OpenGrep 1.30.1 incomplete: syntax_incomplete',
+                   'findings': [], 'finding_count': None, 'coverage': None}
+        with mock.patch.object(security_opengrep, 'scan_source', return_value=partial), \
+             mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+             mock.patch.object(security_tools, '_process_report', return_value={
+                 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}), \
+             mock.patch.object(security_tools, '_process', return_value=ProcessResult([], 0)):
+            result = next(row for row in security_tools.scan_source(self.root, {'files': ['app.js']})
+                          if row['name'] == 'opengrep')
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertIn('syntax_incomplete', result['summary'])
 
     def test_misconfiguration_requires_target_coverage_and_nonfailure_results(self):
         report = {'SchemaVersion': 2, 'Results': [{'Target': 'Dockerfile', 'Class': 'config',

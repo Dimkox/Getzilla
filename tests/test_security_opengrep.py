@@ -249,6 +249,14 @@ class AdapterRefusalTests(unittest.TestCase):
         self.assertIn('syntax_frontend_unavailable', result['summary'])
         self.assertFalse((self.root / 'ran').exists())
 
+    def test_actual_empty_census_needs_no_tool_execution_or_fabricated_pin(self):
+        (self.root / 'app.py').unlink()
+        result = self.scanner.scan_source(self.root, rules_root=self.rules,
+                                          executable=self.root / 'missing-tool', profile='expanded')
+        self.assertEqual(result['outcome'], 'not_applicable', result['summary'])
+        self.assertEqual(result['coverage'], {'expected': [], 'observed': []})
+        self.assertFalse((self.root / 'ran').exists())
+
 
 class AdapterCapabilityTests(unittest.TestCase):
     def test_missing_native_platform_capability_is_explicit_incomplete_without_effect(self):

@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Callable
 
 from .security_data import SOURCE_URLS, SecurityDataError, osv_coverage, publish_snapshot
-from .security_intelligence import validate_epss, validate_kev
 from .updater import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
 
 TRIVY_VERSION = '0.74.0'
@@ -104,6 +103,8 @@ def _body(response: FetchResult, expected_url: str) -> bytes:
 
 def refresh_feeds(database: Path, ecosystems: list[str], *, fetch: Callable[[str], FetchResult] = fetch_public,
                   now: datetime | None = None) -> list[dict]:
+    # This expanded caller remains inactive in the native OSV-only closure.
+    from .security_intelligence import validate_epss, validate_kev
     results = []
     for source_id in [*(f'osv:{item}' for item in sorted(set(ecosystems))), 'kev', 'epss']:
         try:
@@ -128,6 +129,32 @@ def refresh_feeds(database: Path, ecosystems: list[str], *, fetch: Callable[[str
                                      'status': response.status}})
         except (OSError, ValueError, RuntimeError) as exc:
             results.append({'source_id': source_id, 'status': 'fail', 'reason': str(exc)})
+    return results
+
+
+def refresh_osv(database: Path, ecosystems: list[str], *, fetch: Callable[[str], FetchResult] = fetch_public,
+                now: datetime | None = None) -> list[dict]:
+    """Explicit native OSV acquisition; never activate unrelated feed families."""
+    results = []
+    for ecosystem in sorted(set(ecosystems)):
+        source_id = f'osv:{ecosystem}'
+        try:
+            if source_id not in SOURCE_URLS:
+                raise SecurityDataError('unsupported OSV source')
+            url = SOURCE_URLS[source_id]
+            response = fetch(url)
+            payload = _body(response, url)
+            current = datetime.now(timezone.utc) if now is None else now
+            coverage = osv_coverage(payload, ecosystem)
+            acquisition = {'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                           'producer': 'getzilla-native-osv-acquisition-v1'}
+            proof = publish_snapshot(database, source_id, payload, acquisition=acquisition, coverage=coverage, now=now)
+            results.append({'source_id': source_id, 'status': 'pass', 'snapshot': proof,
+                            'http': {'requested_url': response.requested_url, 'final_url': response.final_url,
+                                     'status': response.status}})
+        except (OSError, ValueError, RuntimeError) as error:
+            # The store uses fixed refusal reasons and hashed record locations.
+            results.append({'source_id': source_id, 'status': 'fail', 'reason': str(error)[:512]})
     return results
 
 
@@ -197,3 +224,85 @@ def provision_tools(destination: Path, *, fetch: Callable[[str], FetchResult] = 
         except (OSError, ValueError, RuntimeError, tarfile.TarError) as exc:
             output.append({'tool': name, 'status': 'fail', 'reason': str(exc)})
     return output
+
+
+class _NoQueryRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        raise SecurityDataError('qualified OSV query redirects are unsupported')
+
+
+def fetch_osv_request(method: str, url: str, request_body: bytes, deadline: float,
+                      maximum: int):
+    """One fixed query request with remaining time/body bounds; no retries."""
+    from .security_osv_query import (DETAIL_URL, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
+                                     QUERY_URL, QueryResponse, _identifier, check_deadline)
+    if (method == 'POST' and url != QUERY_URL or method == 'GET' and not url.startswith(DETAIL_URL)
+            or method not in {'POST', 'GET'} or type(request_body) is not bytes
+            or len(request_body) > MAX_REQUEST_BYTES or method == 'GET' and request_body
+            or type(maximum) is not int or not 0 < maximum <= MAX_RESPONSE_BYTES):
+        raise SecurityDataError('qualified OSV request is outside the closed protocol')
+    if method == 'GET':
+        _identifier(url.removeprefix(DETAIL_URL))
+    check_deadline(deadline)
+    remaining_time = min(10.0, deadline - time.monotonic())
+    if remaining_time <= 0:
+        raise SecurityDataError('query acquisition deadline exceeded')
+    request = urllib.request.Request(url, data=request_body if method == 'POST' else None, method=method,
+        headers={'User-Agent': 'getzilla-qualified-osv-query/1', 'Accept-Encoding': 'identity',
+                 'Content-Type': 'application/json'})
+    opener = urllib.request.build_opener(_NoQueryRedirects())
+    try:
+        with opener.open(request, timeout=remaining_time) as response:
+            check_deadline(deadline)
+            if response.status != 200 or response.geturl() != url:
+                raise SecurityDataError('qualified OSV response identity or status differs')
+            declared = response.headers.get('Content-Length')
+            if (response.headers.get('Content-Encoding', 'identity') != 'identity'
+                    or declared is not None and (type(declared) is not str or len(declared) > 20
+                    or not declared.isdecimal() or int(declared) > maximum)):
+                raise SecurityDataError('qualified OSV response exceeds its remaining body bound or encoding')
+            chunks, remaining = [], maximum + 1
+            while remaining:
+                check_deadline(deadline)
+                chunk = response.read1(min(65536, remaining))
+                check_deadline(deadline)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b''.join(chunks)
+            if not body or len(body) > maximum or declared is not None and len(body) != int(declared):
+                raise SecurityDataError('qualified OSV response is empty, incomplete or exceeds bound')
+            return QueryResponse(method, url, request_body, body, response.status, response.geturl())
+    except http.client.HTTPException:
+        raise SecurityDataError('qualified OSV HTTP response is incomplete or malformed') from None
+
+
+def refresh_query(root: Path, database: Path, *, transport=None,
+                  now: datetime | None = None) -> dict:
+    """Explicit producer; read-only scans and receipt consumers never call it."""
+    from .known_vulns import dependency_inventory, load_config
+    from .security_osv_query import MAX_SECONDS, SOURCE_ID, acquire_transcript, check_deadline
+    deadline = time.monotonic() + MAX_SECONDS
+    try:
+        inventory = dependency_inventory(root, load_config(root))[2]
+        if not inventory['objects']:
+            return {'source_id': SOURCE_ID, 'status': 'skip', 'reason': 'actual structural absence; no acquisition'}
+        payload, acquisition, coverage = acquire_transcript(inventory, transport=fetch_osv_request if transport is None else transport,
+                                                           now=now, deadline=deadline)
+        if transport is None:
+            # This names the selected default code path, not independent
+            # publisher/runner authority. Explicit test ports stay synthetic.
+            acquisition['producer'] = 'getzilla-native-osv-query-v1'
+        def current_inputs():
+            check_deadline(deadline)
+            if dependency_inventory(root, load_config(root))[2] != inventory:
+                raise SecurityDataError('query policy or inventory changed before publication')
+            check_deadline(deadline)
+        current_inputs()
+        proof = publish_snapshot(database, SOURCE_ID, payload, acquisition=acquisition,
+                                 coverage=coverage, now=now, before_commit=current_inputs)
+        return {'source_id': SOURCE_ID, 'status': 'pass', 'snapshot': proof}
+    except (OSError, ValueError, RuntimeError):
+        return {'source_id': SOURCE_ID, 'status': 'fail',
+                'reason': 'qualified query acquisition or publication unavailable; possible commits require checked reconciliation'}

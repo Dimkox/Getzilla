@@ -74,7 +74,9 @@ def validate_report(report: object, expected: object, returncode: int) -> dict:
     required = targets(expected)
     if type(returncode) is not int or returncode not in {0, 1}:
         raise OpenGrepError('scanner_failed')
-    if not isinstance(report, dict) or report.get('version') != VERSION:
+    if (not isinstance(report, dict) or report.get('version') != VERSION
+            or not {'version', 'results', 'errors', 'paths'} <= set(report)
+            or not set(report) <= {'version', 'results', 'errors', 'paths', 'skipped_rules', 'interfile_languages_used'}):
         raise OpenGrepError('invalid_report')
     errors = report.get('errors')
     if not isinstance(errors, list):
@@ -83,12 +85,14 @@ def validate_report(report: object, expected: object, returncode: int) -> dict:
         raise OpenGrepError('analysis_diagnostics')
     findings = report.get('results')
     paths = report.get('paths')
-    if not isinstance(findings, list) or not isinstance(paths, dict):
+    if (not isinstance(findings, list) or not isinstance(paths, dict)
+            or not set(paths) <= {'scanned', 'skipped'}):
         raise OpenGrepError('invalid_report')
     observed = targets(paths.get('scanned'))
     if observed != required:
         raise OpenGrepError('target_coverage_incomplete')
-    if report.get('skipped_rules', []) != [] or paths.get('skipped', []) != []:
+    if (report.get('skipped_rules', []) != [] or paths.get('skipped', []) != []
+            or report.get('interfile_languages_used', []) != []):
         raise OpenGrepError('analysis_incomplete')
     details = []
     for item in findings:

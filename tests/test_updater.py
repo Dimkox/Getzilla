@@ -30,15 +30,64 @@ from tests._support import offline_mirror, project_copy, run_hook
 
 
 
-def _zip_bytes(name: str, padding: int = 64) -> bytes:
+def _zip_bytes(name: str, padding: int = 64, *, ecosystem: str = 'PyPI') -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
-        archive.writestr('osv-test.json', ('{"id": "%s", "padding": "%s"}' % (name, 'x' * padding)).encode())
+        archive.writestr('osv-test.json', json.dumps({'id': name, 'padding': 'x' * padding,
+            'affected': [{'package': {'ecosystem': ecosystem, 'name': 'public-updater-package'},
+                          'versions': ['1.0.0']}]}).encode())
     return buffer.getvalue()
 
 
 def _git(*args: str, cwd: Path) -> str:
     return subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+class QualifiedOSVUpdaterTests(unittest.TestCase):
+    def test_public_mirror_uses_production_contract_and_copy_keeps_original_time(self):
+        from getzilla import security_data
+        with tempfile.TemporaryDirectory(prefix='osv-public-mirror-') as temporary:
+            base = Path(temporary).resolve()
+            source = offline_mirror(base)
+            self.assertTrue((source / 'osv/PyPI/snapshot.json').is_file(), 'public mirror fixture lacks qualified acquisition metadata')
+            before = security_data.read_snapshot(source / 'osv', 'osv:PyPI')[1]
+            self.assertEqual(before['acquisition']['producer'], 'synthetic-public-offline-mirror')
+            mirror = updater.Mirror.from_environ({updater.MIRROR_ENV: str(source)})
+            results = updater._run_from_mirror(base / 'state', mirror, run=lambda *_: None,
+                                              which=lambda _: None, components=('osv',))
+            self.assertTrue(all(result.status == 'ok' for result in results), results)
+            after = security_data.read_snapshot(base / 'state/osv', 'osv:PyPI')[1]
+            self.assertEqual(after['acquisition'], before['acquisition'])
+
+    def test_raw_zip_fetch_cannot_create_verified_acquisition(self):
+        from tests.test_security_data import archive, record
+        with tempfile.TemporaryDirectory(prefix='osv-public-updater-') as temporary:
+            root = Path(temporary).resolve()
+            target = root / 'osv/PyPI/all.zip'
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'public legacy bytes')
+            results = updater.update_osv(lambda _url: archive([record()]), root)
+            self.assertTrue(all(result.status == 'fail' for result in results), 'raw ZIP was relabelled as an acquired source')
+            self.assertEqual(target.read_bytes(), b'public legacy bytes')
+            self.assertFalse((target.parent / 'snapshot.json').exists())
+
+    def test_qualified_transport_publishes_through_shared_store(self):
+        from getzilla.security_acquisition import FetchResult
+        from getzilla import security_data
+        from tests.test_security_data import archive, record
+        with tempfile.TemporaryDirectory(prefix='osv-public-updater-') as temporary:
+            root = Path(temporary).resolve()
+            def fetch(url):
+                ecosystem = url.split('/')[-2]
+                return FetchResult(archive([record('PUBLIC-' + ecosystem, ecosystem)]), url, url, 200)
+            results = updater.update_osv(fetch, root)
+            self.assertTrue(all(result.status == 'ok' for result in results), results)
+            for ecosystem in updater.OSV_ECOSYSTEMS:
+                _, evidence = security_data.read_snapshot(root / 'osv', f'osv:{ecosystem}', required_scope={ecosystem})
+                self.assertEqual(evidence['coverage']['scopes'], [ecosystem])
+            before = (root / 'osv/PyPI/snapshot.json').read_bytes()
+            updater.update_osv(lambda _url: b'public raw ZIP cannot refresh time', root)
+            self.assertEqual((root / 'osv/PyPI/snapshot.json').read_bytes(), before)
 
 
 class UpdaterTests(unittest.TestCase):
@@ -88,10 +137,12 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(broken[0].status, 'fail')
 
     def test_osv_mirror_is_replaced_per_ecosystem(self) -> None:
-        def fetch(url: str) -> bytes:
+        from getzilla.security_acquisition import FetchResult
+        def fetch(url: str):
             if '/npm/' in url:
                 raise OSError('offline')
-            return _zip_bytes(url)
+            ecosystem = url.split('/')[-2]
+            return FetchResult(_zip_bytes('PUBLIC-' + ecosystem, ecosystem=ecosystem), url, url, 200)
         results = {item.component: item for item in updater.update_osv(fetch, self.root)}
         self.assertEqual(results['osv:npm'].status, 'fail')
         self.assertEqual(results['osv:PyPI'].status, 'ok')
@@ -101,17 +152,18 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue((self.root / 'osv/PyPI/all.zip').read_bytes().startswith(b'PK'))
 
     def test_osv_archive_with_bad_crc_is_rejected(self) -> None:
+        from getzilla.security_acquisition import FetchResult
         good = _zip_bytes('x', padding=64 * 1024)
-        updater.update_osv(lambda url: good, self.root)
+        updater.update_osv(lambda url: FetchResult(good, url, url, 200), self.root)
         corrupt = bytearray(good)
         # ZIP_STORED keeps the payload verbatim. Flip one byte near the end of a member larger
         # than zipfile's read chunk: headers and filename stay intact, and a reader that stops
         # after the first chunk never sees it -- only a full CRC check (testzip) does.
         corrupt[good.rindex(b'x' * 64) + 32] ^= 0x01
-        results = updater.update_osv(lambda url: bytes(corrupt), self.root)
+        results = updater.update_osv(lambda url: FetchResult(bytes(corrupt), url, url, 200), self.root)
         self.assertTrue(all(item.status == 'fail' for item in results), results)
         self.assertEqual((self.root / 'osv/PyPI/all.zip').read_bytes(), good)
-        truncated = updater.update_osv(lambda url: b'PK\x03\x04' + b'x' * 32, self.root)
+        truncated = updater.update_osv(lambda url: FetchResult(b'PK\x03\x04' + b'x' * 32, url, url, 200), self.root)
         self.assertTrue(all(item.status == 'fail' for item in truncated))
 
     def _pinned(self, payload: bytes) -> mock._patch:

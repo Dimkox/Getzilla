@@ -44,7 +44,10 @@ class OpenGrepContractTests(unittest.TestCase):
     def test_required_shapes_version_and_exit_are_closed(self):
         values = [{}, {**self.clean, 'version': 'unknown'},
                   {**self.clean, 'errors': None}, {**self.clean, 'results': [None]},
-                  {**self.clean, 'paths': {}}, {**self.clean, 'paths': {'scanned': None}}]
+                  {**self.clean, 'paths': {}}, {**self.clean, 'paths': {'scanned': None}},
+                  {**self.clean, 'unknown_safety_field': True},
+                  {**self.clean, 'paths': {'scanned': ['src/app.py'], 'unknown_safety_field': True}},
+                  {**self.clean, 'interfile_languages_used': ['unknown']}]
         for value in values:
             with self.subTest(value=value), self.assertRaises(self.contract.OpenGrepError):
                 self.validate(value)

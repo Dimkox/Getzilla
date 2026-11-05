@@ -654,13 +654,13 @@ def scan_source(root: Path, *, rules_root: Path, executable: Path, profile: str)
             if None in languages:
                 raise OpenGrepError('syntax_frontend_unavailable')
             frontends = {language: stack.enter_context(syntax_frontend(language, deadline=deadline)) for language in sorted(languages)}
-            raw_launcher = _launcher_bytes(executable)
             if not source.entries:
                 source.assert_current()
                 rule_source.assert_current()
                 run.assert_current()
                 return {'outcome': 'not_applicable', 'summary': 'complete census contains no required source targets',
                         'coverage': {'expected': [], 'observed': []}, 'findings': [], 'finding_count': 0}
+            raw_launcher = _launcher_bytes(executable)
             prefix = legacy_rule_prefix(profile, rules_root)
             launcher = stack.enter_context(sealed_tool(raw_launcher))
             core = stack.enter_context(sealed_tool(_bootstrap_core(launcher, run, deadline)))

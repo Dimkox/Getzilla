@@ -54,7 +54,7 @@ class NativeOsvRangeTests(unittest.TestCase):
     def test_actual_offline_pypi_c_advisory_retains_clean_and_finding_controls(self):
         record = {'id':'OSV-SYNTHETIC-PYPI-C','affected':[
             affected([{'introduced':'0'},{'fixed':'0.6c1'}],kind='ECOSYSTEM',ecosystem='PyPI')]}
-        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+        with tempfile.TemporaryDirectory() as directory:
             database = Path(directory)
             fixtures._mirror(database,'PyPI',[record])
             clean = KV.query_offline([KV.Dependency('PyPI','synthetic-package','84.1.0','requirements.txt')],database)
@@ -75,7 +75,7 @@ class NativeOsvRangeTests(unittest.TestCase):
 
     def test_actual_native_cli_keeps_maintenance_line_fixes_instead_of_a_global_maximum(self):
         root_context,root = fixtures._repo({'requirements.txt':'synthetic-package==1.0rc1\n'})
-        with root_context,tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+        with root_context,tempfile.TemporaryDirectory() as directory:
             database = Path(directory)
             records = [{'id':identifier,'affected':[affected([{'introduced':'0'},{'fixed':fixed}],
                         kind='ECOSYSTEM',ecosystem='PyPI')]} for identifier,fixed in
@@ -92,7 +92,7 @@ class NativeOsvRangeTests(unittest.TestCase):
     def test_actual_native_offline_consumer_finds_prerelease_before_fixed_final(self):
         record = {'id':'OSV-SYNTHETIC-313','aliases':[],
                   'affected':[affected([{'introduced':'0'},{'fixed':'1.0.0'}])]}
-        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+        with tempfile.TemporaryDirectory() as directory:
             database = Path(directory)
             fixtures._mirror(database,'npm',[record])
             findings = KV.query_offline([KV.Dependency('npm','synthetic-package','1.0.0-rc.1','package-lock.json')],database)
@@ -165,13 +165,13 @@ class NativeOsvRangeTests(unittest.TestCase):
     def test_native_gate_does_not_hide_unsupported_data_behind_dated_exceptions(self):
         from getzilla import verification
         root_context,root = fixtures._repo({'requirements.txt':'synthetic-package==3.0.0\n'})
-        with root_context,tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+        with root_context,tempfile.TemporaryDirectory() as directory:
             database = Path(directory)
             records = [{'id':identifier,'affected':[scope]} for identifier,scope in [
                 ('OSV-SYNTHETIC-KNOWN',affected([{'introduced':'0'},{'fixed':'4.0.0'}],
                                              kind='ECOSYSTEM',ecosystem='PyPI')),
                 ('OSV-SYNTHETIC-UNKNOWN',affected([{'introduced':'0'}],kind='GIT',ecosystem='PyPI'))]]
-            fixtures._mirror(database,'PyPI',records)
+            fixtures._tampered_mirror(database,'PyPI',records)
             path = root/KV.CONFIG_PATH
             path.parent.mkdir(parents=True,exist_ok=True)
             import json

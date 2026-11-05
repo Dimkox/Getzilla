@@ -310,21 +310,21 @@ def _normalize(value: str) -> str:
 
 
 def validate_tool_report(name: str, report: dict, targets: list[str]) -> dict:
+    if name == 'opengrep':
+        from .opengrep_contract import OpenGrepError, validate_report
+        try:
+            observed = validate_report(report, targets, 0)
+        except OpenGrepError:
+            raise SecurityDataError('OpenGrep report or exact target coverage is incomplete') from None
+        findings = [{'rule': item['rule'], 'path': item['path'], 'line': int(item['line'])}
+                    for item in observed['findings']]
+        return {'outcome': observed['outcome'], 'findings': findings, 'coverage': observed['coverage'],
+                'summary': f'{len(targets)} files checked; {observed["finding_count"]} findings'}
     expected = {_normalize(value) for value in targets}
     if not expected:
         raise SecurityDataError('tool applicability needs source inventory, not an empty report')
     findings = []
-    if name == 'opengrep':
-        if not isinstance(report.get('results'), list) or not isinstance(report.get('errors'), list):
-            raise SecurityDataError('incomplete OpenGrep report')
-        # Partial parsing and timeouts can be warning-level diagnostics even
-        # when the file appears in paths.scanned. None proves full coverage.
-        if report['errors']:
-            raise SecurityDataError('OpenGrep reported incomplete parse/scan coverage')
-        observed = {_normalize(value) for value in report.get('paths', {}).get('scanned', [])}
-        findings = [{'rule': value.get('check_id'), 'path': value.get('path'),
-                     'line': value.get('start', {}).get('line')} for value in report['results']]
-    elif name == 'bandit':
+    if name == 'bandit':
         if report.get('errors') != [] or not isinstance(report.get('results'), list):
             raise SecurityDataError('Bandit reported missing/error coverage')
         metrics = report.get('metrics', {})
@@ -460,8 +460,25 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
               or Path(value).name.endswith('.Dockerfile') or Path(value).suffix == '.tf']
     # Compose files remain a required source inventory and are checked by their
     # native schema/build validations. Trivy's IaC engine does not claim Compose coverage.
-    targets = {'opengrep': sast, 'bandit': python, 'trivy-config': config}
+    targets = {'bandit': python, 'trivy-config': config}
     reports = [{'name': 'secret-scan', **scan_secrets(root, inventory['files'], trusted_root=trusted_root)}]
+    try:
+        from .security_opengrep import OpenGrepError, scan_source as observe_opengrep
+        from .opengrep_contract import targets as target_roster
+        declared = target_roster(sast) if sast else ()
+        observed = observe_opengrep(root, rules_root=trusted_root / '.getzilla/sast/rules',
+                                   executable=tools / 'bin/opengrep', profile='expanded')
+        if observed['outcome'] in {'pass', 'finding', 'not_applicable'}:
+            if tuple(observed['coverage']['expected']) != declared:
+                raise OpenGrepError('inventory_target_coverage_incomplete')
+        projection = {key: observed[key] for key in ('outcome', 'summary', 'coverage')}
+        projection['findings'] = [{'rule': item['rule'], 'path': item['path'], 'line': int(item['line'])}
+                                  for item in observed['findings']]
+        reports.append({'name': 'opengrep', **projection})
+    except (OSError, ValueError, RuntimeError):
+        reports.append({'name': 'opengrep', 'outcome': 'blocked',
+                        'summary': 'OpenGrep 1.30.1 incomplete: source, inventory or tool unavailable',
+                        'gaps': [{'code': 'scanner-unavailable', 'message': 'source, inventory or tool unavailable'}]})
     with tempfile.TemporaryDirectory(prefix='source-', dir=tools) as directory:
         scratch = Path(directory)
         source = scratch / 'input'
@@ -493,10 +510,6 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     bandit_config.write_text(safe_dump(settings), encoding='utf-8', newline='\n')
                     command = [sys.executable, '-I', '-m', 'bandit', '-c', str(bandit_config),
                                '--ignore-nosec', '-q', '-f', 'json', '-o', str(output), '--', *files]
-                elif name == 'opengrep':
-                    command = [str(pinned_tool(name, tools)), 'scan', '--config', str(trusted_root / '.getzilla/sast/rules'),
-                               '--taint-intrafile', '--json', '--quiet', '--strict', '--disable-version-check', '--disable-nosem',
-                               '--no-git-ignore', '--timeout', '30', '--jobs', '1', '--output', str(output), *files]
                 else:
                     command = [str(pinned_tool('trivy', tools)), 'config', '--config', '', '--ignorefile', '',
                                '--skip-check-update', '--skip-version-check', '--include-non-failures',
