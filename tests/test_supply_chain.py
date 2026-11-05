@@ -175,13 +175,13 @@ class TrustAuditTests(unittest.TestCase):
             self.assertNotIn(str(secret), json.dumps(report))
             config.write_bytes(b'x' * 262145)
             entries = {item['path']: item for item in audit(root)['sources']}
-            self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], 'unavailable')
+            self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], 'unqualified')
             self.assertIsNone(entries['.getzilla/config/toolchain.json']['sha256'])
             if os.name != 'nt':
                 config.unlink()
                 config.symlink_to(secret)
                 entries = {item['path']: item for item in audit(root)['sources']}
-                self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], 'unavailable')
+                self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], 'unqualified')
                 self.assertIsNone(entries['.getzilla/config/toolchain.json']['sha256'])
 
     def test_real_cli_audits_sources_without_leaking_configuration_values(self):
@@ -198,9 +198,12 @@ class TrustAuditTests(unittest.TestCase):
             self.assertEqual(report['authority'], 'none')
             self.assertNotIn('PRIVATE-SENTINEL', result.stdout + result.stderr)
             entries = {item['path']: item for item in report['sources']}
-            self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], 'observed')
-            self.assertEqual(len(entries['.getzilla/config/toolchain.json']['sha256']), 64)
-            self.assertEqual(entries['factory/src/getzilla_factory/landing_http.py']['state'], 'missing')
+            expected = 'unqualified' if os.name == 'nt' else 'observed'
+            self.assertEqual(entries['.getzilla/config/toolchain.json']['state'], expected)
+            if os.name != 'nt':
+                self.assertEqual(len(entries['.getzilla/config/toolchain.json']['sha256']), 64)
+            self.assertEqual(entries['factory/src/getzilla_factory/landing_http.py']['state'],
+                             'unqualified' if os.name == 'nt' else 'missing')
 
 
 if __name__ == '__main__':

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -25,6 +26,69 @@ _DEGRADED_PROTECTED_SHELL = re.compile(
 )
 _DEGRADED_CONTROL_PLANE = re.compile(r'(?:^|[\s/"\'=>:])(?:\.getzilla/|\.grok/|\.claude/|\.codex/|\.qwen/|\.gemini/|AGENTS\.md\b)')
 _DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|truncate|touch|rsync)\b|\bsed\s+-i|\bperl\s+-\S*i')
+_MAX_TOOL_PAYLOAD_BYTES = 1_048_576
+_INVALID_TOOL_REQUEST = 'invalid_tool_request: request classification is unavailable.'
+
+
+def _payload_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('invalid-tool-request')
+        result[key] = value
+    return result
+
+
+def _payload_constant(value):
+    raise ValueError('invalid-tool-request')
+
+
+def _payload_tree(value):
+    pending = [(value, 0)]
+    nodes = 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        if depth > 128 or nodes > 65_536:
+            raise ValueError('invalid-tool-request')
+        if isinstance(item, dict):
+            pending.extend((part, depth + 1) for pair in item.items() for part in pair)
+        elif isinstance(item, list):
+            pending.extend((part, depth + 1) for part in item)
+        elif isinstance(item, str):
+            item.encode('utf-8', errors='strict')
+        elif isinstance(item, float) and not math.isfinite(item):
+            raise ValueError('invalid-tool-request')
+
+
+def _read_tool_payload() -> dict[str, Any]:
+    """Decode a bounded request before any fallback can call it a local read."""
+    stream = getattr(sys.stdin, 'buffer', None)
+    raw = stream.read(_MAX_TOOL_PAYLOAD_BYTES + 1) if stream is not None else sys.stdin.read(_MAX_TOOL_PAYLOAD_BYTES + 1)
+    if isinstance(raw, str):
+        raw = raw.encode('utf-8', errors='strict')
+    if len(raw) > _MAX_TOOL_PAYLOAD_BYTES:
+        raise ValueError('invalid-tool-request')
+    value = json.loads(raw.decode('utf-8-sig', errors='strict'), object_pairs_hook=_payload_object,
+                       parse_constant=_payload_constant)
+    _payload_tree(value)
+    if not isinstance(value, dict):
+        raise ValueError('invalid-tool-request')
+    names = [value[key] for key in ('tool_name', 'toolName') if key in value]
+    if (not names or any(not isinstance(name, str) or not name.strip() or len(name) > 512
+                         or any(ord(char) < 32 for char in name) for name in names)):
+        raise ValueError('invalid-tool-request')
+    for key in ('tool_input', 'toolInput', 'toolArgs'):
+        if key not in value or value[key] is None:
+            continue
+        inputs = value[key]
+        if isinstance(inputs, str):
+            inputs = json.loads(inputs, object_pairs_hook=_payload_object, parse_constant=_payload_constant)
+            _payload_tree(inputs)
+        if not isinstance(inputs, dict):
+            raise ValueError('invalid-tool-request')
+        value[key] = inputs
+    return value
 
 
 def _degraded_denial(tool: str, inputs: Any) -> str | None:
@@ -55,23 +119,33 @@ def _degraded_denial(tool: str, inputs: Any) -> str | None:
 
 
 def _degraded_output(reason: str | None) -> str:
+    args = sys.argv[1:]
+    index = args.index('--harness') + 1 if '--harness' in args else len(args)
+    harness_name = args[index] if index < len(args) else 'grok'
     if reason is None:
-        return '{"decision":"allow"}'
+        return '{"decision":"allow"}' if harness_name == 'grok' else '{}'
+    specific = {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                'permissionDecisionReason': reason}
+    if harness_name == 'copilot':
+        return json.dumps({'permissionDecision': 'deny', 'permissionDecisionReason': reason})
+    if harness_name == 'gemini':
+        return json.dumps({'decision': 'deny', 'reason': reason})
+    if harness_name != 'grok':
+        return json.dumps({'hookSpecificOutput': specific})
     return json.dumps({
         'decision': 'deny', 'reason': reason,
-        'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
-                               'permissionDecisionReason': reason},
+        'hookSpecificOutput': specific,
     })
 
 
-def _degraded_payload() -> tuple[str, Any]:
+def _degraded_payload() -> tuple[str, Any] | None:
     try:
-        raw = sys.stdin.buffer.read().decode('utf-8-sig', errors='replace')
-        payload = json.loads(raw) if raw.strip() else {}
-    except (OSError, ValueError):
-        return '', None
-    if not isinstance(payload, dict):
-        return '', None
+        payload = _read_tool_payload()
+    except (OSError, ValueError, RecursionError, TypeError):
+        return None
+    names = [payload[key] for key in ('tool_name', 'toolName') if key in payload]
+    if any(name != names[0] for name in names):
+        return None  # No alias authority is available during bootstrap failure.
     tool = str(payload.get('tool_name') or payload.get('toolName') or '')
     inputs = payload.get('tool_input', payload.get('toolInput', payload.get('toolArgs')))
     if isinstance(inputs, str):
@@ -101,7 +175,6 @@ try:
         agent_id,
         emit,
         permission_output,
-        read_payload,
         root_context,
         session_id,
         tool_input,
@@ -124,7 +197,9 @@ except Exception as _lib_error:
                     'kind': 'HOOK_DEGRADED', 'hook': 'pre_tool_use', 'harness': 'unknown',
                     'error': f'{type(_lib_error).__name__}: {_lib_error}'[:300],
                 }) + '\n')
-    print(_degraded_output(_degraded_denial(*_degraded_payload())))
+    _fallback_request = _degraded_payload()
+    print(_degraded_output(_INVALID_TOOL_REQUEST if _fallback_request is None else
+                           _degraded_denial(*_fallback_request)))
     raise SystemExit(0)
 
 
@@ -537,10 +612,21 @@ def _progress_loop(current_tool: str, current_input: dict[str, Any], payload: di
 
 def main() -> None:
     current_tool, current_input = '', {}
+    classified = False
     try:
-        payload = read_payload()
+        payload = _read_tool_payload()
         current_tool = tool_name(payload)
+        if any(tool_name({'tool_name': payload[key]}) != current_tool
+               for key in ('tool_name', 'toolName') if key in payload):
+            raise ValueError('invalid-tool-request')
         current_input = tool_input(payload)
+        classified = True
+        try:
+            from getzilla.state import bind_session
+        except ImportError:
+            pass
+        else:
+            bind_session(session_id(payload))
         if current_input.get('_getzilla_input_error'):
             _deny(payload, current_tool, current_input, current_input['_getzilla_input_error'],
                   action='invalid-tool-input')
@@ -607,6 +693,13 @@ def main() -> None:
               context=context, action=action or 'policy-denial')
     except Exception as error:
         # Preserve local fallback and record failure. Unknown MCP never gains trust from a hook error.
+        if not classified:
+            try:
+                record_degraded('pre_tool_use', 'invalid-tool-request')
+            except Exception:
+                pass
+            emit(permission_output(False, _INVALID_TOOL_REQUEST))
+            return
         record_degraded('pre_tool_use', error)
         denial = _degraded_denial(current_tool, current_input) if current_tool.startswith('mcp__') else None
         emit(permission_output(denial is None, denial))
