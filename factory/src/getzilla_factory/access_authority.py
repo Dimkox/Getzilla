@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -77,6 +78,67 @@ def _private(path, limit):
         return raw, _file_identity(before)
     except (OSError, SettingsError):
         raise AccessError('access_authority_unavailable') from None
+
+
+def _parent_identity(info):
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
+
+
+@contextmanager
+def _instance_update(lock, deadline):
+    if not lock.acquire(timeout=max(0, deadline - time.monotonic())):
+        raise AccessError('access_authority_unavailable')
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@contextmanager
+def _publication_guard(path, deadline=None):
+    """One stable private lock for native loaders/publishers of this actors file.
+
+    The lock is coordination only, never policy. All IO/waits are outside SOURCE.
+    Uncooperative same-user mutation of this private parent remains unsupported.
+    """
+    deadline = time.monotonic() + 2 if deadline is None else deadline
+    parent = descriptor = None
+    try:
+        import fcntl
+        # Reuse the private no-follow ancestry and single-link custody check.
+        _private(path, 1_048_576)
+        before = path.parent.lstat()
+        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        if _parent_identity(os.fstat(parent)) != _parent_identity(before):
+            raise AccessError('access_authority_unavailable')
+        name = '.access-publication-' + hashlib.sha256(path.name.encode()).hexdigest() + '.lock'
+        descriptor = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=parent)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_size != 0):
+            raise AccessError('access_authority_unavailable')
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AccessError('access_authority_unavailable') from None
+                time.sleep(min(0.01, remaining))
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (_file_identity(named) != _file_identity(info)
+                or _parent_identity(path.parent.lstat()) != _parent_identity(before)):
+            raise AccessError('access_authority_unavailable')
+        yield
+    except (OSError, ImportError):
+        raise AccessError('access_authority_unavailable') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent is not None:
+            os.close(parent)
 
 
 @dataclass(frozen=True, repr=False)
@@ -226,19 +288,21 @@ class AccessAuthority:
         self._issuer, self._boot = object(), object()
         self._snapshot = _snapshot(payload)
         _raw, self._identity = _private(self.path, 1_048_576)
+        self._parent = _parent_identity(self.path.parent.lstat())
         if self._identity != _expected_identity:
             raise AccessError('access_authority_unavailable')
 
     @classmethod
     def load(cls, path):
         path = Path(path)
-        raw, _metadata = _private(path, 1_048_576)
-        try:
-            payload = json.loads(raw, object_pairs_hook=_pairs,
-                                 parse_constant=lambda _value: (_ for _ in ()).throw(AccessError('invalid_access_authority')))
-        except (ValueError, UnicodeError, RecursionError):
-            raise AccessError('invalid_access_authority') from None
-        return cls(path, payload, _expected_identity=_metadata)
+        with _publication_guard(path):
+            raw, _metadata = _private(path, 1_048_576)
+            try:
+                payload = json.loads(raw, object_pairs_hook=_pairs,
+                                     parse_constant=lambda _value: (_ for _ in ()).throw(AccessError('invalid_access_authority')))
+            except (ValueError, UnicodeError, RecursionError):
+                raise AccessError('invalid_access_authority') from None
+            return cls(path, payload, _expected_identity=_metadata)
 
     @property
     def permission_digest(self):
@@ -250,7 +314,8 @@ class AccessAuthority:
     def _live(self):
         # Filesystem work is deliberately outside SOURCE; native updates own the publication cut.
         try:
-            if _file_identity(self.path.lstat()) != self._identity:
+            if (_file_identity(self.path.lstat()) != self._identity
+                    or _parent_identity(self.path.parent.lstat()) != self._parent):
                 raise AccessError('access_authority_unavailable')
         except OSError:
             raise AccessError('access_authority_unavailable') from None
@@ -390,7 +455,8 @@ class AccessAuthority:
 
     def update(self, session, expected_revision, payload):
         # Serialize operator mutations, never block SOURCE on file IO or credential acquisition.
-        with self._updates:
+        deadline = time.monotonic() + 2
+        with _instance_update(self._updates, deadline), _publication_guard(self.path, deadline):
             self._live()
             self._credential_live(session)
             with self._source:
@@ -439,6 +505,8 @@ class AccessAuthority:
                 finally:
                     os.close(directory)
                 _raw, identity = _private(self.path, 1_048_576)
+                if _raw != raw or _parent_identity(self.path.parent.lstat()) != self._parent:
+                    raise AccessError('access_authority_unavailable')
                 with self._source:
                     self._snapshot = proposed
                     self._identity = identity

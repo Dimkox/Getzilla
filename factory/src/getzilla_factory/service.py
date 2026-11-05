@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Iterable
 
 from .brokers import ProposalBroker
-from .contracts import HEX64, TaskIntakeV1, canonical_digest
+from .contracts import HEX64, ContractError, TaskIntakeV1, canonical_digest
 from .execution_contracts import (
     ExecutionContractError,
     ExecutionSelectionV1,
@@ -15,7 +15,7 @@ from .execution_contracts import (
 )
 from .models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
 from .protocol import CanonicalEvent, PROTOCOL_VERSION
-from .result_contracts import ResultEnvelopeV2
+from .result_contracts import ResultEnvelopeV2, ordinary_result_wire
 from .semantic_adjudication import adjudicate
 from .semantic_bridge import SemanticValidationInputsV1, build_semantic_subject
 from .semantic_contracts import (
@@ -37,7 +37,7 @@ from .workspace import (
     WorkspaceSnapshotV1,
     WorkspaceSnapshotUnavailable,
 )
-from .store import FenceError, StoreUnavailable
+from .store import FenceError, ResultReadUnavailable, StoreUnavailable
 
 
 class AuthorizationError(PermissionError):
@@ -140,7 +140,11 @@ class FactoryService:
         """Return a persisted envelope only through its repository-bound identity."""
         self._require(actor, "task:read", repository_id)
         try:
-            return self.store.result_envelope(repository_id, task_id, envelope_digest)
+            result = self.store.result_envelope(repository_id, task_id, envelope_digest)
+            ordinary_result_wire(result.to_dict(), grade='ordinary')
+            return result
+        except (ResultReadUnavailable, ContractError):
+            raise ResultAdmissionUnavailable('result envelope unavailable') from None
         except KeyError as exc:
             raise ResultAdmissionNotFound(envelope_digest) from exc
 

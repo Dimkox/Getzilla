@@ -1,6 +1,32 @@
 -- Protected first-party sources reuse 024/025 identities. Facts are not permits.
 -- Ordinary dispatch cannot claim these rows: their existing dispatch_phase stays blocked.
+-- Grade stays with immutable source facts even if the outbox is absent or pruned.
+ALTER TABLE factory.result_sources_v1
+  ADD COLUMN access_grade text NOT NULL DEFAULT 'ordinary'
+    CHECK (access_grade IN ('ordinary','protected')),
+  ADD CONSTRAINT result_sources_v1_grade_identity UNIQUE (envelope_digest,access_grade);
+
+UPDATE factory.result_sources_v1 SET access_grade='protected'
+WHERE source_operation LIKE 'access:%' OR envelope->>'policy_version' LIKE 'access-local-%';
+
+CREATE FUNCTION factory.stamp_result_access_grade_v1() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+  IF TG_OP='UPDATE' THEN
+    IF NEW IS DISTINCT FROM OLD THEN RAISE EXCEPTION 'immutable result source'; END IF;
+  ELSE
+    NEW.access_grade:=CASE WHEN NEW.source_operation LIKE 'access:%'
+      OR NEW.envelope->>'policy_version' LIKE 'access-local-%' THEN 'protected' ELSE 'ordinary' END;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER stamp_result_access_grade_v1 BEFORE INSERT OR UPDATE ON factory.result_sources_v1
+  FOR EACH ROW EXECUTE FUNCTION factory.stamp_result_access_grade_v1();
+REVOKE ALL ON FUNCTION factory.stamp_result_access_grade_v1() FROM PUBLIC,factory_runtime;
+
 ALTER TABLE factory.next_model_request_outbox_v1
+  ADD COLUMN source_grade text NOT NULL DEFAULT 'ordinary'
+    CHECK (source_grade IN ('ordinary','protected')),
   ADD COLUMN access_binding jsonb,
   ADD COLUMN access_binding_digest char(64),
   ADD COLUMN access_phase text CHECK (access_phase IN ('prepared','sending','delivered','failed','unknown')),
@@ -12,6 +38,36 @@ ALTER TABLE factory.next_model_request_outbox_v1
       AND octet_length(access_binding::text)<=131072
       AND (access_claim IS NULL OR access_claim ~ '^[0-9a-f]{64}$'))
   );
+
+UPDATE factory.next_model_request_outbox_v1 o SET source_grade=s.access_grade,
+  dispatch_phase=CASE WHEN s.access_grade='protected' THEN 'blocked' ELSE o.dispatch_phase END
+FROM factory.result_sources_v1 s WHERE s.envelope_digest=o.envelope_digest;
+
+ALTER TABLE factory.next_model_request_outbox_v1
+  ADD CONSTRAINT access_release_source_grade_fk FOREIGN KEY (envelope_digest,source_grade)
+    REFERENCES factory.result_sources_v1(envelope_digest,access_grade) ON DELETE RESTRICT,
+  ADD CONSTRAINT access_release_no_ordinary_downgrade CHECK (
+    (source_grade='ordinary' AND access_binding IS NULL AND access_phase IS NULL AND access_claim IS NULL)
+    OR (source_grade='protected' AND dispatch_phase='blocked')
+  );
+
+CREATE FUNCTION factory.stamp_outbox_access_grade_v1() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+  IF TG_OP='INSERT' THEN
+    SELECT access_grade INTO NEW.source_grade FROM factory.result_sources_v1
+      WHERE envelope_digest=NEW.envelope_digest;
+    IF NEW.source_grade IS NULL THEN RAISE EXCEPTION 'result source unavailable'; END IF;
+  ELSIF NEW.source_grade IS DISTINCT FROM OLD.source_grade
+    OR NEW.envelope_digest IS DISTINCT FROM OLD.envelope_digest
+    OR NEW.access_binding IS DISTINCT FROM OLD.access_binding
+    OR NEW.access_binding_digest IS DISTINCT FROM OLD.access_binding_digest
+  THEN RAISE EXCEPTION 'immutable result provenance'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER stamp_outbox_access_grade_v1 BEFORE INSERT OR UPDATE ON factory.next_model_request_outbox_v1
+  FOR EACH ROW EXECUTE FUNCTION factory.stamp_outbox_access_grade_v1();
+REVOKE ALL ON FUNCTION factory.stamp_outbox_access_grade_v1() FROM PUBLIC,factory_runtime;
 
 CREATE FUNCTION factory.access_task_fence_v1(p_task uuid,p_run uuid,p_owner text,p_fence bigint,p_packet char(64))
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
@@ -61,7 +117,7 @@ BEGIN
     OR b->>'execution_packet_digest' !~ '^[0-9a-f]{64}$'
   THEN RAISE EXCEPTION 'invalid access binding'; END IF;
   SELECT * INTO s FROM factory.result_sources_v1 WHERE envelope_digest=p_envelope;
-  IF s.envelope_digest IS NULL OR s.outcome NOT IN ('allow','redacted')
+  IF s.envelope_digest IS NULL OR s.access_grade<>'protected' OR s.outcome NOT IN ('allow','redacted')
     OR s.envelope->>'sanitized_payload_digest'<>b->>'payload_digest'
   THEN RAISE EXCEPTION 'access result unavailable'; END IF;
   IF factory.access_task_fence_v1(s.task_id,s.run_id,p_owner,s.fence,s.packet_digest)<>s.attempt_id
@@ -81,7 +137,8 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_tem
 DECLARE o factory.next_model_request_outbox_v1%ROWTYPE;
 BEGIN
   SELECT * INTO o FROM factory.next_model_request_outbox_v1 WHERE request_digest=p_request FOR UPDATE;
-  IF o.access_phase IS DISTINCT FROM 'prepared' OR o.access_binding_digest IS DISTINCT FROM p_binding
+  IF o.access_phase IS DISTINCT FROM 'prepared' OR o.source_grade IS DISTINCT FROM 'protected'
+    OR o.access_binding_digest IS DISTINCT FROM p_binding
     OR p_claim IS NULL OR p_claim !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'access release unavailable'; END IF;
   PERFORM factory.access_task_fence_v1(o.task_id,o.run_id,p_owner,o.fence,o.packet_digest);
   UPDATE factory.next_model_request_outbox_v1 SET access_phase='sending',access_claim=p_claim,

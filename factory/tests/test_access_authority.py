@@ -254,6 +254,142 @@ class AccessAuthorityTests(unittest.TestCase):
                     server.load_actors(path)
             self.assertEqual(reads, [], 'initial JSON detection must obey descriptor custody too')
 
+    def test_later_legitimate_operator_publication_cannot_be_paired_with_earlier_rights(self):
+        import threading
+        from getzilla_factory import access_authority
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, payload, key = authority_fixture(Path(directory))
+            first = self.load_v2(path)
+            old_session = first.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            next_policy = copy.deepcopy(payload)
+            next_policy['revision'] = 2
+            revoked = copy.deepcopy(next_policy)
+            revoked['revision'] = 3
+            revoked['groups'][0]['members'] = []
+            readback, second_finished = threading.Event(), threading.Event()
+            native = access_authority._private
+            injected = False
+            def pause_first_readback(target, limit):
+                nonlocal injected
+                if target == path and not injected and target.lstat().st_ino != first.access_authority._identity[1]:
+                    injected = True
+                    readback.set()
+                    # A qualified shared lock makes the second publisher wait. On b0 it
+                    # completes here, exposing disk3/identity3 paired with proposed2.
+                    second_finished.wait(0.5)
+                return native(target, limit)
+            def second_operator():
+                self.assertTrue(readback.wait(2))
+                second = self.load_v2(path)
+                with TestClient(create_app(FactoryService(object()), second)) as client:
+                    response = client.post('/v1/access/authority', json={'expected_revision': 2, 'authority': revoked},
+                        headers={'Authorization': 'Bearer synthetic-owned-credential-operator'})
+                second_finished.set()
+                self.assertEqual(response.status_code, 200, response.text)
+                return second
+            with patch.object(access_authority, '_private', pause_first_readback), ThreadPoolExecutor(max_workers=1) as pool:
+                later = pool.submit(second_operator)
+                with TestClient(create_app(FactoryService(object()), first)) as client:
+                    response = client.post('/v1/access/authority', json={'expected_revision': 1, 'authority': next_policy},
+                        headers={'Authorization': 'Bearer synthetic-owned-credential-operator'})
+                self.assertEqual(response.status_code, 200, response.text)
+                second = later.result(timeout=3)
+            self.assertEqual(json.loads(path.read_text())['revision'], 3)
+            self.assertFalse(first.access_authority.authorize(old_session, key('a'), 'v1', 'source:read'))
+            current = second.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            self.assertFalse(second.access_authority.authorize(current, key('a'), 'v1', 'source:read'))
+
+    def test_foreign_readback_bytes_never_become_a_current_proposed_snapshot(self):
+        import os
+        from getzilla_factory.access_authority import AccessError
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, payload, key = authority_fixture(Path(directory))
+            auth = self.load_v2(path)
+            session = auth.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            admin = auth.access_session('Bearer synthetic-owned-credential-operator', 'factory:access-admin')
+            next_policy = copy.deepcopy(payload)
+            next_policy['revision'] = 2
+            foreign = copy.deepcopy(next_policy)
+            foreign['revision'] = 3
+            foreign['groups'][0]['members'] = []
+            native_replace = os.replace
+            def replace_then_foreign(*args, **kwargs):
+                native_replace(*args, **kwargs)
+                path.write_text(json.dumps(foreign))
+            with patch.object(os, 'replace', replace_then_foreign):
+                with self.assertRaises(AccessError):
+                    auth.access_authority.update(admin, 1, next_policy)
+            self.assertEqual(json.loads(path.read_text()), foreign)
+            self.assertFalse(auth.access_authority.authorize(session, key('a'), 'v1', 'source:read'))
+
+    def test_stale_provider_cas_preserves_the_later_file_and_requires_fresh_boot(self):
+        from getzilla_factory.access_authority import AccessError
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, payload, key = authority_fixture(Path(directory))
+            first, stale = self.load_v2(path), self.load_v2(path)
+            admin = first.access_session('Bearer synthetic-owned-credential-operator', 'factory:access-admin')
+            old_admin = stale.access_session('Bearer synthetic-owned-credential-operator', 'factory:access-admin')
+            old_user = stale.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            payload['revision'] = 2
+            first.access_authority.update(admin, 1, payload)
+            before = path.read_bytes()
+            with self.assertRaises(AccessError):
+                stale.access_authority.update(old_admin, 1, payload)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse(stale.access_authority.authorize(old_user, key('a'), 'v1', 'source:read'))
+            fresh = self.load_v2(path)
+            user = fresh.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            self.assertTrue(fresh.access_authority.authorize(user, key('a'), 'v1', 'source:read'))
+
+    def test_native_publication_lock_is_shared_with_another_process_and_has_bounded_wait(self):
+        import os
+        import subprocess
+        import sys
+        import time
+        from getzilla_factory.access_authority import _publication_guard
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, _payload, _key = authority_fixture(Path(directory))
+            self.load_v2(path)
+            script = ('from pathlib import Path; import sys; '
+                      'from getzilla_factory.access_authority import AccessAuthority,AccessError; '
+                      '\ntry: AccessAuthority.load(Path(sys.argv[1]))'
+                      '\nexcept AccessError: print("fixed_unavailable"); sys.exit(2)'
+                      '\nelse: print("loaded"); sys.exit(0)')
+            started = time.monotonic()
+            with _publication_guard(path):
+                child = subprocess.run([sys.executable, '-c', script, str(path)], capture_output=True,
+                    text=True, timeout=3, env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+            self.assertEqual(child.returncode, 2, child.stderr)
+            self.assertEqual(child.stdout.strip(), 'fixed_unavailable')
+            self.assertLess(time.monotonic() - started, 3)
+            self.load_v2(path)  # Lifetime lock released; current authority can load normally.
+
+    def test_unknown_post_replace_readback_is_one_write_and_disables_cached_permissions(self):
+        import os
+        from getzilla_factory import access_authority
+        with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
+            path, payload, key = authority_fixture(Path(directory))
+            auth = self.load_v2(path)
+            user = auth.access_session('Bearer synthetic-owned-credential-user-a', 'source:read')
+            admin = auth.access_session('Bearer synthetic-owned-credential-operator', 'factory:access-admin')
+            payload['revision'] = 2
+            native, native_replace = access_authority._private, os.replace
+            replaced = 0
+            def replace(*args, **kwargs):
+                nonlocal replaced
+                native_replace(*args, **kwargs)
+                replaced += 1
+            def unavailable(target, limit):
+                if replaced and target == path:
+                    raise OSError('synthetic private IO detail')
+                return native(target, limit)
+            with patch.object(os, 'replace', replace), patch.object(access_authority, '_private', unavailable):
+                with self.assertRaisesRegex(access_authority.AccessError, '^access_authority_unavailable$'):
+                    auth.access_authority.update(admin, 1, payload)
+            self.assertEqual(replaced, 1)
+            self.assertEqual(json.loads(path.read_bytes())['revision'], 2)
+            self.assertFalse(auth.access_authority.authorize(user, key('a'), 'v1', 'source:read'))
+
     def test_closed_v2_malformed_scalar_is_a_fixed_loader_refusal(self):
         with tempfile.TemporaryDirectory(prefix='getzilla-access150-') as directory:
             root = Path(directory)

@@ -9,9 +9,9 @@ import math
 import time
 import uuid
 
-from .contracts import HEX64, TaskIntakeV1, canonical_digest, canonical_json
+from .contracts import HEX64, ContractError, TaskIntakeV1, canonical_digest, canonical_json
 from .decision_contracts import DecisionRecordV1
-from .result_contracts import ResultEnvelopeV2
+from .result_contracts import ResultEnvelopeV2, ordinary_result_wire
 from .result_dispatch import DispatchClaim, DispatchOutcome
 from .brokers import (
     ArtifactProposal,
@@ -89,6 +89,10 @@ from .workspace import (
 
 class StoreError(RuntimeError):
     pass
+
+
+class ResultReadUnavailable(StoreError):
+    """Protected/unknown source facts cannot enter the legacy read DTO."""
 
 
 class FenceError(StoreError):
@@ -4382,15 +4386,25 @@ class PostgresFactoryStore:
     ) -> ResultEnvelopeV2:
         with self._transaction() as cursor:
             cursor.execute(
-                "SELECT envelope FROM factory.result_sources_v1 "
-                "WHERE repository_id=%s AND task_id=%s AND envelope_digest=%s",
+                "SELECT s.envelope,s.access_grade,EXISTS("
+                "SELECT 1 FROM factory.next_model_request_outbox_v1 o "
+                "WHERE o.envelope_digest=s.envelope_digest AND "
+                "(o.source_grade<>'ordinary' OR o.access_binding IS NOT NULL OR o.access_phase IS NOT NULL)) "
+                "FROM factory.result_sources_v1 s "
+                "WHERE s.repository_id=%s AND s.task_id=%s AND s.envelope_digest=%s",
                 (repository_id, task_id, envelope_digest),
             )
             row = cursor.fetchone()
         if row is None:
             raise KeyError(envelope_digest)
         try:
-            result = ResultEnvelopeV2.from_dict(row[0])
+            if len(row) != 3:
+                raise ContractError('protected_result_unavailable')
+            wire = ordinary_result_wire(row[0], grade=row[1], protected_binding=row[2])
+        except ContractError:
+            raise ResultReadUnavailable('protected result unavailable') from None
+        try:
+            result = ResultEnvelopeV2.from_dict(wire)
         except Exception as exc:
             raise StoreError("stored result envelope is corrupt") from exc
         if (
