@@ -68,6 +68,10 @@ def regular(root, relative, *, create=False):
 
 
 def validate(item):
+    if isinstance(item, dict) and item.get('schema_version') == 3:
+        from .trace_contracts import validate_v3
+        validate_v3(item)
+        return
     if not isinstance(item, dict) or item.get('event') not in EVENTS or not isinstance(item.get('at'), str):
         raise ValueError('malformed observation')
     when(item)

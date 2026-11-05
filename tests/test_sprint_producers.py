@@ -1,0 +1,150 @@
+"""Exercise native canonical transitions; imported JSON cannot finish a task."""
+import os
+import json
+import subprocess
+import sys
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'.getzilla'))
+from getzilla import state
+from getzilla.router import build_route
+from tests._support import project_copy
+try:
+    from getzilla import sprint_lifecycle
+except ImportError:
+    sprint_lifecycle = None
+
+SESSION = '00000000-0000-4000-8000-000000000001'
+
+
+class ProducerTests(unittest.TestCase):
+    def route(self, root):
+        root.chmod(0o755)
+        (root/'.getzilla').chmod(0o755)
+        state.bind_session(SESSION)
+        route = build_route(root, 'Fix a typo in README documentation.', SESSION).to_dict()
+        state.set_active_route(root, route)
+        return state.get_active_route(root)
+
+    def select(self, root, route):
+        self.assertIsNotNone(sprint_lifecycle, 'native selection producer is missing')
+        start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return sprint_lifecycle.select_sprint(root, start, expected_epoch=route['authority_epoch'],
+                                              expected_revision=route['state_revision'])
+
+    def test_native_selection_replay_reuses_exact_committed_event(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            current = self.select(root, route)
+            pending = current['observation_publication']['events']
+            replay = self.select(root, route)
+            self.assertEqual(replay['observation_publication']['events'], pending)
+            self.assertEqual(current['logical_task_id'], route['logical_task_id'])
+            self.assertEqual(pending[0]['context_revision'], route['context']['revision'])
+            self.assertNotIn('Fix a typo', str(pending))
+            proof = state.canonical_route(root, route['route_id'])['observation_publication']['delivery']
+            self.assertIn(pending[0]['event_id'], proof)
+            self.assertGreaterEqual(proof[pending[0]['event_id']]['delivered_by'], pending[0]['captured_at'])
+
+    def test_failed_native_finish_does_not_emit_completion(self):
+        from getzilla.continuity import finish_task
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            current = self.select(root, route)
+            with self.assertRaises(ValueError):
+                finish_task(root)
+            records = state.canonical_route(root, current['route_id'])['observation_publication']['events']
+            self.assertNotIn('task_completed', [row['kind'] for row in records])
+
+    def test_append_failure_preserves_native_selection_for_reconciliation(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            self.assertIsNotNone(sprint_lifecycle, 'native selection producer is missing')
+            with patch('getzilla.sprint_lifecycle.append_native', return_value=False):
+                current = self.select(root, route)
+            self.assertIn('sprint', state.canonical_route(root, route['route_id']))
+            self.assertEqual(current['observation_publication']['coverage'], 'censored')
+
+    def test_delayed_delivery_after_pointer_change_uses_original_task_binding(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            first = self.select(root, route)
+            captured = first['observation_publication']['events'][0]
+            (root/'.getzilla/runtime/active-route.json').unlink()
+            self.assertEqual(sprint_lifecycle.deliver(root, first['route_id']), True)
+            from getzilla.observation_privacy import load_local
+            rows = [row for row in load_local(root)['events'] if row.get('schema_version') == 3]
+            self.assertEqual(rows[0]['logical_task_id'], captured['logical_task_id'])
+            self.assertEqual(rows[0]['head'], captured['head'])
+
+    def test_lost_delivery_ack_does_not_retry_native_work_or_claim_delivery(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            self.assertIsNotNone(sprint_lifecycle)
+            with patch('getzilla.sprint_lifecycle.ack_delivery', side_effect=OSError('private-sentinel')):
+                current = self.select(root, route)
+            self.assertEqual(current['observation_publication']['delivery'], {})
+            captured = current['observation_publication']['events'][0]
+            from getzilla.observation_privacy import load_local
+            from getzilla.sprint_report import summarize_sprint
+            source = load_local(root)
+            result = summarize_sprint(source['events'], start=current['sprint']['window_start'],
+                as_of=(datetime.now(timezone.utc)+timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                source_manifest=source)
+            self.assertIsNone(result['counts']['observed_selected'])
+            self.assertIn('native_delivery_proof_missing', result['coverage']['gaps'])
+            self.assertTrue(sprint_lifecycle.deliver(root, route['route_id']))
+            restored = state.canonical_route(root, route['route_id'])
+            self.assertEqual(restored['observation_publication']['events'][0], captured)
+            self.assertEqual(len(restored['observation_publication']['delivery']), 1)
+
+    def test_backward_delivery_clock_stays_censored(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            self.assertIsNotNone(sprint_lifecycle)
+            with patch('getzilla.sprint_lifecycle.append_native', return_value=False):
+                current = self.select(root, route)
+            with patch('getzilla.sprint_lifecycle.now_utc', return_value='2000-01-01T00:00:00+00:00'):
+                self.assertFalse(sprint_lifecycle.deliver(root, route['route_id']))
+            self.assertEqual(state.canonical_route(root, route['route_id'])['observation_publication']['delivery'], {})
+
+    def test_telemetry_privacy_failure_does_not_block_native_task_state(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            current = self.select(root, route)
+            (root/'.getzilla/runtime').chmod(0o755)
+            updated = state.update_route(root, status='working')
+            self.assertEqual(updated['status'], 'working')
+            self.assertTrue(updated['observation_capture_failed'])
+
+    def test_existing_native_route_cli_selects_only_explicit_current_owner_task(self):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            start = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
+            script = Path(__file__).resolve().parents[1]/'scripts/getzilla_route.py'
+            result = subprocess.run([sys.executable, str(script), '--sprint-select', start,
+                '--expected-epoch', str(route['authority_epoch']), '--expected-revision', str(route['state_revision']),
+                '--session', SESSION, '--json'], cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['sprint']['window_start'], start)
+
+    def test_missing_journal_selection_does_not_turn_membership_into_zero(self):
+        from getzilla.observation_privacy import load_local
+        from getzilla.sprint_report import summarize_sprint
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.route(root)
+            current = self.select(root, route)
+            (root/'.getzilla/runtime/metrics.jsonl').write_text('')
+            source = load_local(root)
+            result = summarize_sprint(source['events'], start=current['sprint']['window_start'],
+                as_of=(datetime.now(timezone.utc)+timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                source_manifest=source)
+            self.assertIsNone(result['counts']['observed_selected'])
+            self.assertIn('native_journal_gap', result['coverage']['gaps'])
+
+
+if __name__ == '__main__':
+    unittest.main()

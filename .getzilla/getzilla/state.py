@@ -532,8 +532,20 @@ def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any]
         actual = canonical_route(root, route['route_id']) if exists else None
         if actual != expected:
             raise ValueError('route changed before atomic update')
+        if 'sprint' in route:
+            from .sprint_lifecycle import prepare_transition
+            try:
+                route = prepare_transition(root, copy.deepcopy(route), actual)
+            except (OSError, ValueError, RuntimeError, TypeError, KeyError):
+                if actual is None or 'sprint' not in actual:
+                    raise ValueError('native_sprint_capture_unavailable') from None
+                route['observation_capture_failed'] = True
         durable_json(root, path, route)
         _publish_route_projections(root, route)
+    if route.get('observation_publication'):
+        from .sprint_lifecycle import deliver
+        deliver(root, route['route_id'])
+        route = canonical_route(root, route['route_id'])
     return copy.deepcopy(route)
 
 
@@ -580,7 +592,8 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
         from .continuity import assert_finishable
         assert_finishable(root, route, cancel=updates['status'] == 'cancelled')
     immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
-                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff'}
+                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff',
+                 'sprint', 'observation_publication'}
     if has_task_context(route) and any(key in updates and updates[key] != route.get(key) for key in immutable | {'change_id'}):
         raise ValueError('immutable task authority requires an explicit task transition')
     changed = copy.deepcopy(route)

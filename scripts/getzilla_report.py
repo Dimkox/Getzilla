@@ -48,8 +48,69 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--since', default='7d', help='period: Nd, Nh or all (default 7d)')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--import-observations', help='Bounded repository-relative JSON offline observation file')
+    parser.add_argument('--sprint-start', help='UTC start of a 14-day canonical-root sprint projection')
+    parser.add_argument('--as-of', help='UTC as-known cutoff; required with --sprint-start')
+    parser.add_argument('--trace-operation', help='Read local source-bound observations for a native operation ID')
     args = parser.parse_args(argv)
     root = find_root()
+    if args.trace_operation is not None:
+        if args.sprint_start is not None or args.as_of is None or args.import_observations:
+            parser.error('trace mode requires cutoff and cannot select a sprint or import')
+        from getzilla.observation_privacy import load_local
+        from getzilla.trace_report import reconstruct
+        from getzilla.trace_contracts import utc
+        from getzilla.metrics_journal import digest
+        source = load_local(root)
+        try:
+            until = utc(args.as_of)
+            visible = []
+            for row in source['events']:
+                if row.get('schema_version') != 3:
+                    visible.append(row)
+                    continue
+                proof = source.get('delivery_proofs', {}).get(row['event_id'])
+                if proof and proof['row_digest'] == digest(row) and utc(proof['delivered_by']) <= until:
+                    visible.append(row)
+                else:
+                    source['gaps'].append('native_delivery_proof_missing')
+            summary = reconstruct(visible, args.trace_operation, args.as_of)
+        except ValueError:
+            parser.error('invalid trace input')
+        summary['access'] = source['access']
+        summary['source_scope'] = source['scope']
+        summary['coverage']['gaps'] = sorted(set(summary['coverage']['gaps'] + source['gaps']))
+        if source['access'] == 'metadata_only':
+            summary['observations'] = None
+            summary['stages'] = {}
+        if source['input_digest'] is None:
+            summary['legacy_observations'] = None
+        if args.json:
+            print(json.dumps(summary, sort_keys=True, indent=2))
+        else:
+            print('Local trace observations: ' + summary['outcome'])
+            print('Coverage gaps: ' + '; '.join(summary['coverage']['gaps']))
+        return 0
+    if args.sprint_start is not None or args.as_of is not None:
+        if args.sprint_start is None or args.as_of is None or args.import_observations:
+            parser.error('sprint mode requires start and cutoff and cannot import observations')
+        from getzilla.observation_privacy import load_local
+        from getzilla.sprint_report import summarize_sprint
+        source = load_local(root)
+        try:
+            summary = summarize_sprint(source['events'], start=args.sprint_start,
+                                       as_of=args.as_of, source_manifest=source)
+        except ValueError:
+            parser.error('invalid sprint input')
+        summary['access'] = source['access']
+        summary['journal_digest'] = source['input_digest']
+        if args.json:
+            print(json.dumps(summary, sort_keys=True, indent=2))
+        else:
+            print('14-day sprint, canonical-root observations only')
+            print('Selected: unknown; qualified completion: unknown; forecast: insufficient history')
+            print('Observed selected: ' + str(summary['counts']['observed_selected']))
+            print('Coverage gaps: ' + '; '.join(summary['coverage']['gaps']))
+        return 0
     if args.import_observations:
         import_observations(root, args.import_observations)
     summary = summarize(load(root, _since(args.since)), root)

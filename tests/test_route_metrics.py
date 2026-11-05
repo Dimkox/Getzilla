@@ -23,6 +23,18 @@ def event(minutes: float, name: str, route_id: str, **fields) -> dict:
 
 
 class SummaryTests(unittest.TestCase):
+    def test_closed_v3_rows_are_readable_but_cannot_be_imported_as_authority(self):
+        from getzilla.metrics_journal import validate, import_observations
+        from tests.test_trace_contracts import observation
+        row = observation('task', 'selected', window_start='2026-11-05T00:00:00Z')
+        validate(row)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'.getzilla/runtime').mkdir(parents=True)
+            (root/'input.json').write_text(json.dumps([row]))
+            with self.assertRaises(ValueError):
+                import_observations(root, 'input.json')
+
     def test_one_route_counts_runs_reviews_and_caught_defects(self) -> None:
         summary = summarize([
             event(0, 'route', 'r1', intent='feature'),
