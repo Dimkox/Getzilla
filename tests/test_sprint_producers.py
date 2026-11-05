@@ -53,6 +53,37 @@ class ProducerTests(unittest.TestCase):
             self.assertEqual(current['observation_publication']['delivery'], {})
             self.assertEqual(len(current['observation_publication']['events']), 1)
 
+    def test_duplicate_json_journal_or_canonical_cannot_qualify_delivery(self):
+        from getzilla.observation_privacy import load_local
+        for target in ('journal', 'canonical'):
+            with self.subTest(target=target), project_copy(git=True, minimal_runtime=True) as root:
+                current = self.select(root, self.route(root))
+                identity = current['observation_publication']['events'][0]['event_id']
+                if target == 'journal':
+                    path = root / '.getzilla/runtime/metrics.jsonl'
+                    raw = path.read_bytes()
+                    self.assertEqual(raw.count(b'"kind":"selected"'), 1)
+                    path.write_bytes(raw.replace(b'"kind":"selected"', b'"kind":"unknown","kind":"selected"'))
+                else:
+                    path = root / '.getzilla/runtime/routes' / f"{current['route_id']}.json"
+                    path.write_bytes(path.read_bytes().replace(b'{',
+                        b'{"observation_capture_failed":true,"observation_capture_failed":false,', 1))
+                source = load_local(root)
+                self.assertNotIn(identity, source['delivery_proofs'])
+                self.assertTrue(source['gaps'])
+
+    def test_nonfinite_canonical_json_cannot_qualify_delivery(self):
+        from getzilla.observation_privacy import load_local
+        for constant in (b'NaN', b'Infinity', b'-Infinity'):
+            with self.subTest(constant=constant), project_copy(git=True, minimal_runtime=True) as root:
+                current = self.select(root, self.route(root))
+                identity = current['observation_publication']['events'][0]['event_id']
+                path = root / '.getzilla/runtime/routes' / f"{current['route_id']}.json"
+                path.write_bytes(path.read_bytes().replace(b'{', b'{"nonfinite":'+constant+b',', 1))
+                source = load_local(root)
+                self.assertNotIn(identity, source['delivery_proofs'])
+                self.assertIn('native_delivery_proof_missing', source['gaps'])
+
     def test_delivery_never_takes_journal_lock_inside_task_transition(self):
         from getzilla import fsx
         with project_copy(git=True, minimal_runtime=True) as root:

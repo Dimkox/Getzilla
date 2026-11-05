@@ -9,8 +9,16 @@ import stat
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from contextlib import contextmanager, ExitStack
+from pathlib import Path
 
 from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, EVENTS, digest
+
+
+def _decode_observation(raw):
+    # Reuse the existing bounded UTF-8/duplicate-key/nonfinite JSON decoder.
+    # Its diagnostics are reduced to fixed coverage codes by both callers.
+    from .spec import _parse_canonical_json
+    return _parse_canonical_json(raw, Path('native_observation'))
 
 
 @dataclass(frozen=True)
@@ -188,7 +196,7 @@ def _delivery_proofs(root, rows, *, anchor):
                             or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)
                             or len(raw) != info.st_size):
                         raise ValueError('canonical_record_changed')
-                    route = json.loads(raw)
+                    route = _decode_observation(raw)
                     if (route.get('route_id') != route_id or route.get('workspace') != str(root.absolute())
                             or selected and route.get('logical_task_id') != selected[0]['logical_task_id']):
                         raise ValueError('canonical_binding_mismatch')
@@ -271,7 +279,7 @@ def _load_local(root, anchor):
             try:
                 if len(line) > MAX_ROW or not line.endswith(b'\n'):
                     raise ValueError('row_bound')
-                row = json.loads(line)
+                row = _decode_observation(line)
                 if not isinstance(row, dict):
                     raise ValueError('invalid_row')
                 identity = row.get('event_id')
