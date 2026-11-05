@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -22,6 +22,7 @@ from .spec import _bounded_walk
 from .util import tree_fingerprint
 
 _ISSUER = object()
+_CONSTRUCTION_TOKEN = object()
 _UNCERTAIN: set[tuple[str, str]] = set()
 _LIVE: dict[tuple[str, str], tuple[Any, float, str]] = {}
 _CANCEL_LIVE: dict[tuple[str, str], float] = {}
@@ -47,7 +48,7 @@ class Clock:
 SYSTEM_CLOCK = Clock()
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class CallerContext:
     workspace: str
     session_id: str
@@ -57,7 +58,12 @@ class CallerContext:
     agent_id: str | None
     agent_generation: str | None
     _observation_id: str | None
-    _issuer: object
+    _issuer: object = field(repr=False)
+    _construction_token: InitVar[object]
+
+    def __post_init__(self, _construction_token):
+        if self._issuer is not _ISSUER or _construction_token is not _CONSTRUCTION_TOKEN:
+            raise ExecutionError('execution_forbidden')
 
 
 @dataclass(frozen=True)
@@ -184,13 +190,10 @@ def trusted_caller(root: Path, *, agent_id: str | None = None, execution_id: str
         if saved is not None and (saved['owner']['agent_id'] != agent_id
                                   or saved['owner']['agent_generation'] != generation):
             raise ExecutionError('execution_forbidden')
-    value = object.__new__(CallerContext)
     fields = dict(workspace=str(root), session_id=session, route_id=route['route_id'],
                   logical_task_id=continuity.task_identity(route), authority_epoch=route['authority_epoch'],
                   agent_id=agent_id, agent_generation=generation, _observation_id=execution_id, _issuer=_ISSUER)
-    for key, item in fields.items():
-        object.__setattr__(value, key, item)
-    return value
+    return CallerContext(**fields, _construction_token=_CONSTRUCTION_TOKEN)
 
 
 def _caller(root, caller):

@@ -7,7 +7,14 @@ database, queue, dependency, native executor or runtime approval. Existing
 
 `trusted_caller(root)` derives the native-bound session and canonical task context.
 An adapter may select a registered agent with `agent_id`; its canonical generation
-must match. Principal strings are not authorization inputs. `submit` captures the
+must match. Principal strings are not authorization inputs. `CallerContext` is an
+immutable trusted-adapter value, not a customer identity or OS isolation boundary.
+Call `trusted_caller` rather than construct or replace its fields: construction
+requires both the private issuer and a distinct required, nonstored construction
+capability, with no defaults. Stored fields and `dataclasses.replace` cannot
+implicitly issue a new context. Existing canonical checks still govern every
+operation; arbitrary trusted Python access to module internals is outside this
+cooperative boundary. `submit` captures the
 workspace, existing route/logical task/change, session, authority epoch and agent
 generation once. Run identity stays null when the adapter has no real run ID.
 Each attempt gets an opaque execution ID and generation. Operation, MCP request
