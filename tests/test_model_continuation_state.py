@@ -347,9 +347,16 @@ class ContinuationJournalTest(unittest.TestCase):
     def test_controlled_claim_rechecks_late_results_after_successful_child_exits(self):
         children = [Mock(pid=101, exitcode=0), Mock(pid=102, exitcode=0)]
         results = Mock()
-        results.get.side_effect = [Empty(),
+        envelopes = iter([
             {'status': 'success', 'pid': 101, 'result': {'claimed': True, 'dispatch_permitted': False}},
-            {'status': 'success', 'pid': 102, 'result': {'claimed': False, 'dispatch_permitted': False}}]
+            {'status': 'success', 'pid': 102, 'result': {'claimed': False, 'dispatch_permitted': False}}])
+
+        def get(**kwargs):
+            if results.get.call_count == 1:
+                raise Empty()
+            return next(envelopes)
+
+        results.get.side_effect = get
         with patch.object(time, 'monotonic', return_value=0):
             claims = _controlled_claim_results(children, results)
         self.assertEqual([c['claimed'] for c in claims], [True, False])
@@ -359,7 +366,11 @@ class ContinuationJournalTest(unittest.TestCase):
     def test_controlled_claim_missing_results_keep_original_deadline(self):
         children = [Mock(pid=101, exitcode=0), Mock(pid=102, exitcode=0)]
         results = Mock()
-        results.get.side_effect = Empty
+
+        def get(**kwargs):
+            raise Empty()
+
+        results.get.side_effect = get
         with patch.object(time, 'monotonic', side_effect=[0, 0, 14.99, 15]), \
                 self.assertRaisesRegex(AssertionError, '^controlled worker result timed out$'):
             _controlled_claim_results(children, results)
