@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +17,22 @@ from getzilla import harnesses  # noqa: E402
 
 
 class PayloadPackagingTests(unittest.TestCase):
+    def test_declared_keep_cannot_silently_leave_an_incompatible_factory_engine(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.source_fixture(root)
+            harnesses.write(root, repository_all=True)
+            mirror = root / harnesses.FACTORY_PAYLOAD_ENGINE
+            original = mirror.read_bytes()
+            (root / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                'schema_version': 1, 'kept_local': [harnesses.FACTORY_PAYLOAD_ENGINE],
+                'kept_local_sha256': {harnesses.FACTORY_PAYLOAD_ENGINE: hashlib.sha256(original).hexdigest()},
+            }), encoding='utf-8', newline='\n')
+            (root / harnesses.PAYLOAD_ENGINE).write_bytes(b'# new public canonical fixture\n')
+            with self.assertRaisesRegex(ValueError, 'conflict.*kept'):
+                harnesses.write(root, repository_all=True)
+            self.assertEqual(mirror.read_bytes(), original)
+
     def source_fixture(self, root):
         for directory in ('.grok/agents', '.agents/skills', '.grok/cursor-rules',
                           '.getzilla/getzilla', 'scripts', 'factory/src/getzilla_factory'):

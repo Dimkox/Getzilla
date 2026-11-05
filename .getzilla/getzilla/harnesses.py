@@ -336,6 +336,16 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
     }
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, kept_digests, generated)
+    if FACTORY_PAYLOAD_ENGINE in expected and FACTORY_PAYLOAD_ENGINE in kept:
+        # A keep declaration cannot select a different executable engine for
+        # the standalone Factory layout while reporting successful generation.
+        try:
+            current = binding.read(FACTORY_PAYLOAD_ENGINE)
+            if (current is None or current.content != expected[FACTORY_PAYLOAD_ENGINE]
+                    or not mode_matches(current.mode, 0o644)):
+                problems.append('conflict kept Factory payload engine')
+        except (OSError, ValueError):
+            problems.append('conflict kept Factory payload engine')
     codex_pair = {'.codex/hooks.json', '.codex/config.toml'}
     if 'codex' in selected and codex_pair & kept:
         # A keep declaration never activates or rebuilds the other half of the

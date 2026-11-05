@@ -14,7 +14,8 @@ byte-identical `factory/src/getzilla_factory/_payload_engine.py`. Never maintain
 the Factory mirror by hand. Drift/identity tests must pass before delivery.
 The full-source generator uses the existing ownership/CAS transaction; it refuses
 foreign output. A Core-only selected hook installation does not create Factory
-files. Existing installer directory inventory includes both source layouts.
+files. A keep declaration cannot select a divergent Factory engine or silently
+omit it. Existing installer directory inventory includes both source layouts.
 
 Factory wrappers retain V1/V2 envelopes, strict JSON duplicate-key handling,
 known-secret rules, typed errors and offline buffering. They import their own
