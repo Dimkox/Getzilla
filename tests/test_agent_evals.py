@@ -15,8 +15,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import agent_evals as ev  # noqa: E402
 from getzilla.agent_evals import (  # noqa: E402
-    EvalError, accept_baseline, compare, render_text, replay, required_suites,
+    EvalError, _baseline, accept_baseline, compare, render_text, replay, required_suites,
 )
 
 
@@ -251,7 +252,7 @@ class AgentEvalTests(unittest.TestCase):
         self.write('manifest.json', self.manifest)
         second = self.run_eval()
         accept_baseline(self.baseline, second, reason='new model', scope='offline')
-        stored = json.loads(self.baseline.read_text())
+        stored = _baseline(self.baseline)  # V1 logical history also covers V2 append framing.
         self.assertEqual(len(stored['history']), 2)
         self.assertEqual(stored['history'][0]['result_digest'], first['result_digest'])
         self.assertEqual(stored['history'][1]['previous_digest'], stored['history'][0]['acceptance_digest'])
@@ -337,7 +338,7 @@ class AgentEvalTests(unittest.TestCase):
         from getzilla.agent_evals import digest
         report = self.run_eval()
         accept_baseline(self.baseline, report, reason='first', scope='offline')
-        original = json.loads(self.baseline.read_text())
+        original = _baseline(self.baseline)
         for replacement in ['pass', {}, None]:
             stored = deepcopy(original)
             entry = stored['history'][0]
@@ -357,7 +358,7 @@ class AgentEvalTests(unittest.TestCase):
         with self.assertRaises(EvalError):
             accept_baseline(self.baseline, report, reason='overflow', scope='offline')
         self.assertEqual(self.baseline.read_bytes(), before)
-        stored = json.loads(before)
+        stored = _baseline(self.baseline)
         stored['history'][0]['reason'] = 'tampered'
         self.write('baseline.json', stored)
         self.assertEqual(compare(report, self.baseline)['status'], 'incomparable')
@@ -480,19 +481,19 @@ class AgentEvalTests(unittest.TestCase):
         outside = Path(outside_temp.name)
         (outside / 'nested').mkdir()
         held = self.root / 'held-baselines'
-        original_open = os.open
+        original_lock = agent_evals.fsx.lock_file
         swapped = False
 
-        def racing_open(path, flags, *args, **kwargs):
+        def racing_lock(descriptor, **kwargs):
             nonlocal swapped
-            result = original_open(path, flags, *args, **kwargs)
-            if str(path).endswith('baseline.json.lock') and not swapped:
+            result = original_lock(descriptor, **kwargs)
+            if not swapped:
                 ancestor.rename(held)
                 ancestor.symlink_to(outside, target_is_directory=True)
                 swapped = True
             return result
 
-        with patch.object(agent_evals.os, 'open', side_effect=racing_open):
+        with patch.object(agent_evals.fsx, 'lock_file', side_effect=racing_lock):
             with self.assertRaises(EvalError):
                 accept_baseline(baseline, report, reason='control', scope='offline')
         self.assertTrue(swapped)
@@ -595,7 +596,7 @@ class AgentEvalTests(unittest.TestCase):
         def replace_destination(directory, name, flags, *args, **kwargs):
             nonlocal swapped
             descriptor = original_open(directory, name, flags, *args, **kwargs)
-            if name.startswith('.eval-baseline-') and not swapped:
+            if name == self.baseline.name and flags & os.O_APPEND and not swapped:
                 self.baseline.unlink()
                 self.baseline.write_bytes(before)
                 swapped = True
@@ -667,17 +668,17 @@ class AgentEvalTests(unittest.TestCase):
         outside_baseline = outside / 'nested/baseline.json'
         outside_baseline.write_bytes(before)
         held = self.root / 'held-baselines'
-        real_replace = agent_evals.fsx.replace_at
+        real_write = agent_evals.os.write
         swapped = False
 
-        def replace(source_parent, source, target_parent, target):
+        def write(descriptor, data):
             nonlocal swapped
             ancestor.rename(held)
             ancestor.symlink_to(outside, target_is_directory=True)
             swapped = True
-            return real_replace(source_parent, source, target_parent, target)
+            return real_write(descriptor, data)
 
-        with patch.object(agent_evals.fsx, 'replace_at', side_effect=replace):
+        with patch.object(agent_evals.os, 'write', side_effect=write):
             with self.assertRaises(EvalError):
                 accept_baseline(baseline, report, reason='next', scope='offline')
         self.assertTrue(swapped)
@@ -710,6 +711,39 @@ class AgentEvalTests(unittest.TestCase):
         process = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(process.returncode, 1, process.stderr)
         self.assertEqual(json.loads(process.stdout)['comparison']['status'], 'regression')
+
+
+    def test_runner_source_digest_refuses_unknown_loader_or_malformed_source(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(ev, '__loader__', SimpleNamespace(get_data=lambda path: b'untrusted loader')):
+            with self.assertRaisesRegex(ev.EvalError, 'runner_source_unavailable'):
+                ev._runner_digest()
+        with patch.object(ev.__loader__, 'get_data', return_value=b'not valid python {'):
+            with self.assertRaisesRegex(ev.EvalError, 'runner_source_unavailable'):
+                ev._runner_digest()
+
+    def test_bytecode_only_archive_has_typed_missing_source_refusal(self):
+        import importlib.util
+        from importlib import _bootstrap_external
+        import zipfile
+        stack = self.root / 'lean/.getzilla'
+        package = stack / 'getzilla'
+        package.mkdir(parents=True)
+        (package / '__init__.py').write_bytes((ROOT / '.getzilla/getzilla/__init__.py').read_bytes())
+        source = (ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes()
+        code = compile(source, 'getzilla/agent_evals.py', 'exec')
+        pyc = _bootstrap_external._code_to_hash_pyc(code, importlib.util.source_hash(source), False)
+        with zipfile.ZipFile(stack / 'getzilla.zip', 'w') as archive:
+            archive.writestr('getzilla/agent_evals.pyc', pyc)
+            archive.writestr('getzilla/fsx.py', (ROOT / '.getzilla/getzilla/fsx.py').read_bytes())
+        child = ('import sys;sys.path.insert(0,sys.argv[1]);from getzilla import agent_evals as e\n'
+                 'try:e._runner_digest()\n'
+                 'except e.EvalError as x:print(str(x))\n'
+                 'else:raise AssertionError("bytecode is not source proof")\n')
+        result = subprocess.run([sys.executable, '-c', child, str(stack)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'runner_source_unavailable')
 
 
 if __name__ == '__main__':

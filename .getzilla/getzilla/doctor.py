@@ -21,18 +21,32 @@ class DoctorItem:
 
 
 def _engine_archive_item(archive: Path) -> DoctorItem:
-    """The archive carries bytecode for the Python that installed it; another Python reads the sources."""
+    """Recognize source archives and retain diagnostics for legacy ABI bytecode."""
     import importlib.util
     import zipfile
     try:
         with zipfile.ZipFile(archive) as bundle:
-            header = bundle.read('getzilla/policy.pyc')[:4]
-    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+            source = None
+            if 'getzilla/policy.py' in bundle.namelist():
+                source = bundle.read('getzilla/policy.py')
+                if not source:
+                    raise ValueError('empty engine policy source')
+                compile(source, 'getzilla/policy.py', 'exec', dont_inherit=True)
+            if not any(name.endswith('.pyc') for name in bundle.namelist()):
+                if source is None:
+                    raise ValueError('missing engine policy source')
+                return DoctorItem('pass', 'engine-archive', 'source-only engine archive; imports compile for the current Python')
+            header = bundle.read('getzilla/policy.pyc')[:16]
+            if len(header) < 16 or int.from_bytes(header[4:8], 'little') & ~3:
+                raise ValueError('invalid legacy bytecode header')
+            if header[:4] != importlib.util.MAGIC_NUMBER and source is None:
+                raise ValueError('foreign bytecode without engine policy source')
+    except (OSError, KeyError, ValueError, SyntaxError, zipfile.BadZipFile) as exc:
         return DoctorItem('fail', 'engine-archive', f'unreadable: {exc}')
-    if header != importlib.util.MAGIC_NUMBER:
-        return DoctorItem('warn', 'engine-archive', 'bytecode is for another Python, so hooks compile the engine '
-                          'on every call; reinstall Getzilla into this project with the current Python')
-    return DoctorItem('pass', 'engine-archive', 'engine archive with bytecode for this Python')
+    if header[:4] != importlib.util.MAGIC_NUMBER:
+        return DoctorItem('warn', 'engine-archive', 'legacy bytecode targets another Python; imports compile '
+                          'the validated source for the current interpreter')
+    return DoctorItem('pass', 'engine-archive', 'legacy engine archive with a current-Python bytecode header')
 
 
 def run_doctor(root: Path) -> list[DoctorItem]:
