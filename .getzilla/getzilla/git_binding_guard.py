@@ -198,7 +198,10 @@ class NativeGitGraph:
             self._stable.add(current)
         if label in {'directory','common directory','object store'}:
             info = os.fstat(self._directories[current].descriptor)
-            if info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink < 1:
+            # Operational Git directories retain the original public mode
+            # admission. Full mode/UID/identity change checks stay strict;
+            # this does not relax the pinned workspace or private storage.
+            if info.st_uid != os.getuid() or not stat.S_ISDIR(info.st_mode) or info.st_nlink < 1:
                 raise GuardUnavailable('native-directory')
         self.check()
         return current

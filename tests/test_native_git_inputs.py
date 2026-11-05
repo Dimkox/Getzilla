@@ -226,3 +226,32 @@ class NativeGitInputTests(fixtures._GuardFixture):
                 with self.assertRaises(diff.ArchitectureError):
                     with diff._GitOperation(self.root,native_anchor=anchor):
                         self.fail('unsupported profile admitted')
+
+    def test_original_public_0775_operational_directory_admission_is_preserved(self):
+        self.common.chmod(0o775)
+        with native_root(self.root) as anchor:
+            with diff._GitOperation(self.root,native_anchor=anchor) as scope:
+                self.assertEqual(diff._git(self.root,['rev-parse','HEAD'],_scope=scope).strip(),self.head.encode())
+
+    def test_operational_directory_mode_change_or_reference_swap_still_refuses(self):
+        for kind in ('mode','reference'):
+            with self.subTest(kind=kind):
+                self.common.chmod(0o775)
+                old_head = (self.common/'HEAD').read_bytes()
+                real_run = diff._run_capped
+                def changed(command,**kwargs):
+                    result = real_run(command,**kwargs)
+                    if command[-2:] == ['rev-parse','HEAD']:
+                        if kind == 'mode':
+                            self.common.chmod(0o755)
+                        else:
+                            replacement = self.common/'new-head'
+                            replacement.write_bytes(old_head)
+                            replacement.chmod(0o644)
+                            os.replace(replacement,self.common/'HEAD')
+                    return result
+                with native_root(self.root) as anchor:
+                    with self.assertRaises(diff.ArchitectureError):
+                        with diff._GitOperation(self.root,native_anchor=anchor) as scope:
+                            with patch.object(diff,'_run_capped',side_effect=changed):
+                                diff._git(self.root,['rev-parse','HEAD'],_scope=scope)
