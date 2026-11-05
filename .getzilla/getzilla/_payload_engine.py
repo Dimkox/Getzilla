@@ -256,4 +256,3 @@ def sanitize_tree(value: Any, *, max_bytes: int) -> tuple[Any, bool]:
             changed = changed or safe_key != key or item_changed
         return sanitized, changed
     return value, False
-

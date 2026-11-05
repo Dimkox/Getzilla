@@ -229,8 +229,6 @@ def _matches(value, kind):
 def _project(value, policy, personal):
     projected = {}
     for field in policy.fields:
-        if field.action == 'drop':
-            continue
         item, present = value, True
         for name in field.path:
             if type(item) is not dict or name not in item:
@@ -243,6 +241,8 @@ def _project(value, policy, personal):
             continue
         if not _matches(item, field.value_type):
             raise engine.PayloadError('invalid_field')
+        if field.action == 'drop':
+            continue
         if field.action == 'redact_pii':
             item = '[REDACTED]'
         elif type(item) is str:
@@ -262,13 +262,14 @@ def transform_candidate(*, policy, chunks, sources, purpose, absolute_deadline) 
     Production must obtain classification and complete dependencies from the
     actual trusted host. These public DTOs alone cannot supply that proof.
     """
+    entry_deadline = time.monotonic() + 2.0
     if type(policy) is not TransformPolicy:
         return CandidateResult('rejected', 'invalid_policy')
     if type(purpose) is not Purpose or purpose is not policy.purpose:
         return CandidateResult('rejected', 'purpose_mismatch')
     try:
         engine.check_deadline(absolute_deadline)
-        absolute_deadline = min(absolute_deadline, time.monotonic() + 2.0)
+        absolute_deadline = min(absolute_deadline, entry_deadline)
         _sources(sources, policy)
         raw = engine.collect(chunks, max_bytes=policy.max_bytes, max_chunks=policy.max_chunks,
                              deadline=absolute_deadline)
